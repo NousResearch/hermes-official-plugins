@@ -90,7 +90,7 @@ class _MtimeCache:
             return self._data
 
         try:
-            with open(self._path, "r", encoding="utf-8") as f:
+            with open(self._path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
             if not isinstance(data, dict):
                 data = {}

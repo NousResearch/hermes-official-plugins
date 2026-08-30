@@ -3952,7 +3952,7 @@ class FeishuAdapter(BasePlatformAdapter):
             ext = Path(cached_path).suffix.lower()
             if ext not in {".txt", ".md"} and media_type not in {"text/plain", "text/markdown"}:
                 return ""
-            content = Path(cached_path).read_text(encoding="utf-8")
+            content = Path(cached_path).read_text(encoding="utf-8-sig")
             display_name = self._display_name_from_cached_path(cached_path)
             return f"[Content of {display_name}]:\n{content}"
         except (OSError, UnicodeDecodeError):
@@ -4576,7 +4576,7 @@ class FeishuAdapter(BasePlatformAdapter):
 
     def _load_seen_message_ids(self) -> None:
         try:
-            payload = json.loads(self._dedup_state_path.read_text(encoding="utf-8"))
+            payload = json.loads(self._dedup_state_path.read_text(encoding="utf-8-sig"))
         except FileNotFoundError:
             return
         except (OSError, json.JSONDecodeError):

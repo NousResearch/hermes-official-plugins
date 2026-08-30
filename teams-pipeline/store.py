@@ -54,7 +54,7 @@ class TeamsPipelineStore:
         with self._lock:
             if not self.path.exists():
                 return
-            data = json.loads(self.path.read_text(encoding="utf-8") or "{}")
+            data = json.loads(self.path.read_text(encoding="utf-8-sig") or "{}")
             if not isinstance(data, dict):
                 return
             self._state["subscriptions"] = dict(data.get("subscriptions") or {})

@@ -62,7 +62,7 @@ class NodeServer:
             return self._token
         if self.token_path.is_file():
             try:
-                data = json.loads(self.token_path.read_text(encoding="utf-8"))
+                data = json.loads(self.token_path.read_text(encoding="utf-8-sig"))
                 tok = data.get("token")
                 if isinstance(tok, str) and tok:
                     self._token = tok

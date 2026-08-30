@@ -44,7 +44,7 @@ class NodeRegistry:
         if not self.path.is_file():
             return {"nodes": {}}
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            data = json.loads(self.path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError):
             return {"nodes": {}}
         if not isinstance(data, dict) or not isinstance(data.get("nodes"), dict):

@@ -49,7 +49,7 @@ def _read_active() -> Optional[Dict[str, Any]]:
     if not p.is_file():
         return None
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        return json.loads(p.read_text(encoding="utf-8-sig"))
     except Exception:
         return None
 
@@ -216,7 +216,7 @@ def status() -> Dict[str, Any]:
     bot_status: Dict[str, Any] = {}
     if status_path.is_file():
         try:
-            bot_status = json.loads(status_path.read_text(encoding="utf-8"))
+            bot_status = json.loads(status_path.read_text(encoding="utf-8-sig"))
         except Exception:
             pass
 
@@ -247,7 +247,7 @@ def transcript(last: Optional[int] = None) -> Dict[str, Any]:
             "total": 0,
             "path": str(tp),
         }
-    text = tp.read_text(encoding="utf-8", errors="replace")
+    text = tp.read_text(encoding="utf-8-sig", errors="replace")
     all_lines = [ln for ln in text.splitlines() if ln.strip()]
     lines = all_lines[-last:] if last else all_lines
     return {

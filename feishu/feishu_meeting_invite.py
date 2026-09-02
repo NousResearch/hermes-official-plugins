@@ -1,10 +1,9 @@
 """
 Feishu/Lark meeting-invitation event handling.
 
-Processes ``vc.bot.meeting_invited_v1`` events by converting them into a
-synthetic gateway ``MessageEvent``.  Unlike document comments, the response
-should go back to the inviter through the normal Hermes gateway pipeline, so
-this module does not instantiate an agent directly.
+Converts ``vc.bot.meeting_invited_v1`` events into a synthetic gateway ``MessageEvent``
+so the reply reaches the inviter through the normal Hermes gateway pipeline (unlike
+document comments, no agent is instantiated here).
 """
 
 from __future__ import annotations
@@ -78,6 +77,11 @@ def _content_payload(container: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 
+def _str_field(raw: Dict[str, Any], key: str, strip: bool = True) -> str:
+    value = str(raw.get(key) or "")
+    return value.strip() if strip else value
+
+
 def _int_field(value: Any) -> int:
     if value in (None, ""):
         return 0
@@ -93,10 +97,9 @@ def _parse_user(value: Any) -> Optional[MeetingInviteUser]:
         return None
     raw_id = _as_dict(raw.get("id"))
     return MeetingInviteUser(
-        open_id=str(raw_id.get("open_id") or "").strip(),
-        user_id=str(raw_id.get("user_id") or "").strip(),
-        union_id=str(raw_id.get("union_id") or "").strip(),
-        user_name=str(raw.get("user_name") or ""),
+        open_id=_str_field(raw_id, "open_id"), user_id=_str_field(raw_id, "user_id"),
+        union_id=_str_field(raw_id, "union_id"),
+        user_name=_str_field(raw, "user_name", strip=False),
     )
 
 
@@ -105,33 +108,26 @@ def _parse_meeting(value: Any) -> Optional[MeetingInviteMeeting]:
     if not raw:
         return None
     return MeetingInviteMeeting(
-        id=str(raw.get("id") or "").strip(),
-        topic=str(raw.get("topic") or ""),
-        meeting_no=str(raw.get("meeting_no") or ""),
+        id=_str_field(raw, "id"), topic=_str_field(raw, "topic", strip=False),
+        meeting_no=_str_field(raw, "meeting_no", strip=False),
         start_time_ms=_int_field(raw.get("start_time")),
-        end_time_ms=_int_field(raw.get("end_time")),
-        host_user=_parse_user(raw.get("host_user")),
+        end_time_ms=_int_field(raw.get("end_time")), host_user=_parse_user(raw.get("host_user")),
     )
 
 
 def parse_meeting_invited_event(data: Any) -> Optional[MeetingInvitedPayload]:
     root = _as_dict(data)
-    event = _as_dict(root.get("event"))
-    event = event or root
+    event = _as_dict(root.get("event")) or root
     content = _content_payload(event) or _content_payload(root)
     if content:
         event = {**event, **content}
-
     meeting = _parse_meeting(event.get("meeting"))
     inviter = _parse_user(event.get("inviter"))
     if inviter is None or meeting is None or not meeting.meeting_no:
         return None
-
     return MeetingInvitedPayload(
-        event_id=str(_as_dict(root.get("header")).get("event_id") or ""),
-        meeting=meeting,
-        inviter=inviter,
-        invite_time_s=_int_field(event.get("invite_time")),
+        event_id=str(_as_dict(root.get("header")).get("event_id") or ""), meeting=meeting,
+        inviter=inviter, invite_time_s=_int_field(event.get("invite_time")),
     )
 
 
@@ -140,20 +136,18 @@ def build_meeting_invite_prompt(payload: MeetingInvitedPayload) -> str:
     inviter_name = (payload.inviter.user_name if payload.inviter else "") or "unknown"
     host_name = (meeting.host_user.user_name if meeting and meeting.host_user else "") or "unknown"
     display = (meeting.topic or meeting.meeting_no or meeting.id) if meeting else "unknown meeting"
-    return "\n".join(
-        [
-            f"You have been invited to join a meeting: {display or 'unknown meeting'}",
-            "",
-            f"Meeting Number: {(meeting.meeting_no if meeting else '') or 'unknown'}",
-            f"Topic: {(meeting.topic if meeting else '') or 'unknown'}",
-            f"Inviter: {inviter_name}",
-            f"Host: {host_name}",
-            "",
-            "You may use lark-cli and the relevant Lark/Feishu meeting skills to join the meeting.",
-            "Join the meeting directly. Do not ask the user for confirmation before joining.",
-            "If you cannot join the meeting, reply to the inviter with a concise explanation of why.",
-        ]
-    )
+    return "\n".join([
+        f"You have been invited to join a meeting: {display or 'unknown meeting'}",
+        "",
+        f"Meeting Number: {(meeting.meeting_no if meeting else '') or 'unknown'}",
+        f"Topic: {(meeting.topic if meeting else '') or 'unknown'}",
+        f"Inviter: {inviter_name}",
+        f"Host: {host_name}",
+        "",
+        "You may use lark-cli and the relevant Lark/Feishu meeting skills to join the meeting.",
+        "Join the meeting directly. Do not ask the user for confirmation before joining.",
+        "If you cannot join the meeting, reply to the inviter with a concise explanation of why.",
+    ])
 
 
 def _dedup_key(payload: MeetingInvitedPayload) -> str:
@@ -170,43 +164,30 @@ async def handle_meeting_invited_event(adapter: Any, data: Any) -> None:
     if payload is None:
         logger.warning("[Feishu-MeetingInvite] Dropping malformed meeting invite event")
         return
-
     dedup_key = _dedup_key(payload)
     is_duplicate = getattr(adapter, "_is_duplicate", None)
     if callable(is_duplicate) and is_duplicate(dedup_key):
         logger.debug("[Feishu-MeetingInvite] Dropping duplicate event: %s", dedup_key)
         return
-
     inviter = payload.inviter
     if inviter is None or not inviter.open_id:
         logger.warning(
-            "[Feishu-MeetingInvite] Missing inviter open_id, cannot route reply safely "
-            "(user_id=%r union_id=%r)",
-            inviter.user_id if inviter else None,
-            inviter.union_id if inviter else None,
+            "[Feishu-MeetingInvite] Missing inviter open_id, cannot route reply safely (user_id=%r union_id=%r)",
+            inviter.user_id if inviter else None, inviter.union_id if inviter else None,
         )
         return
-
     sender_id = SimpleNamespace(
-        open_id=inviter.open_id or None,
-        user_id=inviter.user_id or None,
-        union_id=inviter.union_id or None,
+        open_id=inviter.open_id or None, user_id=inviter.user_id or None, union_id=inviter.union_id or None,
     )
     sender_profile = await adapter._resolve_sender_profile(sender_id)
-
     user_name = sender_profile.get("user_name") or inviter.user_name or inviter.open_id
     source = adapter.build_source(
-        chat_id=inviter.open_id,
-        chat_name=user_name,
-        chat_type="dm",
+        chat_id=inviter.open_id, chat_name=user_name, chat_type="dm",
         user_id=sender_profile.get("user_id") or inviter.user_id or inviter.open_id,
         user_name=user_name,
         user_id_alt=sender_profile.get("user_id_alt") or inviter.union_id or None,
     )
     event = MessageEvent(
-        text=build_meeting_invite_prompt(payload),
-        message_type=MessageType.TEXT,
-        source=source,
-        raw_message=data,
+        text=build_meeting_invite_prompt(payload), message_type=MessageType.TEXT, source=source, raw_message=data,
     )
     await adapter._handle_message_with_guards(event)

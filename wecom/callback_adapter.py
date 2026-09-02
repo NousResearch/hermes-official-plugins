@@ -86,7 +86,7 @@ def ensure_wecom_callback_requirements() -> bool:
     aiohttp/httpx ship with every messaging install) and rebinds the module
     globals.  Before this hook existed, the passive ``check_fn`` returned
     False forever on installs without the ``wecom`` extra and the
-    ``platform.wecom_callback`` LAZY_DEPS entry was never exercised.
+    lazy-installer entry for wecom_callback was never exercised.
     """
     if check_wecom_callback_requirements():
         return True

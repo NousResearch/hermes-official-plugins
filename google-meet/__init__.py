@@ -1,13 +1,9 @@
 """google_meet plugin — let the agent join a Meet call, transcribe it, follow up.
 
-v1: transcribe-only. Spawns a headless Chromium via Playwright, joins the Meet
-URL, enables live captions, scrapes them into a transcript file. The agent then
-has the transcript in its workspace and can do whatever followup work it needs
-using its regular tools.
-
-v2 (not in this PR): realtime duplex audio so the agent can speak in the
-meeting, via OpenAI Realtime / Gemini Live + BlackHole / PulseAudio null-sink.
-``meet_say`` exists as a stub today so the tool surface is stable.
+Spawns a headless Chromium via Playwright, joins the Meet URL, enables live
+captions and scrapes them into a transcript file in the agent's workspace.
+Realtime mode additionally lets the agent speak (OpenAI Realtime + a virtual
+audio device); remote nodes let the bot run on another machine.
 
 Explicit-by-design: only joins ``https://meet.google.com/`` URLs explicitly
 passed in. No calendar scanning, no auto-dial, no consent announcement.
@@ -22,16 +18,8 @@ from plugins.google_meet import process_manager as pm
 from plugins.google_meet.cli import register_cli as _register_meet_cli
 from plugins.google_meet.cli import meet_command as _meet_command
 from plugins.google_meet.tools import (
-    MEET_JOIN_SCHEMA,
-    MEET_LEAVE_SCHEMA,
-    MEET_SAY_SCHEMA,
-    MEET_STATUS_SCHEMA,
-    MEET_TRANSCRIPT_SCHEMA,
-    check_meet_requirements,
-    handle_meet_join,
-    handle_meet_leave,
-    handle_meet_say,
-    handle_meet_status,
+    MEET_JOIN_SCHEMA, MEET_LEAVE_SCHEMA, MEET_SAY_SCHEMA, MEET_STATUS_SCHEMA, MEET_TRANSCRIPT_SCHEMA,
+    check_meet_requirements, handle_meet_join, handle_meet_leave, handle_meet_say, handle_meet_status,
     handle_meet_transcript,
 )
 
@@ -48,11 +36,9 @@ _TOOLS = (
 
 
 def _on_session_end(**kwargs) -> None:
-    """Best-effort cleanup — if a meet bot is still running when the session
-    ends, leave the call so we don't orphan a headless Chromium.
+    """Leave a still-running call so we don't orphan a headless Chromium.
 
-    No-ops when nothing is active. Swallows all exceptions — session end must
-    not fail because the bot cleanup hit an edge case.
+    Swallows all exceptions — session end must never fail on bot cleanup.
     """
     try:
         status = pm.status()
@@ -63,31 +49,17 @@ def _on_session_end(**kwargs) -> None:
 
 
 def register(ctx) -> None:
-    """Register tools, CLI, and lifecycle hooks.
-
-    Called once by the plugin loader when the plugin is enabled via
-    ``plugins.enabled`` in config.yaml.
-    """
-    # Windows is not supported in v1 — audio routing for v2 doesn't have a
-    # tested path there and guest-join Chromium is flakier. Refuse to register
-    # rather than half-working.
+    """Register tools, CLI, and lifecycle hooks (called once by the plugin loader)."""
+    # Windows: no tested audio-routing path and flakier guest-join Chromium —
+    # refuse to register rather than half-work.
     system = platform.system().lower()
     if system not in {"linux", "darwin"}:
-        logger.info(
-            "google_meet plugin: platform=%s not supported (linux/macos only)",
-            system,
-        )
+        logger.info("google_meet plugin: platform=%s not supported (linux/macos only)", system)
         return
 
     for name, schema, handler, emoji in _TOOLS:
-        ctx.register_tool(
-            name=name,
-            toolset="google_meet",
-            schema=schema,
-            handler=handler,
-            check_fn=check_meet_requirements,
-            emoji=emoji,
-        )
+        ctx.register_tool(name=name, toolset="google_meet", schema=schema, handler=handler,
+                          check_fn=check_meet_requirements, emoji=emoji)
 
     ctx.register_cli_command(
         name="meet",

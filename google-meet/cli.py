@@ -199,6 +199,7 @@ def _cmd_install(*, realtime: bool, assume_yes: bool) -> int:
             print("  skipped (you can run it manually later)")
             return
         print(f"  $ {' '.join(cmd)}")
+        # noqa: subprocess-stdin — sudo/brew may prompt on the tty; user explicitly confirmed above
         if subprocess.run(cmd, check=False).returncode != 0:
             print(fail_msg)
 
@@ -219,7 +220,9 @@ def _cmd_install(*, realtime: bool, assume_yes: bool) -> int:
 
     print("\n[2/3] python -m playwright install chromium")
     try:
-        res = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False)
+        res = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"], check=False, stdin=subprocess.DEVNULL
+        )
         if res.returncode != 0:
             print("  playwright install failed (may already be installed)")
     except Exception as e:
@@ -240,7 +243,10 @@ def _cmd_install(*, realtime: bool, assume_yes: bool) -> int:
         elif system == "Darwin":
             have_bh = False
             try:
-                out = subprocess.check_output(["system_profiler", "SPAudioDataType"], text=True, encoding='utf-8', errors='replace')
+                out = subprocess.check_output(
+                    ["system_profiler", "SPAudioDataType"], text=True, encoding='utf-8', errors='replace',
+                    stdin=subprocess.DEVNULL,
+                )
                 have_bh = "BlackHole" in out
             except Exception:
                 pass

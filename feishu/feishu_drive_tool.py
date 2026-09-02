@@ -1,104 +1,75 @@
 """Feishu Drive Tools -- document comment operations via Feishu/Lark API.
 
 List / reply-to / add document comments through the generic BaseRequest path (lazy SDK
-import). The lark client is injected per-thread by the feishu_comment event handler.
+import), sharing client/request plumbing with feishu_doc_tool via ``tools.feishu_lark``.
+The lark client is injected per-thread by the feishu_comment event handler.
 """
 
-import json
 import logging
-import threading
 
+from tools.feishu_lark import (  # noqa: F401  (set_client/get_client are imported by feishu_comment)
+    build_request,
+    _check_feishu,
+    get_client,
+    response_data,
+    set_client,
+)
 from tools.registry import registry, tool_error, tool_result
 
 logger = logging.getLogger(__name__)
 
-# Thread-local storage for the lark client injected by feishu_comment handler.
-_local = threading.local()
-
-
-def set_client(client):
-    """Store a lark client for the current thread (called by feishu_comment)."""
-    _local.client = client
-
-
-def get_client():
-    """Return the lark client for the current thread, or None."""
-    return getattr(_local, "client", None)
-
-
-def _check_feishu():
-    # find_spec avoids executing lark_oapi's ~5s __init__ at every hermes startup;
-    # the handlers do the real import when invoked.
-    import importlib.util
-    try:
-        return importlib.util.find_spec("lark_oapi") is not None
-    except (ImportError, ValueError):
-        return False
-
 
 def _do_request(client, method, uri, paths=None, queries=None, body=None):
     """Build and execute a BaseRequest, return (code, msg, data_dict)."""
-    from lark_oapi import AccessTokenType
-    from lark_oapi.core.enum import HttpMethod
-    from lark_oapi.core.model.base_request import BaseRequest
-
-    builder = (
-        BaseRequest.builder()
-        .http_method(HttpMethod.GET if method == "GET" else HttpMethod.POST)
-        .uri(uri)
-        .token_types({AccessTokenType.TENANT})
-    )
-    if paths:
-        builder = builder.paths(paths)
-    if queries:
-        builder = builder.queries(queries)
-    if body is not None:
-        builder = builder.body(body)
-
     # Tool handlers run synchronously in a worker thread (no running event
     # loop), so call the blocking lark client directly.
-    response = client.request(builder.build())
+    response = client.request(build_request(method, uri, paths, queries, body))
+    return getattr(response, "code", None), getattr(response, "msg", ""), response_data(response)
 
-    code = getattr(response, "code", None)
-    msg = getattr(response, "msg", "")
 
-    # Prefer the raw JSON body's "data"; fall back to the typed response.data.
-    data = {}
-    raw = getattr(response, "raw", None)
-    if raw and hasattr(raw, "content"):
-        try:
-            data = json.loads(raw.content).get("data", {})
-        except (json.JSONDecodeError, AttributeError):
-            pass
-    if not data:
-        resp_data = getattr(response, "data", None)
-        if isinstance(resp_data, dict):
-            data = resp_data
-        elif resp_data and hasattr(resp_data, "__dict__"):
-            data = vars(resp_data)
+def _prepare(args: dict, keys: tuple, missing_msg: str):
+    """Client check first, then required fields (stripped). Returns (client, values, error|None)."""
+    client = get_client()
+    values = tuple(args.get(k, "").strip() for k in keys)
+    if client is None:
+        return None, values, tool_error("Feishu client not available")
+    if not all(values):
+        return client, values, tool_error(missing_msg)
+    return client, values, None
 
-    return code, msg, data
+
+def _file_type(args: dict) -> str:
+    return args.get("file_type", "docx") or "docx"
 
 
 def _paged_queries(args: dict) -> list:
-    """Common query params for comment/reply listing endpoints."""
+    """Query params shared by the comment/reply listing endpoints."""
     return [
-        ("file_type", args.get("file_type", "docx") or "docx"),
+        ("file_type", _file_type(args)),
         ("user_id_type", "open_id"),
         ("page_size", str(args.get("page_size", 100))),
     ]
 
 
+def _with_page_token(queries: list, args: dict) -> list:
+    """Append page_token last (after any is_whole) so the query order stays as before."""
+    page_token = args.get("page_token", "")
+    if page_token:
+        queries.append(("page_token", page_token))
+    return queries
+
+
 _FILE_TOKEN_PROP = {"type": "string", "description": "The document file token."}
 _FILE_TYPE_PROP = {"type": "string", "description": "File type (default: docx).", "default": "docx"}
 _PAGE_TOKEN_PROP = {"type": "string", "description": "Pagination token for next page."}
+_COMMENTS_URI = "/open-apis/drive/v1/files/:file_token/comments"
+_REPLIES_URI = "/open-apis/drive/v1/files/:file_token/comments/:comment_id/replies"
+_ADD_COMMENT_URI = "/open-apis/drive/v1/files/:file_token/new_comments"
 
 
 # ---------------------------------------------------------------------------
 # feishu_drive_list_comments
 # ---------------------------------------------------------------------------
-
-_LIST_COMMENTS_URI = "/open-apis/drive/v1/files/:file_token/comments"
 
 FEISHU_DRIVE_LIST_COMMENTS_SCHEMA = {
     "name": "feishu_drive_list_comments",
@@ -129,37 +100,26 @@ FEISHU_DRIVE_LIST_COMMENTS_SCHEMA = {
 
 
 def _handle_list_comments(args: dict, **kwargs) -> str:
-    client = get_client()
-    if client is None:
-        return tool_error("Feishu client not available")
-
-    file_token = args.get("file_token", "").strip()
-    if not file_token:
-        return tool_error("file_token is required")
+    client, (file_token,), err = _prepare(args, ("file_token",), "file_token is required")
+    if err:
+        return err
 
     queries = _paged_queries(args)
     if args.get("is_whole", False):
         queries.append(("is_whole", "true"))
-    page_token = args.get("page_token", "")
-    if page_token:
-        queries.append(("page_token", page_token))
+    _with_page_token(queries, args)
 
     code, msg, data = _do_request(
-        client, "GET", _LIST_COMMENTS_URI,
-        paths={"file_token": file_token},
-        queries=queries,
+        client, "GET", _COMMENTS_URI, paths={"file_token": file_token}, queries=queries,
     )
     if code != 0:
         return tool_error(f"List comments failed: code={code} msg={msg}")
-
     return tool_result(data)
 
 
 # ---------------------------------------------------------------------------
 # feishu_drive_list_comment_replies
 # ---------------------------------------------------------------------------
-
-_LIST_REPLIES_URI = "/open-apis/drive/v1/files/:file_token/comments/:comment_id/replies"
 
 FEISHU_DRIVE_LIST_REPLIES_SCHEMA = {
     "name": "feishu_drive_list_comment_replies",
@@ -186,36 +146,25 @@ FEISHU_DRIVE_LIST_REPLIES_SCHEMA = {
 
 
 def _handle_list_replies(args: dict, **kwargs) -> str:
-    client = get_client()
-    if client is None:
-        return tool_error("Feishu client not available")
-
-    file_token = args.get("file_token", "").strip()
-    comment_id = args.get("comment_id", "").strip()
-    if not file_token or not comment_id:
-        return tool_error("file_token and comment_id are required")
-
-    queries = _paged_queries(args)
-    page_token = args.get("page_token", "")
-    if page_token:
-        queries.append(("page_token", page_token))
+    client, (file_token, comment_id), err = _prepare(
+        args, ("file_token", "comment_id"), "file_token and comment_id are required"
+    )
+    if err:
+        return err
 
     code, msg, data = _do_request(
-        client, "GET", _LIST_REPLIES_URI,
+        client, "GET", _REPLIES_URI,
         paths={"file_token": file_token, "comment_id": comment_id},
-        queries=queries,
+        queries=_with_page_token(_paged_queries(args), args),
     )
     if code != 0:
         return tool_error(f"List replies failed: code={code} msg={msg}")
-
     return tool_result(data)
 
 
 # ---------------------------------------------------------------------------
 # feishu_drive_reply_comment
 # ---------------------------------------------------------------------------
-
-_REPLY_COMMENT_URI = "/open-apis/drive/v1/files/:file_token/comments/:comment_id/replies"
 
 FEISHU_DRIVE_REPLY_SCHEMA = {
     "name": "feishu_drive_reply_comment",
@@ -244,36 +193,27 @@ FEISHU_DRIVE_REPLY_SCHEMA = {
 
 
 def _handle_reply_comment(args: dict, **kwargs) -> str:
-    client = get_client()
-    if client is None:
-        return tool_error("Feishu client not available")
+    client, (file_token, comment_id, content), err = _prepare(
+        args, ("file_token", "comment_id", "content"), "file_token, comment_id, and content are required"
+    )
+    if err:
+        return err
 
-    file_token = args.get("file_token", "").strip()
-    comment_id = args.get("comment_id", "").strip()
-    content = args.get("content", "").strip()
-    if not file_token or not comment_id or not content:
-        return tool_error("file_token, comment_id, and content are required")
-
-    file_type = args.get("file_type", "docx") or "docx"
-    body = {"content": {"elements": [{"type": "text_run", "text_run": {"text": content}}]}}
-
+    # Replies use the rich "content.elements[text_run]" body shape; file_type is a query param.
     code, msg, data = _do_request(
-        client, "POST", _REPLY_COMMENT_URI,
+        client, "POST", _REPLIES_URI,
         paths={"file_token": file_token, "comment_id": comment_id},
-        queries=[("file_type", file_type)],
-        body=body,
+        queries=[("file_type", _file_type(args))],
+        body={"content": {"elements": [{"type": "text_run", "text_run": {"text": content}}]}},
     )
     if code != 0:
         return tool_error(f"Reply comment failed: code={code} msg={msg}")
-
     return tool_result(success=True, data=data)
 
 
 # ---------------------------------------------------------------------------
 # feishu_drive_add_comment
 # ---------------------------------------------------------------------------
-
-_ADD_COMMENT_URI = "/open-apis/drive/v1/files/:file_token/new_comments"
 
 FEISHU_DRIVE_ADD_COMMENT_SCHEMA = {
     "name": "feishu_drive_add_comment",
@@ -298,26 +238,20 @@ FEISHU_DRIVE_ADD_COMMENT_SCHEMA = {
 
 
 def _handle_add_comment(args: dict, **kwargs) -> str:
-    client = get_client()
-    if client is None:
-        return tool_error("Feishu client not available")
+    client, (file_token, content), err = _prepare(
+        args, ("file_token", "content"), "file_token and content are required"
+    )
+    if err:
+        return err
 
-    file_token = args.get("file_token", "").strip()
-    content = args.get("content", "").strip()
-    if not file_token or not content:
-        return tool_error("file_token and content are required")
-
-    file_type = args.get("file_type", "docx") or "docx"
-    body = {"file_type": file_type, "reply_elements": [{"type": "text", "text": content}]}
-
+    # new_comments takes the flat "reply_elements[text]" shape with file_type in the body.
     code, msg, data = _do_request(
         client, "POST", _ADD_COMMENT_URI,
         paths={"file_token": file_token},
-        body=body,
+        body={"file_type": _file_type(args), "reply_elements": [{"type": "text", "text": content}]},
     )
     if code != 0:
         return tool_error(f"Add comment failed: code={code} msg={msg}")
-
     return tool_result(success=True, data=data)
 
 

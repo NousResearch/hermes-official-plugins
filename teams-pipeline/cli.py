@@ -11,19 +11,11 @@ from typing import Any, Callable
 from hermes_constants import display_hermes_home
 from gateway.config import Platform, load_gateway_config
 from plugins.teams_pipeline.meetings import (
-    enrich_meeting_with_call_record,
-    fetch_preferred_transcript_text,
-    list_recording_artifacts,
-    resolve_meeting_reference,
-)
+    enrich_meeting_with_call_record, fetch_preferred_transcript_text, list_recording_artifacts, resolve_meeting_reference)
 from plugins.teams_pipeline.pipeline import TeamsMeetingPipeline
 from plugins.teams_pipeline.store import TeamsPipelineStore, resolve_teams_pipeline_store_path
 from plugins.teams_pipeline.subscriptions import (
-    build_graph_client,
-    maintain_graph_subscriptions,
-    sync_graph_subscription_record,
-    utc_timestamp,
-)
+    build_graph_client, maintain_graph_subscriptions, sync_graph_subscription_record, utc_timestamp)
 from tools.microsoft_graph_auth import MicrosoftGraphConfigError, MicrosoftGraphTokenProvider
 
 
@@ -62,6 +54,10 @@ def _text(args: argparse.Namespace, name: str) -> str:
     return str(getattr(args, name, "") or "").strip()
 
 
+def _int_arg(args: argparse.Namespace, name: str, default: int) -> int:
+    return int(getattr(args, name, default) or default)
+
+
 def _open_store(args: argparse.Namespace) -> TeamsPipelineStore:
     return TeamsPipelineStore(resolve_teams_pipeline_store_path(getattr(args, "store_path", None)))
 
@@ -98,22 +94,17 @@ def _graph_setup_hint() -> str:
 
 # Graph only emits "created" for the artifact/callRecord collection resources; meetings use "updated".
 _CREATED_RESOURCE_PREFIXES = (
-    "communications/onlinemeetings/getalltranscripts",
-    "communications/onlinemeetings/getallrecordings",
-    "communications/callrecords",
-)
+    "communications/onlinemeetings/getalltranscripts", "communications/onlinemeetings/getallrecordings", "communications/callrecords")
 
 
 def _default_change_type_for_resource(resource: str) -> str:
-    normalized = str(resource or "").strip().lower()
-    return "created" if normalized.startswith(_CREATED_RESOURCE_PREFIXES) else "updated"
+    return "created" if str(resource or "").strip().lower().startswith(_CREATED_RESOURCE_PREFIXES) else "updated"
 
 
 def _compact_job(job: dict) -> dict:
     payload = dict(job)
     summary = dict(payload.get("summary_payload") or {})
-    transcript = summary.pop("transcript_text", None)
-    if transcript:
+    if transcript := summary.pop("transcript_text", None):
         summary["transcript_preview"] = str(transcript)[:240]
     payload["summary_payload"] = summary or None
     return payload
@@ -121,19 +112,16 @@ def _compact_job(job: dict) -> dict:
 
 def _cmd_validate(args) -> None:
     store = _open_store(args)
-    env = os.environ
     issues: list[str] = []
     warnings: list[str] = []
     gateway_config = load_gateway_config()
     webhook_config = gateway_config.platforms.get(Platform.MSGRAPH_WEBHOOK)
     teams_config = gateway_config.platforms.get(Platform("teams"))
-
-    graph = {key: bool(env.get(f"MSGRAPH_{key.upper()}")) for key in ("tenant_id", "client_id", "client_secret")}
+    graph = {key: bool(os.environ.get(f"MSGRAPH_{key.upper()}")) for key in ("tenant_id", "client_id", "client_secret")}
     webhook_enabled = bool(webhook_config and webhook_config.enabled)
     teams_enabled = bool(teams_config and teams_config.enabled)
     teams_extra = dict((teams_config.extra or {}) if teams_config else {})
     teams_mode = str(teams_extra.get("delivery_mode") or "").strip() or None
-
     if not all(graph.values()):
         issues.append("Microsoft Graph app-only credentials are incomplete.")
     if not webhook_enabled:
@@ -145,8 +133,7 @@ def _cmd_validate(args) -> None:
             issues.append("TEAMS_INCOMING_WEBHOOK_URL is required for incoming_webhook mode.")
     elif teams_mode == "graph":
         # Graph delivery can authenticate with either a dedicated delivery token or the app-only creds.
-        has_graph_delivery_token = bool(teams_config.token or teams_extra.get("access_token"))
-        if not has_graph_delivery_token and not all(graph.values()):
+        if not (teams_config.token or teams_extra.get("access_token")) and not all(graph.values()):
             issues.append("TEAMS_GRAPH_ACCESS_TOKEN or complete MSGRAPH_* app credentials is required for graph delivery mode.")
         if not teams_extra.get("team_id"):
             issues.append("TEAMS_TEAM_ID is required for graph delivery mode.")
@@ -154,31 +141,26 @@ def _cmd_validate(args) -> None:
             issues.append("TEAMS_CHANNEL_ID is required for graph delivery mode.")
     else:
         warnings.append("TEAMS_DELIVERY_MODE is not set.")
-
     _print_json({
         "ok": not issues, "issues": issues, "warnings": warnings, "graph_config": graph,
         "webhook_enabled": webhook_enabled, "teams_enabled": teams_enabled, "teams_delivery_mode": teams_mode,
-        "store_path": str(store.path), "store_stats": store.stats(),
-    })
+        "store_path": str(store.path), "store_stats": store.stats()})
 
 
 def _cmd_list(args) -> None:
     jobs = list(_open_store(args).list_jobs().values())
-    status = _text(args, "status").lower()
-    if status:
+    if status := _text(args, "status").lower():
         jobs = [job for job in jobs if str(job.get("status") or "").lower() == status]
     jobs.sort(key=lambda item: str((item or {}).get("updated_at") or ""), reverse=True)
-    jobs = jobs[: max(1, min(int(getattr(args, "limit", 20) or 20), 100))]
+    jobs = jobs[: max(1, min(_int_arg(args, "limit", 20), 100))]
     _print_records("Teams pipeline job(s)", "No Teams meeting pipeline jobs found.", [
         (job.get("job_id"), [
             ("status", job.get("status"), True),
             ("meeting", (job.get("meeting_ref") or {}).get("meeting_id") or "unknown", True),
             ("strategy", job.get("selected_artifact_strategy"), False),
             ("updated", job.get("updated_at"), False),
-            ("error", job.get("error_info"), False),
-        ])
-        for job in jobs
-    ])
+            ("error", job.get("error_info"), False)])
+        for job in jobs])
 
 
 def _cmd_show(args) -> None:
@@ -201,17 +183,13 @@ def _cmd_fetch(args) -> None:
     if not meeting_id and not join_web_url:
         print("meeting_id or join_web_url is required")
         return
-
     client = build_graph_client()
     meeting_ref = asyncio.run(resolve_meeting_reference(
         client, meeting_id=meeting_id, join_web_url=join_web_url,
-        tenant_id=_text(args, "tenant_id") or None, organizer_user_id=_text(args, "organizer_user_id") or None,
-    ))
+        tenant_id=_text(args, "tenant_id") or None, organizer_user_id=_text(args, "organizer_user_id") or None))
     transcript_artifact, transcript_text = asyncio.run(fetch_preferred_transcript_text(client, meeting_ref))
     recordings = asyncio.run(list_recording_artifacts(client, meeting_ref))
-    call_record = asyncio.run(
-        enrich_meeting_with_call_record(client, meeting_ref, call_record_id=_text(args, "call_record_id") or None)
-    )
+    call_record = asyncio.run(enrich_meeting_with_call_record(client, meeting_ref, call_record_id=_text(args, "call_record_id") or None))
     _print_json({
         "meeting_ref": meeting_ref.to_dict(),
         "transcript_available": bool(transcript_artifact and transcript_text),
@@ -219,8 +197,7 @@ def _cmd_fetch(args) -> None:
         "transcript_preview": (transcript_text or "")[:240] or None,
         "recording_count": len(recordings),
         "recordings": [recording.to_dict() for recording in recordings[:5]],
-        "call_record": call_record.to_dict() if call_record else None,
-    })
+        "call_record": call_record.to_dict() if call_record else None})
 
 
 def _cmd_subscriptions(args) -> None:
@@ -236,10 +213,8 @@ def _cmd_subscriptions(args) -> None:
             ("resource", sub.get("resource") or "unknown", True),
             ("changeType", sub.get("changeType") or "unknown", True),
             ("expires", sub.get("expirationDateTime"), False),
-            ("notify", sub.get("notificationUrl"), False),
-        ])
-        for sub in subscriptions
-    ])
+            ("notify", sub.get("notificationUrl"), False)])
+        for sub in subscriptions])
 
 
 def _cmd_subscribe(args) -> None:
@@ -250,13 +225,11 @@ def _cmd_subscribe(args) -> None:
         "notificationUrl": _text(args, "notification_url"),
         "resource": resource,
         "expirationDateTime": _text(args, "expiration") or utc_timestamp(1),
-        "latestSupportedTlsVersion": _text(args, "latest_supported_tls_version") or "v1_2",
-    }
+        "latestSupportedTlsVersion": _text(args, "latest_supported_tls_version") or "v1_2"}
     if client_state := _text(args, "client_state"):
         payload["clientState"] = client_state
     if lifecycle_url := _text(args, "lifecycle_notification_url"):
         payload["lifecycleNotificationUrl"] = lifecycle_url
-
     result = asyncio.run(build_graph_client().post_json("/subscriptions", json_body=payload))
     sync_graph_subscription_record(store, result, status="active")
     _print_json(result)
@@ -283,10 +256,8 @@ def _cmd_delete_subscription(args) -> None:
 def _cmd_maintain_subscriptions(args) -> None:
     _print_json(asyncio.run(maintain_graph_subscriptions(
         client=build_graph_client(), store=_open_store(args),
-        renew_within_hours=int(getattr(args, "renew_within_hours", 24) or 24),
-        extend_hours=int(getattr(args, "extend_hours", 24) or 24),
-        dry_run=bool(getattr(args, "dry_run", False)), client_state=_text(args, "client_state") or None,
-    )))
+        renew_within_hours=_int_arg(args, "renew_within_hours", 24), extend_hours=_int_arg(args, "extend_hours", 24),
+        dry_run=bool(getattr(args, "dry_run", False)), client_state=_text(args, "client_state") or None)))
 
 
 def _cmd_token_health(args) -> None:
@@ -328,14 +299,12 @@ _SUBCOMMANDS: list[tuple[str, list[str], str, list[tuple[str, dict[str, Any]]], 
       _opt("--latest-supported-tls-version", default="v1_2"), _STORE_PATH], _cmd_subscribe),
     ("renew-subscription", [], "Renew a Microsoft Graph subscription",
      [_opt("subscription_id"), _opt("--expiration", required=True), _STORE_PATH], _cmd_renew_subscription),
-    ("delete-subscription", [], "Delete a Microsoft Graph subscription",
-     [_opt("subscription_id"), _STORE_PATH], _cmd_delete_subscription),
+    ("delete-subscription", [], "Delete a Microsoft Graph subscription", [_opt("subscription_id"), _STORE_PATH], _cmd_delete_subscription),
     ("maintain-subscriptions", [], "Renew near-expiry managed subscriptions",
      [_opt("--renew-within-hours", type=int, default=24), _opt("--extend-hours", type=int, default=24),
       _opt("--dry-run", action="store_true"), _STORE_PATH, _opt("--client-state", **_EMPTY)], _cmd_maintain_subscriptions),
     ("token-health", ["token"], "Inspect Graph token health", [_opt("--force-refresh", action="store_true")], _cmd_token_health),
-    ("validate", [], "Validate Teams pipeline configuration snapshot", [_STORE_PATH], _cmd_validate),
-]
+    ("validate", [], "Validate Teams pipeline configuration snapshot", [_STORE_PATH], _cmd_validate)]
 
 _ACTIONS = {alias: handler for name, aliases, _help, _options, handler in _SUBCOMMANDS for alias in (name, *aliases)}
 
@@ -344,5 +313,4 @@ _REQUIRED_ARGS: dict[Callable[[Any], None], tuple[tuple[str, ...], str]] = {
     _cmd_show: (("job_id",), "job_id is required"),
     _cmd_run: (("job_id",), "job_id is required"),
     _cmd_renew_subscription: (("subscription_id", "expiration"), "subscription_id and --expiration are required"),
-    _cmd_delete_subscription: (("subscription_id",), "subscription_id is required"),
-}
+    _cmd_delete_subscription: (("subscription_id",), "subscription_id is required")}

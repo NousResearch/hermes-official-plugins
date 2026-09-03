@@ -978,6 +978,23 @@ def _strip_edge_self_mentions(text: str, mentions: Sequence[FeishuMentionRef]) -
 #   * ``websockets.connect`` becomes one dispatcher that merges the calling thread's
 #     registered ping overrides, so profiles stop racing over the global patch.
 
+# --------------------------------------------------------------------------- Multiplex isolation for the
+# lark_oapi WebSocket client (#73779)
+# --------------------------------------------------------------------------- ``lark_oapi.ws.client`` keeps
+# the asyncio loop used by ``Client.start()`` and every coroutine it spawns in a *module-level global*
+# (``loop``), and Hermes also monkey-patches ``websockets.connect`` on the shared ``websockets`` module to
+# inject per-adapter ping settings. In multiplex mode every profile runs its own WS client on a dedicated
+# thread, so the N threads overwrite each other's module globals (last-write-wins): a client ends up
+# scheduling tasks on a sibling profile's loop ("Future attached to a different loop" crashes) or binds to
+# the wrong loop at construction time and goes deaf from the start. The fix installs process-wide,
+# thread-dispatching shims exactly once: * ``ws_client_module.loop`` becomes a proxy that forwards every
+# attribute access to the loop registered by the *current thread*. All SDK reads of the global happen on the
+# thread that owns the loop (``start()`` blocks in ``run_until_complete`` and every ``create_task`` callback
+# runs on the loop's own thread), so each profile transparently sees its own loop. Threads that never
+# registered one (single-profile installs, CLI) fall back to the SDK's original module loop. *
+# ``websockets.connect`` becomes a single dispatcher that merges the per-thread ping overrides registered by
+# the calling profile, so profiles no longer race over the global patch or restore each other's hooks while
+# a sibling is still connected.
 _WS_ISOLATION_LOCK = threading.Lock()
 _WS_ISOLATION_INSTALLED = False
 _ws_isolation_state = threading.local()  # per WS thread: .loop and .connect_kwargs
@@ -1106,6 +1123,10 @@ def feishu_deps_present() -> bool:
 
     Uses cheap importlib.metadata lookups; the real import is deferred to ``_load_lark_oapi``
     and the ACTIVE installer is ``check_feishu_requirements`` (``ensure_deps_fn``).
+
+    Registry ``check_fn`` — called from status displays and config loading, so it must never install
+    anything. The ACTIVE lazy-installer (``check_feishu_requirements``) is registered as ``ensure_deps_fn``
+    and runs from ``create_adapter()`` when this returns False (#79812).
     """
     if FEISHU_AVAILABLE:
         return True
@@ -1188,6 +1209,7 @@ class FeishuAdapter(BasePlatformAdapter):
         self._client: Optional[Any] = None
         # Adapter-owned pool for blocking SDK calls, recreated on demand: a torn-down default
         # executor can no longer wedge sends with "Executor shutdown has been called".
+        # See issue #10849.
         self._sdk_executor_lock = threading.Lock()
         self._sdk_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
         self._sdk_executor_closing = False  # set on disconnect so a real teardown isn't resurrected
@@ -1262,6 +1284,7 @@ class FeishuAdapter(BasePlatformAdapter):
         # Env-only so adapter and gateway auth bypass share one source (yaml feishu.allow_bots
         # is bridged to the env var at config load). Scoped read: under multiplex a secondary
         # profile's .env must govern its own adapter.
+        # See #86905.
         allow_bots = _get_scoped_secret("FEISHU_ALLOW_BOTS", "none").strip().lower()
         if allow_bots not in {"none", "mentions", "all"}:
             logger.warning(
@@ -1332,7 +1355,12 @@ class FeishuAdapter(BasePlatformAdapter):
         )
 
     def _get_sdk_executor(self) -> concurrent.futures.ThreadPoolExecutor:
-        """Adapter-owned executor; recreated after an *external* shutdown, never after our own close."""
+        """Adapter-owned executor; recreated after an *external* shutdown, never after our own close.
+
+        Recreates the pool if it was never built or was shut down by an *external* teardown of the loop's
+        default executor, so that can no longer permanently wedge sends (#10849). Refuses to resurrect once
+        the adapter itself is closing — a real disconnect/shutdown stays shut.
+        """
         lock = getattr(self, "_sdk_executor_lock", None)  # bare adapters (tests) may lack __init__ state
         if lock is None:
             lock = self._sdk_executor_lock = threading.Lock()
@@ -1428,6 +1456,10 @@ class FeishuAdapter(BasePlatformAdapter):
         await self._cancel_pending_tasks(self._pending_media_batch_tasks)
         self._reset_batch_buffers()
         # ``_disable_websocket_auto_reconnect()`` nils ``_ws_client`` — capture first.
+        # Send a WebSocket CLOSE frame to Feishu BEFORE tearing down the thread loop. Without this, Feishu's
+        # server never learns the connection is dead and continues routing messages to the stale endpoint —
+        # the channel goes silent until the server-side CLOSE-WAIT expires (minutes to hours). See issue
+        # #10202.
         ws_client = self._ws_client
         ws_thread_loop = self._ws_thread_loop
         self._disable_websocket_auto_reconnect()
@@ -1533,6 +1565,8 @@ class FeishuAdapter(BasePlatformAdapter):
         # Decide markdown-vs-text once for the whole message: a chunk of a long
         # markdown reply may be plain prose that fails the per-chunk regex and would
         # otherwise render as literal ``**bold`` / fences while other chunks render.
+        # Lock the markdown decision at the whole-message level so every chunk consistently uses ``post``.
+        # See #26841.
         prefer_post = bool(_MARKDOWN_HINT_RE.search(formatted))
         last_response = None
 
@@ -2593,6 +2627,7 @@ class FeishuAdapter(BasePlatformAdapter):
             )
             response.raise_for_status()
             # Snapshot headers + body inside the context so pooled connections fully release.
+            # See #18451.
             content_type_hdr = str(response.headers.get("Content-Type", ""))
             body = response.content
         filename = self._derive_remote_filename(
@@ -2900,6 +2935,10 @@ class FeishuAdapter(BasePlatformAdapter):
             # Lark's native "audio" is an in-app voice recording (uploaded audio arrives as
             # file/media → "document"). VOICE makes the gateway auto-transcribe it like
             # Discord/DingTalk/Telegram; as AUDIO it would be silently ignored.
+            # Classify it as VOICE so the gateway auto-transcribes it (Opus → STT) the same way
+            # Discord/DingTalk/Telegram/etc. do — otherwise a Feishu voice note reaches the agent as an
+            # untranscribable AUDIO attachment and is silently ignored. Follow-up to #28993, which added
+            # native voice-note transcription for Discord + DingTalk.
             return MessageType.VOICE
         if preferred in ("photo", "document"):
             default = MessageType.PHOTO if preferred == "photo" else MessageType.DOCUMENT
@@ -3428,6 +3467,11 @@ class FeishuAdapter(BasePlatformAdapter):
         # Feishu clients render markdown tables inside ``post`` ``md`` elements natively, so tables
         # take the common markdown path (no text downgrade). ``prefer_post`` lets ``send`` keep every
         # chunk of a split markdown reply as ``post`` even when a chunk alone looks like prose.
+        # The previous table-downgrade branch forced any table-containing message to ``text``, which left
+        # Feishu readers seeing the raw pipe-and-dash source instead of a rendered table. ``prefer_post``
+        # lets ``send`` treat the chunk as part of a larger markdown document: when a long markdown reply is
+        # split at MAX_MESSAGE_LENGTH, the per-chunk regex would otherwise mis-classify a plain-prose chunk
+        # as ``text``. See #26841.
         if prefer_post or _MARKDOWN_HINT_RE.search(content):
             return "post", _build_markdown_post_payload(content)
         return "text", json.dumps({"text": content}, ensure_ascii=False)
@@ -3623,6 +3667,8 @@ class FeishuAdapter(BasePlatformAdapter):
 
         ``lark_oapi.start()`` only returns on fatal errors; without this watcher a dead thread
         left the profile silently deaf until a gateway restart. Rebuild with capped backoff.
+
+        See #73779.
         """
         backoff = initial_backoff = float(self._ws_restart_backoff)
         last_dead: Optional[asyncio.Future] = None
@@ -3677,6 +3723,7 @@ class FeishuAdapter(BasePlatformAdapter):
         self._prepare_client()
         await self._hydrate_bot_identity()
         # client_max_size backstops the bounded reader in _handle_webhook_request on every read path.
+        # See #58536, #58902, #59180.
         app = web.Application(client_max_size=_FEISHU_WEBHOOK_MAX_BODY_BYTES)
         app.router.add_post(self._webhook_path, self._handle_webhook_request)
         self._webhook_runner = web.AppRunner(app)
@@ -4065,6 +4112,14 @@ def _qr_register_inner(*, initial_domain: str, timeout_seconds: int) -> Optional
 
 # --- Plugin glue: register(ctx) + the hook fns that replaced the per-platform core touchpoints ---
 
+# ────────────────────────────────────────────────────────────────────────── Plugin migration glue (#41112 /
+# #3823) Added when the Feishu adapter (+ its feishu_comment / feishu_comment_rules / feishu_meeting_invite
+# satellites) moved from gateway/platforms/ into this bundled plugin. Mirrors the Discord (#24356) / Slack
+# migrations: a register(ctx) entry point plus hook implementations that replace the per-platform core
+# touchpoints (the Platform.FEISHU elif in gateway/run.py, the feishu_cfg YAML→env block +
+# _PLATFORM_CONNECTED_CHECKERS entry in gateway/config.py, the _setup_feishu wizard + _PLATFORMS["feishu"]
+# static dict in hermes_cli/gateway.py, and the _send_feishu dispatch in tools/send_message_tool.py).
+# ──────────────────────────────────────────────────────────────────────────
 _MIGRATION_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 _MIGRATION_VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp"}
 _MIGRATION_AUDIO_EXTS = {".ogg", ".opus", ".mp3", ".wav", ".m4a", ".flac"}
@@ -4228,7 +4283,11 @@ def interactive_setup() -> None:
 
 
 def _apply_yaml_config(yaml_cfg: dict, feishu_cfg: dict) -> dict | None:
-    """apply_yaml_config_fn: bridge config.yaml feishu.allow_bots to FEISHU_ALLOW_BOTS (env wins); returns None."""
+    """apply_yaml_config_fn: bridge config.yaml feishu.allow_bots to FEISHU_ALLOW_BOTS (env wins); returns None.
+
+    Implements the apply_yaml_config_fn contract (#24849). Mirrors the legacy feishu_cfg block from
+    gateway/config.py::load_gateway_config() (allow_bots). Env vars take precedence over YAML.
+    """
     if "allow_bots" in feishu_cfg and not os.getenv("FEISHU_ALLOW_BOTS"):
         os.environ["FEISHU_ALLOW_BOTS"] = str(feishu_cfg["allow_bots"]).lower()
     return None

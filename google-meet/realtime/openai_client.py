@@ -86,18 +86,16 @@ class RealtimeSession:
         })
         self._send_json({"type": "response.create", "response": {"modalities": ["audio"]}})
         bytes_written = 0
-        sink_fp = None
-        if self.audio_sink_path is not None:
-            self.audio_sink_path.parent.mkdir(parents=True, exist_ok=True)
-            sink_fp = open(self.audio_sink_path, "ab")
-        try:
+        with contextlib.ExitStack() as stack:
+            sink_fp = None
+            if self.audio_sink_path is not None:
+                self.audio_sink_path.parent.mkdir(parents=True, exist_ok=True)
+                sink_fp = stack.enter_context(open(self.audio_sink_path, "ab"))
             while True:
                 frame = self._recv_frame(start + timeout, timeout)
-                if frame is None:  # connection closed by peer
+                if frame is None or frame.get("type") in _TERMINAL_FRAMES:  # peer closed / response done
                     break
                 ftype = frame.get("type")
-                if ftype in _TERMINAL_FRAMES:
-                    break
                 if ftype == "error":
                     raise RuntimeError(f"realtime error: {frame.get('error') or frame}")
                 if ftype == "response.audio.delta" and sink_fp is not None:
@@ -108,9 +106,6 @@ class RealtimeSession:
                         bytes_written += len(chunk)
                         self.audio_bytes_out += len(chunk)
                         self.last_audio_out_at = time.time()
-        finally:
-            if sink_fp is not None:
-                sink_fp.close()
         return {"ok": True, "bytes_written": bytes_written, "duration_ms": (time.monotonic() - start) * 1000.0}
 
     def cancel_response(self) -> bool:

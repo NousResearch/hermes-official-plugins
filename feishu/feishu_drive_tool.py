@@ -18,27 +18,19 @@ from tools.registry import registry, tool_error, tool_result
 logger = logging.getLogger(__name__)
 
 
-def _prepare(args: dict, keys: tuple, missing_msg: str):
-    """Client check first, then required fields (stripped). Returns (client, values, error|None)."""
-    client = get_client()
-    values = tuple(args.get(k, "").strip() for k in keys)
-    if client is None:
-        return None, values, tool_error("Feishu client not available")
-    if not all(values):
-        return client, values, tool_error(missing_msg)
-    return client, values, None
-
-
 def _comment_op(keys, missing_msg, label, method, uri, queries=None, body=None, flag_success=False):
-    """Handler factory: validate ``keys`` → lark_call → ``"{label} failed"`` or the data.
+    """Handler factory: client check, then required ``keys`` (stripped) → lark_call → result.
 
     All keys except ``content`` are URI path params. ``queries(args)`` / ``body(args, values)``
     build the request pieces; ``flag_success`` adds ``success=True`` to the result (writes).
     """
     def _handler(args: dict, **kwargs) -> str:
-        client, values, err = _prepare(args, keys, missing_msg)
-        if err:
-            return err
+        client = get_client()
+        values = tuple(args.get(k, "").strip() for k in keys)
+        if client is None:
+            return tool_error("Feishu client not available")
+        if not all(values):
+            return tool_error(missing_msg)
         code, msg, data = lark_call(
             client, method, uri, paths={k: v for k, v in zip(keys, values) if k != "content"},
             queries=queries and queries(args), body=body and body(args, values))
@@ -186,7 +178,8 @@ _handle_reply_comment = _comment_op(
 # new_comments takes the flat "reply_elements[text]" shape with file_type in the body.
 _handle_add_comment = _comment_op(
     ("file_token", "content"), "file_token and content are required", "Add comment", "POST",
-    _ADD_COMMENT_URI, body=lambda a, v: {"file_type": _file_type(a), "reply_elements": [{"type": "text", "text": v[-1]}]},
+    _ADD_COMMENT_URI,
+    body=lambda a, v: {"file_type": _file_type(a), "reply_elements": [{"type": "text", "text": v[-1]}]},
     flag_success=True)
 
 

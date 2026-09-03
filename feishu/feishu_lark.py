@@ -67,24 +67,20 @@ def lark_call(client, method, uri, paths=None, queries=None, body=None):
 def raw_body(response):
     """Parsed JSON object of the raw HTTP body, or None when absent/unparseable/not a dict."""
     raw = getattr(response, "raw", None)
-    if raw and hasattr(raw, "content"):
-        try:
-            body = json.loads(raw.content)
-        except (json.JSONDecodeError, AttributeError):
-            return None
-        if isinstance(body, dict):
-            return body
-    return None
+    try:
+        body = json.loads(raw.content) if raw and hasattr(raw, "content") else None
+    except (json.JSONDecodeError, AttributeError):
+        return None
+    return body if isinstance(body, dict) else None
 
 
 def response_data(response) -> dict:
     """``data`` of a lark response: prefer the raw JSON body, fall back to typed .data."""
     body = raw_body(response)
     data = body.get("data", {}) if body is not None else {}
-    if not data:
-        resp_data = getattr(response, "data", None)
-        if isinstance(resp_data, dict):
-            data = resp_data
-        elif resp_data and hasattr(resp_data, "__dict__"):
-            data = vars(resp_data)
-    return data
+    if data:
+        return data
+    resp_data = getattr(response, "data", None)
+    if isinstance(resp_data, dict):
+        return resp_data
+    return vars(resp_data) if resp_data and hasattr(resp_data, "__dict__") else data

@@ -11,6 +11,7 @@ tries QQ's free ``asr_refer_text`` first, then the configured STT provider.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -132,10 +133,8 @@ class QQAdapter(BasePlatformAdapter):
 
         extra = config.extra or {}
         self._app_id = str(extra.get("app_id") or _resolve_qq_secret("QQ_APP_ID", "")).strip()
-        self._client_secret = str(
-            extra.get("client_secret") or _resolve_qq_secret("QQ_CLIENT_SECRET", "")).strip()
+        self._client_secret = str(extra.get("client_secret") or _resolve_qq_secret("QQ_CLIENT_SECRET", "")).strip()
         self._markdown_support = bool(extra.get("markdown_support", True))
-
         self._dm_policy = str(extra.get("dm_policy", "pairing")).strip().lower()
         self._allow_from = _coerce_list(extra.get("allow_from") or extra.get("allowFrom"))
         self._group_policy = str(extra.get("group_policy", "pairing")).strip().lower()
@@ -150,12 +149,10 @@ class QQAdapter(BasePlatformAdapter):
         self._session_id: Optional[str] = None
         self._last_seq: Optional[int] = None
         self._chat_type_map: Dict[str, str] = {}  # chat_id → "c2c"|"group"|"guild"|"dm"
-
         self._pending_responses: Dict[str, asyncio.Future] = {}  # request/response correlation
         self._seen_messages: Dict[str, float] = {}
         self._last_msg_id: Dict[str, str] = {}  # last inbound message ID per chat (send_typing)
         self._typing_sent_at: Dict[str, float] = {}  # typing debounce: chat_id → last send_typing ts
-
         self._access_token: Optional[str] = None
         self._token_expires_at: float = 0.0
         self._token_lock = asyncio.Lock()
@@ -163,9 +160,8 @@ class QQAdapter(BasePlatformAdapter):
         # Inline-keyboard interaction routing: invoked for every INTERACTION_CREATE
         # after the adapter ACKed it. Defaults to the approval/update-prompt
         # dispatcher; override via set_interaction_callback() (None drops clicks).
-        self._interaction_callback: Optional[
-            Callable[[InteractionEvent], Awaitable[None]]
-        ] = self._default_interaction_dispatch
+        self._interaction_callback: Optional[Callable[[InteractionEvent], Awaitable[None]]] = (
+            self._default_interaction_dispatch)
 
     # ── Properties ──
 
@@ -237,10 +233,8 @@ class QQAdapter(BasePlatformAdapter):
         """Cancel and await *task* (if any); always returns None for reassignment."""
         if task:
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
         return None
 
     async def _close_ws(self) -> None:
@@ -449,7 +443,7 @@ class QQAdapter(BasePlatformAdapter):
 
     async def _heartbeat_loop(self) -> None:
         """Send op 1 heartbeats with the latest seq at 80% of the Hello interval."""
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             while self._running:
                 await asyncio.sleep(self._heartbeat_interval)
                 if not self._ws or self._ws.closed:
@@ -458,8 +452,6 @@ class QQAdapter(BasePlatformAdapter):
                     await self._ws.send_json({"op": 1, "d": self._last_seq})
                 except Exception as exc:
                     logger.debug("[%s] Heartbeat failed: %s", self._log_tag, exc)
-        except asyncio.CancelledError:
-            pass
 
     async def _send_ws_auth(self, name: str, payload: Dict[str, Any], sent_msg: str, *log_args) -> bool:
         """Send an Identify/Resume payload; returns False if the send raised."""
@@ -1077,10 +1069,8 @@ class QQAdapter(BasePlatformAdapter):
 
     @staticmethod
     def _unlink_quiet(path: str) -> None:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(path)
-        except OSError:
-            pass
 
     @staticmethod
     def _wav_ok(wav_path: str) -> bool:
@@ -1685,16 +1675,11 @@ class QQAdapter(BasePlatformAdapter):
 
     def _parse_qq_timestamp(self, raw: str) -> datetime:
         """Parse a QQ timestamp — ISO 8601 string (current) or integer ms (legacy)."""
-        if not raw:
-            return datetime.now(tz=timezone.utc)
-        try:
-            return datetime.fromisoformat(raw)
-        except (ValueError, TypeError):
-            pass
-        try:
-            return datetime.fromtimestamp(int(raw) / 1000, tz=timezone.utc)
-        except (ValueError, TypeError):
-            pass
+        if raw:
+            with contextlib.suppress(ValueError, TypeError):
+                return datetime.fromisoformat(raw)
+            with contextlib.suppress(ValueError, TypeError):
+                return datetime.fromtimestamp(int(raw) / 1000, tz=timezone.utc)
         return datetime.now(tz=timezone.utc)
 
     def _is_duplicate(self, msg_id: str) -> bool:

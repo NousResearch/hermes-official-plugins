@@ -75,7 +75,6 @@ class AudioBridge:
     def _setup_linux(self) -> dict:
         sink_name = f"{self._name_prefix}_sink"
         src_name = f"{self._name_prefix}_src"
-
         try:
             sink_out = _pactl(
                 "load-module", "module-null-sink", f"sink_name={sink_name}",
@@ -85,7 +84,6 @@ class AudioBridge:
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(f"pactl load-module null-sink failed: {exc.stderr or exc}") from exc
         sink_mod_id = self._parse_module_id(sink_out.stdout)
-
         try:
             src_out = _pactl(
                 "load-module", "module-virtual-source", f"source_name={src_name}",
@@ -94,7 +92,6 @@ class AudioBridge:
             # Roll back the null-sink we just created so we don't leak it.
             _pactl("unload-module", str(sink_mod_id), check=False)
             raise RuntimeError(f"pactl load-module virtual-source failed: {exc.stderr or exc}") from exc
-
         return self._finish("linux", src_name, sink_name, [sink_mod_id, self._parse_module_id(src_out.stdout)])
 
     def _setup_darwin(self) -> dict:
@@ -105,7 +102,6 @@ class AudioBridge:
             raise RuntimeError("system_profiler not found (macOS-only command)") from exc
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(f"system_profiler failed: {exc.output}") from exc
-
         if "BlackHole" not in out:
             raise RuntimeError("BlackHole virtual audio device not installed. "
                                "Install via: brew install blackhole-2ch")

@@ -58,7 +58,6 @@ class RealtimeSession:
             self._ws = connect(url, additional_headers=headers)
         except TypeError:
             self._ws = connect(url, extra_headers=headers)
-
         self._send_json({
             "type": "session.update",
             "session": {
@@ -81,14 +80,12 @@ class RealtimeSession:
         so a streaming reader can consume it). Frames other than audio deltas/terminal/error are ignored."""
         if self._ws is None:
             raise RuntimeError("RealtimeSession.connect() must be called first")
-
         start = time.monotonic()
         self._send_json({
             "type": "conversation.item.create",
             "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]},
         })
         self._send_json({"type": "response.create", "response": {"modalities": ["audio"]}})
-
         bytes_written = 0
         sink_fp = None
         if self.audio_sink_path is not None:
@@ -115,7 +112,6 @@ class RealtimeSession:
         finally:
             if sink_fp is not None:
                 sink_fp.close()
-
         return {"ok": True, "bytes_written": bytes_written, "duration_ms": (time.monotonic() - start) * 1000.0}
 
     def cancel_response(self) -> bool:
@@ -208,7 +204,6 @@ class RealtimeSpeaker:
                 except Exception as exc:
                     result = {"ok": False, "error": str(exc)}
             self._append_processed(head, result)
-
             # Re-read (new entries may have arrived), then drop the head by position or id.
             latest = self._read_queue()
             if latest and latest[0].get("id") == head.get("id"):

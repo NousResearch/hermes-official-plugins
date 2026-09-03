@@ -62,24 +62,19 @@ def start(url: str, *, out_dir: Optional[Path] = None, headed: bool = False,
           realtime_api_key: Optional[str] = None) -> Dict[str, Any]:
     """Spawn the meet_bot subprocess for *url*, stopping any running bot first (one active meeting)."""
     from plugins.google_meet.meet_bot import _is_safe_meet_url, _meeting_id_from_url
-
     if not _is_safe_meet_url(url):
         return {"ok": False, "error": "refusing: only https://meet.google.com/ URLs are allowed. got: " + repr(url)}
-
     if _pid_alive(_active_pid()):
         stop(reason="replaced by new meet_join")
-
     meeting_id = _meeting_id_from_url(url)
     out = out_dir or (_root() / meeting_id)
     out.mkdir(parents=True, exist_ok=True)
-
     # Wipe stale files from a previous run of this meeting id.
     for name in ("transcript.txt", "status.json"):
         try:
             (out / name).unlink()
         except OSError:
             pass
-
     env = {**os.environ, "HERMES_MEET_URL": url, "HERMES_MEET_OUT_DIR": str(out),
            "HERMES_MEET_GUEST_NAME": guest_name}
     for value, var in (
@@ -96,11 +91,9 @@ def start(url: str, *, out_dir: Optional[Path] = None, headed: bool = False,
     # (a contextvar) is installed; the detached child inherits env, not scope.
     if not realtime_api_key:
         from agent.secret_scope import get_secret
-
         realtime_api_key = get_secret("HERMES_MEET_REALTIME_KEY") or get_secret("OPENAI_API_KEY")
     if realtime_api_key:
         env["HERMES_MEET_REALTIME_KEY"] = realtime_api_key
-
     log_path = out / "bot.log"
     # Detach: stdout/stderr → log file, new session so parent signals don't propagate.
     with open(log_path, "ab", buffering=0) as log_fh:
@@ -129,7 +122,6 @@ def transcript(last: Optional[int] = None) -> Dict[str, Any]:
     active = _read_active()
     if not active:
         return dict(_NO_ACTIVE)
-
     tp = Path(active.get("out_dir", "")) / "transcript.txt"
     text = tp.read_text(encoding="utf-8", errors="replace") if tp.is_file() else ""
     all_lines = [ln for ln in text.splitlines() if ln.strip()]
@@ -141,22 +133,18 @@ def enqueue_say(text: str) -> Dict[str, Any]:
     """Append a ``say`` request to ``<out_dir>/say_queue.jsonl``.
     Refused when no meeting is active or the active bot is transcribe-only."""
     import uuid
-
     text = (text or "").strip()
     if not text:
         return {"ok": False, "reason": "text is required"}
-
     active = _read_active()
     if not active:
         return dict(_NO_ACTIVE)
     if active.get("mode") != "realtime":
         return {"ok": False, "reason": ("active meeting is in transcribe mode — pass mode='realtime' "
                                         "to meet_join to enable agent speech")}
-
     out_dir = Path(active.get("out_dir", ""))
     if not out_dir.is_dir():
         return {"ok": False, "reason": f"out_dir missing: {out_dir}"}
-
     queue_path = out_dir / "say_queue.jsonl"
     entry = {"id": uuid.uuid4().hex[:12], "text": text}
     with queue_path.open("a", encoding="utf-8") as f:
@@ -169,7 +157,6 @@ def stop(*, reason: str = "requested") -> Dict[str, Any]:
     active = _read_active()
     if not active:
         return dict(_NO_ACTIVE)
-
     pid = int(active.get("pid", 0))
     out_dir = active.get("out_dir")
     if _pid_alive(pid):
@@ -180,7 +167,6 @@ def stop(*, reason: str = "requested") -> Dict[str, Any]:
             time.sleep(0.5)
         if _pid_alive(pid):
             _kill(pid, signal.SIGKILL)  # windows-footgun: ok — POSIX-only plugin (google_meet registers no-op on Windows; see __init__.py)
-
     try:
         (_root() / ".active.json").unlink()
     except FileNotFoundError:

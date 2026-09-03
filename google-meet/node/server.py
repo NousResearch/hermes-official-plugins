@@ -92,7 +92,6 @@ class NodeServer:
         ok, reason = _proto.validate_request(msg, self.ensure_token())
         if not ok:
             return _proto.make_error(str(msg.get("id") or ""), reason)
-
         req_id, t = msg["id"], msg["type"]
         if t == "ping":
             return {"type": "pong", "id": req_id,
@@ -100,10 +99,8 @@ class NodeServer:
         handler = _RPC.get(t)
         if handler is None:
             return _proto.make_error(req_id, f"unhandled type: {t!r}")
-
         # Import lazily so test mocks can monkeypatch freely.
         from plugins.google_meet import process_manager as pm
-
         try:
             return _proto.make_response(req_id, handler(msg["payload"], pm))
         except _RpcError as exc:
@@ -118,7 +115,6 @@ class NodeServer:
         except ImportError as exc:
             raise RuntimeError("NodeServer.serve requires the 'websockets' package. "
                                "Install it with: pip install websockets") from exc
-
         self.ensure_token()
 
         async def _handler(ws):

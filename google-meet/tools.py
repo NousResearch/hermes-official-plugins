@@ -28,7 +28,6 @@ def resolve_node(node: str):
     """``(NodeClient, node_name)`` for *node* (``'auto'`` = the sole registered node), or ``(None, None)``."""
     from plugins.google_meet.node.registry import NodeRegistry
     from plugins.google_meet.node.client import NodeClient
-
     entry = NodeRegistry().resolve(node if node != "auto" else None)
     if entry is None:
         return None, None
@@ -186,7 +185,6 @@ def handle_meet_join(args: Dict[str, Any], **_kw) -> str:
     mode = (args.get("mode") or "transcribe").strip().lower()
     if mode not in {"transcribe", "realtime"}:
         return _err(f"mode must be 'transcribe' or 'realtime' (got {mode!r})")
-
     common: Dict[str, Any] = dict(
         url=url, guest_name=str(args.get("guest_name") or "Hermes Agent"),
         duration=str(args.get("duration")) if args.get("duration") else None,

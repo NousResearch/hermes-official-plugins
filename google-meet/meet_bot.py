@@ -251,12 +251,10 @@ def _start_realtime_speaker(rt: dict, cfg: "_BotConfig", stop_flag: dict, state:
     except Exception as e:
         state.set(error=f"realtime import failed: {e}")
         return
-
     pcm_path = cfg.out_dir / "speaker.pcm"
     queue_path = cfg.out_dir / "say_queue.jsonl"
     pcm_path.write_bytes(b"")  # clean sink file per session
     queue_path.touch()  # so the speaker poller doesn't error on first iteration
-
     try:
         session = RealtimeSession(
             api_key=cfg.realtime_api_key, model=cfg.realtime_model, voice=cfg.realtime_voice,
@@ -266,7 +264,6 @@ def _start_realtime_speaker(rt: dict, cfg: "_BotConfig", stop_flag: dict, state:
         state.set(error=f"realtime connect failed: {e}")
         return
     rt["session"] = session
-
     speaker = RealtimeSpeaker(
         session=session, queue_path=queue_path, processed_path=cfg.out_dir / "say_processed.jsonl")
 
@@ -394,7 +391,6 @@ def _drain_loop(page, cfg: _BotConfig, state: _BotState, rt: dict, stop_flag: di
         if deadline and now > deadline:
             state.set(leave_reason="duration_expired")
             return
-
         if not state.in_call and (now - last_admission_check) > 3.0:
             last_admission_check = now
             if _probe(page, _ADMISSION_PROBE_JS):
@@ -407,7 +403,6 @@ def _drain_loop(page, cfg: _BotConfig, state: _BotState, rt: dict, stop_flag: di
             elif _probe(page, _DENIED_PROBE_JS):
                 state.set(error="host denied admission", leave_reason="denied")
                 return
-
         try:
             queued = page.evaluate("window.__hermesMeetDrain && window.__hermesMeetDrain()")
             for entry in queued if isinstance(queued, list) else ():
@@ -423,11 +418,9 @@ def _drain_loop(page, cfg: _BotConfig, state: _BotState, rt: dict, stop_flag: di
             if page.is_closed():  # Meet reloaded or we got booted — exit rather than spin
                 state.set(leave_reason="page_closed")
                 return
-
         if rt["session"] is not None:
             state.set(audio_bytes_out=rt["session"].audio_bytes_out,
                       last_audio_out_at=rt["session"].last_audio_out_at)
-
         time.sleep(1.0)
 
 
@@ -440,21 +433,17 @@ def run_bot() -> int:
     if cfg.out_dir is None:
         sys.stderr.write("google_meet bot: HERMES_MEET_OUT_DIR is required\n")
         return 2
-
     state = _BotState(out_dir=cfg.out_dir, meeting_id=_meeting_id_from_url(cfg.url), url=cfg.url)
-
     # SIGTERM sets a flag (not an exception) so the Playwright teardown below still runs
     # and ``meet_leave`` gets a finalized transcript.
     stop_flag = {"stop": False}
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda _sig, _frame: stop_flag.__setitem__("stop", True))
-
     # Realtime resources in one dict so teardown works however we exit.
     rt = {"enabled": cfg.realtime, "bridge": None, "bridge_info": None, "session": None,
           "speaker_thread": None}
     if rt["enabled"]:
         _setup_realtime(rt, cfg.realtime_api_key, state)
-
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as e:
@@ -464,14 +453,12 @@ def run_bot() -> int:
         if rt["bridge"]:
             rt["bridge"].teardown()
         return 3
-
     chrome_args = ["--use-fake-ui-for-media-stream", "--disable-blink-features=AutomationControlled"]
     if not rt["enabled"]:
         chrome_args.insert(1, "--use-fake-device-for-media-stream")  # silent fake mic
     elif rt["bridge_info"] and rt["bridge_info"].get("platform") == "linux":
         # Playwright's launch() takes no env: set PULSE_SOURCE on ourselves so Chrome inherits it.
         os.environ["PULSE_SOURCE"] = rt["bridge_info"].get("device_name", "")
-
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=not cfg.headed, args=chrome_args)
@@ -484,13 +471,11 @@ def run_bot() -> int:
                 context_args["storage_state"] = cfg.auth_state
             context = browser.new_context(**context_args)
             page = context.new_page()
-
             try:
                 page.goto(cfg.url, wait_until="domcontentloaded", timeout=30_000)
             except Exception as e:
                 state.set(error=f"navigate failed: {e}", exited=True)
                 return 4
-
             _join(page, cfg, state)
             if _quiet(page.evaluate, _ENABLE_CAPTIONS_JS):
                 state.set(captions_enabled_attempted=True)
@@ -498,21 +483,17 @@ def run_bot() -> int:
                 page.evaluate(_CAPTION_OBSERVER_JS)
             except Exception as e:
                 state.set(error=f"caption observer install failed: {e}")
-
             # in_call stays False until admission is confirmed by the drain loop.
             state.set(captioning=True, join_attempted_at=time.time())
             if rt["enabled"]:
                 _start_realtime_speaker(rt, cfg, stop_flag, state)
-
             _drain_loop(page, cfg, state, rt, stop_flag)
-
             _quiet(page.evaluate, _LEAVE_CALL_JS)
             context.close()
             browser.close()
             _teardown_realtime(rt)
             state.set(in_call=False, captioning=False, exited=True)
             return 0
-
     except Exception as e:
         state.set(error=f"unhandled: {e}", exited=True)
         return 1

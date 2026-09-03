@@ -201,10 +201,7 @@ class QQAdapter(BasePlatformAdapter):
                 timeout=30.0, follow_redirects=True,
                 event_hooks={"response": [_ssrf_redirect_guard]}, limits=platform_httpx_limits())
 
-            await self._ensure_token()
-            gateway_url = await self._get_gateway_url()
-            logger.info("[%s] Gateway URL: %s", self._log_tag, gateway_url)
-            await self._open_ws(gateway_url)
+            await self._open_gateway_ws(log_url=True)
             self._listen_task = asyncio.create_task(self._listen_loop())
             self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
             self._mark_connected()
@@ -299,6 +296,14 @@ class QQAdapter(BasePlatformAdapter):
         return url
 
     # ── WebSocket lifecycle ──
+
+    async def _open_gateway_ws(self, *, log_url: bool = False) -> None:
+        """Token → gateway URL → WebSocket (shared by connect and _reconnect)."""
+        await self._ensure_token()
+        gateway_url = await self._get_gateway_url()
+        if log_url:
+            logger.info("[%s] Gateway URL: %s", self._log_tag, gateway_url)
+        await self._open_ws(gateway_url)
 
     async def _open_ws(self, gateway_url: str) -> None:
         await self._close_ws()
@@ -412,9 +417,7 @@ class QQAdapter(BasePlatformAdapter):
 
         self._heartbeat_interval = 30.0  # reset until Hello
         try:
-            await self._ensure_token()
-            gateway_url = await self._get_gateway_url()
-            await self._open_ws(gateway_url)
+            await self._open_gateway_ws()
             self._mark_connected()
             logger.info("[%s] Reconnected", self._log_tag)
             return True

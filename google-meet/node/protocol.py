@@ -1,14 +1,11 @@
-"""Wire protocol for gateway ↔ node RPC.
-
-Everything is a JSON object with the same envelope shape:
+"""Wire protocol for gateway ↔ node RPC (JSON envelopes).
 
     Request:   {"type": <str>, "id": <str>, "token": <str>, "payload": <dict>}
     Response:  {"type": "response", "id": <req-id>, "payload": <dict>}
     Error:     {"type": "error", "id": <req-id>, "error": <str>}
 
-Requests must carry the shared bearer token (set up via ``hermes meet node
-approve`` on the gateway and read off disk on the server). Mismatched tokens
-are rejected before dispatch.
+Requests carry the shared bearer token (``hermes meet node approve`` on the gateway, read off
+disk on the server); mismatched tokens are rejected before dispatch.
 """
 
 from __future__ import annotations
@@ -55,11 +52,8 @@ def encode(msg: Dict[str, Any]) -> str:
 
 
 def decode(raw) -> Dict[str, Any]:
-    """Parse a JSON envelope (object with string ``type`` + ``id``), raising ValueError otherwise.
-
-    Accepts ``str`` or UTF-8 ``bytes``. Token match and payload shape are
-    checked server-side in :func:`validate_request`.
-    """
+    """Parse a JSON envelope (object with string ``type`` + ``id``) from str/bytes; ValueError otherwise.
+    Token match and payload shape are checked server-side in :func:`validate_request`."""
     if isinstance(raw, (bytes, bytearray)):
         raw = raw.decode("utf-8")
     try:

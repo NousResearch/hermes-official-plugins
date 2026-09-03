@@ -26,8 +26,6 @@ class NodeRegistry:
     def __init__(self, path: Optional[Path] = None) -> None:
         self.path = Path(path) if path is not None else _default_path()
 
-    # ----- storage ------------------------------------------------------
-
     def _load(self) -> Dict[str, Dict[str, Any]]:
         """The ``nodes`` map (name → entry); empty when the file is missing or malformed."""
         data = read_json(self.path)
@@ -36,8 +34,6 @@ class NodeRegistry:
 
     def _save(self, nodes: Dict[str, Dict[str, Any]]) -> None:
         write_json_atomic(self.path, {"nodes": nodes})
-
-    # ----- public API ---------------------------------------------------
 
     def get(self, name: str) -> Optional[Dict[str, Any]]:
         entry = self._load().get(name)
@@ -63,10 +59,8 @@ class NodeRegistry:
         return [{"name": name, **entry} for name, entry in sorted(self._load().items())]
 
     def resolve(self, chrome_node: Optional[str]) -> Optional[Dict[str, Any]]:
-        """Named node's entry, or — when ``chrome_node`` is falsy — the sole registered node.
-
-        None when the name is unknown or when zero / several nodes are registered (ambiguous).
-        """
+        """Named node's entry, or (``chrome_node`` falsy) the sole registered node; None if unknown
+        or when zero / several nodes are registered (ambiguous)."""
         if chrome_node:
             return self.get(chrome_node)
         nodes = self.list_all()

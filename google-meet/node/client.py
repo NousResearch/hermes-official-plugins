@@ -1,9 +1,5 @@
-"""Gateway-side RPC client for a remote meet node.
-
-One short-lived sync WebSocket per call (send one request, read one
-response, close) so non-async tool handlers need no persistent connection
-state across agent turns. ``websockets`` is optional and imported lazily.
-"""
+"""Gateway-side RPC client for a remote meet node: one short-lived sync WebSocket per call, so
+non-async tool handlers need no persistent connection. ``websockets`` is imported lazily."""
 
 from __future__ import annotations
 
@@ -29,10 +25,8 @@ class NodeClient:
         try:
             from websockets.sync.client import connect  # type: ignore
         except ImportError as exc:
-            raise RuntimeError(
-                "NodeClient requires the 'websockets' package. "
-                "Install it with: pip install websockets"
-            ) from exc
+            raise RuntimeError("NodeClient requires the 'websockets' package. "
+                               "Install it with: pip install websockets") from exc
 
         req = _proto.make_request(type, self.token, payload)
         with connect(self.url, open_timeout=self.timeout, close_timeout=self.timeout) as ws:
@@ -48,13 +42,8 @@ class NodeClient:
             raise RuntimeError("response missing payload dict")
         return payload_out
 
-    def start_bot(
-        self,
-        url: str,
-        guest_name: str = "Hermes Agent",
-        duration: Optional[str] = None,
-        headed: bool = False,
-        mode: str = "transcribe") -> Dict[str, Any]:
+    def start_bot(self, url: str, guest_name: str = "Hermes Agent", duration: Optional[str] = None,
+                  headed: bool = False, mode: str = "transcribe") -> Dict[str, Any]:
         payload: Dict[str, Any] = {"url": url, "guest_name": guest_name, "headed": bool(headed), "mode": mode}
         if duration is not None:
             payload["duration"] = duration

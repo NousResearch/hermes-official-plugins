@@ -1,12 +1,9 @@
 """google_meet plugin — let the agent join a Meet call, transcribe it, follow up.
 
-Spawns a headless Chromium via Playwright, joins the Meet URL, enables live
-captions and scrapes them into a transcript file in the agent's workspace.
-Realtime mode additionally lets the agent speak (OpenAI Realtime + a virtual
-audio device); remote nodes let the bot run on another machine.
-
-Explicit-by-design: only joins ``https://meet.google.com/`` URLs explicitly
-passed in. No calendar scanning, no auto-dial, no consent announcement.
+Headless Chromium (Playwright) joins the URL, enables live captions and scrapes them into a
+transcript. Realtime mode adds agent speech (OpenAI Realtime + virtual audio device); remote
+nodes run the bot on another machine. Explicit-by-design: only joins ``https://meet.google.com/``
+URLs passed in — no calendar scanning, auto-dial or consent announcement.
 """
 
 from __future__ import annotations
@@ -34,10 +31,7 @@ _TOOLS = (
 
 
 def _on_session_end(**kwargs) -> None:
-    """Leave a still-running call so we don't orphan a headless Chromium.
-
-    Swallows all exceptions — session end must never fail on bot cleanup.
-    """
+    """Leave a still-running call so we don't orphan a headless Chromium (never raises)."""
     try:
         status = pm.status()
         if status.get("ok") and status.get("alive"):
@@ -48,8 +42,7 @@ def _on_session_end(**kwargs) -> None:
 
 def register(ctx) -> None:
     """Register tools, CLI, and lifecycle hooks (called once by the plugin loader)."""
-    # Windows: no tested audio-routing path and flakier guest-join Chromium —
-    # refuse to register rather than half-work.
+    # Windows: no tested audio-routing path and flaky guest-join Chromium — refuse rather than half-work.
     system = platform.system().lower()
     if system not in {"linux", "darwin"}:
         logger.info("google_meet plugin: platform=%s not supported (linux/macos only)", system)
@@ -60,12 +53,9 @@ def register(ctx) -> None:
                           check_fn=check_meet_requirements, emoji=emoji)
 
     ctx.register_cli_command(
-        name="meet",
-        help="Google Meet bot (join, transcribe, follow up)",
-        setup_fn=_register_meet_cli,
-        handler_fn=_meet_command,
-        description=(
-            "Let the hermes agent join a Google Meet call and scrape live "
-            "captions into a transcript. See: hermes meet setup"))
+        name="meet", help="Google Meet bot (join, transcribe, follow up)",
+        setup_fn=_register_meet_cli, handler_fn=_meet_command,
+        description=("Let the hermes agent join a Google Meet call and scrape live "
+                     "captions into a transcript. See: hermes meet setup"))
 
     ctx.register_hook("on_session_end", _on_session_end)

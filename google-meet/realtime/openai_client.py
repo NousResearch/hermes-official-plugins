@@ -1,9 +1,7 @@
 """OpenAI Realtime API WebSocket client + file-queue speaker.
 
-Output side of the v2 voice bridge: text → OpenAI Realtime → audio deltas
-appended as PCM to a file that the audio bridge streams into Chrome's fake
-mic. One synchronous WebSocket per speaker/session; ``websockets`` is
-imported lazily so importing this module never fails without the optional dep.
+text → OpenAI Realtime → audio deltas appended as PCM to a file the audio bridge streams into
+Chrome's fake mic. One sync WebSocket per session; ``websockets`` is imported lazily.
 """
 
 from __future__ import annotations
@@ -30,20 +28,11 @@ def _decode_audio(b64: str) -> bytes:
 
 
 class RealtimeSession:
-    """Minimal sync client for the OpenAI Realtime WebSocket API.
+    """Minimal sync client for the OpenAI Realtime WebSocket API; ``speak`` and ``cancel_response``
+    may run on different threads — a lock serializes WebSocket writes."""
 
-    ``speak`` and ``cancel_response`` may be called from different threads;
-    a lock serializes WebSocket writes.
-    """
-
-    def __init__(
-        self,
-        api_key: str,
-        model: str = "gpt-realtime",
-        voice: str = "alloy",
-        instructions: str = "",
-        audio_sink_path: Optional[Path] = None,
-        sample_rate: int = 24000) -> None:
+    def __init__(self, api_key: str, model: str = "gpt-realtime", voice: str = "alloy",
+                 instructions: str = "", audio_sink_path: Optional[Path] = None, sample_rate: int = 24000) -> None:
         self.api_key = api_key
         self.model = model
         self.voice = voice
@@ -52,8 +41,7 @@ class RealtimeSession:
         self.sample_rate = sample_rate
         self._ws: Any = None
         self._send_lock = threading.Lock()
-        # Public counters for status reporting.
-        self.audio_bytes_out: int = 0
+        self.audio_bytes_out: int = 0  # public counters for status reporting
         self.last_audio_out_at: Optional[float] = None
 
     def connect(self) -> None:
@@ -61,10 +49,8 @@ class RealtimeSession:
         try:
             from websockets.sync.client import connect  # type: ignore
         except ImportError as exc:  # pragma: no cover - exercised via test
-            raise RuntimeError(
-                "websockets package is required for OpenAI Realtime; "
-                "install with: pip install websockets"
-            ) from exc
+            raise RuntimeError("websockets package is required for OpenAI Realtime; "
+                               "install with: pip install websockets") from exc
         url = f"{REALTIME_URL}?model={self.model}"
         headers = [("Authorization", f"Bearer {self.api_key}"), ("OpenAI-Beta", "realtime=v1")]
         # Newer websockets takes additional_headers=, older extra_headers=.
@@ -91,12 +77,8 @@ class RealtimeSession:
             self._ws = None
 
     def speak(self, text: str, timeout: float = 30.0) -> dict:
-        """Send ``text`` and append the audio response to ``audio_sink_path``.
-
-        The sink is opened 'ab' and closed per call so a streaming reader can
-        consume whatever is there. Frames other than audio deltas, terminal
-        response events and errors are ignored.
-        """
+        """Send ``text`` and append the audio response to ``audio_sink_path`` (opened 'ab' per call
+        so a streaming reader can consume it). Frames other than audio deltas/terminal/error are ignored."""
         if self._ws is None:
             raise RuntimeError("RealtimeSession.connect() must be called first")
 
@@ -153,9 +135,7 @@ class RealtimeSession:
 
     def _recv_frame(self, deadline: float, timeout: float) -> Optional[dict]:
         """Next dict frame before *deadline* (monotonic), ``None`` once the peer closes.
-
-        Non-dict / unparseable frames are skipped; TimeoutError past the deadline.
-        """
+        Non-dict / unparseable frames are skipped; TimeoutError past the deadline."""
         assert self._ws is not None
         while True:
             remaining = deadline - time.monotonic()
@@ -176,15 +156,10 @@ class RealtimeSession:
 
 
 class RealtimeSpeaker:
-    """File-based JSONL queue wrapper around :class:`RealtimeSession`.
+    """JSONL queue (``{"id", "text"}`` per line) wrapper around :class:`RealtimeSession`; processed
+    lines are appended to ``processed_path`` (if set) and removed from the queue."""
 
-    Each queue line is ``{"id": "<uuid>", "text": "..."}``. Processed lines
-    are appended to ``processed_path`` (if set) and removed from the queue.
-    """
-
-    def __init__(
-        self, session: RealtimeSession, queue_path: Path, processed_path: Optional[Path] = None
-    ) -> None:
+    def __init__(self, session: RealtimeSession, queue_path: Path, processed_path: Optional[Path] = None) -> None:
         self.session = session
         self.queue_path = Path(queue_path)
         self.processed_path = Path(processed_path) if processed_path else None
@@ -205,8 +180,7 @@ class RealtimeSpeaker:
         return out
 
     def _rewrite_queue(self, remaining: list[dict]) -> None:
-        # Always keep the file (empty when drained): consumers may watch its
-        # mtime, and delete-then-recreate is a race.
+        # Always keep the file (empty when drained): consumers may watch its mtime.
         body = "".join(json.dumps(e) + "\n" for e in remaining)
         self.queue_path.write_text(body, encoding="utf-8")
 
@@ -236,8 +210,7 @@ class RealtimeSpeaker:
                 result = {"ok": True, "bytes_written": 0, "duration_ms": 0.0}
             self._append_processed(head, result)
 
-            # Re-read from disk (new entries may have arrived), then drop the
-            # head — by position when it's still first, else by id.
+            # Re-read (new entries may have arrived), then drop the head by position or id.
             latest = self._read_queue()
             if latest and latest[0].get("id") == head.get("id"):
                 self._rewrite_queue(latest[1:])

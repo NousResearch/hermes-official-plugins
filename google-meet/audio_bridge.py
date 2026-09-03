@@ -1,14 +1,8 @@
 """Virtual audio bridge for feeding generated speech into Chrome's mic.
 
-Provisions a platform-specific virtual audio device the Meet bot's Chromium
-can use as its input; the OpenAI Realtime client writes PCM into it.
-
-Linux: pactl creates a null-sink plus a virtual source whose master is the
-sink's monitor. Callers set ``PULSE_SOURCE=<source_name>`` in Chrome's env.
-
-macOS: only verifies BlackHole 2ch is installed and returns its name; the
-default-input switch is left to the user so we never surprise their system
-audio state. Windows: unsupported.
+Linux: pactl creates a null-sink plus a virtual source on the sink's monitor; callers set
+``PULSE_SOURCE=<source_name>`` in Chrome's env. macOS: only verifies BlackHole 2ch is installed
+(the default-input switch is left to the user). Windows: unsupported.
 """
 
 from __future__ import annotations
@@ -22,20 +16,12 @@ _BLACKHOLE_DEVICE = "BlackHole 2ch"
 
 
 def _pactl(*args: str, check: bool) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["pactl", *args],
-        check=check,
-        capture_output=True,
-        text=True, encoding='utf-8', errors='replace',
-        stdin=subprocess.DEVNULL)
+    return subprocess.run(["pactl", *args], check=check, capture_output=True, text=True,
+                          encoding='utf-8', errors='replace', stdin=subprocess.DEVNULL)
 
 
 class AudioBridge:
-    """Manages a virtual audio device for Chrome fake-mic input.
-
-    Call ``setup()`` once before launching the Meet bot and ``teardown()``
-    when the session ends (idempotent).
-    """
+    """Virtual audio device for Chrome fake-mic input: ``setup()`` before launch, ``teardown()`` after."""
 
     def __init__(self, name_prefix: str = "hermes_meet") -> None:
         self._name_prefix = name_prefix
@@ -69,8 +55,7 @@ class AudioBridge:
         if self._torn_down:
             return
         if self._platform == "linux":
-            # Unload in reverse order (virtual-source before null-sink).
-            for mod_id in reversed(self._module_ids):
+            for mod_id in reversed(self._module_ids):  # virtual-source before null-sink
                 try:
                     _pactl("unload-module", str(mod_id), check=False)
                 except Exception:
@@ -114,19 +99,16 @@ class AudioBridge:
 
     def _setup_darwin(self) -> dict:
         try:
-            out = subprocess.check_output(
-                ["system_profiler", "SPAudioDataType"],
-                text=True, encoding='utf-8', errors='replace',
-                stderr=subprocess.STDOUT)
+            out = subprocess.check_output(["system_profiler", "SPAudioDataType"], text=True,
+                                          encoding='utf-8', errors='replace', stderr=subprocess.STDOUT)
         except FileNotFoundError as exc:
             raise RuntimeError("system_profiler not found (macOS-only command)") from exc
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(f"system_profiler failed: {exc.output}") from exc
 
         if "BlackHole" not in out:
-            raise RuntimeError(
-                "BlackHole virtual audio device not installed. "
-                "Install via: brew install blackhole-2ch")
+            raise RuntimeError("BlackHole virtual audio device not installed. "
+                               "Install via: brew install blackhole-2ch")
         return self._finish("darwin", _BLACKHOLE_DEVICE, _BLACKHOLE_DEVICE, [])
 
     @staticmethod

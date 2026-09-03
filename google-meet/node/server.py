@@ -1,15 +1,9 @@
-"""Remote node server — hosts the Meet bot on another machine (e.g. the user's Mac).
+"""Remote node server — hosts the Meet bot on another machine (``hermes meet node run``).
 
-Exposes a WebSocket endpoint that accepts token-signed RPC requests and
-dispatches them to ``plugins.google_meet.process_manager``. Launched by
-``hermes meet node run``.
-
-Token: 32 hex chars minted on first boot and persisted at
-``$HERMES_HOME/workspace/meetings/node_token.json`` so previously-approved
-gateways survive restarts. The operator copies it to the gateway via
-``hermes meet node approve <name> <url> <token>``.
-
-``websockets`` is optional and imported lazily inside :meth:`serve`.
+WebSocket endpoint accepting token-signed RPC requests dispatched to ``process_manager``.
+Token: 32 hex chars minted on first boot, persisted at ``$HERMES_HOME/workspace/meetings/
+node_token.json`` so approved gateways survive restarts; the operator copies it to the gateway
+via ``hermes meet node approve <name> <url> <token>``. ``websockets`` is imported lazily.
 """
 
 from __future__ import annotations
@@ -41,9 +35,7 @@ def _rpc_start_bot(payload: Dict[str, Any], pm) -> Dict[str, Any]:
 
 
 def _rpc_say(payload: Dict[str, Any], pm) -> Dict[str, Any]:
-    # Appends to say_queue.jsonl inside the active meeting's out_dir; the
-    # bot-side consumer only exists in realtime mode, so ok=True here means
-    # "enqueued", not "spoken".
+    # The bot-side consumer only exists in realtime mode: ok=True means "enqueued", not "spoken".
     text = payload.get("text", "")
     active = pm._read_active()
     enqueued = False
@@ -71,12 +63,8 @@ _RPC = {
 class NodeServer:
     """WebSocket server that executes meet bot RPCs locally."""
 
-    def __init__(
-        self,
-        host: str = "127.0.0.1",
-        port: int = 18789,
-        token_path: Optional[Path] = None,
-        display_name: str = "hermes-meet-node") -> None:
+    def __init__(self, host: str = "127.0.0.1", port: int = 18789, token_path: Optional[Path] = None,
+                 display_name: str = "hermes-meet-node") -> None:
         self.host = host
         self.port = port
         self.display_name = display_name
@@ -99,18 +87,16 @@ class NodeServer:
 
     async def _handle_request(self, msg: Dict[str, Any]) -> Dict[str, Any]:
         """Validate + dispatch one decoded request; always returns an envelope, never raises.
-
-        The envelope-level ``error`` channel is reserved for auth/protocol
-        failures and pm crashes; pm's own ``ok``/``error`` results travel
-        inside a normal response payload.
-        """
+        Envelope ``error`` is for auth/protocol failures and pm crashes; pm's own ``ok``/``error``
+        results travel inside a normal response payload."""
         ok, reason = _proto.validate_request(msg, self.ensure_token())
         if not ok:
             return _proto.make_error(str(msg.get("id") or ""), reason)
 
         req_id, t = msg["id"], msg["type"]
         if t == "ping":
-            return {"type": "pong", "id": req_id, "payload": {"display_name": self.display_name, "ts": time.time()}}
+            return {"type": "pong", "id": req_id,
+                    "payload": {"display_name": self.display_name, "ts": time.time()}}
         handler = _RPC.get(t)
         if handler is None:
             return _proto.make_error(req_id, f"unhandled type: {t!r}")
@@ -130,10 +116,8 @@ class NodeServer:
         try:
             import websockets  # type: ignore
         except ImportError as exc:
-            raise RuntimeError(
-                "NodeServer.serve requires the 'websockets' package. "
-                "Install it with: pip install websockets"
-            ) from exc
+            raise RuntimeError("NodeServer.serve requires the 'websockets' package. "
+                               "Install it with: pip install websockets") from exc
 
         self.ensure_token()
 

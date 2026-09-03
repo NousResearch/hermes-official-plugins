@@ -17,18 +17,11 @@ from plugins.google_meet import process_manager as pm
 
 def check_meet_requirements() -> bool:
     """True when the plugin can run LOCALLY: Linux/macOS + importable ``playwright``.
-
-    Remote-node operation only needs ``websockets`` on the gateway side; the
-    handlers relax this gate themselves when a node is addressed.
-    """
+    Remote-node operation only needs ``websockets``; handlers relax this gate when a node is addressed."""
+    import importlib.util
     import platform as _p
-    if _p.system().lower() not in {"linux", "darwin"}:
-        return False
-    try:
-        import playwright  # noqa: F401
-    except ImportError:
-        return False
-    return True
+    return (_p.system().lower() in {"linux", "darwin"}
+            and importlib.util.find_spec("playwright") is not None)
 
 
 def resolve_node(node: str):
@@ -41,10 +34,6 @@ def resolve_node(node: str):
         return None, None
     return NodeClient(url=entry["url"], token=entry["token"]), entry.get("name")
 
-
-# ---------------------------------------------------------------------------
-# Schemas
-# ---------------------------------------------------------------------------
 
 _NODE_PROP = {"type": "string"}
 
@@ -168,10 +157,6 @@ MEET_SAY_SCHEMA: Dict[str, Any] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Handlers
-# ---------------------------------------------------------------------------
-
 def _json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False)
 
@@ -187,10 +172,8 @@ def _dispatch(node: Optional[str], op: str, remote, local) -> str:
         return _json({"success": bool(res.get("ok")), **res})
     client, node_name = resolve_node(node)
     if client is None:
-        return _err(
-            f"no registered meet node matches {node!r} — "
-            "run `hermes meet node approve <name> <url> <token>` first"
-        )
+        return _err(f"no registered meet node matches {node!r} — "
+                    "run `hermes meet node approve <name> <url> <token>` first")
     try:
         res = remote(client)
     except Exception as e:
@@ -207,23 +190,16 @@ def handle_meet_join(args: Dict[str, Any], **_kw) -> str:
         return _err(f"mode must be 'transcribe' or 'realtime' (got {mode!r})")
 
     common: Dict[str, Any] = dict(
-        url=url,
-        guest_name=str(args.get("guest_name") or "Hermes Agent"),
+        url=url, guest_name=str(args.get("guest_name") or "Hermes Agent"),
         duration=str(args.get("duration")) if args.get("duration") else None,
-        headed=bool(args.get("headed", False)),
-        mode=mode,
-    )
+        headed=bool(args.get("headed", False)), mode=mode)
 
     def _local():
         if not check_meet_requirements():
-            return {
-                "ok": False,
-                "error": (
-                    "google_meet plugin prerequisites missing — install with "
-                    "`pip install playwright && python -m playwright install "
-                    "chromium`. Plugin is supported on Linux and macOS only."
-                ),
-            }
+            return {"ok": False, "error": (
+                "google_meet plugin prerequisites missing — install with "
+                "`pip install playwright && python -m playwright install "
+                "chromium`. Plugin is supported on Linux and macOS only.")}
         return pm.start(**common)
 
     return _dispatch(args.get("node"), "start_bot", lambda c: c.start_bot(**common), _local)
@@ -240,17 +216,13 @@ def handle_meet_transcript(args: Dict[str, Any], **_kw) -> str:
         last = None
     if last is not None and last < 1:
         last = None
-    return _dispatch(
-        args.get("node"), "transcript",
-        lambda c: c.transcript(last=last), lambda: pm.transcript(last=last),
-    )
+    return _dispatch(args.get("node"), "transcript", lambda c: c.transcript(last=last),
+                     lambda: pm.transcript(last=last))
 
 
 def handle_meet_leave(args: Dict[str, Any], **_kw) -> str:
-    return _dispatch(
-        args.get("node"), "stop",
-        lambda c: c.stop(), lambda: pm.stop(reason="agent called meet_leave"),
-    )
+    return _dispatch(args.get("node"), "stop", lambda c: c.stop(),
+                     lambda: pm.stop(reason="agent called meet_leave"))
 
 
 def handle_meet_say(args: Dict[str, Any], **_kw) -> str:

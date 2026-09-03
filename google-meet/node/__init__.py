@@ -1,12 +1,10 @@
-"""Remote 'node host' primitive: run the Meet bot on a different machine than the gateway.
+"""Remote 'node host': run the Meet bot on a different machine than the gateway.
 
     gateway (Linux)  ── ws://mac.local:18789 ──▶  node server (Mac) → process_manager → meet_bot
 
-Why: Google sign-in + Chrome profile live on the user's laptop; running the
-bot there reuses that profile without shipping credentials to the server.
-
-NodeClient (gateway-side RPC), NodeServer (hosts the bot), NodeRegistry
-(approved nodes: name → url+token), protocol (envelope helpers).
+Why: Google sign-in + Chrome profile live on the user's laptop; running the bot there reuses
+that profile without shipping credentials. NodeClient (gateway RPC), NodeServer (hosts the
+bot), NodeRegistry (approved nodes: name → url+token), protocol (envelope helpers).
 """
 
 from __future__ import annotations

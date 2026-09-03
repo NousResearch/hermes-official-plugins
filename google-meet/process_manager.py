@@ -146,7 +146,8 @@ def enqueue_say(text: str) -> Dict[str, Any]:
     entry = {"id": uuid.uuid4().hex[:12], "text": text}
     with queue_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
-    return {"ok": True, "meetingId": active.get("meeting_id"), "enqueued_id": entry["id"], "queue_path": str(queue_path)}
+    return {"ok": True, "meetingId": active.get("meeting_id"), "enqueued_id": entry["id"],
+            "queue_path": str(queue_path)}
 
 
 def stop(*, reason: str = "requested") -> Dict[str, Any]:

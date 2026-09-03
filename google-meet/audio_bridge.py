@@ -46,7 +46,8 @@ class AudioBridge:
             return self._setup_linux()
         if system == "Darwin":
             return self._setup_darwin()
-        raise RuntimeError("windows not supported in v2" if system == "Windows" else f"unsupported platform: {system}")
+        raise RuntimeError("windows not supported in v2" if system == "Windows"
+                           else f"unsupported platform: {system}")
 
     def teardown(self) -> None:
         """Release the virtual audio device. Idempotent; never raises."""

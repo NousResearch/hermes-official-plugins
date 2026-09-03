@@ -214,7 +214,8 @@ def _cmd_auth() -> int:
         return 1
     path = _auth_state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"opening Chromium — sign in to Google, then return here and press Enter.\nsaving storage state to: {path}")
+    print("opening Chromium — sign in to Google, then return here and press Enter.\n"
+          f"saving storage state to: {path}")
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=False)

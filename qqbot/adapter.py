@@ -210,8 +210,7 @@ class QQAdapter(BasePlatformAdapter):
             from tools.url_safety import create_ssrf_safe_async_client
             self._http_client = create_ssrf_safe_async_client(
                 timeout=30.0, follow_redirects=True,
-                event_hooks={"response": [_ssrf_redirect_guard]}, limits=platform_httpx_limits(),
-            )
+                event_hooks={"response": [_ssrf_redirect_guard]}, limits=platform_httpx_limits())
 
             await self._ensure_token()
             gateway_url = await self._get_gateway_url()
@@ -830,8 +829,7 @@ class QQAdapter(BasePlatformAdapter):
 
     async def _ingest(
         self, d: Dict[str, Any], msg_id: str, content: str, attachments: Any, timestamp: str, *,
-        chat_id: str, qq_chat_type: str, verbose: bool = False, **source_kwargs: Any,
-    ) -> None:
+        chat_id: str, qq_chat_type: str, verbose: bool = False, **source_kwargs: Any) -> None:
         """Shared inbound tail: fold attachment transcripts/file info and quoted context
         into the text, drop empty events, remember the QQ chat kind and dispatch."""
         att = await self._process_attachments(attachments)
@@ -855,13 +853,9 @@ class QQAdapter(BasePlatformAdapter):
 
         self._chat_type_map[chat_id] = qq_chat_type
         event = MessageEvent(
-            source=self.build_source(chat_id=chat_id, **source_kwargs),
-            text=text,
-            message_type=self._detect_message_type(image_urls, image_media_types),
-            raw_message=d,
-            message_id=msg_id,
-            media_urls=image_urls,
-            media_types=image_media_types,
+            source=self.build_source(chat_id=chat_id,** source_kwargs), text=text,
+            message_type=self._detect_message_type(image_urls, image_media_types), raw_message=d,
+            message_id=msg_id, media_urls=image_urls, media_types=image_media_types,
             timestamp=self._parse_qq_timestamp(timestamp),
         )
         await self.handle_message(event)
@@ -965,43 +959,44 @@ class QQAdapter(BasePlatformAdapter):
                 self._log_tag, ct, url[:80], filename)
 
             if self._is_voice_content_type(ct, filename):
-                asr_refer = att.get("asr_refer_text")
-                voice_wav_url = att.get("voice_wav_url")
+                asr_refer, wav_url = (self._opt_str(att.get(k)) for k in ("asr_refer_text", "voice_wav_url"))
                 transcript = await self._stt_voice_attachment(
-                    url, ct, filename,
-                    asr_refer_text=(asr_refer.strip() if isinstance(asr_refer, str) else "") or None,
-                    voice_wav_url=(voice_wav_url.strip() if isinstance(voice_wav_url, str) else "") or None,
-                )
+                    url, ct, filename, asr_refer_text=asr_refer, voice_wav_url=wav_url)
                 if transcript:
                     voice_transcripts.append(f"[Voice] {transcript}")
                     logger.debug("[%s] Voice transcript: %s", self._log_tag, transcript)
                 else:
                     logger.warning("[%s] Voice STT failed for %s", self._log_tag, url[:60])
                     voice_transcripts.append("[Voice] [语音识别失败]")
-            elif ct.startswith("image/"):
-                try:
-                    cached_path = await self._download_and_cache(url, ct, filename)
-                    if cached_path and os.path.isfile(cached_path):
-                        image_urls.append(cached_path)
-                        image_media_types.append(ct or "image/jpeg")
-                    elif cached_path:
-                        logger.warning("[%s] Cached image path does not exist: %s", self._log_tag, cached_path)
-                except Exception as exc:
-                    logger.debug("[%s] Failed to cache image: %s", self._log_tag, exc)
+                continue
+
+            is_image = ct.startswith("image/")
+            try:
+                cached_path = await self._download_and_cache(url, ct, filename)
+            except Exception as exc:
+                logger.debug("[%s] Failed to cache %s: %s", self._log_tag, "image" if is_image else "attachment", exc)
+                continue
+            if not cached_path:
+                continue
+            if not is_image:
+                label = "video" if ct.startswith("video/") else "file"
+                other_attachments.append(f"[{label}: {filename or ct} ({cached_path})]")
+            elif os.path.isfile(cached_path):
+                image_urls.append(cached_path)
+                image_media_types.append(ct or "image/jpeg")
             else:
-                try:
-                    cached_path = await self._download_and_cache(url, ct, filename)
-                    if cached_path:
-                        label = "video" if ct.startswith("video/") else "file"
-                        other_attachments.append(f"[{label}: {filename or ct} ({cached_path})]")
-                except Exception as exc:
-                    logger.debug("[%s] Failed to cache attachment: %s", self._log_tag, exc)
+                logger.warning("[%s] Cached image path does not exist: %s", self._log_tag, cached_path)
 
         return {
             "image_urls": image_urls,
             "image_media_types": image_media_types,
             "voice_transcripts": voice_transcripts,
             "attachment_info": "\n".join(other_attachments)}
+
+    @staticmethod
+    def _opt_str(value: Any) -> Optional[str]:
+        """Stripped non-empty string or None."""
+        return (value.strip() if isinstance(value, str) else "") or None
 
     async def _download_and_cache(self, url: str, content_type: str, original_name: str = "") -> Optional[str]:
         """Download a URL and cache it locally (``original_name`` falls back to the URL basename)."""
@@ -1423,16 +1418,12 @@ class QQAdapter(BasePlatformAdapter):
     async def _send_chunk(self, chat_id: str, content: str, reply_to: Optional[str] = None) -> SendResult:
         """Send a single chunk with retry + exponential backoff."""
         last_exc: Optional[Exception] = None
-        chat_type = self._guess_chat_type(chat_id)
+        sender = self._text_sender(self._guess_chat_type(chat_id))
+        if sender is None:
+            return SendResult(success=False, error=f"Unknown chat type for {chat_id}")
         for attempt in range(3):
             try:
-                if chat_type == "c2c":
-                    return await self._send_c2c_text(chat_id, content, reply_to)
-                if chat_type == "group":
-                    return await self._send_group_text(chat_id, content, reply_to)
-                if chat_type == "guild":
-                    return await self._send_guild_text(chat_id, content, reply_to)
-                return SendResult(success=False, error=f"Unknown chat type for {chat_id}")
+                return await sender(chat_id, content, reply_to)
             except Exception as exc:
                 last_exc = exc
                 err = str(exc).lower()
@@ -1482,6 +1473,15 @@ class QQAdapter(BasePlatformAdapter):
     async def _send_group_text(self, group_openid, content, reply_to=None, keyboard=None) -> SendResult:
         return await self._send_text_to("group", group_openid, content, reply_to, keyboard)
 
+    _TEXT_SENDERS = {"c2c": "_send_c2c_text", "group": "_send_group_text", "guild": "_send_guild_text"}
+
+    def _text_sender(self, chat_type: str, *, keyboard_ok: bool = False):
+        """Bound text sender for *chat_type* (None if unsupported); guild lacks keyboards."""
+        if keyboard_ok and chat_type == "guild":
+            return None
+        name = self._TEXT_SENDERS.get(chat_type)
+        return getattr(self, name) if name else None
+
     async def _send_guild_text(self, channel_id: str, content: str, reply_to: Optional[str] = None) -> SendResult:
         """Send text to a guild channel via REST API."""
         body: Dict[str, Any] = {"content": content[: self.MAX_MESSAGE_LENGTH]}
@@ -1499,15 +1499,13 @@ class QQAdapter(BasePlatformAdapter):
         if not await self._ensure_connected():
             return self._NOT_CONNECTED
         chat_type = self._guess_chat_type(chat_id)
+        sender = self._text_sender(chat_type, keyboard_ok=True)
+        if sender is None:
+            return SendResult(
+                success=False, error=f"Inline keyboards not supported for chat_type {chat_type!r}", retryable=False)
         truncated = self.format_message(content)[: self.MAX_MESSAGE_LENGTH]
         try:
-            if chat_type == "c2c":
-                return await self._send_c2c_text(chat_id, truncated, reply_to, keyboard=keyboard)
-            if chat_type == "group":
-                return await self._send_group_text(chat_id, truncated, reply_to, keyboard=keyboard)
-            return SendResult(
-                success=False, error=f"Inline keyboards not supported for chat_type {chat_type!r}", retryable=False
-            )
+            return await sender(chat_id, truncated, reply_to, keyboard=keyboard)
         except Exception as exc:
             logger.error("[%s] send_with_keyboard failed: %s", self._log_tag, exc)
             return SendResult(success=False, error=str(exc) or type(exc).__name__)
@@ -1538,8 +1536,7 @@ class QQAdapter(BasePlatformAdapter):
         req = ApprovalRequest(
             session_key=session_key, title="Execute this command?", description=description,
             command_preview=command, timeout_sec=self._APPROVAL_TIMEOUT_SECONDS,
-            allow_permanent=allow_permanent and not smart_denied,
-        )
+            allow_permanent=allow_permanent and not smart_denied)
         # QQ requires a msg_id for passive replies; the last inbound id is the natural one.
         return await self.send_approval_request(chat_id, req, reply_to=self._last_msg_id.get(chat_id))
 

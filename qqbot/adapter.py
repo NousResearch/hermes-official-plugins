@@ -1049,13 +1049,10 @@ class QQAdapter(BasePlatformAdapter):
             logger.debug("[%s] STT: using QQ asr_refer_text: %r", self._log_tag, asr_refer_text[:100])
             return asr_refer_text
 
+        is_pre_wav = bool(voice_wav_url)
         download_url = url
-        is_pre_wav = False
-        if voice_wav_url:
-            if voice_wav_url.startswith("//"):
-                voice_wav_url = f"https:{voice_wav_url}"
-            download_url = voice_wav_url
-            is_pre_wav = True
+        if is_pre_wav:
+            download_url = f"https:{voice_wav_url}" if voice_wav_url.startswith("//") else voice_wav_url
             logger.debug("[%s] STT: using voice_wav_url (pre-converted WAV)", self._log_tag)
 
         from tools.url_safety import is_safe_url
@@ -1079,9 +1076,7 @@ class QQAdapter(BasePlatformAdapter):
                 "[%s] STT: downloaded %d bytes, content_type=%s",
                 self._log_tag, len(audio_data), resp.headers.get("content-type", "unknown"))
             if len(audio_data) < 10:
-                logger.warning(
-                    "[%s] STT: downloaded data too small (%d bytes), skipping", self._log_tag, len(audio_data)
-                )
+                logger.warning("[%s] STT: downloaded data too small (%d bytes), skipping", self._log_tag, len(audio_data))
                 return None
 
             if is_pre_wav:
@@ -1155,10 +1150,9 @@ class QQAdapter(BasePlatformAdapter):
         """Guess file extension from magic bytes (unknown → .amr, QQ's most common)."""
         return next((ext for magic, ext in cls._MAGIC_EXTS if data.startswith(magic)), ".amr")
 
-    @staticmethod
-    def _looks_like_silk(data: bytes) -> bool:
-        """Check if bytes look like a SILK audio file."""
-        return data[:6] == b"#!SILK" or data[:2] == b"\x02!"
+    @classmethod
+    def _looks_like_silk(cls, data: bytes) -> bool:
+        return cls._guess_ext_from_data(data) == ".silk"
 
     async def _convert_silk_to_wav(self, src_path: str, wav_path: str) -> Optional[str]:
         """Convert to WAV with pilk: as-is first, then copied to .silk (pilk checks the extension)."""

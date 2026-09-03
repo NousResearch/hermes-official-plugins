@@ -23,6 +23,7 @@ import textwrap
 import time
 import uuid
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import quote, urlparse
@@ -75,14 +76,14 @@ def _wx_secret(name: str, default: Optional[str] = None) -> Optional[str]:
         return os.getenv(name, default)
 
 
-def _extra_or_secret(extra: Dict[str, Any], key: str, env: str, default: str = "") -> str:
-    """``config.extra[key]`` first, else the scoped secret ``env``; stripped."""
-    return str(extra.get(key) or _wx_secret(env, default)).strip()
+def _extra_or_secret(extra: Dict[str, Any], key: str, default: str = "") -> str:
+    """``config.extra[key]`` first, else the scoped secret ``WEIXIN_<KEY>``; stripped."""
+    return str(extra.get(key) or _wx_secret(f"WEIXIN_{key.upper()}", default)).strip()
 
 
-def _extra_or_env(extra: Dict[str, Any], key: str, env: str, default: str) -> Any:
-    """``config.extra[key]`` first, else plain ``os.getenv(env, default)`` (non-secret tunables)."""
-    return extra.get(key) or os.getenv(env, default)
+def _extra_or_env(extra: Dict[str, Any], key: str, default: str) -> Any:
+    """``config.extra[key]`` first, else plain ``os.getenv("WEIXIN_<KEY>", default)`` (non-secret tunables)."""
+    return extra.get(key) or os.getenv(f"WEIXIN_{key.upper()}", default)
 
 
 ILINK_BASE_URL = "https://ilinkai.weixin.qq.com"
@@ -99,34 +100,16 @@ EP_GET_UPLOAD_URL = "ilink/bot/getuploadurl"
 EP_GET_BOT_QR = "ilink/bot/get_bot_qrcode"
 EP_GET_QR_STATUS = "ilink/bot/get_qrcode_status"
 
-LONG_POLL_TIMEOUT_MS = 35_000
-API_TIMEOUT_MS = 15_000
-CONFIG_TIMEOUT_MS = 10_000
-QR_TIMEOUT_MS = 35_000
-
-MAX_CONSECUTIVE_FAILURES = 3
-RETRY_DELAY_SECONDS = 2
-BACKOFF_DELAY_SECONDS = 30
+LONG_POLL_TIMEOUT_MS, API_TIMEOUT_MS, CONFIG_TIMEOUT_MS, QR_TIMEOUT_MS = 35_000, 15_000, 10_000, 35_000
+MAX_CONSECUTIVE_FAILURES, RETRY_DELAY_SECONDS, BACKOFF_DELAY_SECONDS = 3, 2, 30
 SESSION_EXPIRED_ERRCODE = -14
 RATE_LIMIT_ERRCODE = -2  # iLink frequency limit — backoff and retry
 MESSAGE_DEDUP_TTL_SECONDS = 300
 
-MEDIA_IMAGE = 1
-MEDIA_VIDEO = 2
-MEDIA_FILE = 3
-MEDIA_VOICE = 4
-
-ITEM_TEXT = 1
-ITEM_IMAGE = 2
-ITEM_VOICE = 3
-ITEM_FILE = 4
-ITEM_VIDEO = 5
-
-MSG_TYPE_BOT = 2
-MSG_STATE_FINISH = 2
-
-TYPING_START = 1
-TYPING_STOP = 2
+MEDIA_IMAGE, MEDIA_VIDEO, MEDIA_FILE, MEDIA_VOICE = 1, 2, 3, 4  # getuploadurl media_type
+ITEM_TEXT, ITEM_IMAGE, ITEM_VOICE, ITEM_FILE, ITEM_VIDEO = 1, 2, 3, 4, 5  # item_list entry types
+MSG_TYPE_BOT, MSG_STATE_FINISH = 2, 2
+TYPING_START, TYPING_STOP = 1, 2
 
 _LIVE_ADAPTERS: Dict[str, Any] = {}
 
@@ -145,10 +128,9 @@ def _is_session_expired(resp: Dict[str, Any], ret: Any, errcode: Any) -> bool:
 
 
 def _make_ssl_connector() -> Optional["aiohttp.TCPConnector"]:
-    """TCPConnector with certifi's CA bundle (``ilinkai.weixin.qq.com`` fails some system
-    stores, e.g. Homebrew OpenSSL); None without certifi so aiohttp's default (honors
-    ``SSL_CERT_FILE`` under trust_env) applies. ``keepalive_timeout=2`` +
-    ``enable_cleanup_closed`` drain idle CLOSE_WAIT sockets behind proxies like Warp."""
+    """TCPConnector with certifi's CA bundle (``ilinkai.weixin.qq.com`` fails some system stores, e.g. Homebrew
+    OpenSSL); None without certifi so aiohttp's default (honors ``SSL_CERT_FILE`` under trust_env) applies.
+    ``keepalive_timeout=2`` + ``enable_cleanup_closed`` drain idle CLOSE_WAIT sockets behind proxies like Warp."""
     try:
         import ssl
         import certifi
@@ -156,8 +138,7 @@ def _make_ssl_connector() -> Optional["aiohttp.TCPConnector"]:
         return None
     if not AIOHTTP_AVAILABLE:
         return None
-    ssl_ctx = ssl.create_default_context(cafile=certifi.where())
-    return aiohttp.TCPConnector(ssl=ssl_ctx, keepalive_timeout=2, enable_cleanup_closed=True)
+    return aiohttp.TCPConnector(ssl=ssl.create_default_context(cafile=certifi.where()), keepalive_timeout=2, enable_cleanup_closed=True)
 
 
 def _new_session(**kwargs: Any) -> "aiohttp.ClientSession":
@@ -209,17 +190,12 @@ def _base_info() -> Dict[str, Any]:
 
 def _headers(token: Optional[str], body: str) -> Dict[str, str]:
     uin = base64.b64encode(str(struct.unpack(">I", secrets.token_bytes(4))[0]).encode("utf-8")).decode("ascii")
-    headers = {
-        "Content-Type": "application/json",
-        "AuthorizationType": "ilink_bot_token",
-        "Content-Length": str(len(body.encode("utf-8"))),
-        "X-WECHAT-UIN": uin,
-        "iLink-App-Id": ILINK_APP_ID,
-        "iLink-App-ClientVersion": str(ILINK_APP_CLIENT_VERSION),
+    return {
+        "Content-Type": "application/json", "AuthorizationType": "ilink_bot_token",
+        "Content-Length": str(len(body.encode("utf-8"))), "X-WECHAT-UIN": uin,
+        "iLink-App-Id": ILINK_APP_ID, "iLink-App-ClientVersion": str(ILINK_APP_CLIENT_VERSION),
+        **({"Authorization": f"Bearer {token}"} if token else {}),
     }
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
 
 
 def _account_dir(hermes_home: str) -> Path:
@@ -360,13 +336,10 @@ async def _api_request(
 
 
 async def _api_post(
-    session: "aiohttp.ClientSession", *, base_url: str, endpoint: str,
-    payload: Dict[str, Any], token: Optional[str], timeout_ms: int,
+    session: "aiohttp.ClientSession", *, base_url: str, endpoint: str, payload: Dict[str, Any], token: Optional[str], timeout_ms: int,
 ) -> Dict[str, Any]:
     body = _json_dumps({**payload, "base_info": _base_info()})
-    return await _api_request(
-        session, "POST", base_url=base_url, endpoint=endpoint, headers=_headers(token, body), timeout_ms=timeout_ms, body=body,
-    )
+    return await _api_request(session, "POST", base_url=base_url, endpoint=endpoint, headers=_headers(token, body), timeout_ms=timeout_ms, body=body)
 
 
 async def _api_get(session: "aiohttp.ClientSession", *, base_url: str, endpoint: str, timeout_ms: int) -> Dict[str, Any]:
@@ -376,9 +349,7 @@ async def _api_get(session: "aiohttp.ClientSession", *, base_url: str, endpoint:
 
 async def _get_updates(session: "aiohttp.ClientSession", *, base_url: str, token: str, sync_buf: str, timeout_ms: int) -> Dict[str, Any]:
     try:
-        return await _api_post(
-            session, base_url=base_url, endpoint=EP_GET_UPDATES, payload={"get_updates_buf": sync_buf}, token=token, timeout_ms=timeout_ms,
-        )
+        return await _api_post(session, base_url=base_url, endpoint=EP_GET_UPDATES, payload={"get_updates_buf": sync_buf}, token=token, timeout_ms=timeout_ms)
     except asyncio.TimeoutError:
         return {"ret": 0, "msgs": [], "get_updates_buf": sync_buf}
 
@@ -394,14 +365,11 @@ async def _send_items(
     }
     if context_token:
         message["context_token"] = context_token
-    return await _api_post(
-        session, base_url=base_url, endpoint=EP_SEND_MESSAGE, payload={"msg": message}, token=token, timeout_ms=API_TIMEOUT_MS,
-    )
+    return await _api_post(session, base_url=base_url, endpoint=EP_SEND_MESSAGE, payload={"msg": message}, token=token, timeout_ms=API_TIMEOUT_MS)
 
 
 async def _send_message(
-    session: "aiohttp.ClientSession", *, base_url: str, token: str, to: str, text: str, context_token: Optional[str],
-    client_id: str,
+    session: "aiohttp.ClientSession", *, base_url: str, token: str, to: str, text: str, context_token: Optional[str], client_id: str,
 ) -> Dict[str, Any]:
     """Send a text message. Returns the raw API response (may carry ``errcode: -14`` etc.)."""
     if not text or not text.strip():
@@ -412,9 +380,7 @@ async def _send_message(
     )
 
 
-async def _get_config(
-    session: "aiohttp.ClientSession", *, base_url: str, token: str, user_id: str, context_token: Optional[str],
-) -> Dict[str, Any]:
+async def _get_config(session: "aiohttp.ClientSession", *, base_url: str, token: str, user_id: str, context_token: Optional[str]) -> Dict[str, Any]:
     payload: Dict[str, Any] = {"ilink_user_id": user_id}
     if context_token:
         payload["context_token"] = context_token
@@ -434,7 +400,7 @@ async def _get_upload_url(
 
 async def _upload_ciphertext(session: "aiohttp.ClientSession", *, ciphertext: bytes, upload_url: str) -> str:
     """POST encrypted media to the CDN (constructed URL or direct ``upload_full_url``)."""
-    async def _do_upload() -> str:
+    async def _do() -> str:
         async with session.post(upload_url, data=ciphertext, headers={"Content-Type": "application/octet-stream"}) as response:
             encrypted_param = response.headers.get("x-encrypted-param") if response.status == 200 else None
             if encrypted_param:
@@ -444,15 +410,15 @@ async def _upload_ciphertext(session: "aiohttp.ClientSession", *, ciphertext: by
             if response.status == 200:
                 raise RuntimeError(f"CDN upload missing x-encrypted-param header: {raw[:200]}")
             raise RuntimeError(f"CDN upload HTTP {response.status}: {raw[:200]}")
-    return await asyncio.wait_for(_do_upload(), timeout=120)
+    return await asyncio.wait_for(_do(), timeout=120)
 
 
 async def _download_bytes(session: "aiohttp.ClientSession", *, url: str, timeout_seconds: float = 60.0) -> bytes:
-    async def _do_download() -> bytes:
+    async def _do() -> bytes:
         async with session.get(url) as response:
             response.raise_for_status()
             return await response.read()
-    return await asyncio.wait_for(_do_download(), timeout=timeout_seconds)
+    return await asyncio.wait_for(_do(), timeout=timeout_seconds)
 
 
 _WEIXIN_CDN_ALLOWLIST: frozenset[str] = frozenset({
@@ -490,26 +456,31 @@ async def _download_and_decrypt_media(
     return _aes128_ecb_decrypt(raw, _parse_aes_key(aes_key_b64)) if aes_key_b64 else raw
 
 
+def _walk_markdown_lines(content: str):
+    """Yield ``(rstripped line, is_fence, in_code_block)`` per line; ``in_code_block`` is the state
+    *before* a fence line toggles it."""
+    in_code_block = False
+    for raw_line in content.splitlines():
+        line = raw_line.rstrip()
+        is_fence = bool(_FENCE_RE.match(line.strip()))
+        yield line, is_fence, in_code_block
+        if is_fence:
+            in_code_block = not in_code_block
+
+
 def _normalize_markdown_blocks(content: str) -> str:
     """rstrip lines and collapse blank runs to one, leaving fenced code untouched."""
     result: List[str] = []
-    in_code_block = False
     blank_run = 0
-    for raw_line in content.splitlines():
-        line = raw_line.rstrip()
-        if _FENCE_RE.match(line.strip()):
-            in_code_block = not in_code_block
-            result.append(line)
-            blank_run = 0
-        elif in_code_block:
-            result.append(line)
-        elif not line.strip():
+    for line, is_fence, in_code_block in _walk_markdown_lines(content):
+        if not is_fence and not in_code_block and not line.strip():
             blank_run += 1
             if blank_run <= 1:
                 result.append("")
-        else:
+            continue
+        if is_fence or not in_code_block:
             blank_run = 0
-            result.append(line)
+        result.append(line)
     return "\n".join(result).strip()
 
 
@@ -518,15 +489,10 @@ def _wrap_copy_friendly_lines_for_weixin(content: str) -> str:
     if not content:
         return content
     wrapped: List[str] = []
-    in_code_block = False
-    for raw_line in content.splitlines():
-        line = raw_line.rstrip()
+    for line, is_fence, in_code_block in _walk_markdown_lines(content):
         stripped = line.strip()
-        if _FENCE_RE.match(stripped):
-            in_code_block = not in_code_block
-            wrapped.append(line)
-        elif (
-            in_code_block or len(line) <= WEIXIN_COPY_LINE_WIDTH or not stripped
+        if (
+            is_fence or in_code_block or len(line) <= WEIXIN_COPY_LINE_WIDTH or not stripped
             or stripped.startswith("|") or _TABLE_RULE_RE.match(stripped)
         ):
             wrapped.append(line)
@@ -540,32 +506,23 @@ def _wrap_copy_friendly_lines_for_weixin(content: str) -> str:
 
 def _split_markdown_blocks(content: str) -> List[str]:
     """Split on blank lines, keeping each fenced code block as one block."""
-    if not content:
-        return []
     blocks: List[str] = []
     current: List[str] = []
-    in_code_block = False
 
     def flush() -> None:
         if current:
             blocks.append("\n".join(current).strip())
             current.clear()
 
-    for raw_line in content.splitlines():
-        line = raw_line.rstrip()
-        if _FENCE_RE.match(line.strip()):
-            if not in_code_block:
-                flush()
-            current.append(line)
-            in_code_block = not in_code_block
-            if not in_code_block:
-                flush()
-        elif in_code_block:
-            current.append(line)
-        elif not line.strip():
+    for line, is_fence, in_code_block in _walk_markdown_lines(content):
+        if is_fence and not in_code_block:  # opening fence starts a fresh block
             flush()
-        else:
+        if is_fence or in_code_block or line.strip():
             current.append(line)
+        else:
+            flush()
+        if is_fence and in_code_block:  # closing fence ends the block
+            flush()
     flush()
     return [block for block in blocks if block]
 
@@ -629,13 +586,9 @@ def _pack_markdown_blocks_for_weixin(content: str, max_length: int) -> List[str]
 
 
 def _split_text_for_weixin_delivery(content: str, max_length: int, split_per_line: bool = False) -> List[str]:
-    """Split content into sequential Weixin messages.
-
-    Compact (default): one message when it fits — unless it reads as a short chatty
-    exchange, which becomes separate bubbles. Per-line (legacy, via
-    ``extra.split_multiline_messages`` / ``WEIXIN_SPLIT_MULTILINE_MESSAGES``): top-level
-    line breaks become separate messages. Oversized units use block-aware packing.
-    """
+    """Compact (default): one message when it fits, unless it reads as a short chatty exchange (separate
+    bubbles). Per-line (legacy ``extra.split_multiline_messages`` / ``WEIXIN_SPLIT_MULTILINE_MESSAGES``):
+    top-level line breaks become separate messages. Oversized units use block-aware packing."""
     if not content:
         return []
     if split_per_line:
@@ -704,17 +657,13 @@ def _message_type_from_media(media_types: List[str], text: str) -> MessageType:
     return MessageType.COMMAND if text.startswith("/") else MessageType.TEXT
 
 
-def _sync_buf_path(hermes_home: str, account_id: str) -> Path:
-    return _account_dir(hermes_home) / f"{account_id}.sync.json"
-
-
 def _load_sync_buf(hermes_home: str, account_id: str) -> str:
-    data = _read_json(_sync_buf_path(hermes_home, account_id))
+    data = _read_json(_account_dir(hermes_home) / f"{account_id}.sync.json")
     return data.get("get_updates_buf", "") if isinstance(data, dict) else ""
 
 
 def _save_sync_buf(hermes_home: str, account_id: str, sync_buf: str) -> None:
-    atomic_json_write(_sync_buf_path(hermes_home, account_id), {"get_updates_buf": sync_buf})
+    atomic_json_write(_account_dir(hermes_home) / f"{account_id}.sync.json", {"get_updates_buf": sync_buf})
 
 
 async def _fetch_qr(session: "aiohttp.ClientSession", bot_type: str) -> Tuple[str, str]:
@@ -762,11 +711,9 @@ async def qr_login(hermes_home: str, *, bot_type: str = "3", timeout_seconds: in
                 status_resp = await _api_get(
                     session, base_url=current_base_url, endpoint=f"{EP_GET_QR_STATUS}?qrcode={qrcode_value}", timeout_ms=QR_TIMEOUT_MS,
                 )
-            except asyncio.TimeoutError:
-                await asyncio.sleep(1)
-                continue
             except Exception as exc:
-                logger.warning("weixin: QR poll error: %s", exc)
+                if not isinstance(exc, asyncio.TimeoutError):
+                    logger.warning("weixin: QR poll error: %s", exc)
                 await asyncio.sleep(1)
                 continue
             status = str(status_resp.get("status") or "wait")
@@ -791,48 +738,43 @@ async def qr_login(hermes_home: str, *, bot_type: str = "3", timeout_seconds: in
                     logger.error("weixin: QR refresh failed: %s", exc)
                     return None
             elif status == "confirmed":
-                account_id = str(status_resp.get("ilink_bot_id") or "")
-                token = str(status_resp.get("bot_token") or "")
-                base_url = str(status_resp.get("baseurl") or ILINK_BASE_URL)
-                user_id = str(status_resp.get("ilink_user_id") or "")
-                if not account_id or not token:
+                creds = {
+                    "account_id": str(status_resp.get("ilink_bot_id") or ""), "token": str(status_resp.get("bot_token") or ""),
+                    "base_url": str(status_resp.get("baseurl") or ILINK_BASE_URL), "user_id": str(status_resp.get("ilink_user_id") or ""),
+                }
+                if not creds["account_id"] or not creds["token"]:
                     logger.error("weixin: QR confirmed but credential payload was incomplete")
                     return None
-                save_weixin_account(hermes_home, account_id=account_id, token=token, base_url=base_url, user_id=user_id)
-                print(f"\n微信连接成功，account_id={account_id}")
-                return {"account_id": account_id, "token": token, "base_url": base_url, "user_id": user_id}
+                save_weixin_account(hermes_home, **creds)
+                print(f"\n微信连接成功，account_id={creds['account_id']}")
+                return creds
             await asyncio.sleep(1)
         print("\n微信登录超时。")
         return None
 
 
-def _encrypted_media(kw: Dict[str, Any]) -> Dict[str, Any]:
-    return {"encrypt_query_param": kw["encrypt_query_param"], "aes_key": kw["aes_key_for_api"], "encrypt_type": 1}
-
-
-def _file_item(**kw: Any) -> Dict[str, Any]:
-    file_item = {"media": _encrypted_media(kw), "file_name": kw["filename"], "len": str(kw["plaintext_size"])}
-    return {"type": ITEM_FILE, "file_item": file_item}
-
-
-def _image_item(**kw: Any) -> Dict[str, Any]:
-    return {"type": ITEM_IMAGE, "image_item": {"media": _encrypted_media(kw), "mid_size": kw["ciphertext_size"]}}
-
-
-def _video_item(**kw: Any) -> Dict[str, Any]:
-    video_item = {
-        "media": _encrypted_media(kw), "video_size": kw["ciphertext_size"],
-        "play_length": kw.get("play_length", 0), "video_md5": kw.get("rawfilemd5", ""),
-    }
-    return {"type": ITEM_VIDEO, "video_item": video_item}
-
-
-def _voice_item(**kw: Any) -> Dict[str, Any]:
-    voice_item = {
-        "media": _encrypted_media(kw), "encode_type": kw.get("encode_type"), "bits_per_sample": kw.get("bits_per_sample"),
+# Outbound item shapes: item type -> (item key, extra fields after the shared ``media`` block).
+_ITEM_SHAPES: Dict[int, Tuple[str, Callable[[Dict[str, Any]], Dict[str, Any]]]] = {
+    ITEM_FILE: ("file_item", lambda kw: {"file_name": kw["filename"], "len": str(kw["plaintext_size"])}),
+    ITEM_IMAGE: ("image_item", lambda kw: {"mid_size": kw["ciphertext_size"]}),
+    ITEM_VIDEO: ("video_item", lambda kw: {
+        "video_size": kw["ciphertext_size"], "play_length": kw.get("play_length", 0), "video_md5": kw.get("rawfilemd5", ""),
+    }),
+    ITEM_VOICE: ("voice_item", lambda kw: {
+        "encode_type": kw.get("encode_type"), "bits_per_sample": kw.get("bits_per_sample"),
         "sample_rate": kw.get("sample_rate"), "playtime": kw.get("playtime", 0),
-    }
-    return {"type": ITEM_VOICE, "voice_item": voice_item}
+    }),
+}
+
+
+def _media_item(item_type: int, **kw: Any) -> Dict[str, Any]:
+    key, fields = _ITEM_SHAPES[item_type]
+    media = {"encrypt_query_param": kw["encrypt_query_param"], "aes_key": kw["aes_key_for_api"], "encrypt_type": 1}
+    return {"type": item_type, key: {"media": media, **fields(kw)}}
+
+
+_file_item, _image_item = partial(_media_item, ITEM_FILE), partial(_media_item, ITEM_IMAGE)
+_video_item, _voice_item = partial(_media_item, ITEM_VIDEO), partial(_media_item, ITEM_VOICE)
 
 
 # Inbound media dispatch: item type -> (item key, download timeout, cache fn, mime or None (= guess from
@@ -875,32 +817,23 @@ class WeixinAdapter(BasePlatformAdapter):
         self._send_session: Optional[aiohttp.ClientSession] = None
         self._poll_task: Optional[asyncio.Task] = None
         self._dedup = MessageDeduplicator(ttl_seconds=MESSAGE_DEDUP_TTL_SECONDS)
-        self._account_id = _extra_or_secret(extra, "account_id", "WEIXIN_ACCOUNT_ID")
+        self._account_id = _extra_or_secret(extra, "account_id")
         self._token = str(config.token or extra.get("token") or _wx_secret("WEIXIN_TOKEN", "")).strip()
-        self._base_url = _extra_or_secret(extra, "base_url", "WEIXIN_BASE_URL", ILINK_BASE_URL).rstrip("/")
-        self._cdn_base_url = _extra_or_secret(extra, "cdn_base_url", "WEIXIN_CDN_BASE_URL", WEIXIN_CDN_BASE_URL).rstrip("/")
+        self._base_url = _extra_or_secret(extra, "base_url", ILINK_BASE_URL).rstrip("/")
+        self._cdn_base_url = _extra_or_secret(extra, "cdn_base_url", WEIXIN_CDN_BASE_URL).rstrip("/")
 
-        def tunable(key: str, env: str, default: str) -> Any:
-            return _extra_or_env(extra, key, env, default)
-        self._send_chunk_delay_seconds = float(tunable("send_chunk_delay_seconds", "WEIXIN_SEND_CHUNK_DELAY_SECONDS", "1.5"))
-        self._send_chunk_retries = int(tunable("send_chunk_retries", "WEIXIN_SEND_CHUNK_RETRIES", "4"))
-        self._send_chunk_retry_delay_seconds = float(
-            tunable("send_chunk_retry_delay_seconds", "WEIXIN_SEND_CHUNK_RETRY_DELAY_SECONDS", "1.0")
-        )
+        # Tunables: ``extra.<key>`` else env ``WEIXIN_<KEY>`` (e.g. WEIXIN_SEND_CHUNK_RETRIES).
+        self._send_chunk_delay_seconds = float(_extra_or_env(extra, "send_chunk_delay_seconds", "1.5"))
+        self._send_chunk_retries = int(_extra_or_env(extra, "send_chunk_retries", "4"))
+        self._send_chunk_retry_delay_seconds = float(_extra_or_env(extra, "send_chunk_retry_delay_seconds", "1.0"))
         self._send_text_gate = asyncio.Lock()
-        self._rate_limit_circuit_threshold = max(
-            1, int(tunable("rate_limit_circuit_threshold", "WEIXIN_RATE_LIMIT_CIRCUIT_THRESHOLD", "1"))
-        )
-        self._rate_limit_circuit_window_seconds = float(
-            tunable("rate_limit_circuit_window_seconds", "WEIXIN_RATE_LIMIT_CIRCUIT_WINDOW_SECONDS", "30.0")
-        )
-        self._rate_limit_circuit_open_seconds = float(
-            tunable("rate_limit_circuit_open_seconds", "WEIXIN_RATE_LIMIT_CIRCUIT_OPEN_SECONDS", "30.0")
-        )
+        self._rate_limit_circuit_threshold = max(1, int(_extra_or_env(extra, "rate_limit_circuit_threshold", "1")))
+        self._rate_limit_circuit_window_seconds = float(_extra_or_env(extra, "rate_limit_circuit_window_seconds", "30.0"))
+        self._rate_limit_circuit_open_seconds = float(_extra_or_env(extra, "rate_limit_circuit_open_seconds", "30.0"))
         self._rate_limit_circuit_until = 0.0
         self._rate_limit_events: List[float] = []
-        self._dm_policy = _extra_or_secret(extra, "dm_policy", "WEIXIN_DM_POLICY", "pairing").lower()
-        self._group_policy = _extra_or_secret(extra, "group_policy", "WEIXIN_GROUP_POLICY", "disabled").lower()
+        self._dm_policy = _extra_or_secret(extra, "dm_policy", "pairing").lower()
+        self._group_policy = _extra_or_secret(extra, "group_policy", "disabled").lower()
         # ``extra`` wins even when falsy (an explicit empty list disables the env allowlist).
         allow_from, group_allow_from = extra.get("allow_from"), extra.get("group_allow_from")
         self._allow_from = self._coerce_list(_wx_secret("WEIXIN_ALLOWED_USERS", "") if allow_from is None else allow_from)
@@ -1017,14 +950,11 @@ class WeixinAdapter(BasePlatformAdapter):
         consecutive_failures = 0
         while self._running:
             try:
-                response = await _get_updates(
-                    self._poll_session, base_url=self._base_url, token=self._token, sync_buf=sync_buf, timeout_ms=timeout_ms,
-                )
+                response = await _get_updates(self._poll_session, base_url=self._base_url, token=self._token, sync_buf=sync_buf, timeout_ms=timeout_ms)
                 suggested_timeout = response.get("longpolling_timeout_ms")
                 if isinstance(suggested_timeout, int) and suggested_timeout > 0:
                     timeout_ms = suggested_timeout
-                ret = response.get("ret", 0)
-                errcode = response.get("errcode", 0)
+                ret, errcode = response.get("ret", 0), response.get("errcode", 0)
                 if ret not in {0, None} or errcode not in {0, None}:
                     if _is_session_expired(response, ret, errcode):
                         logger.error("[%s] Session expired; pausing for 10 minutes", self.name)
@@ -1211,9 +1141,7 @@ class WeixinAdapter(BasePlatformAdapter):
 
     async def _fetch_typing_ticket(self, session: Any, user_id: str, context_token: Optional[str], failure_label: str) -> Optional[str]:
         try:
-            response = await _get_config(
-                session, base_url=self._base_url, token=self._token, user_id=user_id, context_token=context_token,
-            )
+            response = await _get_config(session, base_url=self._base_url, token=self._token, user_id=user_id, context_token=context_token)
             typing_ticket = str(response.get("typing_ticket") or "")
             if typing_ticket:
                 self._typing_cache.set(user_id, typing_ticket)
@@ -1266,8 +1194,7 @@ class WeixinAdapter(BasePlatformAdapter):
                         text=chunk, context_token=context_token, client_id=client_id,
                     )
                     if resp and isinstance(resp, dict):
-                        ret = resp.get("ret")
-                        errcode = resp.get("errcode")
+                        ret, errcode = resp.get("ret"), resp.get("errcode")
                         if (ret is not None and ret != 0) or (errcode is not None and errcode != 0):
                             if _is_session_expired(resp, ret, errcode) and not retried_without_token and context_token:
                                 retried_without_token = True
@@ -1307,9 +1234,7 @@ class WeixinAdapter(BasePlatformAdapter):
             assert last_error is not None
             raise last_error
 
-    async def send(
-        self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None,
-    ) -> SendResult:
+    async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> SendResult:
         if not self._send_session or not self._token:
             return SendResult(success=False, error="Not connected")
         context_token = self._token_store.get(self._account_id, chat_id)
@@ -1378,8 +1303,7 @@ class WeixinAdapter(BasePlatformAdapter):
         await self._set_typing(chat_id, TYPING_STOP, "stop")
 
     async def send_image(
-        self, chat_id: str, image_url: str, caption: str, reply_to: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        self, chat_id: str, image_url: str, caption: str, reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None,
     ) -> SendResult:
         cleanup = image_url.startswith(("http://", "https://"))
         if cleanup:
@@ -1417,14 +1341,12 @@ class WeixinAdapter(BasePlatformAdapter):
         return await self._send_file_result(chat_id, file_path, caption or "", "send_document")
 
     async def send_video(
-        self, chat_id: str, video_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        self, chat_id: str, video_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None,
     ) -> SendResult:
         return await self._send_file_result(chat_id, video_path, caption or "", "send_video")
 
     async def send_voice(
-        self, chat_id: str, audio_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        self, chat_id: str, audio_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None,
     ) -> SendResult:
         # Native outbound voice bubbles are not proven-working upstream; send a
         # file attachment so users at least receive playable audio (even .silk).
@@ -1438,8 +1360,7 @@ class WeixinAdapter(BasePlatformAdapter):
             raise ValueError(f"Blocked unsafe URL (SSRF protection): {url}")
         assert self._send_session is not None
         data = await _download_bytes(self._send_session, url=url, timeout_seconds=30)
-        suffix = Path(url.split("?", 1)[0]).suffix or ".bin"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as handle:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(url.split("?", 1)[0]).suffix or ".bin") as handle:
             handle.write(data)
             return handle.name
 
@@ -1447,21 +1368,17 @@ class WeixinAdapter(BasePlatformAdapter):
         assert self._send_session is not None and self._token is not None
         plaintext = Path(path).read_bytes()
         media_type, item_builder = self._outbound_media_builder(path, force_file_attachment=force_file_attachment)
-        filekey = secrets.token_hex(16)
-        aes_key = secrets.token_bytes(16)
-        rawsize = len(plaintext)
-        rawfilemd5 = hashlib.md5(plaintext).hexdigest()
+        filekey, aes_key = secrets.token_hex(16), secrets.token_bytes(16)
+        rawsize, rawfilemd5 = len(plaintext), hashlib.md5(plaintext).hexdigest()
         upload_response = await _get_upload_url(
             self._send_session, base_url=self._base_url, token=self._token, to_user_id=chat_id,
             media_type=media_type, filekey=filekey, rawsize=rawsize, rawfilemd5=rawfilemd5,
             filesize=((rawsize + 16) // 16) * 16, aeskey_hex=aes_key.hex(),
         )
         upload_param = str(upload_response.get("upload_param") or "")
-        upload_full_url = str(upload_response.get("upload_full_url") or "")
         ciphertext = _aes128_ecb_encrypt(plaintext, aes_key)
-        # Prefer upload_full_url (direct CDN), else construct from upload_param.
-        # Both use POST — PUT to upload_full_url 404s on the WeChat CDN.
-        upload_url = upload_full_url or (upload_param and _cdn_upload_url(self._cdn_base_url, upload_param, filekey))
+        # Prefer upload_full_url (direct CDN), else construct from upload_param. Both use POST — PUT 404s on the CDN.
+        upload_url = str(upload_response.get("upload_full_url") or "") or (upload_param and _cdn_upload_url(self._cdn_base_url, upload_param, filekey))
         if not upload_url:
             raise RuntimeError(f"getUploadUrl returned neither upload_param nor upload_full_url: {upload_response}")
         encrypted_query_param = await _upload_ciphertext(self._send_session, ciphertext=ciphertext, upload_url=upload_url)
@@ -1478,8 +1395,8 @@ class WeixinAdapter(BasePlatformAdapter):
         media_item = item_builder(**item_kwargs)
         if caption:
             await _send_message(
-                self._send_session, base_url=self._base_url, token=self._token, to=chat_id,
-                text=self.format_message(caption), context_token=context_token, client_id=f"hermes-weixin-{uuid.uuid4().hex}",
+                self._send_session, base_url=self._base_url, token=self._token, to=chat_id, text=self.format_message(caption),
+                context_token=context_token, client_id=f"hermes-weixin-{uuid.uuid4().hex}",
             )
         last_message_id = f"hermes-weixin-{uuid.uuid4().hex}"
         await _send_items(
@@ -1507,8 +1424,7 @@ class WeixinAdapter(BasePlatformAdapter):
 
 
 async def _deliver_direct(
-    adapter: WeixinAdapter, chat_id: str, message: str,
-    media_files: Optional[List[Tuple[str, bool]]], context_token: Optional[str],
+    adapter: WeixinAdapter, chat_id: str, message: str, media_files: Optional[List[Tuple[str, bool]]], context_token: Optional[str],
 ) -> Dict[str, Any]:
     last_result: Optional[SendResult] = None
     cleaned = adapter.format_message(message)
@@ -1528,14 +1444,13 @@ async def _deliver_direct(
 
 
 async def send_weixin_direct(
-    *, extra: Dict[str, Any], token: Optional[str], chat_id: str, message: str,
-    media_files: Optional[List[Tuple[str, bool]]] = None,
+    *, extra: Dict[str, Any], token: Optional[str], chat_id: str, message: str, media_files: Optional[List[Tuple[str, bool]]] = None,
 ) -> Dict[str, Any]:
     """One-shot send helper for ``send_message`` and cron delivery. Reuses the live adapter's
     session when one is connected on this loop; otherwise builds a throwaway adapter."""
-    account_id = _extra_or_secret(extra, "account_id", "WEIXIN_ACCOUNT_ID")
-    base_url = _extra_or_secret(extra, "base_url", "WEIXIN_BASE_URL", ILINK_BASE_URL).rstrip("/")
-    cdn_base_url = _extra_or_secret(extra, "cdn_base_url", "WEIXIN_CDN_BASE_URL", WEIXIN_CDN_BASE_URL).rstrip("/")
+    account_id = _extra_or_secret(extra, "account_id")
+    base_url = _extra_or_secret(extra, "base_url", ILINK_BASE_URL).rstrip("/")
+    cdn_base_url = _extra_or_secret(extra, "cdn_base_url", WEIXIN_CDN_BASE_URL).rstrip("/")
     resolved_token = str(token or extra.get("token") or _wx_secret("WEIXIN_TOKEN", "")).strip()
     if not resolved_token:
         return {"error": "Weixin token missing. Configure WEIXIN_TOKEN or platforms.weixin.token."}
@@ -1546,9 +1461,7 @@ async def send_weixin_direct(
     context_token = token_store.get(account_id, chat_id)
     live_adapter = _LIVE_ADAPTERS.get(resolved_token)
     send_session = getattr(live_adapter, '_send_session', None)
-    if (live_adapter is not None and send_session is not None
-            and not send_session.closed
-            and send_session._loop is asyncio.get_running_loop()):
+    if send_session is not None and not send_session.closed and send_session._loop is asyncio.get_running_loop():
         return await _deliver_direct(live_adapter, chat_id, message, media_files, context_token)
     async with _new_session() as session:
         adapter = WeixinAdapter(PlatformConfig(

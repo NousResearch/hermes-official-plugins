@@ -1,6 +1,5 @@
-"""QQBot scan-to-configure (QR code onboard). Mirrors the Feishu pattern: synchronous
-HTTP + one entry-point ``qr_register()`` (create task → display QR → poll → decrypt
-credentials) against ``q.qq.com`` ``create_bind_task`` / ``poll_bind_result``."""
+"""QQBot scan-to-configure (QR code onboard). Mirrors the Feishu pattern: synchronous HTTP + one entry-point
+``qr_register()`` (create task → display QR → poll → decrypt) against ``q.qq.com`` bind-task endpoints."""
 
 from __future__ import annotations
 
@@ -11,8 +10,7 @@ from typing import Optional, Tuple
 from urllib.parse import quote
 
 from .constants import (
-    ONBOARD_API_TIMEOUT, ONBOARD_CREATE_PATH, ONBOARD_POLL_INTERVAL, ONBOARD_POLL_PATH, PORTAL_HOST, QR_URL_TEMPLATE,
-)
+    ONBOARD_API_TIMEOUT, ONBOARD_CREATE_PATH, ONBOARD_POLL_INTERVAL, ONBOARD_POLL_PATH, PORTAL_HOST, QR_URL_TEMPLATE)
 from .crypto import decrypt_secret, generate_bind_key
 from .utils import get_api_headers
 
@@ -71,7 +69,8 @@ def _create_bind_task(timeout: float = ONBOARD_API_TIMEOUT) -> Tuple[str, str]:
 def _poll_bind_result(task_id: str, timeout: float = ONBOARD_API_TIMEOUT) -> Tuple[BindStatus, str, str, str]:
     """Poll *task_id*; returns ``(status, bot_appid, bot_encrypt_secret, user_openid)``."""
     d = _portal_post(ONBOARD_POLL_PATH, {"task_id": task_id}, timeout, "poll_bind_result failed").get("data", {})
-    return BindStatus(d.get("status", 0)), str(d.get("bot_appid", "")), d.get("bot_encrypt_secret", ""), d.get("user_openid", "")
+    return (BindStatus(d.get("status", 0)), str(d.get("bot_appid", "")), d.get("bot_encrypt_secret", ""),
+            d.get("user_openid", ""))
 
 
 def build_connect_url(task_id: str) -> str:
@@ -86,14 +85,12 @@ def qr_register(timeout_seconds: int = 600) -> Optional[dict]:
     """Run the QR registration flow; returns ``{"app_id", "client_secret", "user_openid"}``
     or None on failure / expiry / cancellation. Unexpected errors propagate."""
     deadline = time.monotonic() + timeout_seconds
-
     for refresh_count in range(_MAX_REFRESHES + 1):
         try:
             task_id, aes_key = _create_bind_task()
         except Exception as exc:
             logger.warning("[QQBot onboard] Failed to create bind task: %s", exc)
             return None
-
         url = build_connect_url(task_id)
         print()
         if _render_qr(url):
@@ -102,14 +99,12 @@ def qr_register(timeout_seconds: int = 600) -> Optional[dict]:
             print(f"  Open this URL in QQ on your phone:\n  {url}")
             print("  Tip: pip install qrcode  to display a scannable QR code here")
         print()
-
         while time.monotonic() < deadline:
             try:
                 status, app_id, encrypted_secret, user_openid = _poll_bind_result(task_id)
             except Exception:
                 time.sleep(ONBOARD_POLL_INTERVAL)
                 continue
-
             if status == BindStatus.COMPLETED:
                 client_secret = decrypt_secret(encrypted_secret, aes_key)
                 print()
@@ -117,17 +112,14 @@ def qr_register(timeout_seconds: int = 600) -> Optional[dict]:
                 if user_openid:
                     print(f"  Scanner's OpenID: {user_openid}")
                 return {"app_id": app_id, "client_secret": client_secret, "user_openid": user_openid}
-
             if status == BindStatus.EXPIRED:
                 if refresh_count >= _MAX_REFRESHES:
                     logger.warning("[QQBot onboard] QR code expired %d times — giving up", _MAX_REFRESHES)
                     return None
                 print(f"\n  QR code expired, refreshing... ({refresh_count + 1}/{_MAX_REFRESHES})")
                 break  # next for-loop iteration creates a new task
-
             time.sleep(ONBOARD_POLL_INTERVAL)
         else:
             logger.warning("[QQBot onboard] Poll timed out after %ds", timeout_seconds)
             return None
-
     return None

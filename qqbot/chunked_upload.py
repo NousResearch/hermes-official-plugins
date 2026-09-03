@@ -20,11 +20,11 @@ from gateway.platforms.qqbot.constants import FILE_UPLOAD_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
-_BIZ_CODE_DAILY_LIMIT = 40093002     # upload_prepare: daily cumulative limit
+_BIZ_CODE_DAILY_LIMIT = 40093002  # upload_prepare: daily cumulative limit
 _BIZ_CODE_PART_RETRYABLE = 40093001  # upload_part_finish: transient
 _DEFAULT_CONCURRENT_PARTS = 1
 _MAX_CONCURRENT_PARTS = 10
-_PART_UPLOAD_TIMEOUT = 300.0        # 5 minutes per COS PUT
+_PART_UPLOAD_TIMEOUT = 300.0  # 5 minutes per COS PUT
 _PART_UPLOAD_MAX_RETRIES = 2
 _PART_FINISH_RETRY_INTERVAL = 1.0
 _PART_FINISH_DEFAULT_TIMEOUT = 120.0
@@ -32,8 +32,6 @@ _PART_FINISH_MAX_TIMEOUT = 600.0
 _COMPLETE_UPLOAD_MAX_RETRIES = 2
 _COMPLETE_UPLOAD_BASE_DELAY = 2.0
 _MD5_10M_SIZE = 10_002_432  # first N bytes used for the ``md5_10m`` hash (per QQ API spec)
-
-# ── Exceptions ──
 
 class _UploadError(Exception):
     def __init__(self, file_name: str, file_size: int, message: str) -> None:
@@ -59,17 +57,13 @@ class UploadFileTooLargeError(_UploadError):
     def __init__(self, file_name: str, file_size: int, limit_bytes: int = 0, message: str = "") -> None:
         self.limit_bytes = limit_bytes
         limit_str = f" ({format_size(limit_bytes)})" if limit_bytes else ""
-        super().__init__(
-            file_name, file_size,
-            message or f"File {file_name!r} ({format_size(file_size)}) exceeds platform limit{limit_str}",
-        )
+        super().__init__(file_name, file_size,
+                         message or f"File {file_name!r} ({format_size(file_size)}) exceeds platform limit{limit_str}")
 
     @property
     def limit_human(self) -> str:
         return format_size(self.limit_bytes) if self.limit_bytes else "unknown"
 
-
-# ── Prepare-response shape ──
 
 @dataclass
 class _PreparePart:
@@ -97,27 +91,19 @@ def _parse_prepare_response(raw: Dict[str, Any]) -> _PrepareResult:
     raw_parts = src.get("parts") or src.get("part_list") or []
     if not isinstance(raw_parts, list) or not raw_parts:
         raise ValueError(f"upload_prepare response missing parts: {str(raw)[:200]}")
-    parts = [
-        _PreparePart(
-            index=int(p.get("part_index") or p.get("index") or 0),
-            presigned_url=str(p.get("presigned_url") or p.get("url") or ""),
-            block_size=int(p.get("block_size", 0)))
-        for p in raw_parts
-        if isinstance(p, dict)]
+    parts = [_PreparePart(index=int(p.get("part_index") or p.get("index") or 0),
+                          presigned_url=str(p.get("presigned_url") or p.get("url") or ""),
+                          block_size=int(p.get("block_size", 0)))
+             for p in raw_parts if isinstance(p, dict)]
     return _PrepareResult(
-        upload_id=upload_id,
-        block_size=block_size,
-        parts=parts,
+        upload_id=upload_id, block_size=block_size, parts=parts,
         concurrency=int(src.get("concurrency", _DEFAULT_CONCURRENT_PARTS)) or _DEFAULT_CONCURRENT_PARTS,
         retry_timeout=float(src.get("retry_timeout", 0.0) or 0.0))
 
 
 def _api_path(chat_type: str, target_id: str, endpoint: str) -> str:
-    base = "/v2/users" if chat_type == "c2c" else "/v2/groups"
-    return f"{base}/{target_id}/{endpoint}"
+    return f"{'/v2/users' if chat_type == 'c2c' else '/v2/groups'}/{target_id}/{endpoint}"
 
-
-# ── Chunked upload driver ──
 
 @dataclass
 class _Job:
@@ -142,9 +128,8 @@ class ChunkedUploader:
     circular import; must raise RuntimeError with the biz_code in the message);
     ``http_put`` is ``(url, data, headers) -> httpx-like response`` for COS PUTs."""
 
-    def __init__(
-        self, api_request: Callable[..., Awaitable[Dict[str, Any]]], http_put: Callable[..., Awaitable[Any]],
-        log_tag: str = "QQBot") -> None:
+    def __init__(self, api_request: Callable[..., Awaitable[Dict[str, Any]]],
+                 http_put: Callable[..., Awaitable[Any]], log_tag: str = "QQBot") -> None:
         self._api_request = api_request
         self._http_put = http_put
         self._log_tag = log_tag
@@ -158,24 +143,18 @@ class ChunkedUploader:
         Raises UploadDailyLimitExceededError (40093002), UploadFileTooLargeError, RuntimeError."""
         if chat_type not in {"c2c", "group"}:
             raise ValueError(f"ChunkedUploader: unsupported chat_type {chat_type!r}")
-
         job = _Job(chat_type, target_id, file_path, Path(file_path).stat().st_size)
-        logger.info(
-            "[%s] Chunked upload start: file=%s size=%s type=%d",
-            self._log_tag, file_name, format_size(job.file_size), file_type)
-
+        logger.info("[%s] Chunked upload start: file=%s size=%s type=%d", self._log_tag, file_name,
+                    format_size(job.file_size), file_type)
         # Hashing is blocking I/O → executor.
         hashes = await asyncio.get_running_loop().run_in_executor(None, _compute_file_hashes, file_path, job.file_size)
         prepare = await self._prepare(job, file_type, file_name, hashes)
         max_concurrent = min(prepare.concurrency, _MAX_CONCURRENT_PARTS)
         job.upload_id, job.block_size, job.total_parts = prepare.upload_id, prepare.block_size, len(prepare.parts)
-        job.retry_timeout = min(
-            prepare.retry_timeout if prepare.retry_timeout > 0 else _PART_FINISH_DEFAULT_TIMEOUT,
-            _PART_FINISH_MAX_TIMEOUT)
-        logger.info(
-            "[%s] Prepared: upload_id=%s block_size=%s parts=%d concurrency=%d",
-            self._log_tag, job.upload_id, format_size(job.block_size), job.total_parts, max_concurrent)
-
+        job.retry_timeout = min(prepare.retry_timeout if prepare.retry_timeout > 0 else _PART_FINISH_DEFAULT_TIMEOUT,
+                                _PART_FINISH_MAX_TIMEOUT)
+        logger.info("[%s] Prepared: upload_id=%s block_size=%s parts=%d concurrency=%d", self._log_tag,
+                    job.upload_id, format_size(job.block_size), job.total_parts, max_concurrent)
         sem = asyncio.Semaphore(max(max_concurrent, 1))
 
         async def _run(part: _PreparePart) -> None:
@@ -187,42 +166,34 @@ class ChunkedUploader:
         return await self._complete(job)
 
     async def _prepare(self, job: _Job, file_type: int, file_name: str, hashes: Dict[str, str]) -> _PrepareResult:
-        body = {
-            "file_type": file_type, "file_name": file_name, "file_size": job.file_size,
-            "md5": hashes["md5"], "sha1": hashes["sha1"], "md5_10m": hashes["md5_10m"]}
+        body = {"file_type": file_type, "file_name": file_name, "file_size": job.file_size,
+                "md5": hashes["md5"], "sha1": hashes["sha1"], "md5_10m": hashes["md5_10m"]}
         try:
             raw = await self._post(job, "upload_prepare", body)
         except RuntimeError as exc:
-            err_msg = str(exc)
-            if f"{_BIZ_CODE_DAILY_LIMIT}" in err_msg:
-                raise UploadDailyLimitExceededError(file_name, job.file_size, err_msg) from exc
+            if f"{_BIZ_CODE_DAILY_LIMIT}" in str(exc):
+                raise UploadDailyLimitExceededError(file_name, job.file_size, str(exc)) from exc
             raise
         return _parse_prepare_response(raw)
 
     async def _upload_one_part(self, job: _Job, part: _PreparePart) -> None:
         """PUT one part to COS, then call ``upload_part_finish``."""
         part_index, total_parts = part.index, job.total_parts
-        # Per-part block_size wins; fall back to the response-level value.
-        actual_block_size = part.block_size if part.block_size > 0 else job.block_size
         offset = (part_index - 1) * job.block_size
-        length = min(actual_block_size, job.file_size - offset)
-
+        # Per-part block_size wins; fall back to the response-level value.
+        length = min(part.block_size if part.block_size > 0 else job.block_size, job.file_size - offset)
         data = await asyncio.get_running_loop().run_in_executor(None, _read_file_chunk, job.file_path, offset, length)
         md5_hex = hashlib.md5(data).hexdigest()
-        logger.debug(
-            "[%s] Part %d/%d: uploading %s (offset=%d md5=%s)",
-            self._log_tag, part_index, total_parts, format_size(length), offset, md5_hex)
-
+        logger.debug("[%s] Part %d/%d: uploading %s (offset=%d md5=%s)", self._log_tag, part_index, total_parts,
+                     format_size(length), offset, md5_hex)
         await self._put_to_presigned_url(part.presigned_url, data, part_index, total_parts)
         await self._part_finish_with_retry(job, part_index, length, md5_hex)
-
         job.completed += 1
-        logger.debug(
-            "[%s] Part %d/%d done (%d/%d total)", self._log_tag, part_index, total_parts, job.completed, total_parts)
+        logger.debug("[%s] Part %d/%d done (%d/%d total)", self._log_tag, part_index, total_parts, job.completed,
+                     total_parts)
 
-    async def _with_retries(
-        self, attempt_fn: Callable[[], Awaitable[Any]], *, max_retries: int, base_delay: float, label: str,
-        failure_label: str) -> Any:
+    async def _with_retries(self, attempt_fn: Callable[[], Awaitable[Any]], *, max_retries: int, base_delay: float,
+                            label: str, failure_label: str) -> Any:
         """Run *attempt_fn* up to ``max_retries + 1`` times with exponential backoff."""
         last_exc: Exception | None = None
         for attempt in range(max_retries + 1):
@@ -232,9 +203,8 @@ class ChunkedUploader:
                 last_exc = exc
                 if attempt < max_retries:
                     delay = base_delay * (2 ** attempt)
-                    logger.warning(
-                        "[%s] %s attempt %d failed, retry in %.1fs: %s",
-                        self._log_tag, label, attempt + 1, delay, exc)
+                    logger.warning("[%s] %s attempt %d failed, retry in %.1fs: %s", self._log_tag, label, attempt + 1,
+                                   delay, exc)
                     await asyncio.sleep(delay)
         raise RuntimeError(f"{failure_label} failed after {max_retries + 1} attempts: {last_exc}")
 
@@ -242,9 +212,8 @@ class ChunkedUploader:
         """PUT part data to a pre-signed COS URL with retry."""
 
         async def _attempt() -> None:
-            resp = await asyncio.wait_for(
-                self._http_put(url, data=data, headers={"Content-Length": str(len(data))}),
-                timeout=_PART_UPLOAD_TIMEOUT)
+            resp = await asyncio.wait_for(self._http_put(url, data=data, headers={"Content-Length": str(len(data))}),
+                                          timeout=_PART_UPLOAD_TIMEOUT)
             status = getattr(resp, "status_code", 0)
             if 200 <= status < 300:
                 logger.debug("[%s] PUT part %d/%d: %d OK", self._log_tag, part_index, total_parts, status)
@@ -255,16 +224,15 @@ class ChunkedUploader:
                 body_preview = ""
             raise RuntimeError(f"COS PUT returned {status}: {body_preview}")
 
-        await self._with_retries(
-            _attempt, max_retries=_PART_UPLOAD_MAX_RETRIES, base_delay=1.0,
-            label=f"PUT part {part_index}/{total_parts}", failure_label=f"Part {part_index}/{total_parts} upload")
+        await self._with_retries(_attempt, max_retries=_PART_UPLOAD_MAX_RETRIES, base_delay=1.0,
+                                 label=f"PUT part {part_index}/{total_parts}",
+                                 failure_label=f"Part {part_index}/{total_parts} upload")
 
     async def _part_finish_with_retry(self, job: _Job, part_index: int, block_size: int, md5: str) -> None:
         """Call ``upload_part_finish``, retrying on biz_code 40093001 until ``job.retry_timeout``."""
         body = {"upload_id": job.upload_id, "part_index": part_index, "block_size": block_size, "md5": md5}
         loop = asyncio.get_running_loop()
-        start = loop.time()
-        attempt = 0
+        start, attempt = loop.time(), 0
         while True:
             try:
                 await self._post(job, "upload_part_finish", body)
@@ -274,25 +242,20 @@ class ChunkedUploader:
                     raise
                 elapsed = loop.time() - start
                 if elapsed >= job.retry_timeout:
-                    raise RuntimeError(
-                        f"upload_part_finish persistent retry timed out "
-                        f"after {job.retry_timeout:.0f}s ({attempt} retries): {exc}") from exc
+                    raise RuntimeError(f"upload_part_finish persistent retry timed out after "
+                                       f"{job.retry_timeout:.0f}s ({attempt} retries): {exc}") from exc
                 attempt += 1
-                logger.debug(
-                    "[%s] part_finish retryable error, attempt %d, elapsed=%.1fs: %s",
-                    self._log_tag, attempt, elapsed, exc)
+                logger.debug("[%s] part_finish retryable error, attempt %d, elapsed=%.1fs: %s", self._log_tag, attempt,
+                             elapsed, exc)
                 await asyncio.sleep(_PART_FINISH_RETRY_INTERVAL)
 
     async def _complete(self, job: _Job) -> Dict[str, Any]:
-        """Call ``complete_upload`` with retry — the ``/files`` endpoint (same as the simple
-        URL upload) selects the chunked-completion path when only ``upload_id`` is sent."""
+        """Call ``complete_upload`` with retry — the ``/files`` endpoint (same as the simple URL upload)
+        selects the chunked-completion path when only ``upload_id`` is sent."""
         return await self._with_retries(
-            lambda: self._post(job, "files", {"upload_id": job.upload_id}),
-            max_retries=_COMPLETE_UPLOAD_MAX_RETRIES, base_delay=_COMPLETE_UPLOAD_BASE_DELAY,
-            label="complete_upload", failure_label="complete_upload")
+            lambda: self._post(job, "files", {"upload_id": job.upload_id}), max_retries=_COMPLETE_UPLOAD_MAX_RETRIES,
+            base_delay=_COMPLETE_UPLOAD_BASE_DELAY, label="complete_upload", failure_label="complete_upload")
 
-
-# ── Helpers (module-level for testability) ──
 
 def format_size(size_bytes: int) -> str:
     """Return a human-readable file size string (e.g. ``'12.3 MB'``)."""
@@ -309,32 +272,23 @@ def _read_file_chunk(file_path: str, offset: int, length: int) -> bytes:
     with open(file_path, "rb") as fh:
         fh.seek(offset)
         data = fh.read(length)
-        if len(data) != length:
-            raise IOError(
-                f"Short read from {file_path}: expected {length} bytes at "
-                f"offset {offset}, got {len(data)} (file may be truncated)")
-        return data
+    if len(data) != length:
+        raise IOError(f"Short read from {file_path}: expected {length} bytes at offset {offset}, got {len(data)} "
+                      f"(file may be truncated)")
+    return data
 
 
 def _compute_file_hashes(file_path: str, file_size: int) -> Dict[str, str]:
-    """Compute md5, sha1, and md5_10m in a single pass."""
-    md5 = hashlib.md5()
-    sha1 = hashlib.sha1()
-    md5_10m = hashlib.md5()
+    """Compute md5, sha1, and md5_10m in a single pass (for small files md5_10m is just the full md5)."""
+    md5, sha1, md5_10m = hashlib.md5(), hashlib.sha1(), hashlib.md5()
     need_10m = file_size > _MD5_10M_SIZE
     bytes_read = 0
     with open(file_path, "rb") as fh:
         while chunk := fh.read(65536):
             md5.update(chunk)
             sha1.update(chunk)
-            if need_10m:
-                remaining = _MD5_10M_SIZE - bytes_read
-                if remaining > 0:
-                    md5_10m.update(chunk[:remaining])
+            if need_10m and (remaining := _MD5_10M_SIZE - bytes_read) > 0:
+                md5_10m.update(chunk[:remaining])
             bytes_read += len(chunk)
     full_md5 = md5.hexdigest()
-    return {
-        "md5": full_md5,
-        "sha1": sha1.hexdigest(),
-        # For small files the "10m" hash is just the full md5.
-        "md5_10m": md5_10m.hexdigest() if need_10m else full_md5}
+    return {"md5": full_md5, "sha1": sha1.hexdigest(), "md5_10m": md5_10m.hexdigest() if need_10m else full_md5}

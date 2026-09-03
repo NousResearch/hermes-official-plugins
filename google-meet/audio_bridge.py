@@ -17,8 +17,8 @@ _BLACKHOLE_DEVICE = "BlackHole 2ch"
 
 
 def _pactl(*args: str, check: bool) -> subprocess.CompletedProcess:
-    return subprocess.run(["pactl", *args], check=check, capture_output=True, text=True,
-                          encoding='utf-8', errors='replace', stdin=subprocess.DEVNULL)
+    return subprocess.run(["pactl", *args], check=check, capture_output=True, text=True, encoding='utf-8',
+                          errors='replace', stdin=subprocess.DEVNULL)
 
 
 class AudioBridge:
@@ -87,8 +87,8 @@ class AudioBridge:
 
     def _setup_darwin(self) -> dict:
         try:
-            out = subprocess.check_output(["system_profiler", "SPAudioDataType"], text=True,
-                                          encoding='utf-8', errors='replace', stderr=subprocess.STDOUT)
+            out = subprocess.check_output(["system_profiler", "SPAudioDataType"], text=True, encoding='utf-8',
+                                          errors='replace', stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
         except FileNotFoundError as exc:
             raise RuntimeError("system_profiler not found (macOS-only command)") from exc
         except subprocess.CalledProcessError as exc:

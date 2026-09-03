@@ -21,7 +21,6 @@ UPDATE_PROMPT_PREFIX = "update_prompt:"
 _APPROVAL_DATA_RE = re.compile(r"^approve:(.+):(allow-once|allow-always|deny)$")
 _UPDATE_PROMPT_RE = re.compile(r"^update_prompt:(y|n)$")
 
-
 # ── Keyboard dataclasses ──
 
 def _to_dict(value: Any) -> Any:
@@ -108,8 +107,7 @@ def _make_callback_button(btn_id: str, label: str, visited_label: str, data: str
         id=btn_id,
         render_data=KeyboardButtonRenderData(label=label, visited_label=visited_label, style=style),
         action=KeyboardButtonAction(type=1, data=data),
-        group_id=group_id,
-    )
+        group_id=group_id)
 
 
 def _single_row_keyboard(buttons: List[KeyboardButton]) -> InlineKeyboard:
@@ -132,8 +130,7 @@ def build_update_prompt_keyboard() -> InlineKeyboard:
     """Build a Yes/No keyboard for update confirmation prompts."""
     return _single_row_keyboard([
         _make_callback_button("yes", "✓ 确认", "已确认", f"{UPDATE_PROMPT_PREFIX}y", 1, "update_prompt"),
-        _make_callback_button("no", "✗ 取消", "已取消", f"{UPDATE_PROMPT_PREFIX}n", 0, "update_prompt"),
-    ])
+        _make_callback_button("no", "✗ 取消", "已取消", f"{UPDATE_PROMPT_PREFIX}n", 0, "update_prompt")])
 
 
 # ── ApprovalRequest + text builder ──
@@ -211,16 +208,11 @@ def parse_interaction_event(raw: Dict[str, Any]) -> InteractionEvent:
     resolved = data_raw.get("resolved") or {}
     scene_code = int(raw.get("chat_type", 0) or 0)
     return InteractionEvent(
-        id=str(raw.get("id", "")),
-        type=int(data_raw.get("type", 0) or 0),
-        chat_type=scene_code,
-        scene=_SCENE_NAMES.get(scene_code, ""),
-        group_openid=str(raw.get("group_openid", "")),
+        id=str(raw.get("id", "")), type=int(data_raw.get("type", 0) or 0), chat_type=scene_code,
+        scene=_SCENE_NAMES.get(scene_code, ""), group_openid=str(raw.get("group_openid", "")),
         group_member_openid=str(raw.get("group_member_openid", "")),
-        user_openid=str(raw.get("user_openid", "")),
-        channel_id=str(raw.get("channel_id", "")),
-        guild_id=str(raw.get("guild_id", "")),
-        button_data=str(resolved.get("button_data", "")),
+        user_openid=str(raw.get("user_openid", "")), channel_id=str(raw.get("channel_id", "")),
+        guild_id=str(raw.get("guild_id", "")), button_data=str(resolved.get("button_data", "")),
         button_id=str(resolved.get("button_id", "")),
         resolver_user_id=str(resolved.get("user_id", "")),
     )

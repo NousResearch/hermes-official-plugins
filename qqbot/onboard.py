@@ -75,11 +75,9 @@ def _poll_bind_result(task_id: str, timeout: float = ONBOARD_API_TIMEOUT) -> Tup
     """Poll *task_id*; returns ``(status, bot_appid, bot_encrypt_secret, user_openid)``."""
     data = _portal_post(ONBOARD_POLL_PATH, {"task_id": task_id}, timeout, "poll_bind_result failed")
     d = data.get("data", {})
-    return (
-        BindStatus(d.get("status", 0)),
-        str(d.get("bot_appid", "")),
-        d.get("bot_encrypt_secret", ""),
-        d.get("user_openid", ""),
+    return(
+        BindStatus(d.get("status", 0)), str(d.get("bot_appid", "")),
+        d.get("bot_encrypt_secret", ""), d.get("user_openid", ""),
     )
 
 

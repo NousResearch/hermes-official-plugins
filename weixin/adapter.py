@@ -8,7 +8,7 @@ import asyncio, base64, contextlib, hashlib, json, logging, mimetypes, os, re, s
 from datetime import datetime
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from urllib.parse import quote, urlparse
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ from gateway.config import Platform, PlatformConfig
 from gateway.platforms.helpers import MessageDeduplicator, greedy_pack_blocks
 from gateway.platforms.base import (
     _IMAGE_EXTS, _VIDEO_EXTS, gateway_trust_env, BasePlatformAdapter, MessageEvent, MessageType, SendResult,
-    cache_audio_from_bytes, cache_document_from_bytes, cache_image_from_bytes,
+    cache_audio_from_bytes_async, cache_document_from_bytes_async, cache_image_from_bytes_async,
 )
 from hermes_constants import get_hermes_home
 from utils import atomic_json_write
@@ -175,6 +175,10 @@ class ContextTokenStore:
     def __init__(self, hermes_home: str):
         self._root = _account_dir(hermes_home)
         self._cache: Dict[str, str] = {}
+        # Serializes the offloaded flushes so two concurrent set() calls
+        # cannot land their writes out of order (last-writer-wins would drop
+        # the newer token from disk).
+        self._persist_lock = asyncio.Lock()
 
     @staticmethod
     def _key(account_id: str, user_id: str) -> str:
@@ -197,10 +201,16 @@ class ContextTokenStore:
     def get(self, account_id: str, user_id: str) -> Optional[str]:
         return self._cache.get(self._key(account_id, user_id))
 
-    def set(self, account_id: str, user_id: str, token: str) -> None:
+    async def set(self, account_id: str, user_id: str, token: str) -> None:
         self._cache[self._key(account_id, user_id)] = token
-        prefix = f"{account_id}:"
-        payload = {key[len(prefix):]: value for key, value in self._cache.items() if key.startswith(prefix)}
+        # atomic_json_write() fsyncs, so the flush is offloaded off the loop; the payload is snapshotted
+        # here (the worker never iterates ``_cache`` mid-mutation) and the lock keeps flushes in order.
+        async with self._persist_lock:
+            prefix = f"{account_id}:"
+            payload = {key[len(prefix):]: value for key, value in self._cache.items() if key.startswith(prefix)}
+            await asyncio.to_thread(self._persist, account_id, payload)
+
+    def _persist(self, account_id: str, payload: Dict[str, str]) -> None:
         try:
             atomic_json_write(self._root / f"{account_id}.context-tokens.json", payload)
         except Exception as exc:
@@ -649,11 +659,11 @@ _video_item, _voice_item = partial(_media_item, ITEM_VIDEO), partial(_media_item
 
 # Inbound media dispatch: item type -> (item key, download timeout, cache fn, mime or None (= guess from
 # file_name), log label). Cache fns are lambdas so monkeypatching the module names takes effect at call time.
-_INBOUND_MEDIA: Dict[int, Tuple[str, float, Callable[[bytes, str], str], Optional[str], str]] = {
-    ITEM_IMAGE: ("image_item", 30.0, lambda data, _name: cache_image_from_bytes(data, ".jpg"), "image/jpeg", "image"),
-    ITEM_VIDEO: ("video_item", 120.0, lambda data, _name: cache_document_from_bytes(data, "video.mp4"), "video/mp4", "video"),
-    ITEM_FILE: ("file_item", 60.0, lambda data, name: cache_document_from_bytes(data, name), None, "file"),
-    ITEM_VOICE: ("voice_item", 60.0, lambda data, _name: cache_audio_from_bytes(data, ".silk"), "audio/silk", "voice"),
+_INBOUND_MEDIA: Dict[int, Tuple[str, float, Callable[[bytes, str], Awaitable[str]], Optional[str], str]] = {
+    ITEM_IMAGE: ("image_item", 30.0, lambda data, _name: cache_image_from_bytes_async(data, ".jpg"), "image/jpeg", "image"),
+    ITEM_VIDEO: ("video_item", 120.0, lambda data, _name: cache_document_from_bytes_async(data, "video.mp4"), "video/mp4", "video"),
+    ITEM_FILE: ("file_item", 60.0, lambda data, name: cache_document_from_bytes_async(data, name), None, "file"),
+    ITEM_VOICE: ("voice_item", 60.0, lambda data, _name: cache_audio_from_bytes_async(data, ".silk"), "audio/silk", "voice"),
 }
 
 # Outbound local-file dispatch by extension: (extensions, sender method, path kwarg); default = send_document.
@@ -870,7 +880,7 @@ class WeixinAdapter(BasePlatformAdapter):
             return
         context_token = str(message.get("context_token") or "").strip()
         if context_token:
-            self._token_store.set(self._account_id, sender_id, context_token)
+            await self._token_store.set(self._account_id, sender_id, context_token)
         if self._poll_session and self._token and not self._typing_cache.get(sender_id):
             asyncio.create_task(self._fetch_typing_ticket(self._poll_session, sender_id, context_token or None, "getConfig failed"))
         media_paths, media_types = [], []  # type: List[str], List[str]
@@ -951,7 +961,7 @@ class WeixinAdapter(BasePlatformAdapter):
             data = await _download_and_decrypt_media(
                 self._poll_session, cdn_base_url=self._cdn_base_url, encrypted_query_param=media.get("encrypt_query_param"),
                 aes_key_b64=aes_key_b64, full_url=media.get("full_url"), timeout_seconds=timeout_seconds)
-            return cache_fn(data, filename), mime
+            return await cache_fn(data, filename), mime
         except Exception as exc:
             logger.warning("[%s] %s download failed: %s", self.name, label, exc)
             return None, mime

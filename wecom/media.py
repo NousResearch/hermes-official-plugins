@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
-from gateway.platforms.base import SendResult, cache_document_from_bytes, cache_image_from_bytes
+from gateway.platforms.base import SendResult, cache_document_from_bytes_async, cache_image_from_bytes_async
 
 logger = logging.getLogger("plugins.platforms.wecom.adapter")
 
@@ -102,9 +102,9 @@ class WeComMediaMixin:
                 return None
             if kind == "image":
                 ext = self._detect_image_ext(raw)
-                return self._cache_image(raw, ext, self._mime_for_ext(ext, fallback="image/jpeg"), "")
+                return await self._cache_image(raw, ext, self._mime_for_ext(ext, fallback="image/jpeg"), "")
             filename = str(media.get("filename") or media.get("name") or "wecom_file")
-            return cache_document_from_bytes(raw, filename), mimetypes.guess_type(filename)[0] or "application/octet-stream"
+            return await cache_document_from_bytes_async(raw, filename), mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
         url = str(media.get("url") or "").strip()
         if not url:
@@ -124,13 +124,13 @@ class WeComMediaMixin:
         content_type = str(headers.get("content-type") or "").split(";", 1)[0].strip() or "application/octet-stream"
         if kind == "image":
             ext = self._guess_extension(url, content_type, fallback=self._detect_image_ext(raw))
-            return self._cache_image(raw, ext, content_type or self._mime_for_ext(ext, fallback="image/jpeg"), f" from {url}")
+            return await self._cache_image(raw, ext, content_type or self._mime_for_ext(ext, fallback="image/jpeg"), f" from {url}")
         filename = self._guess_filename(url, headers.get("content-disposition"), content_type)
-        return cache_document_from_bytes(raw, filename), content_type
+        return await cache_document_from_bytes_async(raw, filename), content_type
 
-    def _cache_image(self, raw: bytes, ext: str, mime: str, origin: str) -> Optional[Tuple[str, str]]:
+    async def _cache_image(self, raw: bytes, ext: str, mime: str, origin: str) -> Optional[Tuple[str, str]]:
         try:
-            return cache_image_from_bytes(raw, ext), mime
+            return await cache_image_from_bytes_async(raw, ext), mime
         except ValueError as exc:
             logger.warning("[%s] Rejected non-image bytes%s: %s", self.name, origin, exc)
             return None

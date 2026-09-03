@@ -53,7 +53,14 @@ def check_wecom_callback_requirements() -> bool:
 
 
 def ensure_wecom_callback_requirements() -> bool:
-    """ACTIVE lazy-installer (``ensure_deps_fn``): installs ``defusedxml`` and rebinds globals."""
+    """ACTIVE lazy-installer (``ensure_deps_fn``): installs ``defusedxml`` and rebinds globals.
+
+    Registered as ``ensure_deps_fn``: the registry's ``create_adapter()`` runs it when the passive probe
+    fails, right before the gateway connects the platform (#79812). Installs ``defusedxml`` (the only
+    non-core dep; aiohttp/httpx ship with every messaging install) and rebinds the module globals. Before
+    this hook existed, the passive ``check_fn`` returned False forever on installs without the ``wecom``
+    extra and the ``platform.wecom_callback`` LAZY_DEPS entry was never exercised.
+    """
     if check_wecom_callback_requirements():
         return True
 
@@ -118,6 +125,7 @@ class WecomCallbackAdapter(BasePlatformAdapter):
         except (ConnectionRefusedError, OSError):
             pass
         try:
+            # Tighter keepalive so idle CLOSE_WAIT drains promptly (#18451).
             from gateway.platforms._http_client_limits import platform_httpx_limits
             self._http_client = httpx.AsyncClient(timeout=20.0, limits=platform_httpx_limits())
             # client_max_size → 413 before our handler / any signature work runs.
@@ -240,6 +248,7 @@ class WecomCallbackAdapter(BasePlatformAdapter):
         return tuple(request.query.get(k, "") for k in ("msg_signature", "timestamp", "nonce"))
 
     def _is_duplicate(self, message_id: str) -> bool:
+        # Deduplicate: WeCom retries callbacks on timeout, producing duplicate inbound messages (#10305).
         now = time.time()
         if now - self._seen_messages.get(message_id, float("-inf")) < MESSAGE_DEDUP_TTL_SECONDS:
             return True

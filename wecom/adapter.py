@@ -175,6 +175,7 @@ class WeComAdapter(WeComStreamMixin, WeComMediaMixin, ChatSendQueueMixin, BasePl
             return self._startup_failure("wecom_missing_credentials", "WeCom startup failed: WECOM_BOT_ID and WECOM_SECRET are required", "[%s] %s")
         try:
             # Tighter keepalive so idle CLOSE_WAIT drains promptly.
+            # See #18451.
             from gateway.platforms._http_client_limits import platform_httpx_limits
             from gateway.platforms.base import _ssrf_redirect_guard
             from tools.url_safety import create_ssrf_safe_async_client

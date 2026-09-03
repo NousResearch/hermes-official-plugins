@@ -998,8 +998,8 @@ class QQAdapter(BasePlatformAdapter):
         return {"Authorization": f"QQBot {self._access_token}"} if self._access_token else {}
 
     async def _stt_voice_attachment(
-        self, url: str, content_type: str, filename: str, *,
-        asr_refer_text: Optional[str] = None, voice_wav_url: Optional[str] = None) -> Optional[str]:
+        self, url: str, content_type: str, filename: str, *, asr_refer_text: Optional[str] = None,
+        voice_wav_url: Optional[str] = None) -> Optional[str]:
         """Transcribe a voice attachment. Priority: QQ's free ``asr_refer_text`` →
         STT on ``voice_wav_url`` (pre-converted WAV, no SILK decode) → STT on the
         original URL (SILK→WAV). Returns the transcript or None."""
@@ -1283,10 +1283,7 @@ class QQAdapter(BasePlatformAdapter):
     async def _auth_headers(self) -> Dict[str, str]:
         """JSON REST headers with a fresh bot token."""
         token = await self._ensure_token()
-        return {
-            "Authorization": f"QQBot {token}",
-            "Content-Type": "application/json",
-            "User-Agent": build_user_agent()}
+        return {"Authorization": f"QQBot {token}", "Content-Type": "application/json", "User-Agent": build_user_agent()}
 
     async def _upload_media(
         self, target_type: str, target_id: str, file_type: int, url: Optional[str] = None,
@@ -1300,13 +1297,11 @@ class QQAdapter(BasePlatformAdapter):
             body["file_data"] = file_data
         if file_type == MEDIA_TYPE_FILE and file_name:
             body["file_name"] = file_name
-
         for attempt in range(3):  # retry transient upload failures
             try:
                 return await self._api_request("POST", path, body, timeout=FILE_UPLOAD_TIMEOUT)
             except RuntimeError as exc:
-                err_msg = str(exc)
-                if attempt == 2 or any(kw in err_msg for kw in ("400", "401", "Invalid", "timeout", "Timeout")):
+                if attempt == 2 or any(kw in str(exc) for kw in ("400", "401", "Invalid", "timeout", "Timeout")):
                     raise
                 await asyncio.sleep(1.5 * (attempt + 1))
 
@@ -1368,8 +1363,7 @@ class QQAdapter(BasePlatformAdapter):
                 return await sender(chat_id, content, reply_to)
             except Exception as exc:
                 last_exc = exc
-                err = str(exc).lower()
-                if any(k in err for k in self._PERMANENT_SEND_ERRORS + ("bad request",)):
+                if any(k in str(exc).lower() for k in self._PERMANENT_SEND_ERRORS + ("bad request",)):
                     break  # permanent — don't retry
                 if attempt < 2:
                     delay = 1.0 * (2 ** attempt)
@@ -1550,7 +1544,7 @@ class QQAdapter(BasePlatformAdapter):
                     chat_type, chat_id, file_type, url=media_source, srv_send_msg=False,
                     file_name=resolved_name if file_type == MEDIA_TYPE_FILE else None)
             else:
-                _, upload = await self._upload_local_file(chat_type, chat_id, media_source, file_type, file_name)
+                upload = await self._upload_local_file(chat_type, chat_id, media_source, file_type, file_name)
 
             file_info = upload.get("file_info") or (upload.get("data", {}) or {}).get("file_info")
             if not file_info:
@@ -1581,11 +1575,10 @@ class QQAdapter(BasePlatformAdapter):
 
     async def _upload_local_file(
         self, chat_type: str, chat_id: str, media_source: str, file_type: int, file_name: Optional[str],
-    ) -> Tuple[str, Dict[str, Any]]:
-        """Chunked-upload a local file; returns ``(resolved_name, complete_response)``
-        whose ``file_info`` goes into the RichMedia body. Raises UploadDailyLimitExceededError /
-        UploadFileTooLargeError from the uploader, ValueError for placeholder paths like
-        ``<path>``, FileNotFoundError."""
+    ) -> Dict[str, Any]:
+        """Chunked-upload a local file; returns the complete response whose ``file_info`` goes
+        into the RichMedia body. Raises UploadDailyLimitExceededError / UploadFileTooLargeError
+        from the uploader, ValueError for placeholder paths like ``<path>``, FileNotFoundError."""
         client = self._require_http_client()
         local_path = Path(media_source).expanduser()
         if not local_path.is_absolute():
@@ -1595,11 +1588,10 @@ class QQAdapter(BasePlatformAdapter):
                 raise ValueError(f"Invalid media source (looks like a placeholder): {media_source!r}")
             raise FileNotFoundError(f"Media file not found: {local_path}")
 
-        resolved_name = file_name or local_path.name
         uploader = ChunkedUploader(api_request=self._api_request, http_put=client.put, log_tag=self._log_tag)
-        return resolved_name, await uploader.upload(
+        return await uploader.upload(
             chat_type=chat_type, target_id=chat_id, file_path=str(local_path), file_type=file_type,
-            file_name=resolved_name)
+            file_name=file_name or local_path.name)
 
     # ── Typing indicator ──
 

@@ -47,7 +47,7 @@ CRYPTO_AVAILABLE = Cipher is not None
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.helpers import MessageDeduplicator, greedy_pack_blocks
 from gateway.platforms.base import (
-    gateway_trust_env, BasePlatformAdapter, MessageEvent, MessageType, SendResult,
+    _IMAGE_EXTS, _VIDEO_EXTS, gateway_trust_env, BasePlatformAdapter, MessageEvent, MessageType, SendResult,
     cache_audio_from_bytes, cache_document_from_bytes, cache_image_from_bytes,
 )
 from hermes_constants import get_hermes_home
@@ -277,13 +277,10 @@ def _guess_chat_type(message: Dict[str, Any], account_id: str) -> Tuple[str, str
 # HTTP helpers enforce timeouts via asyncio.wait_for(), not aiohttp ClientTimeout, which raises
 # "Timeout context manager should be used inside a task" under run_coroutine_threadsafe() from cron.
 async def _api_request(
-    session: "aiohttp.ClientSession", method: str, *, base_url: str, endpoint: str, headers: Dict[str, str],
-    timeout_ms: int, body: Optional[str] = None,
+    session: "aiohttp.ClientSession", method: str, *, base_url: str, endpoint: str, headers: Dict[str, str], timeout_ms: int, body: Optional[str] = None,
 ) -> Dict[str, Any]:
-    url = f"{base_url.rstrip('/')}/{endpoint}"
-
     async def _do() -> Dict[str, Any]:
-        kwargs = {"data": body} if body is not None else {}
+        url, kwargs = f"{base_url.rstrip('/')}/{endpoint}", ({"data": body} if body is not None else {})
         async with getattr(session, method.lower())(url, headers=headers, **kwargs) as response:
             raw = await response.text()
             if not response.ok:
@@ -315,9 +312,8 @@ async def _send_items(
     session: "aiohttp.ClientSession", *, base_url: str, token: str, to: str, item_list: List[Dict[str, Any]], context_token: Optional[str], client_id: str,
 ) -> Dict[str, Any]:
     message: Dict[str, Any] = {
-        "from_user_id": "", "to_user_id": to, "client_id": client_id,
-        "message_type": MSG_TYPE_BOT, "message_state": MSG_STATE_FINISH, "item_list": item_list,
-    }
+        "from_user_id": "", "to_user_id": to, "client_id": client_id, "message_type": MSG_TYPE_BOT, "message_state": MSG_STATE_FINISH,
+        "item_list": item_list}
     if context_token:
         message["context_token"] = context_token
     return await _api_post(session, base_url=base_url, endpoint=EP_SEND_MESSAGE, payload={"msg": message}, token=token, timeout_ms=API_TIMEOUT_MS)
@@ -340,13 +336,12 @@ async def _get_config(session: "aiohttp.ClientSession", *, base_url: str, token:
 
 
 async def _get_upload_url(
-    session: "aiohttp.ClientSession", *, base_url: str, token: str, to_user_id: str, media_type: int,
-    filekey: str, rawsize: int, rawfilemd5: str, filesize: int, aeskey_hex: str,
+    session: "aiohttp.ClientSession", *, base_url: str, token: str, to_user_id: str, media_type: int, filekey: str, rawsize: int,
+    rawfilemd5: str, filesize: int, aeskey_hex: str,
 ) -> Dict[str, Any]:
     payload = {
-        "filekey": filekey, "media_type": media_type, "to_user_id": to_user_id, "rawsize": rawsize,
-        "rawfilemd5": rawfilemd5, "filesize": filesize, "no_need_thumb": True, "aeskey": aeskey_hex,
-    }
+        "filekey": filekey, "media_type": media_type, "to_user_id": to_user_id, "rawsize": rawsize, "rawfilemd5": rawfilemd5,
+        "filesize": filesize, "no_need_thumb": True, "aeskey": aeskey_hex}
     return await _api_post(session, base_url=base_url, endpoint=EP_GET_UPLOAD_URL, payload=payload, token=token, timeout_ms=API_TIMEOUT_MS)
 
 
@@ -371,9 +366,7 @@ async def _download_bytes(session: "aiohttp.ClientSession", *, url: str, timeout
 
 
 _WEIXIN_CDN_ALLOWLIST: frozenset[str] = frozenset({
-    "novac2c.cdn.weixin.qq.com", "ilinkai.weixin.qq.com", "wx.qlogo.cn", "thirdwx.qlogo.cn",
-    "res.wx.qq.com", "mmbiz.qpic.cn", "mmbiz.qlogo.cn",
-})
+    "novac2c.cdn.weixin.qq.com", "ilinkai.weixin.qq.com", "wx.qlogo.cn", "thirdwx.qlogo.cn", "res.wx.qq.com", "mmbiz.qpic.cn", "mmbiz.qlogo.cn"})
 
 
 def _assert_weixin_cdn_url(url: str) -> None:
@@ -437,16 +430,13 @@ def _wrap_copy_friendly_lines_for_weixin(content: str) -> str:
     wrapped: List[str] = []
     for line, is_fence, in_code_block in _walk_markdown_lines(content):
         stripped = line.strip()
-        if (
-            is_fence or in_code_block or len(line) <= WEIXIN_COPY_LINE_WIDTH or not stripped
-            or stripped.startswith("|") or _TABLE_RULE_RE.match(stripped)
-        ):
+        keep = is_fence or in_code_block or len(line) <= WEIXIN_COPY_LINE_WIDTH or not stripped or stripped.startswith("|")
+        if keep or _TABLE_RULE_RE.match(stripped):
             wrapped.append(line)
         else:
             wrapped.extend(textwrap.wrap(
-                line, width=WEIXIN_COPY_LINE_WIDTH, break_long_words=False,
-                break_on_hyphens=False, replace_whitespace=False, drop_whitespace=True,
-            ) or [line])
+                line, width=WEIXIN_COPY_LINE_WIDTH, break_long_words=False, break_on_hyphens=False, replace_whitespace=False,
+                drop_whitespace=True) or [line])
     return "\n".join(wrapped).strip()
 
 
@@ -458,7 +448,6 @@ def _split_markdown_blocks(content: str) -> List[str]:
         if current:
             blocks.append("\n".join(current).strip())
             current.clear()
-
     for line, is_fence, in_code_block in _walk_markdown_lines(content):
         if is_fence and not in_code_block:  # opening fence starts a fresh block
             flush()
@@ -494,13 +483,8 @@ def _split_delivery_units_for_weixin(content: str) -> List[str]:
 def _looks_like_chatty_line_for_weixin(line: str) -> bool:
     stripped = line.strip()
     return bool(
-        stripped and len(stripped) <= 48
-        and not line.startswith((" ", "\t"))
-        and not stripped.startswith((">", "-", "*", "【", "#", "|"))
-        and not _TABLE_RULE_RE.match(stripped)
-        and not re.match(r"^\*\*[^*]+\*\*$", stripped)
-        and not re.match(r"^\d+\.\s", stripped)
-    )
+        stripped and len(stripped) <= 48 and not line.startswith((" ", "\t")) and not stripped.startswith((">", "-", "*", "【", "#", "|"))
+        and not _TABLE_RULE_RE.match(stripped) and not re.match(r"^\*\*[^*]+\*\*$", stripped) and not re.match(r"^\d+\.\s", stripped))
 
 
 def _looks_like_heading_line_for_weixin(line: str) -> bool:
@@ -520,10 +504,8 @@ def _pack_markdown_blocks_for_weixin(content: str, max_length: int) -> List[str]
     if len(content) <= max_length:
         return [content]
     # Block extraction stays weixin-local (anchored _FENCE_RE + per-line rstrip); packing is shared.
-    return greedy_pack_blocks(
-        _split_markdown_blocks(content), max_length,
-        overflow=lambda block: BasePlatformAdapter.truncate_message(block, max_length),
-    )
+    overflow = lambda block: BasePlatformAdapter.truncate_message(block, max_length)  # noqa: E731
+    return greedy_pack_blocks(_split_markdown_blocks(content), max_length, overflow=overflow)
 
 
 def _split_text_for_weixin_delivery(content: str, max_length: int, split_per_line: bool = False) -> List[str]:
@@ -535,10 +517,8 @@ def _split_text_for_weixin_delivery(content: str, max_length: int, split_per_lin
     if split_per_line:
         if len(content) <= max_length and "\n" not in content:
             return [content]
-        chunks = [
-            c for unit in _split_delivery_units_for_weixin(content)
-            for c in ([unit] if len(unit) <= max_length else _pack_markdown_blocks_for_weixin(unit, max_length))
-        ]
+        units = _split_delivery_units_for_weixin(content)
+        chunks = [c for u in units for c in ([u] if len(u) <= max_length else _pack_markdown_blocks_for_weixin(u, max_length))]
         return [c for c in chunks if c] or [content]
     if len(content) <= max_length:
         if _should_split_short_chat_block_for_weixin(content):
@@ -672,8 +652,7 @@ async def qr_login(hermes_home: str, *, bot_type: str = "3", timeout_seconds: in
             elif status == "confirmed":
                 creds = {
                     "account_id": str(status_resp.get("ilink_bot_id") or ""), "token": str(status_resp.get("bot_token") or ""),
-                    "base_url": str(status_resp.get("baseurl") or ILINK_BASE_URL), "user_id": str(status_resp.get("ilink_user_id") or ""),
-                }
+                    "base_url": str(status_resp.get("baseurl") or ILINK_BASE_URL), "user_id": str(status_resp.get("ilink_user_id") or "")}
                 if not creds["account_id"] or not creds["token"]:
                     logger.error("weixin: QR confirmed but credential payload was incomplete")
                     return None
@@ -690,12 +669,10 @@ _ITEM_SHAPES: Dict[int, Tuple[str, Callable[[Dict[str, Any]], Dict[str, Any]]]] 
     ITEM_FILE: ("file_item", lambda kw: {"file_name": kw["filename"], "len": str(kw["plaintext_size"])}),
     ITEM_IMAGE: ("image_item", lambda kw: {"mid_size": kw["ciphertext_size"]}),
     ITEM_VIDEO: ("video_item", lambda kw: {
-        "video_size": kw["ciphertext_size"], "play_length": kw.get("play_length", 0), "video_md5": kw.get("rawfilemd5", ""),
-    }),
+        "video_size": kw["ciphertext_size"], "play_length": kw.get("play_length", 0), "video_md5": kw.get("rawfilemd5", "")}),
     ITEM_VOICE: ("voice_item", lambda kw: {
-        "encode_type": kw.get("encode_type"), "bits_per_sample": kw.get("bits_per_sample"),
-        "sample_rate": kw.get("sample_rate"), "playtime": kw.get("playtime", 0),
-    }),
+        "encode_type": kw.get("encode_type"), "bits_per_sample": kw.get("bits_per_sample"), "sample_rate": kw.get("sample_rate"),
+        "playtime": kw.get("playtime", 0)}),
 }
 
 
@@ -720,9 +697,9 @@ _INBOUND_MEDIA: Dict[int, Tuple[str, float, Callable[[bytes, str], str], Optiona
 
 # Outbound local-file dispatch by extension: (extensions, sender method, path kwarg); default = send_document.
 _OUTBOUND_BY_EXT: Tuple[Tuple[frozenset, str, str], ...] = (
-    (frozenset({".ogg", ".opus", ".mp3", ".wav", ".m4a", ".flac"}), "send_voice", "audio_path"),
-    (frozenset({".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp"}), "send_video", "video_path"),
-    (frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif"}), "send_image_file", "image_path"),
+    (frozenset({".ogg", ".opus", ".mp3", ".wav", ".m4a", ".flac"}), "send_voice", "audio_path"),  # no .m2a, unlike base
+    (_VIDEO_EXTS, "send_video", "video_path"),
+    (_IMAGE_EXTS, "send_image_file", "image_path"),
 )
 _DIRECT_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 
@@ -751,7 +728,6 @@ class WeixinAdapter(BasePlatformAdapter):
         self._token = str(config.token or extra.get("token") or _wx_secret("WEIXIN_TOKEN", "")).strip()
         self._base_url = _extra_or_secret(extra, "base_url", ILINK_BASE_URL).rstrip("/")
         self._cdn_base_url = _extra_or_secret(extra, "cdn_base_url", WEIXIN_CDN_BASE_URL).rstrip("/")
-
         # Tunables: ``extra.<key>`` else env ``WEIXIN_<KEY>`` (e.g. WEIXIN_SEND_CHUNK_RETRIES).
         self._send_chunk_delay_seconds = float(_extra_or_env(extra, "send_chunk_delay_seconds", "1.5"))
         self._send_chunk_retries = int(_extra_or_env(extra, "send_chunk_retries", "4"))
@@ -804,8 +780,7 @@ class WeixinAdapter(BasePlatformAdapter):
         preflight = (
             (check_weixin_requirements(), "weixin_missing_dependency", "aiohttp and cryptography are required"),
             (self._token, "weixin_missing_token", "WEIXIN_TOKEN is required"),
-            (self._account_id, "weixin_missing_account", "WEIXIN_ACCOUNT_ID is required"),
-        )
+            (self._account_id, "weixin_missing_account", "WEIXIN_ACCOUNT_ID is required"))
         for ok, code, reason in preflight:
             if not ok:
                 self._set_fatal_error(code, f"Weixin startup failed: {reason}", retryable=False)
@@ -831,8 +806,7 @@ class WeixinAdapter(BasePlatformAdapter):
                 "which typically cannot be invited into ordinary WeChat groups. iLink usually does not deliver "
                 "ordinary-group events for these accounts, so group messages may never reach Hermes regardless of "
                 "this policy. If group delivery doesn't work, the limitation is on the iLink side, not in Hermes.",
-                self.name, self._group_policy,
-            )
+                self.name, self._group_policy)
         self._wire_plugin_handlers(None)  # plugin-registered native handlers
         return True
 
@@ -941,9 +915,7 @@ class WeixinAdapter(BasePlatformAdapter):
             return
         chat_type, effective_chat_id = _guess_chat_type(message, self._account_id)
         if chat_type == "group":
-            if self._group_policy in {"disabled", "pairing"} or (
-                self._group_policy == "allowlist" and effective_chat_id not in self._group_allow_from
-            ):
+            if self._group_policy in {"disabled", "pairing"} or (self._group_policy == "allowlist" and effective_chat_id not in self._group_allow_from):
                 return
         elif not self._is_dm_intake_allowed(sender_id):
             return
@@ -963,8 +935,7 @@ class WeixinAdapter(BasePlatformAdapter):
         source = self.build_source(chat_id=effective_chat_id, chat_type=chat_type, user_id=sender_id, user_name=sender_id)
         event = MessageEvent(
             text=text, message_type=_message_type_from_media(media_types, text), source=source, raw_message=message,
-            message_id=message_id or None, media_urls=media_paths, media_types=media_types, timestamp=datetime.now(),
-        )
+            message_id=message_id or None, media_urls=media_paths, media_types=media_types, timestamp=datetime.now())
         logger.info("[%s] inbound from=%s type=%s media=%d", self.name, _safe_id(sender_id), source.chat_type, len(media_paths))
         if event.message_type == MessageType.TEXT:
             self._enqueue_text_event(event)
@@ -974,10 +945,7 @@ class WeixinAdapter(BasePlatformAdapter):
     def _open_dm_opted_in(self) -> bool:
         # Scoped reads: the default profile's allow-all flag must not leak into a
         # multiplexed secondary profile's admission gate.
-        return any(
-            (_wx_secret(name, "") or "").lower() in {"true", "1", "yes"}
-            for name in ("GATEWAY_ALLOW_ALL_USERS", "WEIXIN_ALLOW_ALL_USERS")
-        )
+        return any((_wx_secret(name, "") or "").lower() in {"true", "1", "yes"} for name in ("GATEWAY_ALLOW_ALL_USERS", "WEIXIN_ALLOW_ALL_USERS"))
 
     def _is_dm_allowed(self, sender_id: str) -> bool:
         if self._dm_policy == "allowlist":
@@ -998,11 +966,8 @@ class WeixinAdapter(BasePlatformAdapter):
     def _text_batch_key(self, event: MessageEvent) -> str:
         from gateway.session import build_session_key
         return build_session_key(
-            event.source,
-            group_sessions_per_user=self.config.extra.get("group_sessions_per_user", True),
-            thread_sessions_per_user=self.config.extra.get("thread_sessions_per_user", False),
-            profile=event.source.profile,
-        )
+            event.source, group_sessions_per_user=self.config.extra.get("group_sessions_per_user", True),
+            thread_sessions_per_user=self.config.extra.get("thread_sessions_per_user", False), profile=event.source.profile)
 
     async def _flush_text_batch(self, key: str) -> None:
         current_task = asyncio.current_task()
@@ -1172,8 +1137,7 @@ class WeixinAdapter(BasePlatformAdapter):
         try:
             await _api_post(
                 self._send_session, base_url=self._base_url, endpoint=EP_SEND_TYPING, token=self._token, timeout_ms=CONFIG_TIMEOUT_MS,
-                payload={"ilink_user_id": chat_id, "typing_ticket": typing_ticket, "status": status},
-            )
+                payload={"ilink_user_id": chat_id, "typing_ticket": typing_ticket, "status": status})
         except Exception as exc:
             logger.debug("[%s] typing %s failed for %s: %s", self.name, label, _safe_id(chat_id), exc)
 
@@ -1227,9 +1191,7 @@ class WeixinAdapter(BasePlatformAdapter):
     ) -> SendResult:
         # Native outbound voice bubbles are not proven-working upstream; send a
         # file attachment so users at least receive playable audio (even .silk).
-        return await self._send_file_result(
-            chat_id, audio_path, caption or "[voice message as attachment]", "send_voice", force_file_attachment=True,
-        )
+        return await self._send_file_result(chat_id, audio_path, caption or "[voice message as attachment]", "send_voice", force_file_attachment=True)
 
     async def _download_remote_media(self, url: str) -> str:
         from tools.url_safety import is_safe_url
@@ -1248,16 +1210,13 @@ class WeixinAdapter(BasePlatformAdapter):
         filekey, aes_key = secrets.token_hex(16), secrets.token_bytes(16)
         rawsize, rawfilemd5 = len(plaintext), hashlib.md5(plaintext).hexdigest()
         upload_response = await _get_upload_url(
-            self._send_session, base_url=self._base_url, token=self._token, to_user_id=chat_id,
-            media_type=media_type, filekey=filekey, rawsize=rawsize, rawfilemd5=rawfilemd5,
-            filesize=((rawsize + 16) // 16) * 16, aeskey_hex=aes_key.hex(),
-        )
+            self._send_session, base_url=self._base_url, token=self._token, to_user_id=chat_id, media_type=media_type, filekey=filekey,
+            rawsize=rawsize, rawfilemd5=rawfilemd5, filesize=((rawsize + 16) // 16) * 16, aeskey_hex=aes_key.hex())
         upload_param = str(upload_response.get("upload_param") or "")
         ciphertext = _aes128_ecb_encrypt(plaintext, aes_key)
         # Prefer upload_full_url (direct CDN), else construct from upload_param. Both use POST — PUT 404s on the CDN.
-        upload_url = str(upload_response.get("upload_full_url") or "") or (
-            upload_param and f"{self._cdn_base_url.rstrip('/')}/upload?encrypted_query_param={quote(upload_param, safe='')}&filekey={quote(filekey, safe='')}"
-        )
+        upload_url = str(upload_response.get("upload_full_url") or "") or (upload_param and (
+            f"{self._cdn_base_url.rstrip('/')}/upload?encrypted_query_param={quote(upload_param, safe='')}&filekey={quote(filekey, safe='')}"))
         if not upload_url:
             raise RuntimeError(f"getUploadUrl returned neither upload_param nor upload_full_url: {upload_response}")
         encrypted_query_param = await _upload_ciphertext(self._send_session, ciphertext=ciphertext, upload_url=upload_url)
@@ -1266,15 +1225,13 @@ class WeixinAdapter(BasePlatformAdapter):
         # otherwise images render as grey boxes because the key doesn't match.
         item_kwargs = {
             "encrypt_query_param": encrypted_query_param, "aes_key_for_api": base64.b64encode(aes_key.hex().encode("ascii")).decode("ascii"),
-            "ciphertext_size": len(ciphertext), "plaintext_size": rawsize, "filename": Path(path).name, "rawfilemd5": rawfilemd5,
-        }
+            "ciphertext_size": len(ciphertext), "plaintext_size": rawsize, "filename": Path(path).name, "rawfilemd5": rawfilemd5}
         if media_type == MEDIA_VOICE and path.endswith(".silk"):
             item_kwargs.update(encode_type=6, sample_rate=24000, bits_per_sample=16)
         if caption:
             await _send_message(
                 self._send_session, base_url=self._base_url, token=self._token, to=chat_id, text=self.format_message(caption),
-                context_token=context_token, client_id=f"hermes-weixin-{uuid.uuid4().hex}",
-            )
+                context_token=context_token, client_id=f"hermes-weixin-{uuid.uuid4().hex}")
         last_message_id = f"hermes-weixin-{uuid.uuid4().hex}"
         await _send_items(
             self._send_session, base_url=self._base_url, token=self._token, to=chat_id, item_list=[item_builder(**item_kwargs)],

@@ -188,14 +188,13 @@ class QQAdapter(BasePlatformAdapter):
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         """Authenticate, obtain gateway URL, and open the WebSocket. ``is_reconnect``
         is accepted for interface conformance only (QQBot has no server-side update queue)."""
-        for ok, code, message, hint in (
-            (AIOHTTP_AVAILABLE, "qq_missing_dependency", "QQ startup failed: aiohttp not installed",
-             ". Run: pip install aiohttp"),
-            (HTTPX_AVAILABLE, "qq_missing_dependency", "QQ startup failed: httpx not installed",
-             ". Run: pip install httpx"),
+        for ok, code, what, hint in (
+            (AIOHTTP_AVAILABLE, "qq_missing_dependency", "aiohttp not installed", ". Run: pip install aiohttp"),
+            (HTTPX_AVAILABLE, "qq_missing_dependency", "httpx not installed", ". Run: pip install httpx"),
             (self._app_id and self._client_secret, "qq_missing_credentials",
-             "QQ startup failed: QQ_APP_ID and QQ_CLIENT_SECRET are required", "")):
+             "QQ_APP_ID and QQ_CLIENT_SECRET are required", "")):
             if not ok:
+                message = f"QQ startup failed: {what}"
                 self._set_fatal_error(code, message, retryable=True)
                 logger.warning("[%s] %s%s", self._log_tag, message, hint)
                 return False
@@ -1124,6 +1123,12 @@ class QQAdapter(BasePlatformAdapter):
         """True when *wav_path* exists and holds more than a bare 44-byte header."""
         return Path(wav_path).exists() and Path(wav_path).stat().st_size > 44
 
+    @classmethod
+    def _temp_pair(cls, audio_data: bytes, ext: str) -> Tuple[str, str]:
+        """Write *audio_data* to a temp ``<x>{ext}`` and return ``(src_path, sibling .wav path)``."""
+        src_path = cls._write_temp(audio_data, ext)
+        return src_path, src_path.rsplit(".", 1)[0] + ".wav"
+
     async def _convert_audio_to_wav_file(self, audio_data: bytes, filename: str) -> Optional[str]:
         """Convert audio bytes to a temp .wav: pilk (SILK, which ffmpeg can't decode)
         → ffmpeg → raw-PCM last resort. Returns the wav path or None."""
@@ -1131,8 +1136,7 @@ class QQAdapter(BasePlatformAdapter):
         logger.info(
             "[%s] STT: audio_data size=%d, ext=%r, first_20_bytes=%r",
             self._log_tag, len(audio_data), ext, audio_data[:20])
-        src_path = self._write_temp(audio_data, ext)
-        wav_path = src_path.rsplit(".", 1)[0] + ".wav"
+        src_path, wav_path = self._temp_pair(audio_data, ext)
         result = (
             await self._convert_silk_to_wav(src_path, wav_path)
             or await self._convert_ffmpeg_to_wav(src_path, wav_path)
@@ -1284,15 +1288,11 @@ class QQAdapter(BasePlatformAdapter):
         ext = Path(urlparse(source_url).path).suffix.lower()
         if ext not in _AUDIO_URL_EXTENSIONS:
             ext = self._guess_ext_from_data(audio_data)
-
-        src_path = self._write_temp(audio_data, ext)
-        wav_path = src_path.rsplit(".", 1)[0] + ".wav"
+        src_path, wav_path = self._temp_pair(audio_data, ext)
+        is_silk = ext == ".silk" or self._looks_like_silk(audio_data)
+        convert = self._convert_silk_to_wav if is_silk else self._convert_ffmpeg_to_wav
         try:
-            if ext == ".silk" or self._looks_like_silk(audio_data):
-                result = await self._convert_silk_to_wav(src_path, wav_path)
-            else:
-                result = await self._convert_ffmpeg_to_wav(src_path, wav_path)
-            if not result:
+            if not await convert(src_path, wav_path):
                 logger.warning("[%s] audio conversion failed for %s (format=%s)", self._log_tag, source_url[:60], ext)
                 return cache_document_from_bytes(audio_data, f"qq_voice{ext}")
         except Exception:
@@ -1572,15 +1572,12 @@ class QQAdapter(BasePlatformAdapter):
         return await self.send(chat_id=chat_id, content=fallback, reply_to=reply_to)
 
     async def send_image_file(self, chat_id, image_path, caption=None, reply_to=None, **kwargs) -> SendResult:
-        """Send a local image file natively."""
         return await self._send_media(chat_id, image_path, MEDIA_TYPE_IMAGE, "image", caption, reply_to)
 
     async def send_voice(self, chat_id, audio_path, caption=None, reply_to=None, **kwargs) -> SendResult:
-        """Send a voice message natively."""
         return await self._send_media(chat_id, audio_path, MEDIA_TYPE_VOICE, "voice", caption, reply_to)
 
     async def send_video(self, chat_id, video_path, caption=None, reply_to=None, **kwargs) -> SendResult:
-        """Send a video natively."""
         return await self._send_media(chat_id, video_path, MEDIA_TYPE_VIDEO, "video", caption, reply_to)
 
     async def send_document(
@@ -1609,17 +1606,13 @@ class QQAdapter(BasePlatformAdapter):
                     chat_type, chat_id, file_type, url=media_source, srv_send_msg=False,
                     file_name=resolved_name if file_type == MEDIA_TYPE_FILE else None)
             else:
-                resolved_name, upload = await self._upload_local_file(
-                    chat_type, chat_id, media_source, file_type, file_name)
+                _, upload = await self._upload_local_file(chat_type, chat_id, media_source, file_type, file_name)
 
             file_info = upload.get("file_info") or (upload.get("data", {}) or {}).get("file_info")
             if not file_info:
                 return SendResult(success=False, error=f"Upload returned no file_info: {upload}")
-
             body: Dict[str, Any] = {
-                "msg_type": MSG_TYPE_MEDIA,
-                "media": {"file_info": file_info},
-                "msg_seq": self._next_msg_seq(chat_id)}
+                "msg_type": MSG_TYPE_MEDIA, "media": {"file_info": file_info}, "msg_seq": self._next_msg_seq(chat_id)}
             if caption:
                 body["content"] = caption[: self.MAX_MESSAGE_LENGTH]
             if reply_to:
@@ -1627,22 +1620,17 @@ class QQAdapter(BasePlatformAdapter):
             return await self._post_message(self._messages_path(chat_type, chat_id), body)
         except UploadDailyLimitExceededError as exc:
             # Non-retryable quota hit; give the model actionable text.
-            logger.warning(
-                "[%s] Daily upload limit exceeded for %s (%s)", self._log_tag, exc.file_name, exc.file_size_human
-            )
+            logger.warning("[%s] Daily upload limit exceeded for %s (%s)", self._log_tag, exc.file_name, exc.file_size_human)
             return SendResult(
                 success=False, retryable=False,
-                error=f"QQ daily upload limit exceeded for {exc.file_name!r} ({exc.file_size_human}). Retry tomorrow.",
-            )
+                error=f"QQ daily upload limit exceeded for {exc.file_name!r} ({exc.file_size_human}). Retry tomorrow.")
         except UploadFileTooLargeError as exc:
             logger.warning(
                 "[%s] File too large: %s (%s, platform limit %s)",
                 self._log_tag, exc.file_name, exc.file_size_human, exc.limit_human)
             return SendResult(
                 success=False, retryable=False,
-                error=(
-                    f"{exc.file_name!r} ({exc.file_size_human}) exceeds the "
-                    f"QQ per-file upload limit ({exc.limit_human})."))
+                error=f"{exc.file_name!r} ({exc.file_size_human}) exceeds the QQ per-file upload limit ({exc.limit_human}).")
         except Exception as exc:
             logger.error("[%s] Media send failed: %s", self._log_tag, exc)
             return SendResult(success=False, error=str(exc) or type(exc).__name__)

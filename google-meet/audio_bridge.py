@@ -7,6 +7,7 @@ Linux: pactl creates a null-sink plus a virtual source on the sink's monitor; ca
 
 from __future__ import annotations
 
+import contextlib
 import platform
 import subprocess
 from typing import Optional
@@ -56,10 +57,8 @@ class AudioBridge:
             return
         if self._platform == "linux":
             for mod_id in reversed(self._module_ids):  # virtual-source before null-sink
-                try:
+                with contextlib.suppress(Exception):
                     _pactl("unload-module", str(mod_id), check=False)
-                except Exception:
-                    pass
             self._module_ids = []
         self._torn_down = True
 

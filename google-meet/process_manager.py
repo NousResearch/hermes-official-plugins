@@ -8,6 +8,7 @@ across turns can find the bot. The bot is a detached subprocess reached via file
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import signal
@@ -47,10 +48,8 @@ def _active_pid() -> int:
 
 
 def _kill(pid: int, sig) -> None:
-    try:
+    with contextlib.suppress(ProcessLookupError):
         os.kill(pid, sig)
-    except ProcessLookupError:
-        pass
 
 
 _NO_ACTIVE = {"ok": False, "reason": "no active meeting"}
@@ -72,10 +71,8 @@ def start(url: str, *, out_dir: Optional[Path] = None, headed: bool = False,
     out.mkdir(parents=True, exist_ok=True)
     # Wipe stale files from a previous run of this meeting id.
     for name in ("transcript.txt", "status.json"):
-        try:
+        with contextlib.suppress(OSError):
             (out / name).unlink()
-        except OSError:
-            pass
     env = {**os.environ, "HERMES_MEET_URL": url, "HERMES_MEET_OUT_DIR": str(out),
            "HERMES_MEET_GUEST_NAME": guest_name}
     for value, var in (

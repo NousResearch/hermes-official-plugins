@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
 import json
 import platform
@@ -220,10 +221,8 @@ def _cmd_auth() -> int:
             context = browser.new_context()
             page = context.new_page()
             page.goto("https://accounts.google.com/", wait_until="domcontentloaded")
-            try:
+            with contextlib.suppress(EOFError):
                 input("press Enter after you've signed in ... ")
-            except EOFError:
-                pass
             context.storage_state(path=str(path))
             browser.close()
     except Exception as e:

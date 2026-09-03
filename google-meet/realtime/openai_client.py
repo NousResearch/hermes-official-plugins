@@ -7,6 +7,7 @@ Chrome's fake mic. One sync WebSocket per session; ``websockets`` is imported la
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import threading
 import time
@@ -69,10 +70,8 @@ class RealtimeSession:
 
     def close(self) -> None:
         if self._ws is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._ws.close()
-            except Exception:
-                pass
             self._ws = None
 
     def speak(self, text: str, timeout: float = 30.0) -> dict:

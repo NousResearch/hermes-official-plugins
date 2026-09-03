@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from typing import Any, Optional
@@ -24,8 +25,6 @@ def write_json_atomic(path: Path, data: Any, mode: Optional[int] = None) -> None
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     if mode is not None:
-        try:
+        with contextlib.suppress(OSError, NotImplementedError):  # best-effort on non-POSIX filesystems
             tmp.chmod(mode)
-        except (OSError, NotImplementedError):  # best-effort on non-POSIX filesystems
-            pass
     tmp.replace(path)

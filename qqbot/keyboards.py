@@ -27,9 +27,7 @@ def _to_dict(value: Any) -> Any:
     """Serialize a dataclass tree in field-declaration order (the wire shape)."""
     if is_dataclass(value):
         return {f.name: _to_dict(getattr(value, f.name)) for f in fields(value)}
-    if isinstance(value, list):
-        return [_to_dict(v) for v in value]
-    return value
+    return [_to_dict(v) for v in value] if isinstance(value, list) else value
 
 
 class _Serializable:
@@ -91,7 +89,7 @@ class InlineKeyboard(_Serializable):
 def parse_approval_button_data(button_data: str) -> Optional[tuple[str, str]]:
     """Parse approval ``button_data`` into ``(session_key, decision)`` or ``None``."""
     m = _APPROVAL_DATA_RE.match(button_data or "")
-    return (m.group(1), m.group(2)) if m else None
+    return m.groups() if m else None
 
 
 def parse_update_prompt_button_data(button_data: str) -> Optional[str]:

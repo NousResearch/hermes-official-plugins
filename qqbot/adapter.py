@@ -767,10 +767,8 @@ class QQAdapter(BasePlatformAdapter):
                         self._log_tag, _i, _att.get("content_type", ""),
                         str(_att.get("url", ""))[:80], _att.get("filename", ""))
 
-        text, image_urls, image_media_types, n_voice = await self._absorb_attachments(content, attachments_raw)
-        logger.info("[%s] After processing: images=%d, voice=%d", self._log_tag, len(image_urls), n_voice)
-        await self._emit_inbound(
-            d, msg_id, timestamp, text, image_urls, image_media_types,
+        await self._ingest(
+            d, msg_id, content, attachments_raw, timestamp, verbose=True,
             chat_id=user_openid, qq_chat_type="c2c", user_id=user_openid, chat_type="dm")
 
     async def _handle_group_message(self, d, msg_id, content, author, timestamp) -> None:
@@ -779,10 +777,8 @@ class QQAdapter(BasePlatformAdapter):
         member = str(author.get("member_openid", ""))
         if not group_openid or not self._is_group_allowed(group_openid, member):
             return
-        text, image_urls, image_media_types, _ = await self._absorb_attachments(
-            self._strip_at_mention(content), d.get("attachments"))
-        await self._emit_inbound(
-            d, msg_id, timestamp, text, image_urls, image_media_types,
+        await self._ingest(
+            d, msg_id, self._strip_at_mention(content), d.get("attachments"), timestamp,
             chat_id=group_openid, qq_chat_type="group", user_id=member, chat_type="group")
 
     async def _handle_guild_message(self, d, msg_id, content, author, timestamp) -> None:
@@ -800,11 +796,9 @@ class QQAdapter(BasePlatformAdapter):
 
         member = d.get("member") if isinstance(d.get("member"), dict) else {}
         nick = str(member.get("nick", "")) or str(author.get("username", ""))
-        text, image_urls, image_media_types, _ = await self._absorb_attachments(content, d.get("attachments"))
-        await self._emit_inbound(
-            d, msg_id, timestamp, text, image_urls, image_media_types,
-            chat_id=channel_id, qq_chat_type="guild", user_id=author_id, user_name=nick or None, chat_type="group",
-        )
+        await self._ingest(
+            d, msg_id, content, d.get("attachments"), timestamp,
+            chat_id=channel_id, qq_chat_type="guild", user_id=author_id, user_name=nick or None, chat_type="group")
 
     async def _handle_dm_message(self, d, msg_id, content, author, timestamp) -> None:
         """Handle a guild DM message event."""
@@ -816,9 +810,8 @@ class QQAdapter(BasePlatformAdapter):
         if not self._is_dm_intake_allowed(author_id):
             logger.debug("[%s] Guild DM blocked by ACL: guild=%s user=%s", self._log_tag, guild_id, author_id)
             return
-        text, image_urls, image_media_types, _ = await self._absorb_attachments(content, d.get("attachments"))
-        await self._emit_inbound(
-            d, msg_id, timestamp, text, image_urls, image_media_types,
+        await self._ingest(
+            d, msg_id, content, d.get("attachments"), timestamp,
             chat_id=guild_id, qq_chat_type="dm", user_id=author_id, chat_type="dm")
 
     _INBOUND_HANDLERS = {
@@ -835,22 +828,23 @@ class QQAdapter(BasePlatformAdapter):
         """Append *block* to *text* after a blank line (or return block alone if text is blank)."""
         return (text + "\n\n" + block).strip() if text.strip() else block
 
-    async def _absorb_attachments(self, text: str, attachments: Any) -> Tuple[str, List[str], List[str], int]:
-        """Run attachments through _process_attachments and fold transcripts/file
-        info into *text*. Returns (text, image_urls, image_media_types, n_voice)."""
+    async def _ingest(
+        self, d: Dict[str, Any], msg_id: str, content: str, attachments: Any, timestamp: str, *,
+        chat_id: str, qq_chat_type: str, verbose: bool = False, **source_kwargs: Any,
+    ) -> None:
+        """Shared inbound tail: fold attachment transcripts/file info and quoted context
+        into the text, drop empty events, remember the QQ chat kind and dispatch."""
         att = await self._process_attachments(attachments)
+        text = content
         voice_transcripts = att["voice_transcripts"]
         if voice_transcripts:
             text = self._append_block(text, "\n".join(voice_transcripts))
         if att["attachment_info"]:
             text = self._append_block(text, att["attachment_info"])
-        return text, att["image_urls"], att["image_media_types"], len(voice_transcripts)
+        image_urls, image_media_types = att["image_urls"], att["image_media_types"]
+        if verbose:
+            logger.info("[%s] After processing: images=%d, voice=%d", self._log_tag, len(image_urls), len(voice_transcripts))
 
-    async def _emit_inbound(
-        self, d: Dict[str, Any], msg_id: str, timestamp: str, text: str, image_urls: List[str],
-        image_media_types: List[str], *, chat_id: str, qq_chat_type: str, **source_kwargs: Any,
-    ) -> None:
-        """Merge quoted context, drop empty events, remember the QQ chat kind and dispatch."""
         quoted = await self._process_quoted_context(d)
         text = self._merge_quote_into(text, quoted["quote_block"])
         if quoted["image_urls"]:
@@ -861,9 +855,13 @@ class QQAdapter(BasePlatformAdapter):
 
         self._chat_type_map[chat_id] = qq_chat_type
         event = MessageEvent(
-            source=self.build_source(chat_id=chat_id,** source_kwargs), text=text,
-            message_type=self._detect_message_type(image_urls, image_media_types), raw_message=d,
-            message_id=msg_id, media_urls=image_urls, media_types=image_media_types,
+            source=self.build_source(chat_id=chat_id, **source_kwargs),
+            text=text,
+            message_type=self._detect_message_type(image_urls, image_media_types),
+            raw_message=d,
+            message_id=msg_id,
+            media_urls=image_urls,
+            media_types=image_media_types,
             timestamp=self._parse_qq_timestamp(timestamp),
         )
         await self.handle_message(event)
@@ -1136,12 +1134,6 @@ class QQAdapter(BasePlatformAdapter):
         """True when *wav_path* exists and holds more than a bare 44-byte header."""
         return Path(wav_path).exists() and Path(wav_path).stat().st_size > 44
 
-    def _log_converted(self, tool: str, src_path: str, wav_path: str) -> str:
-        logger.debug(
-            "[%s] %s converted %s to wav (%d bytes)",
-            self._log_tag, tool, Path(src_path).name, Path(wav_path).stat().st_size)
-        return wav_path
-
     async def _convert_audio_to_wav_file(self, audio_data: bytes, filename: str) -> Optional[str]:
         """Convert audio bytes to a temp .wav: pilk (SILK, which ffmpeg can't decode)
         → ffmpeg → raw-PCM last resort. Returns the wav path or None."""
@@ -1181,26 +1173,22 @@ class QQAdapter(BasePlatformAdapter):
             logger.warning("[%s] pilk not installed — cannot decode SILK audio. Run: pip install pilk", self._log_tag)
             return None
 
-        try:
-            pilk.silk_to_wav(src_path, wav_path, rate=16000)
-            if self._wav_ok(wav_path):
-                return self._log_converted("pilk", src_path, wav_path)
-        except Exception as exc:
-            logger.debug("[%s] pilk direct conversion failed: %s", self._log_tag, exc)
-
         silk_path = src_path.rsplit(".", 1)[0] + ".silk"
         try:
-            import shutil
+            for path, label, how in ((src_path, "", "direct"), (silk_path, " (as .silk)", ".silk")):
+                try:
+                    if path == silk_path:
+                        import shutil
 
-            shutil.copy2(src_path, silk_path)
-            pilk.silk_to_wav(silk_path, wav_path, rate=16000)
-            if self._wav_ok(wav_path):
-                logger.debug(
-                    "[%s] pilk converted %s (as .silk) to wav (%d bytes)",
-                    self._log_tag, Path(src_path).name, Path(wav_path).stat().st_size)
-                return wav_path
-        except Exception as exc:
-            logger.debug("[%s] pilk .silk conversion failed: %s", self._log_tag, exc)
+                        shutil.copy2(src_path, silk_path)
+                    pilk.silk_to_wav(path, wav_path, rate=16000)
+                    if self._wav_ok(wav_path):
+                        logger.debug(
+                            "[%s] pilk converted %s%s to wav (%d bytes)",
+                            self._log_tag, Path(src_path).name, label, Path(wav_path).stat().st_size)
+                        return wav_path
+                except Exception as exc:
+                    logger.debug("[%s] pilk %s conversion failed: %s", self._log_tag, how, exc)
         finally:
             self._unlink_quiet(silk_path)
         return None
@@ -1241,7 +1229,10 @@ class QQAdapter(BasePlatformAdapter):
         if not self._wav_ok(wav_path):
             logger.warning("[%s] ffmpeg produced no/small output for %s", self._log_tag, Path(src_path).name)
             return None
-        return self._log_converted("ffmpeg", src_path, wav_path)
+        logger.debug(
+            "[%s] ffmpeg converted %s to wav (%d bytes)",
+            self._log_tag, Path(src_path).name, Path(wav_path).stat().st_size)
+        return wav_path
 
     def _resolve_stt_config(self) -> Optional[Dict[str, str]]:
         """Resolve STT backend: ``extra["stt"]`` config first, then ``QQ_STT_*`` env

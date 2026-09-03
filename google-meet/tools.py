@@ -39,14 +39,11 @@ _NODE_PROP = {"type": "string"}
 MEET_JOIN_SCHEMA: Dict[str, Any] = {
     "name": "meet_join",
     "description": (
-        "Join a Google Meet call and start scraping live captions into a "
-        "transcript file. Only meet.google.com URLs are accepted; no calendar "
-        "scanning, no auto-dial. Spawns a headless Chromium subprocess that "
-        "runs in parallel with the agent loop — returns immediately. Poll "
-        "with meet_status and read captions with meet_transcript. Reminder "
-        "to the agent: you should announce yourself in the meeting (there is "
-        "no automatic consent announcement)."
-    ),
+        "Join a Google Meet call and start scraping live captions into a transcript file. Only "
+        "meet.google.com URLs are accepted; no calendar scanning, no auto-dial. Spawns a headless "
+        "Chromium subprocess that runs in parallel with the agent loop — returns immediately. Poll "
+        "with meet_status and read captions with meet_transcript. Reminder to the agent: you "
+        "should announce yourself in the meeting (there is no automatic consent announcement)."),
     "parameters": {
         "type": "object",
         "properties": {
@@ -56,8 +53,7 @@ MEET_JOIN_SCHEMA: Dict[str, Any] = {
                 "description": (
                     "transcribe (default): listen-only, scrape captions. "
                     "realtime: also enable agent speech via meet_say "
-                    "(requires OpenAI Realtime key + platform audio bridge)."),
-            },
+                    "(requires OpenAI Realtime key + platform audio bridge).")},
             "guest_name": {
                 "type": "string",
                 "description": "Display name to use when joining as guest. Defaults to 'Hermes Agent'."},
@@ -71,26 +67,18 @@ MEET_JOIN_SCHEMA: Dict[str, Any] = {
             "node": {
                 "type": "string",
                 "description": (
-                    "Name of a registered remote node to run the bot on "
-                    "(useful when the gateway runs on a headless Linux box "
-                    "but the user's Chrome with a signed-in Google profile "
-                    "lives on their Mac). Pass 'auto' to use the single "
-                    "registered node. Default: run locally. Nodes are "
-                    "approved via `hermes meet node approve`."),
-            },
-        },
+                    "Name of a registered remote node to run the bot on (useful when the gateway "
+                    "runs on a headless Linux box but the user's Chrome with a signed-in Google "
+                    "profile lives on their Mac). Pass 'auto' to use the single registered node. "
+                    "Default: run locally. Nodes are approved via `hermes meet node approve`.")}},
         "required": ["url"],
-        "additionalProperties": False,
-    },
-}
+        "additionalProperties": False}}
 
 MEET_STATUS_SCHEMA: Dict[str, Any] = {
     "name": "meet_status",
     "description": (
-        "Report the current Meet session state — whether the bot is alive, "
-        "has joined, is sitting in the lobby, number of transcript lines "
-        "captured, and last-caption timestamp."
-    ),
+        "Report the current Meet session state — whether the bot is alive, has joined, is sitting "
+        "in the lobby, number of transcript lines captured, and last-caption timestamp."),
     "parameters": {"type": "object", "properties": {"node": _NODE_PROP}, "additionalProperties": False},
 }
 
@@ -98,8 +86,7 @@ MEET_TRANSCRIPT_SCHEMA: Dict[str, Any] = {
     "name": "meet_transcript",
     "description": (
         "Read the scraped transcript for the active Meet session. Returns "
-        "full transcript unless 'last' is set, in which case returns the last N lines only."
-    ),
+        "full transcript unless 'last' is set, in which case returns the last N lines only."),
     "parameters": {
         "type": "object",
         "properties": {
@@ -108,39 +95,30 @@ MEET_TRANSCRIPT_SCHEMA: Dict[str, Any] = {
                 "description": ("Optional: return only the last N caption lines. Useful "
                                 "for polling during a meeting without re-reading the whole transcript."),
                 "minimum": 1},
-            "node": _NODE_PROP,
-        },
-        "additionalProperties": False,
-    },
-}
+            "node": _NODE_PROP},
+        "additionalProperties": False}}
 
 MEET_LEAVE_SCHEMA: Dict[str, Any] = {
     "name": "meet_leave",
     "description": (
-        "Leave the active Meet call cleanly, stop caption scraping, and "
-        "finalize the transcript file. Safe to call when no meeting is "
-        "active — returns ok=false with a reason."
-    ),
+        "Leave the active Meet call cleanly, stop caption scraping, and finalize the transcript "
+        "file. Safe to call when no meeting is active — returns ok=false with a reason."),
     "parameters": {"type": "object", "properties": {"node": _NODE_PROP}, "additionalProperties": False},
 }
 
 MEET_SAY_SCHEMA: Dict[str, Any] = {
     "name": "meet_say",
     "description": (
-        "Speak text into the active Meet call. Requires the active meeting "
-        "to have been joined with mode='realtime'. The text is queued to "
-        "the bot's OpenAI Realtime session; the generated audio is streamed "
-        "into Chrome's fake microphone via a virtual audio device "
-        "(PulseAudio null-sink on Linux, BlackHole on macOS). Returns "
-        "immediately — the actual speech lags by a couple of seconds."
-    ),
+        "Speak text into the active Meet call. Requires the active meeting to have been joined "
+        "with mode='realtime'. The text is queued to the bot's OpenAI Realtime session; the "
+        "generated audio is streamed into Chrome's fake microphone via a virtual audio device "
+        "(PulseAudio null-sink on Linux, BlackHole on macOS). Returns immediately — the actual "
+        "speech lags by a couple of seconds."),
     "parameters": {
         "type": "object",
         "properties": {"text": {"type": "string", "description": "Text to speak."}, "node": _NODE_PROP},
         "required": ["text"],
-        "additionalProperties": False,
-    },
-}
+        "additionalProperties": False}}
 
 
 def _json(obj: Any) -> str:

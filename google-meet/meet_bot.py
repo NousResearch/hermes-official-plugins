@@ -197,39 +197,31 @@ _DENIED_PROBE_JS = r"""
 
 def _probe(page, js: str) -> bool:
     """Evaluate a boolean JS probe; conservative — False on any error."""
-    try:
-        return bool(page.evaluate(js))
-    except Exception:
-        return False
+    return bool(_quiet(page.evaluate, js))
 
 
 def _visible(locator):
     """``locator.first`` if it exists and is visible, else None (swallows Playwright errors)."""
-    try:
-        first = locator.first
-        return first if first.count() and first.is_visible() else None
-    except Exception:
-        return None
+    return _quiet(lambda: locator.first if locator.first.count() and locator.first.is_visible() else None)
 
 
 def _start_pcm_pump(rt: dict, bridge_info: dict, pcm_path: Path, state: "_BotState") -> None:
     """Stream the growing ``speaker.pcm`` (24kHz s16le mono) into the device Chrome's fake mic reads."""
     bridge_info = bridge_info or {}
     platform_tag = bridge_info.get("platform")
+    target = bridge_info.get("write_target")
     if platform_tag == "linux":
-        sink = bridge_info.get("write_target") or "hermes_meet_sink"
         cmd = ["paplay", "--raw", "--rate=24000", "--format=s16le", "--channels=1",
-               f"--device={sink}", str(pcm_path)]
+               f"--device={target or 'hermes_meet_sink'}", str(pcm_path)]
         missing = "paplay not found — install pulseaudio-utils for realtime on Linux"
     elif platform_tag == "darwin":
         # User must have BlackHole as default input; ffmpeg targets it by audiotoolbox index.
         if not shutil.which("ffmpeg"):
             state.set(error=_FFMPEG_MISSING)
             return
-        device_name = bridge_info.get("write_target") or "BlackHole 2ch"
         cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-re",
-               "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", str(pcm_path),
-               "-f", "audiotoolbox", "-audio_device_index", _mac_audio_device_index(device_name), "-"]
+               "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", str(pcm_path), "-f", "audiotoolbox",
+               "-audio_device_index", _mac_audio_device_index(target or "BlackHole 2ch"), "-"]
         missing = _FFMPEG_MISSING
     else:
         return
@@ -251,8 +243,7 @@ def _start_realtime_speaker(rt: dict, cfg: "_BotConfig", stop_flag: dict, state:
     except Exception as e:
         state.set(error=f"realtime import failed: {e}")
         return
-    pcm_path = cfg.out_dir / "speaker.pcm"
-    queue_path = cfg.out_dir / "say_queue.jsonl"
+    pcm_path, queue_path = cfg.out_dir / "speaker.pcm", cfg.out_dir / "say_queue.jsonl"
     pcm_path.write_bytes(b"")  # clean sink file per session
     queue_path.touch()  # so the speaker poller doesn't error on first iteration
     try:
@@ -282,14 +273,10 @@ def _start_realtime_speaker(rt: dict, cfg: "_BotConfig", stop_flag: dict, state:
 def _mac_audio_device_index(device_name: str) -> str:
     """ffmpeg ``-audio_device_index`` for *device_name* (case-insensitive; ``"0"`` if not found).
     ffmpeg prints the avfoundation device table on stderr as ``[N] Name``."""
-    try:
-        out = subprocess.run(
-            ["ffmpeg", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
-            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10)
-    except Exception:
-        return "0"
+    out = _quiet(subprocess.run, ["ffmpeg", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10)
     needle = device_name.strip().lower()
-    for line in (out.stderr or "").splitlines():
+    for line in (out.stderr if out else "").splitlines():
         m = re.search(r"\[(\d+)\]\s+(.+)$", line)
         if m and m.group(2).strip().lower() == needle:
             return m.group(1)
@@ -317,11 +304,10 @@ def _teardown_realtime(rt: dict) -> None:
     if rt.get("pcm_pump"):
         _quiet(rt["pcm_pump"].terminate)
         _quiet(rt["pcm_pump"].wait, timeout=3)
-    if rt["speaker_thread"] is not None:
-        _quiet(rt["speaker_thread"].join, timeout=5.0)
-    for key, method in (("session", "close"), ("bridge", "teardown")):
-        if rt[key]:
-            _quiet(getattr(rt[key], method))
+    for key, method, kw in (("speaker_thread", "join", {"timeout": 5.0}), ("session", "close", {}),
+                            ("bridge", "teardown", {})):
+        if rt[key] is not None:
+            _quiet(getattr(rt[key], method), **kw)
 
 
 @dataclass
@@ -369,15 +355,10 @@ def _join(page, cfg: _BotConfig, state: _BotState) -> None:
         _quiet(name_box.fill, cfg.guest_name, timeout=2_000)
     for label in ("Join now", "Ask to join"):
         btn = _visible(page.get_by_role("button", name=label, exact=False))
-        if btn is None:
-            continue
-        try:
-            btn.click(timeout=3_000)
-        except Exception:
-            continue
-        if label == "Ask to join":
-            state.set(lobby_waiting=True)
-        break
+        if btn is not None and _quiet(lambda: (btn.click(timeout=3_000), True)):
+            if label == "Ask to join":
+                state.set(lobby_waiting=True)
+            break
 
 
 def _drain_loop(page, cfg: _BotConfig, state: _BotState, rt: dict, stop_flag: dict) -> None:
@@ -405,9 +386,7 @@ def _drain_loop(page, cfg: _BotConfig, state: _BotState, rt: dict, stop_flag: di
                 return
         try:
             queued = page.evaluate("window.__hermesMeetDrain && window.__hermesMeetDrain()")
-            for entry in queued if isinstance(queued, list) else ():
-                if not isinstance(entry, dict):
-                    continue
+            for entry in (e for e in (queued if isinstance(queued, list) else ()) if isinstance(e, dict)):
                 speaker = str(entry.get("speaker", ""))
                 state.record_caption(speaker=speaker, text=str(entry.get("text", "")))
                 # Barge-in: a real human spoke while we may be generating audio.
@@ -422,6 +401,13 @@ def _drain_loop(page, cfg: _BotConfig, state: _BotState, rt: dict, stop_flag: di
             state.set(audio_bytes_out=rt["session"].audio_bytes_out,
                       last_audio_out_at=rt["session"].last_audio_out_at)
         time.sleep(1.0)
+
+
+_CONTEXT_ARGS = {
+    "viewport": {"width": 1280, "height": 800},
+    "user_agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+    "permissions": ["microphone", "camera"]}
 
 
 def run_bot() -> int:
@@ -440,8 +426,7 @@ def run_bot() -> int:
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda _sig, _frame: stop_flag.__setitem__("stop", True))
     # Realtime resources in one dict so teardown works however we exit.
-    rt = {"enabled": cfg.realtime, "bridge": None, "bridge_info": None, "session": None,
-          "speaker_thread": None}
+    rt = dict(enabled=cfg.realtime, bridge=None, bridge_info=None, session=None, speaker_thread=None)
     if rt["enabled"]:
         _setup_realtime(rt, cfg.realtime_api_key, state)
     try:
@@ -459,16 +444,12 @@ def run_bot() -> int:
     elif rt["bridge_info"] and rt["bridge_info"].get("platform") == "linux":
         # Playwright's launch() takes no env: set PULSE_SOURCE on ourselves so Chrome inherits it.
         os.environ["PULSE_SOURCE"] = rt["bridge_info"].get("device_name", "")
+    context_args = dict(_CONTEXT_ARGS)
+    if cfg.auth_state and Path(cfg.auth_state).is_file():
+        context_args["storage_state"] = cfg.auth_state
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=not cfg.headed, args=chrome_args)
-            context_args = {
-                "viewport": {"width": 1280, "height": 800},
-                "user_agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                               "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
-                "permissions": ["microphone", "camera"]}
-            if cfg.auth_state and Path(cfg.auth_state).is_file():
-                context_args["storage_state"] = cfg.auth_state
             context = browser.new_context(**context_args)
             page = context.new_page()
             try:

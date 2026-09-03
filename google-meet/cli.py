@@ -102,18 +102,14 @@ def _cmd_setup() -> int:
     pw_ok = importlib.util.find_spec("playwright") is not None
     print("  playwright     : installed" if pw_ok
           else "  playwright     : NOT installed — run: pip install playwright")
-    chromium_ok = False
-    chromium_msg = "unknown"
+    chromium_ok, chromium_msg = False, "unknown"
     if pw_ok:
         try:
             from playwright.sync_api import sync_playwright
             with sync_playwright() as p:
                 exe = p.chromium.executable_path
-                if exe and Path(exe).exists():
-                    chromium_ok = True
-                    chromium_msg = f"ok ({exe})"
-                else:
-                    chromium_msg = "not installed — run: python -m playwright install chromium"
+            chromium_ok = bool(exe and Path(exe).exists())
+            chromium_msg = f"ok ({exe})" if chromium_ok else "not installed — run: python -m playwright install chromium"
         except Exception as e:
             chromium_msg = f"probe failed: {e}"
     print(f"  chromium       : {chromium_msg}")
@@ -162,9 +158,8 @@ def _cmd_install(*, realtime: bool, assume_yes: bool) -> int:
         return 1
     print("\n[2/3] python -m playwright install chromium")
     try:
-        res = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False,
-                             stdin=subprocess.DEVNULL)
-        if res.returncode != 0:
+        if subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False,
+                          stdin=subprocess.DEVNULL).returncode != 0:
             print("  playwright install failed (may already be installed)")
     except Exception as e:
         print(f"  playwright install failed: {e}")
@@ -196,10 +191,9 @@ def _cmd_install(*, realtime: bool, assume_yes: bool) -> int:
             else:
                 _install_pkgs(f"  install via brew: {' '.join(needs)}?", ["brew", "install", *needs],
                               "  brew install failed — install them manually")
-            print("\n  NOTE: macOS does not auto-route audio. Open\n"
-                  "    System Settings → Sound → Input\n"
-                  "  and select 'BlackHole 2ch' before starting a realtime meeting.\n"
-                  "  hermes will not switch your default input for you.")
+            print("\n  NOTE: macOS does not auto-route audio. Open\n    System Settings → Sound → "
+                  "Input\n  and select 'BlackHole 2ch' before starting a realtime meeting.\n  "
+                  "hermes will not switch your default input for you.")
     print("\ndone. verify with: hermes meet setup")
     return 0
 

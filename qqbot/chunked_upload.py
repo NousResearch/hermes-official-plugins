@@ -119,6 +119,23 @@ def _api_path(chat_type: str, target_id: str, endpoint: str) -> str:
 
 # ── Chunked upload driver ──
 
+@dataclass
+class _Job:
+    """Per-upload state shared by the part workers."""
+    chat_type: str
+    target_id: str
+    file_path: str
+    file_size: int
+    upload_id: str = ""
+    block_size: int = 0
+    total_parts: int = 0
+    retry_timeout: float = 0.0
+    completed: int = 0
+
+    def path(self, endpoint: str) -> str:
+        return _api_path(self.chat_type, self.target_id, endpoint)
+
+
 class ChunkedUploader:
     """Run the prepare → PUT parts → complete sequence. ``api_request`` is the adapter's
     bound ``_api_request(method, path, body=..., timeout=...)`` (injected to avoid a
@@ -132,6 +149,9 @@ class ChunkedUploader:
         self._http_put = http_put
         self._log_tag = log_tag
 
+    async def _post(self, job: _Job, endpoint: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        return await self._api_request("POST", job.path(endpoint), body=body, timeout=FILE_UPLOAD_TIMEOUT)
+
     async def upload(self, chat_type: str, target_id: str, file_path: str, file_type: int, file_name: str) -> Dict[str, Any]:
         """Run the full chunked upload (``chat_type`` 'c2c'|'group', ``file_type`` MEDIA_TYPE_*)
         and return the raw ``complete_upload`` response (contains ``file_info``).
@@ -139,78 +159,66 @@ class ChunkedUploader:
         if chat_type not in {"c2c", "group"}:
             raise ValueError(f"ChunkedUploader: unsupported chat_type {chat_type!r}")
 
-        file_size = Path(file_path).stat().st_size
+        job = _Job(chat_type, target_id, file_path, Path(file_path).stat().st_size)
         logger.info(
             "[%s] Chunked upload start: file=%s size=%s type=%d",
-            self._log_tag, file_name, format_size(file_size), file_type)
+            self._log_tag, file_name, format_size(job.file_size), file_type)
 
         # Hashing is blocking I/O → executor.
-        hashes = await asyncio.get_running_loop().run_in_executor(None, _compute_file_hashes, file_path, file_size)
-        prepare = await self._prepare(chat_type, target_id, file_type, file_name, file_size, hashes)
+        hashes = await asyncio.get_running_loop().run_in_executor(None, _compute_file_hashes, file_path, job.file_size)
+        prepare = await self._prepare(job, file_type, file_name, hashes)
         max_concurrent = min(prepare.concurrency, _MAX_CONCURRENT_PARTS)
-        retry_timeout = min(
+        job.upload_id, job.block_size, job.total_parts = prepare.upload_id, prepare.block_size, len(prepare.parts)
+        job.retry_timeout = min(
             prepare.retry_timeout if prepare.retry_timeout > 0 else _PART_FINISH_DEFAULT_TIMEOUT,
             _PART_FINISH_MAX_TIMEOUT)
         logger.info(
             "[%s] Prepared: upload_id=%s block_size=%s parts=%d concurrency=%d",
-            self._log_tag, prepare.upload_id, format_size(prepare.block_size),
-            len(prepare.parts), max_concurrent)
+            self._log_tag, job.upload_id, format_size(job.block_size), job.total_parts, max_concurrent)
 
-        total_parts = len(prepare.parts)
-        completed = [0]  # shared counter for progress logging
         sem = asyncio.Semaphore(max(max_concurrent, 1))
 
         async def _run(part: _PreparePart) -> None:
             async with sem:
-                await self._upload_one_part(
-                    chat_type, target_id, file_path, file_size, prepare.upload_id,
-                    prepare.block_size, part, retry_timeout, total_parts, completed)
+                await self._upload_one_part(job, part)
 
         await asyncio.gather(*(_run(p) for p in prepare.parts))
-        logger.info("[%s] All %d parts uploaded, completing…", self._log_tag, total_parts)
-        return await self._complete(chat_type, target_id, prepare.upload_id)
+        logger.info("[%s] All %d parts uploaded, completing…", self._log_tag, job.total_parts)
+        return await self._complete(job)
 
-    async def _prepare(
-        self, chat_type: str, target_id: str, file_type: int, file_name: str, file_size: int, hashes: Dict[str, str],
-    ) -> _PrepareResult:
+    async def _prepare(self, job: _Job, file_type: int, file_name: str, hashes: Dict[str, str]) -> _PrepareResult:
         body = {
-            "file_type": file_type, "file_name": file_name, "file_size": file_size,
+            "file_type": file_type, "file_name": file_name, "file_size": job.file_size,
             "md5": hashes["md5"], "sha1": hashes["sha1"], "md5_10m": hashes["md5_10m"]}
         try:
-            raw = await self._api_request(
-                "POST", _api_path(chat_type, target_id, "upload_prepare"), body=body, timeout=FILE_UPLOAD_TIMEOUT,
-            )
+            raw = await self._post(job, "upload_prepare", body)
         except RuntimeError as exc:
             err_msg = str(exc)
             if f"{_BIZ_CODE_DAILY_LIMIT}" in err_msg:
-                raise UploadDailyLimitExceededError(file_name, file_size, err_msg) from exc
+                raise UploadDailyLimitExceededError(file_name, job.file_size, err_msg) from exc
             raise
         return _parse_prepare_response(raw)
 
-    async def _upload_one_part(
-        self, chat_type: str, target_id: str, file_path: str, file_size: int, upload_id: str, rsp_block_size: int,
-        part: _PreparePart, retry_timeout: float, total_parts: int, completed: List[int]) -> None:
+    async def _upload_one_part(self, job: _Job, part: _PreparePart) -> None:
         """PUT one part to COS, then call ``upload_part_finish``."""
-        part_index = part.index
+        part_index, total_parts = part.index, job.total_parts
         # Per-part block_size wins; fall back to the response-level value.
-        actual_block_size = part.block_size if part.block_size > 0 else rsp_block_size
-        offset = (part_index - 1) * rsp_block_size
-        length = min(actual_block_size, file_size - offset)
+        actual_block_size = part.block_size if part.block_size > 0 else job.block_size
+        offset = (part_index - 1) * job.block_size
+        length = min(actual_block_size, job.file_size - offset)
 
-        data = await asyncio.get_running_loop().run_in_executor(None, _read_file_chunk, file_path, offset, length)
+        data = await asyncio.get_running_loop().run_in_executor(None, _read_file_chunk, job.file_path, offset, length)
         md5_hex = hashlib.md5(data).hexdigest()
         logger.debug(
             "[%s] Part %d/%d: uploading %s (offset=%d md5=%s)",
             self._log_tag, part_index, total_parts, format_size(length), offset, md5_hex)
 
         await self._put_to_presigned_url(part.presigned_url, data, part_index, total_parts)
-        await self._part_finish_with_retry(
-            chat_type, target_id, upload_id, part_index, length, md5_hex, retry_timeout)
+        await self._part_finish_with_retry(job, part_index, length, md5_hex)
 
-        completed[0] += 1
+        job.completed += 1
         logger.debug(
-            "[%s] Part %d/%d done (%d/%d total)",
-            self._log_tag, part_index, total_parts, completed[0], total_parts)
+            "[%s] Part %d/%d done (%d/%d total)", self._log_tag, part_index, total_parts, job.completed, total_parts)
 
     async def _with_retries(
         self, attempt_fn: Callable[[], Awaitable[Any]], *, max_retries: int, base_delay: float, label: str,
@@ -249,44 +257,37 @@ class ChunkedUploader:
 
         await self._with_retries(
             _attempt, max_retries=_PART_UPLOAD_MAX_RETRIES, base_delay=1.0,
-            label=f"PUT part {part_index}/{total_parts}",
-            failure_label=f"Part {part_index}/{total_parts} upload")
+            label=f"PUT part {part_index}/{total_parts}", failure_label=f"Part {part_index}/{total_parts} upload")
 
-    async def _part_finish_with_retry(
-        self, chat_type: str, target_id: str, upload_id: str, part_index: int, block_size: int, md5: str,
-        retry_timeout: float) -> None:
-        """Call ``upload_part_finish``, retrying on biz_code 40093001 until *retry_timeout*."""
-        path = _api_path(chat_type, target_id, "upload_part_finish")
-        body = {"upload_id": upload_id, "part_index": part_index, "block_size": block_size, "md5": md5}
+    async def _part_finish_with_retry(self, job: _Job, part_index: int, block_size: int, md5: str) -> None:
+        """Call ``upload_part_finish``, retrying on biz_code 40093001 until ``job.retry_timeout``."""
+        body = {"upload_id": job.upload_id, "part_index": part_index, "block_size": block_size, "md5": md5}
         loop = asyncio.get_running_loop()
         start = loop.time()
         attempt = 0
         while True:
             try:
-                await self._api_request("POST", path, body=body, timeout=FILE_UPLOAD_TIMEOUT)
+                await self._post(job, "upload_part_finish", body)
                 return
             except RuntimeError as exc:
                 if f"{_BIZ_CODE_PART_RETRYABLE}" not in str(exc):
                     raise
                 elapsed = loop.time() - start
-                if elapsed >= retry_timeout:
+                if elapsed >= job.retry_timeout:
                     raise RuntimeError(
                         f"upload_part_finish persistent retry timed out "
-                        f"after {retry_timeout:.0f}s ({attempt} retries): {exc}"
-                    ) from exc
+                        f"after {job.retry_timeout:.0f}s ({attempt} retries): {exc}") from exc
                 attempt += 1
                 logger.debug(
                     "[%s] part_finish retryable error, attempt %d, elapsed=%.1fs: %s",
                     self._log_tag, attempt, elapsed, exc)
                 await asyncio.sleep(_PART_FINISH_RETRY_INTERVAL)
 
-    async def _complete(self, chat_type: str, target_id: str, upload_id: str) -> Dict[str, Any]:
+    async def _complete(self, job: _Job) -> Dict[str, Any]:
         """Call ``complete_upload`` with retry — the ``/files`` endpoint (same as the simple
         URL upload) selects the chunked-completion path when only ``upload_id`` is sent."""
-        path = _api_path(chat_type, target_id, "files")
-        body = {"upload_id": upload_id}
         return await self._with_retries(
-            lambda: self._api_request("POST", path, body=body, timeout=FILE_UPLOAD_TIMEOUT),
+            lambda: self._post(job, "files", {"upload_id": job.upload_id}),
             max_retries=_COMPLETE_UPLOAD_MAX_RETRIES, base_delay=_COMPLETE_UPLOAD_BASE_DELAY,
             label="complete_upload", failure_label="complete_upload")
 

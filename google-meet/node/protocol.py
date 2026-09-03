@@ -72,18 +72,12 @@ def validate_request(msg: Dict[str, Any], expected_token: str) -> Tuple[bool, st
     """Return ``(True, "")`` or ``(False, <reason>)``; reasons are safe to send back to the client."""
     if not isinstance(msg, dict):
         return False, "envelope must be a dict"
-    t = msg.get("type")
-    if not _nonempty_str(t):
-        return False, "missing or non-string 'type'"
-    if t not in VALID_REQUEST_TYPES:
-        return False, f"unknown request type: {t!r}"
-    if not _nonempty_str(msg.get("id")):
-        return False, "missing or non-string 'id'"
-    token = msg.get("token")
-    if not _nonempty_str(token):
-        return False, "missing token"
-    if token != expected_token:
-        return False, "token mismatch"
-    if not isinstance(msg.get("payload"), dict):
-        return False, "payload must be a dict"
-    return True, ""
+    t, token = msg.get("type"), msg.get("token")
+    checks = (  # ordered, lazily evaluated: first failing check wins
+        (lambda: _nonempty_str(t), "missing or non-string 'type'"),
+        (lambda: t in VALID_REQUEST_TYPES, f"unknown request type: {t!r}"),
+        (lambda: _nonempty_str(msg.get("id")), "missing or non-string 'id'"),
+        (lambda: _nonempty_str(token), "missing token"),
+        (lambda: token == expected_token, "token mismatch"),
+        (lambda: isinstance(msg.get("payload"), dict), "payload must be a dict"))
+    return next(((False, reason) for ok, reason in checks if not ok()), (True, ""))

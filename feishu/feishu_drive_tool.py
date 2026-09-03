@@ -29,6 +29,25 @@ def _prepare(args: dict, keys: tuple, missing_msg: str):
     return client, values, None
 
 
+def _comment_op(keys, missing_msg, label, method, uri, queries=None, body=None, flag_success=False):
+    """Handler factory: validate ``keys`` → lark_call → ``"{label} failed"`` or the data.
+
+    All keys except ``content`` are URI path params. ``queries(args)`` / ``body(args, values)``
+    build the request pieces; ``flag_success`` adds ``success=True`` to the result (writes).
+    """
+    def _handler(args: dict, **kwargs) -> str:
+        client, values, err = _prepare(args, keys, missing_msg)
+        if err:
+            return err
+        code, msg, data = lark_call(
+            client, method, uri, paths={k: v for k, v in zip(keys, values) if k != "content"},
+            queries=queries and queries(args), body=body and body(args, values))
+        if code != 0:
+            return tool_error(f"{label} failed: code={code} msg={msg}")
+        return tool_result(success=True, data=data) if flag_success else tool_result(data)
+    return _handler
+
+
 def _file_type(args: dict) -> str:
     return args.get("file_type", "docx") or "docx"
 
@@ -80,18 +99,6 @@ FEISHU_DRIVE_LIST_COMMENTS_SCHEMA = {
 }
 
 
-def _handle_list_comments(args: dict, **kwargs) -> str:
-    client, (file_token,), err = _prepare(args, ("file_token",), "file_token is required")
-    if err:
-        return err
-    extra = (("is_whole", "true"),) if args.get("is_whole", False) else ()
-    code, msg, data = lark_call(
-        client, "GET", _COMMENTS_URI, paths={"file_token": file_token}, queries=_paged_queries(args, *extra))
-    if code != 0:
-        return tool_error(f"List comments failed: code={code} msg={msg}")
-    return tool_result(data)
-
-
 FEISHU_DRIVE_LIST_REPLIES_SCHEMA = {
     "name": "feishu_drive_list_comment_replies",
     "description": "List all replies in a comment thread on a Feishu document.",
@@ -114,19 +121,6 @@ FEISHU_DRIVE_LIST_REPLIES_SCHEMA = {
         "required": ["file_token", "comment_id"],
     },
 }
-
-
-def _handle_list_replies(args: dict, **kwargs) -> str:
-    client, (file_token, comment_id), err = _prepare(
-        args, ("file_token", "comment_id"), "file_token and comment_id are required")
-    if err:
-        return err
-    code, msg, data = lark_call(
-        client, "GET", _REPLIES_URI, paths={"file_token": file_token, "comment_id": comment_id},
-        queries=_paged_queries(args))
-    if code != 0:
-        return tool_error(f"List replies failed: code={code} msg={msg}")
-    return tool_result(data)
 
 
 FEISHU_DRIVE_REPLY_SCHEMA = {
@@ -155,21 +149,6 @@ FEISHU_DRIVE_REPLY_SCHEMA = {
 }
 
 
-def _handle_reply_comment(args: dict, **kwargs) -> str:
-    client, (file_token, comment_id, content), err = _prepare(
-        args, ("file_token", "comment_id", "content"), "file_token, comment_id, and content are required")
-    if err:
-        return err
-    # Replies use the rich "content.elements[text_run]" body shape; file_type is a query param.
-    code, msg, data = lark_call(
-        client, "POST", _REPLIES_URI, paths={"file_token": file_token, "comment_id": comment_id},
-        queries=[("file_type", _file_type(args))],
-        body={"content": {"elements": [{"type": "text_run", "text_run": {"text": content}}]}})
-    if code != 0:
-        return tool_error(f"Reply comment failed: code={code} msg={msg}")
-    return tool_result(success=True, data=data)
-
-
 FEISHU_DRIVE_ADD_COMMENT_SCHEMA = {
     "name": "feishu_drive_add_comment",
     "description": (
@@ -192,18 +171,23 @@ FEISHU_DRIVE_ADD_COMMENT_SCHEMA = {
 }
 
 
-def _handle_add_comment(args: dict, **kwargs) -> str:
-    client, (file_token, content), err = _prepare(
-        args, ("file_token", "content"), "file_token and content are required")
-    if err:
-        return err
-    # new_comments takes the flat "reply_elements[text]" shape with file_type in the body.
-    code, msg, data = lark_call(
-        client, "POST", _ADD_COMMENT_URI, paths={"file_token": file_token},
-        body={"file_type": _file_type(args), "reply_elements": [{"type": "text", "text": content}]})
-    if code != 0:
-        return tool_error(f"Add comment failed: code={code} msg={msg}")
-    return tool_result(success=True, data=data)
+_handle_list_comments = _comment_op(
+    ("file_token",), "file_token is required", "List comments", "GET", _COMMENTS_URI,
+    queries=lambda a: _paged_queries(a, *([("is_whole", "true")] if a.get("is_whole", False) else [])))
+_handle_list_replies = _comment_op(
+    ("file_token", "comment_id"), "file_token and comment_id are required", "List replies", "GET",
+    _REPLIES_URI, queries=_paged_queries)
+# Replies use the rich "content.elements[text_run]" body shape; file_type is a query param.
+_handle_reply_comment = _comment_op(
+    ("file_token", "comment_id", "content"), "file_token, comment_id, and content are required",
+    "Reply comment", "POST", _REPLIES_URI, queries=lambda a: [("file_type", _file_type(a))],
+    body=lambda a, v: {"content": {"elements": [{"type": "text_run", "text_run": {"text": v[-1]}}]}},
+    flag_success=True)
+# new_comments takes the flat "reply_elements[text]" shape with file_type in the body.
+_handle_add_comment = _comment_op(
+    ("file_token", "content"), "file_token and content are required", "Add comment", "POST",
+    _ADD_COMMENT_URI, body=lambda a, v: {"file_type": _file_type(a), "reply_elements": [{"type": "text", "text": v[-1]}]},
+    flag_success=True)
 
 
 for _schema, _handler, _desc, _emoji in (
@@ -213,5 +197,5 @@ for _schema, _handler, _desc, _emoji in (
     (FEISHU_DRIVE_ADD_COMMENT_SCHEMA, _handle_add_comment, "Add a whole-document comment", "\u2709\ufe0f"),
 ):
     registry.register(
-        name=_schema["name"], toolset="feishu_drive", schema=_schema, handler=_handler, check_fn=_check_feishu,
-        requires_env=[], is_async=False, description=_desc, emoji=_emoji)
+        name=_schema["name"], toolset="feishu_drive", schema=_schema, handler=_handler,
+        check_fn=_check_feishu, requires_env=[], is_async=False, description=_desc, emoji=_emoji)

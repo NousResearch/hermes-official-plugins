@@ -23,8 +23,7 @@ def register_cli(subparser: argparse.ArgumentParser) -> None:
     app = sp.add_parser("approve", help="Register a remote node on the gateway.")
     for arg in ("name", "url", "token"):
         app.add_argument(arg)
-    for name, help_ in (("remove", "Forget a registered node."),
-                        ("status", "Ping a registered node."),
+    for name, help_ in (("remove", "Forget a registered node."), ("status", "Ping a registered node."),
                         ("ping", "Alias for status.")):
         sp.add_parser(name, help=help_).add_argument("name")
     for p in sp.choices.values():

@@ -31,35 +31,39 @@ def _auth_state_path() -> Path:
     return Path(get_hermes_home()) / "workspace" / "meetings" / "auth.json"
 
 
+# ``hermes meet <sub>`` in help order.
+_SUBCOMMAND_HELP = (
+    ("setup", "Preflight: playwright, chromium, auth"),
+    ("install", "Install prerequisites (pip deps, Chromium, platform audio tools)"),
+    ("auth", "Sign in to Google and save session state"),
+    ("join", "Join a Meet URL"),
+    ("status", "Print current Meet bot state"),
+    ("transcript", "Print the scraped transcript"),
+    ("say", "Speak text in an active realtime meeting"),
+    ("stop", "Leave the current meeting"),
+    ("node", "Manage remote meet node hosts (run/list/approve/remove/status/ping)"))
+
+
 def register_cli(subparser: argparse.ArgumentParser) -> None:
     """Build the ``hermes meet`` argparse tree (called at plugin load time)."""
     subs = subparser.add_subparsers(dest="meet_command")
-    subs.add_parser("setup", help="Preflight: playwright, chromium, auth")
-    inst_p = subs.add_parser(
-        "install", help="Install prerequisites (pip deps, Chromium, platform audio tools)")
-    inst_p.add_argument("--realtime", action="store_true",
-                        help="Also install realtime audio tools (pulseaudio-utils on Linux, BlackHole+ffmpeg on macOS). Uses sudo/brew, prompts before invoking either.")
-    inst_p.add_argument("--yes", "-y", action="store_true",
-                        help="Answer yes to all prompts (use with care; will run sudo apt-get or brew without asking).")
-    subs.add_parser("auth", help="Sign in to Google and save session state")
-    join_p = subs.add_parser("join", help="Join a Meet URL")
-    join_p.add_argument("url", help="https://meet.google.com/...")
-    join_p.add_argument("--guest-name", default="Hermes Agent")
-    join_p.add_argument("--duration", default=None, help="e.g. 30m, 2h, 90s")
-    join_p.add_argument("--headed", action="store_true", help="show browser")
-    join_p.add_argument("--mode", choices=("transcribe", "realtime"), default="transcribe",
-                        help="transcribe (default, listen-only) or realtime (speak via OpenAI Realtime)")
-    join_p.add_argument("--node", default=None,
-                        help="remote node name, or 'auto' to use the sole registered node")
-    subs.add_parser("status", help="Print current Meet bot state")
-    tr_p = subs.add_parser("transcript", help="Print the scraped transcript")
-    tr_p.add_argument("--last", type=int, default=None)
-    say_p = subs.add_parser("say", help="Speak text in an active realtime meeting")
-    say_p.add_argument("text", help="what to say")
-    say_p.add_argument("--node", default=None)
-    subs.add_parser("stop", help="Leave the current meeting")
-    _register_node_cli(subs.add_parser(
-        "node", help="Manage remote meet node hosts (run/list/approve/remove/status/ping)"))
+    p = {name: subs.add_parser(name, help=help_) for name, help_ in _SUBCOMMAND_HELP}
+    p["install"].add_argument("--realtime", action="store_true",
+                              help="Also install realtime audio tools (pulseaudio-utils on Linux, BlackHole+ffmpeg on macOS). Uses sudo/brew, prompts before invoking either.")
+    p["install"].add_argument("--yes", "-y", action="store_true",
+                              help="Answer yes to all prompts (use with care; will run sudo apt-get or brew without asking).")
+    p["join"].add_argument("url", help="https://meet.google.com/...")
+    p["join"].add_argument("--guest-name", default="Hermes Agent")
+    p["join"].add_argument("--duration", default=None, help="e.g. 30m, 2h, 90s")
+    p["join"].add_argument("--headed", action="store_true", help="show browser")
+    p["join"].add_argument("--mode", choices=("transcribe", "realtime"), default="transcribe",
+                           help="transcribe (default, listen-only) or realtime (speak via OpenAI Realtime)")
+    p["join"].add_argument("--node", default=None,
+                           help="remote node name, or 'auto' to use the sole registered node")
+    p["transcript"].add_argument("--last", type=int, default=None)
+    p["say"].add_argument("text", help="what to say")
+    p["say"].add_argument("--node", default=None)
+    _register_node_cli(p["node"])
     subparser.set_defaults(func=meet_command)
 
 

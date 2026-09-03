@@ -7,12 +7,8 @@ import os
 
 
 def generate_bind_key() -> str:
-    """Generate a random 256-bit AES key as base64.
-
-    Passed to ``create_bind_task`` so the server encrypts the bot's
-    *client_secret*; only this CLI holds the key, so the secret never travels
-    in plaintext.
-    """
+    """Random 256-bit AES key (base64) passed to ``create_bind_task`` so the server
+    encrypts the bot's *client_secret*; only this CLI holds the key."""
     return base64.b64encode(os.urandom(32)).decode()
 
 

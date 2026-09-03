@@ -1,11 +1,6 @@
-"""QQBot scan-to-configure (QR code onboard) module.
-
-Mirrors the Feishu onboarding pattern: synchronous HTTP + one public entry-point
-``qr_register()`` (create task → display QR → poll → decrypt credentials) against
-the ``q.qq.com`` ``create_bind_task`` / ``poll_bind_result`` APIs.
-
-Reference: https://bot.q.qq.com/wiki/develop/api-v2/
-"""
+"""QQBot scan-to-configure (QR code onboard). Mirrors the Feishu pattern: synchronous
+HTTP + one entry-point ``qr_register()`` (create task → display QR → poll → decrypt
+credentials) against ``q.qq.com`` ``create_bind_task`` / ``poll_bind_result``."""
 
 from __future__ import annotations
 
@@ -16,12 +11,7 @@ from typing import Optional, Tuple
 from urllib.parse import quote
 
 from .constants import (
-    ONBOARD_API_TIMEOUT,
-    ONBOARD_CREATE_PATH,
-    ONBOARD_POLL_INTERVAL,
-    ONBOARD_POLL_PATH,
-    PORTAL_HOST,
-    QR_URL_TEMPLATE,
+    ONBOARD_API_TIMEOUT, ONBOARD_CREATE_PATH, ONBOARD_POLL_INTERVAL, ONBOARD_POLL_PATH, PORTAL_HOST, QR_URL_TEMPLATE,
 )
 from .crypto import decrypt_secret, generate_bind_key
 from .utils import get_api_headers
@@ -31,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 class BindStatus(IntEnum):
     """Status codes returned by ``_poll_bind_result``."""
-
     NONE = 0
     PENDING = 1
     COMPLETED = 2
@@ -103,13 +92,8 @@ _MAX_REFRESHES = 3
 
 
 def qr_register(timeout_seconds: int = 600) -> Optional[dict]:
-    """Run the QQBot scan-to-configure QR registration flow.
-
-    Unexpected errors propagate to the caller.
-
-    :returns: ``{"app_id", "client_secret", "user_openid"}`` on success, or
-        ``None`` on failure / expiry / cancellation.
-    """
+    """Run the QR registration flow; returns ``{"app_id", "client_secret", "user_openid"}``
+    or None on failure / expiry / cancellation. Unexpected errors propagate."""
     deadline = time.monotonic() + timeout_seconds
 
     for refresh_count in range(_MAX_REFRESHES + 1):

@@ -1,17 +1,10 @@
 """QQ Bot inline keyboards + approval / update-prompt helpers.
 
-QQ Bot v2 attaches inline keyboards to outbound messages. A button click
-dispatches an ``INTERACTION_CREATE`` gateway event carrying the button's
-``data`` payload; the bot must ACK promptly via ``PUT /interactions/{id}`` or
-the user sees an error indicator on the button.
-
-``button_data`` formats::
-
-    approve:<session_key>:<decision>      # decision = allow-once|allow-always|deny
-    update_prompt:<answer>                # answer = y|n
-
-Ported from WideLee's qqbot-agent-sdk v1.2.2 (``approval.py`` + ``dto.py``
-keyboard types). Authorship preserved via Co-authored-by.
+A button click dispatches an ``INTERACTION_CREATE`` event carrying the button's
+``data``; the bot must ACK promptly via ``PUT /interactions/{id}`` or the user
+sees an error indicator. ``button_data`` formats: ``approve:<session_key>:<decision>``
+(decision = allow-once|allow-always|deny) and ``update_prompt:<answer>`` (y|n).
+Ported from WideLee's qqbot-agent-sdk v1.2.2 (authorship via Co-authored-by).
 """
 
 from __future__ import annotations
@@ -29,7 +22,7 @@ _APPROVAL_DATA_RE = re.compile(r"^approve:(.+):(allow-once|allow-always|deny)$")
 _UPDATE_PROMPT_RE = re.compile(r"^update_prompt:(y|n)$")
 
 
-# ── Keyboard dataclasses ─────────────────────────────────────────────
+# ── Keyboard dataclasses ──
 
 def _to_dict(value: Any) -> Any:
     """Serialize a dataclass tree in field-declaration order (the wire shape)."""
@@ -53,9 +46,8 @@ class KeyboardButtonPermission(_Serializable):
 
 @dataclass
 class KeyboardButtonAction(_Serializable):
-    """Click behaviour: ``type`` 1 = Callback (INTERACTION_CREATE with ``data``), 2 = Link.
-    ``click_limit=1`` = single-use.
-    """
+    """Click behaviour: ``type`` 1 = Callback (INTERACTION_CREATE with ``data``), 2 = Link;
+    ``click_limit=1`` = single-use."""
     type: int
     data: str
     permission: KeyboardButtonPermission = field(default_factory=KeyboardButtonPermission)
@@ -95,7 +87,7 @@ class InlineKeyboard(_Serializable):
     content: KeyboardContent = field(default_factory=KeyboardContent)
 
 
-# ── INTERACTION_CREATE parsing ───────────────────────────────────────
+# ── INTERACTION_CREATE parsing ──
 
 def parse_approval_button_data(button_data: str) -> Optional[tuple[str, str]]:
     """Parse approval ``button_data`` into ``(session_key, decision)`` or ``None``."""
@@ -109,11 +101,9 @@ def parse_update_prompt_button_data(button_data: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
-# ── Keyboard builders ────────────────────────────────────────────────
+# ── Keyboard builders ──
 
-def _make_callback_button(
-    btn_id: str, label: str, visited_label: str, data: str, style: int, group_id: str,
-) -> KeyboardButton:
+def _make_callback_button(btn_id: str, label: str, visited_label: str, data: str, style: int, group_id: str) -> KeyboardButton:
     return KeyboardButton(
         id=btn_id,
         render_data=KeyboardButtonRenderData(label=label, visited_label=visited_label, style=style),
@@ -128,10 +118,8 @@ def _single_row_keyboard(buttons: List[KeyboardButton]) -> InlineKeyboard:
 
 def build_approval_keyboard(session_key: str, *, allow_permanent: bool = True) -> InlineKeyboard:
     """Build ``[✅ 允许一次] [⭐ 始终允许] [❌ 拒绝]`` (one group, so a click greys the rest).
-
-    The ⭐ button is hidden when persistent scope is unavailable. *session_key*
-    is embedded in ``button_data`` so the decision routes to the right approval.
-    """
+    ⭐ is hidden when persistent scope is unavailable; *session_key* is embedded in
+    ``button_data`` so the decision routes to the right approval."""
     prefix = f"{APPROVAL_BUTTON_PREFIX}{session_key}"
     buttons = [_make_callback_button("allow", "✅ 允许一次", "已允许", f"{prefix}:allow-once", 1, "approval")]
     if allow_permanent:
@@ -148,15 +136,12 @@ def build_update_prompt_keyboard() -> InlineKeyboard:
     ])
 
 
-# ── ApprovalRequest + text builder ───────────────────────────────────
+# ── ApprovalRequest + text builder ──
 
 @dataclass
 class ApprovalRequest:
-    """Approval-request display data.
-
-    ``command_preview`` / ``cwd`` are set for exec approvals, ``tool_name`` for
-    plugin approvals; ``severity`` is ``'critical' | 'info' | ''``.
-    """
+    """Approval-request display data. ``command_preview`` / ``cwd`` are set for exec
+    approvals, ``tool_name`` for plugin approvals; ``severity`` is ``'critical' | 'info' | ''``."""
     session_key: str
     title: str
     description: str = ""
@@ -193,14 +178,11 @@ def build_approval_text(req: ApprovalRequest) -> str:
     return "\n".join(lines)
 
 
-# ── INTERACTION_CREATE event shape ───────────────────────────────────
+# ── INTERACTION_CREATE event shape ──
 
 @dataclass
 class InteractionEvent:
-    """Parsed ``INTERACTION_CREATE`` payload.
-
-    See https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/interface-framework/event-emit.html
-    """
+    """Parsed ``INTERACTION_CREATE`` payload (api-v2 event-emit docs)."""
     id: str = ""            # required for the ``PUT /interactions/{id}`` ACK
     type: int = 0           # event type code (11 = message button)
     chat_type: int = 0      # 0 = guild, 1 = group, 2 = c2c

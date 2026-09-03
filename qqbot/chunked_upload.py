@@ -1,21 +1,10 @@
-"""QQ Bot chunked upload flow.
-
-The QQ v2 API caps inline base64 uploads (``file_data`` / ``url``) at ~10 MB.
-Files between 10 MB and ~100 MB use the three-step chunked flow::
-
-    1. POST /v2/{users|groups}/{id}/upload_prepare
-       → upload_id, block_size, and pre-signed COS part URLs.
-    2. Per part: PUT bytes to the COS URL, then POST .../upload_part_finish.
-    3. POST /v2/{users|groups}/{id}/files with {"upload_id": ...}
-       → ``file_info`` token used in a RichMedia message.
-
-Error codes (QQ Bot v2 spec): ``40093001`` — ``upload_part_finish`` retryable
-until the server's ``retry_timeout`` (or a local cap) elapses; ``40093002`` —
-daily upload quota exceeded, surfaced as :class:`UploadDailyLimitExceededError`.
-Other API/I/O failures raise ``RuntimeError``.
-
-Ported from WideLee's qqbot-agent-sdk v1.2.2 (``media_loader.py::ChunkedUploader``).
-Authorship preserved via Co-authored-by.
+"""QQ Bot chunked upload flow (files 10 MB..~100 MB; inline uploads cap at ~10 MB):
+1. POST .../upload_prepare → upload_id, block_size, pre-signed COS part URLs;
+2. per part: PUT bytes to COS, then POST .../upload_part_finish;
+3. POST .../files with {"upload_id"} → ``file_info`` for a RichMedia message.
+biz_code 40093001 = part_finish retryable until ``retry_timeout``; 40093002 = daily
+quota (UploadDailyLimitExceededError); other API/I/O failures raise RuntimeError.
+Ported from WideLee's qqbot-agent-sdk v1.2.2 (authorship via Co-authored-by).
 """
 
 from __future__ import annotations
@@ -34,60 +23,55 @@ logger = logging.getLogger(__name__)
 
 _BIZ_CODE_DAILY_LIMIT = 40093002     # upload_prepare: daily cumulative limit
 _BIZ_CODE_PART_RETRYABLE = 40093001  # upload_part_finish: transient
-
 _DEFAULT_CONCURRENT_PARTS = 1
 _MAX_CONCURRENT_PARTS = 10
-
 _PART_UPLOAD_TIMEOUT = 300.0        # 5 minutes per COS PUT
 _PART_UPLOAD_MAX_RETRIES = 2
 _PART_FINISH_RETRY_INTERVAL = 1.0
 _PART_FINISH_DEFAULT_TIMEOUT = 120.0
 _PART_FINISH_MAX_TIMEOUT = 600.0
-
 _COMPLETE_UPLOAD_MAX_RETRIES = 2
 _COMPLETE_UPLOAD_BASE_DELAY = 2.0
-
-# First 10,002,432 bytes used for the ``md5_10m`` hash (per QQ API spec).
-_MD5_10M_SIZE = 10_002_432
+_MD5_10M_SIZE = 10_002_432  # first N bytes used for the ``md5_10m`` hash (per QQ API spec)
 
 
-# ── Exceptions ───────────────────────────────────────────────────────
+# ── Exceptions ──
 
-class UploadDailyLimitExceededError(Exception):
+class _UploadError(Exception):
+    def __init__(self, file_name: str, file_size: int, message: str) -> None:
+        self.file_name = file_name
+        self.file_size = file_size
+        super().__init__(message)
+
+    @property
+    def file_size_human(self) -> str:
+        return format_size(self.file_size)
+
+
+class UploadDailyLimitExceededError(_UploadError):
     """Raised when ``upload_prepare`` returns biz_code 40093002 (daily quota hit)."""
 
     def __init__(self, file_name: str, file_size: int, message: str = "") -> None:
-        self.file_name = file_name
-        self.file_size = file_size
-        super().__init__(message or f"Daily upload limit exceeded for {file_name!r}")
-
-    @property
-    def file_size_human(self) -> str:
-        return format_size(self.file_size)
+        super().__init__(file_name, file_size, message or f"Daily upload limit exceeded for {file_name!r}")
 
 
-class UploadFileTooLargeError(Exception):
+class UploadFileTooLargeError(_UploadError):
     """Raised when a file exceeds the platform per-file size limit."""
 
     def __init__(self, file_name: str, file_size: int, limit_bytes: int = 0, message: str = "") -> None:
-        self.file_name = file_name
-        self.file_size = file_size
         self.limit_bytes = limit_bytes
         limit_str = f" ({format_size(limit_bytes)})" if limit_bytes else ""
         super().__init__(
-            message or f"File {file_name!r} ({format_size(file_size)}) exceeds platform limit{limit_str}"
+            file_name, file_size,
+            message or f"File {file_name!r} ({format_size(file_size)}) exceeds platform limit{limit_str}",
         )
-
-    @property
-    def file_size_human(self) -> str:
-        return format_size(self.file_size)
 
     @property
     def limit_human(self) -> str:
         return format_size(self.limit_bytes) if self.limit_bytes else "unknown"
 
 
-# ── Prepare-response shape ───────────────────────────────────────────
+# ── Prepare-response shape ──
 
 @dataclass
 class _PreparePart:
@@ -138,47 +122,26 @@ def _api_path(chat_type: str, target_id: str, endpoint: str) -> str:
     return f"{base}/{target_id}/{endpoint}"
 
 
-# ── Chunked upload driver ────────────────────────────────────────────
+# ── Chunked upload driver ──
 
 class ChunkedUploader:
-    """Run the prepare → PUT parts → complete sequence.
-
-    :param api_request: Bound ``_api_request(method, path, body=..., timeout=...)``
-        coroutine from the adapter (passed in rather than imported to avoid
-        circular imports). Must raise ``RuntimeError`` with the biz_code in
-        the message on API errors.
-    :param http_put: Coroutine ``(url, data, headers) -> httpx-like response``
-        for COS part uploads.
-    :param log_tag: Log prefix.
-    """
+    """Run the prepare → PUT parts → complete sequence. ``api_request`` is the adapter's
+    bound ``_api_request(method, path, body=..., timeout=...)`` (injected to avoid a
+    circular import; must raise RuntimeError with the biz_code in the message);
+    ``http_put`` is ``(url, data, headers) -> httpx-like response`` for COS PUTs."""
 
     def __init__(
-        self,
-        api_request: Callable[..., Awaitable[Dict[str, Any]]],
-        http_put: Callable[..., Awaitable[Any]],
+        self, api_request: Callable[..., Awaitable[Dict[str, Any]]], http_put: Callable[..., Awaitable[Any]],
         log_tag: str = "QQBot",
     ) -> None:
         self._api_request = api_request
         self._http_put = http_put
         self._log_tag = log_tag
 
-    async def upload(
-        self,
-        chat_type: str,
-        target_id: str,
-        file_path: str,
-        file_type: int,
-        file_name: str,
-    ) -> Dict[str, Any]:
-        """Run the full chunked upload and return the ``complete_upload`` response.
-
-        :param chat_type: ``'c2c'`` or ``'group'``.
-        :param file_type: ``MEDIA_TYPE_*`` constant.
-        :returns: Raw ``complete_upload`` response dict (contains ``file_info``).
-        :raises UploadDailyLimitExceededError: On biz_code 40093002.
-        :raises UploadFileTooLargeError: When the file exceeds the platform limit.
-        :raises RuntimeError: On other API or I/O failures.
-        """
+    async def upload(self, chat_type: str, target_id: str, file_path: str, file_type: int, file_name: str) -> Dict[str, Any]:
+        """Run the full chunked upload (``chat_type`` 'c2c'|'group', ``file_type`` MEDIA_TYPE_*)
+        and return the raw ``complete_upload`` response (contains ``file_info``).
+        Raises UploadDailyLimitExceededError (40093002), UploadFileTooLargeError, RuntimeError."""
         if chat_type not in {"c2c", "group"}:
             raise ValueError(f"ChunkedUploader: unsupported chat_type {chat_type!r}")
 
@@ -189,9 +152,7 @@ class ChunkedUploader:
         )
 
         # Hashing is blocking I/O → executor.
-        hashes = await asyncio.get_running_loop().run_in_executor(
-            None, _compute_file_hashes, file_path, file_size
-        )
+        hashes = await asyncio.get_running_loop().run_in_executor(None, _compute_file_hashes, file_path, file_size)
         prepare = await self._prepare(chat_type, target_id, file_type, file_name, file_size, hashes)
         max_concurrent = min(prepare.concurrency, _MAX_CONCURRENT_PARTS)
         retry_timeout = min(
@@ -220,26 +181,15 @@ class ChunkedUploader:
         return await self._complete(chat_type, target_id, prepare.upload_id)
 
     async def _prepare(
-        self,
-        chat_type: str,
-        target_id: str,
-        file_type: int,
-        file_name: str,
-        file_size: int,
-        hashes: Dict[str, str],
+        self, chat_type: str, target_id: str, file_type: int, file_name: str, file_size: int, hashes: Dict[str, str],
     ) -> _PrepareResult:
         body = {
-            "file_type": file_type,
-            "file_name": file_name,
-            "file_size": file_size,
-            "md5": hashes["md5"],
-            "sha1": hashes["sha1"],
-            "md5_10m": hashes["md5_10m"],
+            "file_type": file_type, "file_name": file_name, "file_size": file_size,
+            "md5": hashes["md5"], "sha1": hashes["sha1"], "md5_10m": hashes["md5_10m"],
         }
         try:
             raw = await self._api_request(
-                "POST", _api_path(chat_type, target_id, "upload_prepare"),
-                body=body, timeout=FILE_UPLOAD_TIMEOUT,
+                "POST", _api_path(chat_type, target_id, "upload_prepare"), body=body, timeout=FILE_UPLOAD_TIMEOUT,
             )
         except RuntimeError as exc:
             err_msg = str(exc)
@@ -249,17 +199,8 @@ class ChunkedUploader:
         return _parse_prepare_response(raw)
 
     async def _upload_one_part(
-        self,
-        chat_type: str,
-        target_id: str,
-        file_path: str,
-        file_size: int,
-        upload_id: str,
-        rsp_block_size: int,
-        part: _PreparePart,
-        retry_timeout: float,
-        total_parts: int,
-        completed: List[int],
+        self, chat_type: str, target_id: str, file_path: str, file_size: int, upload_id: str, rsp_block_size: int,
+        part: _PreparePart, retry_timeout: float, total_parts: int, completed: List[int],
     ) -> None:
         """PUT one part to COS, then call ``upload_part_finish``."""
         part_index = part.index
@@ -268,9 +209,7 @@ class ChunkedUploader:
         offset = (part_index - 1) * rsp_block_size
         length = min(actual_block_size, file_size - offset)
 
-        data = await asyncio.get_running_loop().run_in_executor(
-            None, _read_file_chunk, file_path, offset, length
-        )
+        data = await asyncio.get_running_loop().run_in_executor(None, _read_file_chunk, file_path, offset, length)
         md5_hex = hashlib.md5(data).hexdigest()
         logger.debug(
             "[%s] Part %d/%d: uploading %s (offset=%d md5=%s)",
@@ -289,12 +228,7 @@ class ChunkedUploader:
         )
 
     async def _with_retries(
-        self,
-        attempt_fn: Callable[[], Awaitable[Any]],
-        *,
-        max_retries: int,
-        base_delay: float,
-        label: str,
+        self, attempt_fn: Callable[[], Awaitable[Any]], *, max_retries: int, base_delay: float, label: str,
         failure_label: str,
     ) -> Any:
         """Run *attempt_fn* up to ``max_retries + 1`` times with exponential backoff."""
@@ -325,11 +259,10 @@ class ChunkedUploader:
             if 200 <= status < 300:
                 logger.debug("[%s] PUT part %d/%d: %d OK", self._log_tag, part_index, total_parts, status)
                 return
-            body_preview = ""
             try:
                 body_preview = getattr(resp, "text", "")[:200]
             except Exception:  # pragma: no cover — defensive
-                pass
+                body_preview = ""
             raise RuntimeError(f"COS PUT returned {status}: {body_preview}")
 
         await self._with_retries(
@@ -339,13 +272,7 @@ class ChunkedUploader:
         )
 
     async def _part_finish_with_retry(
-        self,
-        chat_type: str,
-        target_id: str,
-        upload_id: str,
-        part_index: int,
-        block_size: int,
-        md5: str,
+        self, chat_type: str, target_id: str, upload_id: str, part_index: int, block_size: int, md5: str,
         retry_timeout: float,
     ) -> None:
         """Call ``upload_part_finish``, retrying on biz_code 40093001 until *retry_timeout*."""
@@ -375,11 +302,8 @@ class ChunkedUploader:
                 await asyncio.sleep(_PART_FINISH_RETRY_INTERVAL)
 
     async def _complete(self, chat_type: str, target_id: str, upload_id: str) -> Dict[str, Any]:
-        """Call ``complete_upload`` with retry.
-
-        Reuses the ``/files`` endpoint (same as the simple URL-based upload) but
-        signals the chunked-completion path by sending only ``upload_id``.
-        """
+        """Call ``complete_upload`` with retry — the ``/files`` endpoint (same as the simple
+        URL upload) selects the chunked-completion path when only ``upload_id`` is sent."""
         path = _api_path(chat_type, target_id, "files")
         body = {"upload_id": upload_id}
         return await self._with_retries(
@@ -389,7 +313,7 @@ class ChunkedUploader:
         )
 
 
-# ── Helpers (module-level for testability) ───────────────────────────
+# ── Helpers (module-level for testability) ──
 
 def format_size(size_bytes: int) -> str:
     """Return a human-readable file size string (e.g. ``'12.3 MB'``)."""

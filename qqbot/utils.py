@@ -28,16 +28,9 @@ def build_user_agent() -> str:
 
 
 def get_api_headers() -> Dict[str, str]:
-    """Standard QQBot API headers.
-
-    ``q.qq.com`` requires ``Accept: application/json`` — without it the server
-    returns a JavaScript anti-bot challenge page.
-    """
-    return {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "User-Agent": build_user_agent(),
-    }
+    """Standard QQBot API headers. ``q.qq.com`` requires ``Accept: application/json``
+    — without it the server returns a JavaScript anti-bot challenge page."""
+    return {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": build_user_agent()}
 
 
 def coerce_list(value: Any) -> List[str]:

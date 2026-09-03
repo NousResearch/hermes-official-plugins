@@ -79,14 +79,12 @@ class InlineKeyboard(_Serializable):
 
 def parse_approval_button_data(button_data: str) -> Optional[tuple[str, str]]:
     """Parse approval ``button_data`` into ``(session_key, decision)`` or ``None``."""
-    m = _APPROVAL_DATA_RE.match(button_data or "")
-    return m.groups() if m else None
+    return m.groups() if (m := _APPROVAL_DATA_RE.match(button_data or "")) else None
 
 
 def parse_update_prompt_button_data(button_data: str) -> Optional[str]:
     """Parse update-prompt ``button_data`` into ``'y'`` / ``'n'`` or ``None``."""
-    m = _UPDATE_PROMPT_RE.match(button_data or "")
-    return m.group(1) if m else None
+    return m.group(1) if (m := _UPDATE_PROMPT_RE.match(button_data or "")) else None
 
 
 def _single_row_keyboard(group_id: str, *buttons: tuple) -> InlineKeyboard:
@@ -183,8 +181,7 @@ _SCENE_NAMES = {0: "guild", 1: "group", 2: "c2c"}
 def parse_interaction_event(raw: Dict[str, Any]) -> InteractionEvent:
     """Parse a raw ``INTERACTION_CREATE`` dispatch payload (``d``)."""
     data_raw = raw.get("data") or {}
-    resolved = data_raw.get("resolved") or {}
-    scene_code = int(raw.get("chat_type", 0) or 0)
+    resolved, scene_code = data_raw.get("resolved") or {}, int(raw.get("chat_type", 0) or 0)
     return InteractionEvent(
         id=str(raw.get("id", "")), type=int(data_raw.get("type", 0) or 0), chat_type=scene_code,
         scene=_SCENE_NAMES.get(scene_code, ""), group_openid=str(raw.get("group_openid", "")),

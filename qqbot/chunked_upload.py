@@ -35,8 +35,7 @@ _MD5_10M_SIZE = 10_002_432  # first N bytes used for the ``md5_10m`` hash (per Q
 
 class _UploadError(Exception):
     def __init__(self, file_name: str, file_size: int, message: str) -> None:
-        self.file_name = file_name
-        self.file_size = file_size
+        self.file_name, self.file_size = file_name, file_size
         super().__init__(message)
 
     @property
@@ -84,8 +83,7 @@ class _PrepareResult:
 def _parse_prepare_response(raw: Dict[str, Any]) -> _PrepareResult:
     """Parse upload_prepare response (either bare or wrapped in ``data``)."""
     src = raw.get("data") if isinstance(raw.get("data"), dict) else raw
-    upload_id = str(src.get("upload_id", ""))
-    if not upload_id:
+    if not (upload_id := str(src.get("upload_id", ""))):
         raise ValueError(f"upload_prepare response missing upload_id: {str(raw)[:200]}")
     block_size = int(src.get("block_size", 0))
     raw_parts = src.get("parts") or src.get("part_list") or []

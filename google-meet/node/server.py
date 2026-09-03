@@ -40,8 +40,8 @@ def _rpc_say(payload: Dict[str, Any], pm) -> Dict[str, Any]:
     active = pm._read_active()
     enqueued = False
     if active and active.get("out_dir"):
-        queue = Path(active["out_dir"]) / "say_queue.jsonl"
         try:
+            queue = Path(active["out_dir"]) / "say_queue.jsonl"
             queue.parent.mkdir(parents=True, exist_ok=True)
             with queue.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps({"text": text, "ts": time.time()}) + "\n")

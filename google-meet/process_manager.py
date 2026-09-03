@@ -123,15 +123,9 @@ def status() -> Dict[str, Any]:
     if not active:
         return dict(_NO_ACTIVE)
     pid = int(active.get("pid", 0))
-    return {
-        "ok": True,
-        "alive": _pid_alive(pid),
-        "pid": pid,
-        "meetingId": active.get("meeting_id"),
-        "url": active.get("url"),
-        "startedAt": active.get("started_at"),
-        "outDir": active.get("out_dir"),
-        **(read_json(Path(active.get("out_dir", "")) / "status.json") or {})}
+    return {"ok": True, "alive": _pid_alive(pid), "pid": pid, "meetingId": active.get("meeting_id"),
+            "url": active.get("url"), "startedAt": active.get("started_at"), "outDir": active.get("out_dir"),
+            **(read_json(Path(active.get("out_dir", "")) / "status.json") or {})}
 
 
 def transcript(last: Optional[int] = None) -> Dict[str, Any]:
@@ -160,8 +154,8 @@ def enqueue_say(text: str) -> Dict[str, Any]:
     if not active:
         return dict(_NO_ACTIVE)
     if active.get("mode") != "realtime":
-        return {"ok": False, "reason": "active meeting is in transcribe mode — pass mode='realtime' "
-                                       "to meet_join to enable agent speech"}
+        return {"ok": False, "reason": ("active meeting is in transcribe mode — pass mode='realtime' "
+                                        "to meet_join to enable agent speech")}
 
     out_dir = Path(active.get("out_dir", ""))
     if not out_dir.is_dir():
@@ -171,8 +165,7 @@ def enqueue_say(text: str) -> Dict[str, Any]:
     entry = {"id": uuid.uuid4().hex[:12], "text": text}
     with queue_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
-    return {"ok": True, "meetingId": active.get("meeting_id"), "enqueued_id": entry["id"],
-            "queue_path": str(queue_path)}
+    return {"ok": True, "meetingId": active.get("meeting_id"), "enqueued_id": entry["id"], "queue_path": str(queue_path)}
 
 
 def stop(*, reason: str = "requested") -> Dict[str, Any]:
@@ -183,7 +176,6 @@ def stop(*, reason: str = "requested") -> Dict[str, Any]:
 
     pid = int(active.get("pid", 0))
     out_dir = active.get("out_dir")
-
     if _pid_alive(pid):
         _kill(pid, signal.SIGTERM)
         for _ in range(20):

@@ -106,8 +106,7 @@ def meet_command(args: argparse.Namespace) -> int:
 
 
 def _cmd_setup() -> int:
-    print("google_meet preflight")
-    print("---------------------")
+    print("google_meet preflight\n---------------------")
 
     system = platform.system()
     system_ok = system in {"Linux", "Darwin"}
@@ -170,8 +169,7 @@ def _cmd_install(*, realtime: bool, assume_yes: bool) -> int:
         if subprocess.run(cmd, check=False).returncode != 0:
             print(fail_msg)
 
-    print("google_meet install")
-    print("-------------------")
+    print("google_meet install\n-------------------")
 
     pip_pkgs = ["playwright", "websockets"]
     print(f"\n[1/3] pip install: {' '.join(pip_pkgs)}")
@@ -187,9 +185,8 @@ def _cmd_install(*, realtime: bool, assume_yes: bool) -> int:
 
     print("\n[2/3] python -m playwright install chromium")
     try:
-        res = subprocess.run(
-            [sys.executable, "-m", "playwright", "install", "chromium"], check=False, stdin=subprocess.DEVNULL
-        )
+        res = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False,
+                             stdin=subprocess.DEVNULL)
         if res.returncode != 0:
             print("  playwright install failed (may already be installed)")
     except Exception as e:
@@ -208,14 +205,12 @@ def _cmd_install(*, realtime: bool, assume_yes: bool) -> int:
                               ["sudo", "apt-get", "install", "-y", "pulseaudio-utils"],
                               "  apt install failed — install pulseaudio-utils manually")
         elif system == "Darwin":
-            have_bh = False
             try:
-                out = subprocess.check_output(
+                have_bh = "BlackHole" in subprocess.check_output(
                     ["system_profiler", "SPAudioDataType"], text=True, encoding='utf-8', errors='replace',
                     stdin=subprocess.DEVNULL)
-                have_bh = "BlackHole" in out
             except Exception:
-                pass
+                have_bh = False
             needs = ([] if have_bh else ["blackhole-2ch"]) + ([] if shutil.which("ffmpeg") else ["ffmpeg"])
             if not needs:
                 print("  BlackHole and ffmpeg already installed.")
@@ -245,9 +240,7 @@ def _cmd_auth() -> int:
 
     path = _auth_state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    print("opening Chromium — sign in to Google, then return here and press Enter.")
-    print(f"saving storage state to: {path}")
+    print(f"opening Chromium — sign in to Google, then return here and press Enter.\nsaving storage state to: {path}")
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=False)

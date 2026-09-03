@@ -12,8 +12,7 @@ import logging
 import platform
 
 from plugins.google_meet import process_manager as pm
-from plugins.google_meet.cli import register_cli as _register_meet_cli
-from plugins.google_meet.cli import meet_command as _meet_command
+from plugins.google_meet.cli import meet_command as _meet_command, register_cli as _register_meet_cli
 from plugins.google_meet.tools import (
     MEET_JOIN_SCHEMA, MEET_LEAVE_SCHEMA, MEET_SAY_SCHEMA, MEET_STATUS_SCHEMA, MEET_TRANSCRIPT_SCHEMA,
     check_meet_requirements, handle_meet_join, handle_meet_leave, handle_meet_say, handle_meet_status,

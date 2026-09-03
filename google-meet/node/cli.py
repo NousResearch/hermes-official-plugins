@@ -84,8 +84,6 @@ def _cmd_ping(args: argparse.Namespace, reg: NodeRegistry) -> int:
     except Exception as exc:  # noqa: BLE001 — surface any connection error
         print(json.dumps({"ok": False, "error": str(exc)}))
         return 1
-    if not isinstance(result, dict):
-        result = {"result": result}
     print(json.dumps({"ok": True, "node": args.name, **result}))
     return 0
 

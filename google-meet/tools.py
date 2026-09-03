@@ -107,8 +107,7 @@ MEET_TRANSCRIPT_SCHEMA: Dict[str, Any] = {
     "name": "meet_transcript",
     "description": (
         "Read the scraped transcript for the active Meet session. Returns "
-        "full transcript unless 'last' is set, in which case returns the last "
-        "N lines only."
+        "full transcript unless 'last' is set, in which case returns the last N lines only."
     ),
     "parameters": {
         "type": "object",
@@ -117,8 +116,7 @@ MEET_TRANSCRIPT_SCHEMA: Dict[str, Any] = {
                 "type": "integer",
                 "description": (
                     "Optional: return only the last N caption lines. Useful "
-                    "for polling during a meeting without re-reading the "
-                    "whole transcript."
+                    "for polling during a meeting without re-reading the whole transcript."
                 ),
                 "minimum": 1,
             },

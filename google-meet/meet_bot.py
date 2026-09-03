@@ -70,22 +70,15 @@ class _BotState:
     """Single-process mutable state, flushed to ``status.json`` on each change."""
 
     def __init__(self, out_dir: Path, meeting_id: str, url: str):
-        for _, attr, default in _STATUS_FIELDS:
-            if attr:
-                setattr(self, attr, default)
-        self.out_dir = out_dir
-        self.meeting_id = meeting_id
-        self.url = url
-        self._seen: set = set()  # "speaker|text" keys already written
+        self.__dict__.update({attr: default for _, attr, default in _STATUS_FIELDS if attr})
+        self.__dict__.update(out_dir=out_dir, meeting_id=meeting_id, url=url, _seen=set(),  # seen "speaker|text"
+                             transcript_path=out_dir / "transcript.txt", status_path=out_dir / "status.json")
         out_dir.mkdir(parents=True, exist_ok=True)
-        self.transcript_path = out_dir / "transcript.txt"
-        self.status_path = out_dir / "status.json"
         self._flush()
 
     def record_caption(self, speaker: str, text: str) -> None:
         """Append a caption line unless this exact (speaker, text) was already seen."""
-        speaker = (speaker or "").strip() or "Unknown"
-        text = (text or "").strip()
+        speaker, text = (speaker or "").strip() or "Unknown", (text or "").strip()
         key = f"{speaker}|{text}"
         if not text or key in self._seen:
             return
@@ -238,21 +231,19 @@ def _start_pcm_pump(rt: dict, bridge_info: dict, pcm_path: Path, state: "_BotSta
 
 def _start_realtime_speaker(rt: dict, cfg: "_BotConfig", stop_flag: dict, state: "_BotState") -> None:
     """Wire up the OpenAI Realtime session, the say-queue speaker thread and the PCM pump."""
-    try:
-        from plugins.google_meet.realtime.openai_client import RealtimeSession, RealtimeSpeaker
-    except Exception as e:
-        state.set(error=f"realtime import failed: {e}")
-        return
     pcm_path, queue_path = cfg.out_dir / "speaker.pcm", cfg.out_dir / "say_queue.jsonl"
     pcm_path.write_bytes(b"")  # clean sink file per session
     queue_path.touch()  # so the speaker poller doesn't error on first iteration
+    phase = "import"
     try:
+        from plugins.google_meet.realtime.openai_client import RealtimeSession, RealtimeSpeaker
+        phase = "connect"
         session = RealtimeSession(
             api_key=cfg.realtime_api_key, model=cfg.realtime_model, voice=cfg.realtime_voice,
             instructions=cfg.realtime_instructions, audio_sink_path=pcm_path, sample_rate=24000)
         session.connect()
     except Exception as e:
-        state.set(error=f"realtime connect failed: {e}")
+        state.set(error=f"realtime {phase} failed: {e}")
         return
     rt["session"] = session
     speaker = RealtimeSpeaker(session=session, queue_path=queue_path,

@@ -598,14 +598,11 @@ class QQAdapter(BasePlatformAdapter):
         if not msg_id or self._is_duplicate(msg_id):
             logger.debug("[%s] Duplicate or missing message id: %s", self._log_tag, msg_id)
             return
-
-        timestamp = str(d.get("timestamp", ""))
-        content = str(d.get("content", "")).strip()
-        author = d.get("author") if isinstance(d.get("author"), dict) else {}
-
         handler = self._INBOUND_HANDLERS.get(event_type)
         if handler:
-            await getattr(self, handler)(d, msg_id, content, author, timestamp)
+            author = d.get("author") if isinstance(d.get("author"), dict) else {}
+            await getattr(self, handler)(
+                d, msg_id, str(d.get("content", "")).strip(), author, str(d.get("timestamp", "")))
 
     # ── Inline-keyboard interactions (INTERACTION_CREATE) ──
 
@@ -869,37 +866,24 @@ class QQAdapter(BasePlatformAdapter):
         quote_block is "" when nothing is quoted."""
         empty = {"quote_block": "", "image_urls": [], "image_media_types": []}
         try:
-            if int(d.get("message_type", 0) or 0) != 103:
-                return empty
+            is_quote = int(d.get("message_type", 0) or 0) == 103
         except (TypeError, ValueError):
-            return empty
-
+            is_quote = False
         elements = d.get("msg_elements")
-        if not isinstance(elements, list) or not elements:
+        if not is_quote or not isinstance(elements, list) or not elements:
             return empty
 
-        quoted_text_parts: List[str] = []
-        all_attachments: List[Dict[str, Any]] = []
-        for elem in elements:
-            if not isinstance(elem, dict):
-                continue
-            etext = str(elem.get("content", "")).strip()
-            if etext:
-                quoted_text_parts.append(etext)
-            eatts = elem.get("attachments")
-            if isinstance(eatts, list):
-                all_attachments.extend(a for a in eatts if isinstance(a, dict))
-
+        elements = [e for e in elements if isinstance(e, dict)]
+        quoted_text_parts = [t for t in (str(e.get("content", "")).strip() for e in elements) if t]
+        all_attachments = [
+            a for e in elements if isinstance(e.get("attachments"), list) for a in e["attachments"] if isinstance(a, dict)]
         att_result = await self._process_attachments(all_attachments)
         quoted_images = att_result.get("image_urls") or []
 
-        lines: List[str] = []
-        if quoted_text_parts:
-            lines.append(" ".join(quoted_text_parts))
+        lines: List[str] = [" ".join(quoted_text_parts)] if quoted_text_parts else []
         lines.extend(att_result.get("voice_transcripts") or [])
         if att_result.get("attachment_info"):
             lines.append(att_result["attachment_info"])
-
         if not lines and not quoted_images:
             return empty
         # Images-only quote still gets a marker so the LLM knows context was referenced.

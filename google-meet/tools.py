@@ -52,29 +52,22 @@ MEET_JOIN_SCHEMA: Dict[str, Any] = {
         "properties": {
             "url": {"type": "string", "description": "Full https://meet.google.com/... URL. Required."},
             "mode": {
-                "type": "string",
-                "enum": ["transcribe", "realtime"],
+                "type": "string", "enum": ["transcribe", "realtime"],
                 "description": (
                     "transcribe (default): listen-only, scrape captions. "
                     "realtime: also enable agent speech via meet_say "
-                    "(requires OpenAI Realtime key + platform audio bridge)."
-                ),
+                    "(requires OpenAI Realtime key + platform audio bridge)."),
             },
             "guest_name": {
                 "type": "string",
-                "description": "Display name to use when joining as guest. Defaults to 'Hermes Agent'.",
-            },
+                "description": "Display name to use when joining as guest. Defaults to 'Hermes Agent'."},
             "duration": {
                 "type": "string",
-                "description": (
-                    "Optional max duration before auto-leave (e.g. '30m', "
-                    "'2h', '90s'). Omit to stay until meet_leave is called."
-                ),
-            },
+                "description": ("Optional max duration before auto-leave (e.g. '30m', "
+                                "'2h', '90s'). Omit to stay until meet_leave is called.")},
             "headed": {
                 "type": "boolean",
-                "description": "Run Chromium headed instead of headless (debug only). Default false.",
-            },
+                "description": "Run Chromium headed instead of headless (debug only). Default false."},
             "node": {
                 "type": "string",
                 "description": (
@@ -83,8 +76,7 @@ MEET_JOIN_SCHEMA: Dict[str, Any] = {
                     "but the user's Chrome with a signed-in Google profile "
                     "lives on their Mac). Pass 'auto' to use the single "
                     "registered node. Default: run locally. Nodes are "
-                    "approved via `hermes meet node approve`."
-                ),
+                    "approved via `hermes meet node approve`."),
             },
         },
         "required": ["url"],
@@ -113,12 +105,9 @@ MEET_TRANSCRIPT_SCHEMA: Dict[str, Any] = {
         "properties": {
             "last": {
                 "type": "integer",
-                "description": (
-                    "Optional: return only the last N caption lines. Useful "
-                    "for polling during a meeting without re-reading the whole transcript."
-                ),
-                "minimum": 1,
-            },
+                "description": ("Optional: return only the last N caption lines. Useful "
+                                "for polling during a meeting without re-reading the whole transcript."),
+                "minimum": 1},
             "node": _NODE_PROP,
         },
         "additionalProperties": False,

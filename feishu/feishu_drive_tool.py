@@ -12,8 +12,7 @@ from tools.feishu_lark import (  # noqa: F401  (set_client/get_client are import
     build_request,
     get_client,
     lark_call,
-    set_client,
-)
+    set_client)
 from tools.registry import registry, tool_error, tool_result
 
 logger = logging.getLogger(__name__)
@@ -38,8 +37,7 @@ def _paged_queries(args: dict, *extra) -> list:
     """Query params shared by the listing endpoints; page_token goes last (after any extra)."""
     queries = [
         ("file_type", _file_type(args)), ("user_id_type", "open_id"),
-        ("page_size", str(args.get("page_size", 100))), *extra,
-    ]
+        ("page_size", str(args.get("page_size", 100))), *extra]
     page_token = args.get("page_token", "")
     if page_token:
         queries.append(("page_token", page_token))
@@ -125,8 +123,7 @@ def _handle_list_replies(args: dict, **kwargs) -> str:
         return err
     code, msg, data = lark_call(
         client, "GET", _REPLIES_URI, paths={"file_token": file_token, "comment_id": comment_id},
-        queries=_paged_queries(args),
-    )
+        queries=_paged_queries(args))
     if code != 0:
         return tool_error(f"List replies failed: code={code} msg={msg}")
     return tool_result(data)
@@ -167,8 +164,7 @@ def _handle_reply_comment(args: dict, **kwargs) -> str:
     code, msg, data = lark_call(
         client, "POST", _REPLIES_URI, paths={"file_token": file_token, "comment_id": comment_id},
         queries=[("file_type", _file_type(args))],
-        body={"content": {"elements": [{"type": "text_run", "text_run": {"text": content}}]}},
-    )
+        body={"content": {"elements": [{"type": "text_run", "text_run": {"text": content}}]}})
     if code != 0:
         return tool_error(f"Reply comment failed: code={code} msg={msg}")
     return tool_result(success=True, data=data)
@@ -204,8 +200,7 @@ def _handle_add_comment(args: dict, **kwargs) -> str:
     # new_comments takes the flat "reply_elements[text]" shape with file_type in the body.
     code, msg, data = lark_call(
         client, "POST", _ADD_COMMENT_URI, paths={"file_token": file_token},
-        body={"file_type": _file_type(args), "reply_elements": [{"type": "text", "text": content}]},
-    )
+        body={"file_type": _file_type(args), "reply_elements": [{"type": "text", "text": content}]})
     if code != 0:
         return tool_error(f"Add comment failed: code={code} msg={msg}")
     return tool_result(success=True, data=data)
@@ -219,5 +214,4 @@ for _schema, _handler, _desc, _emoji in (
 ):
     registry.register(
         name=_schema["name"], toolset="feishu_drive", schema=_schema, handler=_handler, check_fn=_check_feishu,
-        requires_env=[], is_async=False, description=_desc, emoji=_emoji,
-    )
+        requires_env=[], is_async=False, description=_desc, emoji=_emoji)

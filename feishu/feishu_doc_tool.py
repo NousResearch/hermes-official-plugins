@@ -9,8 +9,7 @@ from tools.feishu_lark import (  # noqa: F401  (set_client/get_client are import
     build_request,
     get_client,
     raw_body,
-    set_client,
-)
+    set_client)
 from tools.registry import registry, tool_error, tool_result
 
 _RAW_CONTENT_URI = "/open-apis/docx/v1/documents/:document_id/raw_content"
@@ -68,5 +67,4 @@ def _handle_feishu_doc_read(args: dict, **kwargs) -> str:
 registry.register(
     name="feishu_doc_read", toolset="feishu_doc", schema=FEISHU_DOC_READ_SCHEMA, handler=_handle_feishu_doc_read,
     check_fn=_check_feishu, requires_env=[], is_async=False, description="Read Feishu document content",
-    emoji="\U0001f4c4",
-)
+    emoji="\U0001f4c4")

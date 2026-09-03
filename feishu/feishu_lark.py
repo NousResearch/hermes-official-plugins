@@ -44,8 +44,7 @@ def build_request(method, uri, paths=None, queries=None, body=None):
         BaseRequest.builder()
         .http_method(HttpMethod.GET if method == "GET" else HttpMethod.POST)
         .uri(uri)
-        .token_types({AccessTokenType.TENANT})
-    )
+        .token_types({AccessTokenType.TENANT}))
     if paths:
         builder = builder.paths(paths)
     if queries:

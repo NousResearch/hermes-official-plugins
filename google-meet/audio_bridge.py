@@ -27,8 +27,7 @@ def _pactl(*args: str, check: bool) -> subprocess.CompletedProcess:
         check=check,
         capture_output=True,
         text=True, encoding='utf-8', errors='replace',
-        stdin=subprocess.DEVNULL,
-    )
+        stdin=subprocess.DEVNULL)
 
 
 class AudioBridge:
@@ -95,8 +94,7 @@ class AudioBridge:
         try:
             sink_out = _pactl(
                 "load-module", "module-null-sink", f"sink_name={sink_name}",
-                "sink_properties=device.description=HermesMeetSink", check=True,
-            )
+                "sink_properties=device.description=HermesMeetSink", check=True)
         except FileNotFoundError as exc:
             raise RuntimeError("pactl not found — install PulseAudio/pipewire-pulse") from exc
         except subprocess.CalledProcessError as exc:
@@ -106,8 +104,7 @@ class AudioBridge:
         try:
             src_out = _pactl(
                 "load-module", "module-virtual-source", f"source_name={src_name}",
-                f"master={sink_name}.monitor", check=True,
-            )
+                f"master={sink_name}.monitor", check=True)
         except subprocess.CalledProcessError as exc:
             # Roll back the null-sink we just created so we don't leak it.
             _pactl("unload-module", str(sink_mod_id), check=False)
@@ -120,8 +117,7 @@ class AudioBridge:
             out = subprocess.check_output(
                 ["system_profiler", "SPAudioDataType"],
                 text=True, encoding='utf-8', errors='replace',
-                stderr=subprocess.STDOUT,
-            )
+                stderr=subprocess.STDOUT)
         except FileNotFoundError as exc:
             raise RuntimeError("system_profiler not found (macOS-only command)") from exc
         except subprocess.CalledProcessError as exc:
@@ -130,8 +126,7 @@ class AudioBridge:
         if "BlackHole" not in out:
             raise RuntimeError(
                 "BlackHole virtual audio device not installed. "
-                "Install via: brew install blackhole-2ch"
-            )
+                "Install via: brew install blackhole-2ch")
         return self._finish("darwin", _BLACKHOLE_DEVICE, _BLACKHOLE_DEVICE, [])
 
     @staticmethod

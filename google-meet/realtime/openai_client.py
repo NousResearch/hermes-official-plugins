@@ -43,8 +43,7 @@ class RealtimeSession:
         voice: str = "alloy",
         instructions: str = "",
         audio_sink_path: Optional[Path] = None,
-        sample_rate: int = 24000,
-    ) -> None:
+        sample_rate: int = 24000) -> None:
         self.api_key = api_key
         self.model = model
         self.voice = voice
@@ -81,9 +80,7 @@ class RealtimeSession:
                 "instructions": self.instructions,
                 "modalities": ["audio", "text"],
                 "output_audio_format": "pcm16",
-                "input_audio_format": "pcm16",
-            },
-        })
+                "input_audio_format": "pcm16"}})
 
     def close(self) -> None:
         if self._ws is not None:
@@ -186,10 +183,7 @@ class RealtimeSpeaker:
     """
 
     def __init__(
-        self,
-        session: RealtimeSession,
-        queue_path: Path,
-        processed_path: Optional[Path] = None,
+        self, session: RealtimeSession, queue_path: Path, processed_path: Optional[Path] = None
     ) -> None:
         self.session = session
         self.queue_path = Path(queue_path)

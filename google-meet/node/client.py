@@ -54,8 +54,7 @@ class NodeClient:
         guest_name: str = "Hermes Agent",
         duration: Optional[str] = None,
         headed: bool = False,
-        mode: str = "transcribe",
-    ) -> Dict[str, Any]:
+        mode: str = "transcribe") -> Dict[str, Any]:
         payload: Dict[str, Any] = {"url": url, "guest_name": guest_name, "headed": bool(headed), "mode": mode}
         if duration is not None:
             payload["duration"] = duration

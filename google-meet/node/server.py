@@ -65,8 +65,7 @@ _RPC = {
     "stop": lambda p, pm: pm.stop(reason=p.get("reason", "requested")),
     "status": lambda p, pm: pm.status(),
     "transcript": lambda p, pm: pm.transcript(last=p.get("last")),
-    "say": _rpc_say,
-}
+    "say": _rpc_say}
 
 
 class NodeServer:
@@ -77,14 +76,12 @@ class NodeServer:
         host: str = "127.0.0.1",
         port: int = 18789,
         token_path: Optional[Path] = None,
-        display_name: str = "hermes-meet-node",
-    ) -> None:
+        display_name: str = "hermes-meet-node") -> None:
         self.host = host
         self.port = port
         self.display_name = display_name
         self.token_path = Path(token_path) if token_path is not None else (
-            Path(get_hermes_home()) / "workspace" / "meetings" / "node_token.json"
-        )
+            Path(get_hermes_home()) / "workspace" / "meetings" / "node_token.json")
         self._token: Optional[str] = None
 
     def ensure_token(self) -> str:

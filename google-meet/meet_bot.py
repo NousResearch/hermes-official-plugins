@@ -35,8 +35,7 @@ MEET_URL_RE = re.compile(
     r"[a-z0-9]{3,}-[a-z0-9]{3,}-[a-z0-9]{3,}"
     r"|lookup/[^/?#]+"
     r"|new"
-    r")(?:[/?#].*)?$"
-)
+    r")(?:[/?#].*)?$")
 
 # Filenames the bot reads/writes in ``HERMES_MEET_OUT_DIR``.
 SAY_QUEUE_FILENAME = "say_queue.jsonl"
@@ -78,8 +77,7 @@ _STATUS_FIELDS = (
     ("realtime", "realtime", False), ("realtimeReady", "realtime_ready", False),
     ("realtimeDevice", "realtime_device", None), ("audioBytesOut", "audio_bytes_out", 0),
     ("lastAudioOutAt", "last_audio_out_at", None), ("lastBargeInAt", "last_barge_in_at", None),
-    ("leaveReason", "leave_reason", None),
-)
+    ("leaveReason", "leave_reason", None))
 
 
 class _BotState:
@@ -188,13 +186,11 @@ _CAPTION_OBSERVER_JS = r"""
 # is too brittle to rely on.
 _ENABLE_CAPTIONS_JS = (
     "(() => { document.body.dispatchEvent(new KeyboardEvent('keydown', "
-    "{ key: 'c', code: 'KeyC', keyCode: 67, which: 67, bubbles: true })); return true; })();"
-)
+    "{ key: 'c', code: 'KeyC', keyCode: 67, which: 67, bubbles: true })); return true; })();")
 
 _LEAVE_CALL_JS = (
     "() => { const b = document.querySelector('button[aria-label*=\"eave call\"]');"
-    " if (b) b.click(); }"
-)
+    " if (b) b.click(); }")
 
 # True once we're clearly past the lobby: leave button, caption region
 # (only once our observer is installed) or participant list visible.
@@ -257,8 +253,7 @@ def _start_pcm_pump(rt: dict, bridge_info: dict, pcm_path: Path, state: "_BotSta
         return
     try:
         rt["pcm_pump"] = subprocess.Popen(
-            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except FileNotFoundError:
         state.set(error=missing)
     except Exception as e:
@@ -283,8 +278,7 @@ def _start_realtime_speaker(rt: dict, cfg: "_BotConfig", stop_flag: dict, state:
     try:
         session = RealtimeSession(
             api_key=cfg.realtime_api_key, model=cfg.realtime_model, voice=cfg.realtime_voice,
-            instructions=cfg.realtime_instructions, audio_sink_path=pcm_path, sample_rate=24000,
-        )
+            instructions=cfg.realtime_instructions, audio_sink_path=pcm_path, sample_rate=24000)
         session.connect()
     except Exception as e:
         state.set(error=f"realtime connect failed: {e}")
@@ -292,8 +286,7 @@ def _start_realtime_speaker(rt: dict, cfg: "_BotConfig", stop_flag: dict, state:
     rt["session"] = session
 
     speaker = RealtimeSpeaker(
-        session=session, queue_path=queue_path, processed_path=cfg.out_dir / "say_processed.jsonl",
-    )
+        session=session, queue_path=queue_path, processed_path=cfg.out_dir / "say_processed.jsonl")
 
     def _speaker_loop():
         try:
@@ -315,8 +308,7 @@ def _mac_audio_device_index(device_name: str) -> str:
     try:
         out = subprocess.run(
             ["ffmpeg", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
-            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10,
-        )
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10)
     except Exception:
         return "0"
     needle = device_name.strip().lower()
@@ -392,8 +384,7 @@ def _config_from_env() -> _BotConfig:
         realtime_model=env("HERMES_MEET_REALTIME_MODEL", "gpt-realtime"),
         realtime_voice=env("HERMES_MEET_REALTIME_VOICE", "alloy"),
         realtime_instructions=env("HERMES_MEET_REALTIME_INSTRUCTIONS", ""),
-        lobby_timeout=float(env("HERMES_MEET_LOBBY_TIMEOUT", "300")),
-    )
+        lobby_timeout=float(env("HERMES_MEET_LOBBY_TIMEOUT", "300")))
 
 
 def _join(page, cfg: _BotConfig, state: _BotState) -> None:
@@ -440,8 +431,7 @@ def _drain_loop(page, cfg: _BotConfig, state: _BotState, rt: dict, stop_flag: di
                 waited = int(lobby_deadline - state.join_attempted_at) if state.join_attempted_at else 0
                 state.set(
                     error=f"lobby timeout — host never admitted the bot within {waited}s",
-                    leave_reason="lobby_timeout",
-                )
+                    leave_reason="lobby_timeout")
                 return
             elif _probe(page, _DENIED_PROBE_JS):
                 state.set(error="host denied admission", leave_reason="denied")
@@ -469,8 +459,7 @@ def _drain_loop(page, cfg: _BotConfig, state: _BotState, rt: dict, stop_flag: di
         if rt["session"] is not None:
             state.set(
                 audio_bytes_out=rt["session"].audio_bytes_out,
-                last_audio_out_at=rt["session"].last_audio_out_at,
-            )
+                last_audio_out_at=rt["session"].last_audio_out_at)
 
         time.sleep(1.0)
 
@@ -480,8 +469,7 @@ def run_bot() -> int:
     if not _is_safe_meet_url(cfg.url):
         sys.stderr.write(
             "google_meet bot: refusing to launch — HERMES_MEET_URL must be a "
-            "meet.google.com URL. got: %r\n" % cfg.url
-        )
+            "meet.google.com URL. got: %r\n" % cfg.url)
         return 2
     if cfg.out_dir is None:
         sys.stderr.write("google_meet bot: HERMES_MEET_OUT_DIR is required\n")
@@ -511,8 +499,7 @@ def run_bot() -> int:
         state.set(error=f"playwright not installed: {e}", exited=True)
         sys.stderr.write(
             "google_meet bot: playwright is not installed. Run "
-            "`pip install playwright && python -m playwright install chromium`\n"
-        )
+            "`pip install playwright && python -m playwright install chromium`\n")
         if rt["bridge"]:
             rt["bridge"].teardown()
         return 3
@@ -533,10 +520,8 @@ def run_bot() -> int:
                 "viewport": {"width": 1280, "height": 800},
                 "user_agent": (
                     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                ),
-                "permissions": ["microphone", "camera"],
-            }
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+                "permissions": ["microphone", "camera"]}
             if cfg.auth_state and Path(cfg.auth_state).is_file():
                 context_args["storage_state"] = cfg.auth_state
             context = browser.new_context(**context_args)

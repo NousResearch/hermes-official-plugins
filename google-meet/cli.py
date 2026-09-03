@@ -36,9 +36,7 @@ def register_cli(subparser: argparse.ArgumentParser) -> None:
     subs.add_parser("setup", help="Preflight: playwright, chromium, auth")
 
     inst_p = subs.add_parser(
-        "install",
-        help="Install prerequisites (pip deps, Chromium, platform audio tools)",
-    )
+        "install", help="Install prerequisites (pip deps, Chromium, platform audio tools)")
     inst_p.add_argument(
         "--realtime", action="store_true",
         help="Also install realtime audio tools (pulseaudio-utils on Linux, BlackHole+ffmpeg on macOS). Uses sudo/brew, prompts before invoking either.",
@@ -57,12 +55,9 @@ def register_cli(subparser: argparse.ArgumentParser) -> None:
     join_p.add_argument("--headed", action="store_true", help="show browser")
     join_p.add_argument(
         "--mode", choices=("transcribe", "realtime"), default="transcribe",
-        help="transcribe (default, listen-only) or realtime (speak via OpenAI Realtime)"
-    )
+        help="transcribe (default, listen-only) or realtime (speak via OpenAI Realtime)")
     join_p.add_argument(
-        "--node", default=None,
-        help="remote node name, or 'auto' to use the sole registered node"
-    )
+        "--node", default=None, help="remote node name, or 'auto' to use the sole registered node")
 
     subs.add_parser("status", help="Print current Meet bot state")
 
@@ -76,9 +71,7 @@ def register_cli(subparser: argparse.ArgumentParser) -> None:
     subs.add_parser("stop", help="Leave the current meeting")
 
     node_p = subs.add_parser(
-        "node",
-        help="Manage remote meet node hosts (run/list/approve/remove/status/ping)",
-    )
+        "node", help="Manage remote meet node hosts (run/list/approve/remove/status/ping)")
     try:
         from plugins.google_meet.node.cli import register_cli as _register_node_cli
         _register_node_cli(node_p)
@@ -105,19 +98,16 @@ def _cmd_node(args: argparse.Namespace) -> int:
 _DISPATCH = {
     "setup": lambda a: _cmd_setup(),
     "install": lambda a: _cmd_install(
-        realtime=bool(getattr(a, "realtime", False)), assume_yes=bool(getattr(a, "yes", False)),
-    ),
+        realtime=bool(getattr(a, "realtime", False)), assume_yes=bool(getattr(a, "yes", False))),
     "auth": lambda a: _cmd_auth(),
     "join": lambda a: _cmd_join(
         url=a.url, guest_name=a.guest_name, duration=a.duration, headed=a.headed,
-        mode=getattr(a, "mode", "transcribe"), node=getattr(a, "node", None),
-    ),
+        mode=getattr(a, "mode", "transcribe"), node=getattr(a, "node", None)),
     "status": lambda a: _print_result(pm.status()),
     "transcript": lambda a: _cmd_transcript(last=a.last),
     "say": lambda a: _cmd_say(text=a.text, node=getattr(a, "node", None)),
     "stop": lambda a: _print_result(pm.stop(reason="hermes meet stop")),
-    "node": _cmd_node,
-}
+    "node": _cmd_node}
 
 
 def meet_command(args: argparse.Namespace) -> int:
@@ -167,8 +157,7 @@ def _cmd_setup() -> int:
     auth_path = _auth_state_path()
     print(
         "  google auth    : "
-        + (f"ok ({auth_path})" if auth_path.is_file() else "not saved — run: hermes meet auth")
-    )
+        + (f"ok ({auth_path})" if auth_path.is_file() else "not saved — run: hermes meet auth"))
 
     print()
     all_ok = system_ok and pw_ok and chromium_ok
@@ -245,8 +234,7 @@ def _cmd_install(*, realtime: bool, assume_yes: bool) -> int:
             try:
                 out = subprocess.check_output(
                     ["system_profiler", "SPAudioDataType"], text=True, encoding='utf-8', errors='replace',
-                    stdin=subprocess.DEVNULL,
-                )
+                    stdin=subprocess.DEVNULL)
                 have_bh = "BlackHole" in out
             except Exception:
                 pass
@@ -256,8 +244,7 @@ def _cmd_install(*, realtime: bool, assume_yes: bool) -> int:
             elif not shutil.which("brew"):
                 print(
                     "  missing: " + ", ".join(needs) + "\n"
-                    "  install Homebrew first (https://brew.sh) or install the packages manually."
-                )
+                    "  install Homebrew first (https://brew.sh) or install the packages manually.")
             else:
                 _install_pkgs(f"  install via brew: {' '.join(needs)}?", ["brew", "install", *needs],
                               "  brew install failed — install them manually")
@@ -265,8 +252,7 @@ def _cmd_install(*, realtime: bool, assume_yes: bool) -> int:
                 "\n  NOTE: macOS does not auto-route audio. Open\n"
                 "    System Settings → Sound → Input\n"
                 "  and select 'BlackHole 2ch' before starting a realtime meeting.\n"
-                "  hermes will not switch your default input for you."
-            )
+                "  hermes will not switch your default input for you.")
 
     print("\ndone. verify with: hermes meet setup")
     return 0
@@ -279,8 +265,7 @@ def _cmd_auth() -> int:
     except ImportError:
         print(
             "playwright is not installed. run:\n"
-            "  pip install playwright && python -m playwright install chromium"
-        )
+            "  pip install playwright && python -m playwright install chromium")
         return 1
 
     path = _auth_state_path()
@@ -337,20 +322,17 @@ def _cmd_join(
     duration: Optional[str],
     headed: bool,
     mode: str = "transcribe",
-    node: Optional[str] = None,
-) -> int:
+    node: Optional[str] = None) -> int:
     if not _is_safe_meet_url(url):
         print(f"refusing: not a meet.google.com URL: {url}")
         return 2
     if node:
         return _remote(node, "start_bot", lambda c: c.start_bot(
-            url=url, guest_name=guest_name, duration=duration, headed=headed, mode=mode,
-        ))
+            url=url, guest_name=guest_name, duration=duration, headed=headed, mode=mode))
     auth = _auth_state_path()
     return _print_result(pm.start(
         url=url, headed=headed, guest_name=guest_name, duration=duration,
-        auth_state=str(auth) if auth.is_file() else None, mode=mode,
-    ))
+        auth_state=str(auth) if auth.is_file() else None, mode=mode))
 
 
 def _cmd_say(text: str, node: Optional[str] = None) -> int:

@@ -97,8 +97,7 @@ _COMMANDS = {
     "approve": _cmd_approve,
     "remove": _cmd_remove,
     "status": _cmd_ping,
-    "ping": _cmd_ping,
-}
+    "ping": _cmd_ping}
 
 
 def node_command(args: argparse.Namespace) -> int:

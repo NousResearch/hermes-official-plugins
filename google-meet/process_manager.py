@@ -77,8 +77,7 @@ def start(
     realtime_model: Optional[str] = None,
     realtime_voice: Optional[str] = None,
     realtime_instructions: Optional[str] = None,
-    realtime_api_key: Optional[str] = None,
-) -> Dict[str, Any]:
+    realtime_api_key: Optional[str] = None) -> Dict[str, Any]:
     """Spawn the meet_bot subprocess for *url*, stopping any running bot first
     (single-active-meeting semantics). Returns a dict summarizing the bot."""
     from plugins.google_meet.meet_bot import _is_safe_meet_url, _meeting_id_from_url
@@ -109,8 +108,7 @@ def start(
         (mode, "HERMES_MEET_MODE"),  # bot defaults to transcribe when unset (v1 behavior)
         (realtime_model, "HERMES_MEET_REALTIME_MODEL"),
         (realtime_voice, "HERMES_MEET_REALTIME_VOICE"),
-        (realtime_instructions, "HERMES_MEET_REALTIME_INSTRUCTIONS"),
-    ):
+        (realtime_instructions, "HERMES_MEET_REALTIME_INSTRUCTIONS")):
         if value:
             env[var] = value
     # Resolve the realtime key at SPAWN time, in the parent, where the profile
@@ -131,8 +129,7 @@ def start(
         proc = subprocess.Popen(
             [sys.executable, "-m", "plugins.google_meet.meet_bot"],
             stdin=subprocess.DEVNULL, stdout=log_fh, stderr=subprocess.STDOUT,
-            env=env, start_new_session=True, close_fds=True,
-        )
+            env=env, start_new_session=True, close_fds=True)
 
     record = {
         "pid": proc.pid, "meeting_id": meeting_id, "out_dir": str(out), "url": url,
@@ -156,8 +153,7 @@ def status() -> Dict[str, Any]:
         "url": active.get("url"),
         "startedAt": active.get("started_at"),
         "outDir": active.get("out_dir"),
-        **(read_json(Path(active.get("out_dir", "")) / "status.json") or {}),
-    }
+        **(read_json(Path(active.get("out_dir", "")) / "status.json") or {})}
 
 
 def transcript(last: Optional[int] = None) -> Dict[str, Any]:
@@ -174,8 +170,7 @@ def transcript(last: Optional[int] = None) -> Dict[str, Any]:
         "meetingId": active.get("meeting_id"),
         "lines": all_lines[-last:] if last else all_lines,
         "total": len(all_lines),
-        "path": str(tp),
-    }
+        "path": str(tp)}
 
 
 def enqueue_say(text: str) -> Dict[str, Any]:
@@ -234,5 +229,4 @@ def stop(*, reason: str = "requested") -> Dict[str, Any]:
         "ok": True,
         "reason": reason,
         "meetingId": active.get("meeting_id"),
-        "transcriptPath": str(Path(out_dir) / "transcript.txt") if out_dir else None,
-    }
+        "transcriptPath": str(Path(out_dir) / "transcript.txt") if out_dir else None}

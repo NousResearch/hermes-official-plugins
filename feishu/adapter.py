@@ -83,8 +83,8 @@ FEISHU_WEBHOOK_AVAILABLE = aiohttp is not None
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import (
     BasePlatformAdapter, MessageEvent, MessageType, ProcessingOutcome, SendResult,
-    SUPPORTED_DOCUMENT_TYPES, cache_document_from_bytes, cache_image_from_url,
-    cache_audio_from_bytes, cache_image_from_bytes,
+    SUPPORTED_DOCUMENT_TYPES, cache_document_from_bytes_async, cache_image_from_url,
+    cache_audio_from_bytes_async, cache_image_from_bytes_async,
 )
 from gateway.status import acquire_scoped_lock, release_scoped_lock
 from hermes_constants import get_hermes_home
@@ -1199,6 +1199,9 @@ class FeishuAdapter(BasePlatformAdapter):
         self._seen_message_order: List[str] = []
         self._dedup_state_path = get_hermes_home() / "feishu_seen_message_ids.json"
         self._dedup_lock = threading.Lock()
+        # Serializes the offloaded dedup-state flushes so two concurrent
+        # inbound messages cannot land their writes out of order.
+        self._dedup_persist_lock = asyncio.Lock()
         self._sender_name_cache: Dict[str, tuple[str, float]] = {}  # sender_id → (name, expire_at)
         self._webhook_rate_counts: Dict[str, tuple[int, float]] = {}  # rate_key → (count, window_start)
         self._webhook_anomaly_counts: Dict[str, tuple[int, str, float]] = {}  # ip → (count, last_status, first_seen)
@@ -1949,7 +1952,7 @@ class FeishuAdapter(BasePlatformAdapter):
             logger.debug("[Feishu] Dropping malformed inbound event: missing message/sender")
             return
         message_id = getattr(message, "message_id", None)
-        if not message_id or self._is_duplicate(message_id):
+        if not message_id or await self._is_duplicate(message_id):
             logger.debug("[Feishu] Dropping duplicate/missing message_id: %s", message_id)
             return
         reason = self._admit(sender, message)
@@ -2595,7 +2598,7 @@ class FeishuAdapter(BasePlatformAdapter):
         filename = self._derive_remote_filename(
             file_url, content_type=content_type_hdr, default_name=preferred_name, default_ext=default_ext,
         )
-        return cache_document_from_bytes(body, filename), filename
+        return await cache_document_from_bytes_async(body, filename), filename
 
     @staticmethod
     def _guess_remote_extension(url: str, *, default: str) -> str:
@@ -2943,7 +2946,7 @@ class FeishuAdapter(BasePlatformAdapter):
             content_type = self._get_response_header(response, "Content-Type")
             filename = getattr(response, "file_name", None) or f"{image_key}.jpg"
             ext = self._guess_extension(filename, content_type, ".jpg", allowed=_IMAGE_EXTENSIONS)
-            cached_path = cache_image_from_bytes(raw_bytes, ext=ext)
+            cached_path = await cache_image_from_bytes_async(raw_bytes, ext=ext)
             return cached_path, self._normalize_media_type(content_type, default=self._default_image_media_type(ext))
         except Exception:
             logger.warning("[Feishu] Failed to cache image resource %s", image_key, exc_info=True)
@@ -2979,20 +2982,20 @@ class FeishuAdapter(BasePlatformAdapter):
 
                 if media_type.startswith("image/"):
                     ext = self._guess_extension(filename, content_type, ".jpg", allowed=_IMAGE_EXTENSIONS)
-                    kind, cached_path = "image", cache_image_from_bytes(raw_bytes, ext=ext)
+                    kind, cached_path = "image", await cache_image_from_bytes_async(raw_bytes, ext=ext)
                     media_type = media_type or self._default_image_media_type(ext)
                 elif request_type == "audio" or media_type.startswith("audio/"):
                     ext = self._guess_extension(filename, content_type, ".ogg", allowed=_AUDIO_EXTENSIONS)
-                    kind, cached_path = "audio", cache_audio_from_bytes(raw_bytes, ext=ext)
+                    kind, cached_path = "audio", await cache_audio_from_bytes_async(raw_bytes, ext=ext)
                     media_type = media_type or f"audio/{ext.lstrip('.') or 'ogg'}"
                 elif media_type.startswith("video/"):
                     if not Path(filename).suffix:
                         filename = f"{filename}.mp4"
-                    kind, cached_path = "video", cache_document_from_bytes(raw_bytes, filename)
+                    kind, cached_path = "video", await cache_document_from_bytes_async(raw_bytes, filename)
                 else:
                     if not Path(filename).suffix and media_type in _DOCUMENT_MIME_TO_EXT:
                         filename = f"{filename}{_DOCUMENT_MIME_TO_EXT[media_type]}"
-                    kind, cached_path = "document", cache_document_from_bytes(raw_bytes, filename)
+                    kind, cached_path = "document", await cache_document_from_bytes_async(raw_bytes, filename)
                     media_type = media_type or self._guess_document_media_type(filename)
                 logger.info("[Feishu] Cached message %s resource at %s", kind, cached_path)
                 return cached_path, media_type
@@ -3387,14 +3390,15 @@ class FeishuAdapter(BasePlatformAdapter):
     def _persist_seen_message_ids(self) -> None:
         try:
             self._dedup_state_path.parent.mkdir(parents=True, exist_ok=True)
-            recent = self._seen_message_order[-self._dedup_cache_size:]
-            # Save as {msg_id: timestamp} so TTL filtering works across restarts.
-            payload = {"message_ids": {k: self._seen_message_ids[k] for k in recent if k in self._seen_message_ids}}
+            with self._dedup_lock:
+                recent = self._seen_message_order[-self._dedup_cache_size:]
+                # Save as {msg_id: timestamp} so TTL filtering works across restarts.
+                payload = {"message_ids": {k: self._seen_message_ids[k] for k in recent if k in self._seen_message_ids}}
             atomic_json_write(self._dedup_state_path, payload, indent=None)
         except OSError:
             logger.warning("[Feishu] Failed to persist dedup state to %s", self._dedup_state_path, exc_info=True)
 
-    def _is_duplicate(self, message_id: str) -> bool:
+    async def _is_duplicate(self, message_id: str) -> bool:
         now, ttl = time.time(), _FEISHU_DEDUP_TTL_SECONDS
         with self._dedup_lock:
             seen_at = self._seen_message_ids.get(message_id)
@@ -3404,8 +3408,20 @@ class FeishuAdapter(BasePlatformAdapter):
             self._seen_message_order.append(message_id)
             while len(self._seen_message_order) > self._dedup_cache_size:
                 self._seen_message_ids.pop(self._seen_message_order.pop(0), None)
-            self._persist_seen_message_ids()
-            return False
+        # atomic_json_write() fsyncs; this runs on the event loop for every inbound message, so
+        # offload the flush. The lock keeps flushes in mutation order (the snapshot inside the
+        # worker is taken under _dedup_lock, but the write itself is not).
+        async with self._dedup_persist_lock_or_create():
+            await asyncio.to_thread(self._persist_seen_message_ids)
+        return False
+
+    def _dedup_persist_lock_or_create(self) -> asyncio.Lock:
+        # Tests build bare adapters via object.__new__ and install dedup state
+        # by hand; create the lock lazily so those fixtures keep working.
+        lock = getattr(self, "_dedup_persist_lock", None)
+        if lock is None:
+            lock = self._dedup_persist_lock = asyncio.Lock()
+        return lock
 
     # --- Outbound payload construction and send pipeline ---
     def _build_outbound_payload(self, content: str, *, prefer_post: bool = False) -> tuple[str, str]:

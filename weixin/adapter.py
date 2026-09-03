@@ -41,7 +41,10 @@ from agent.secret_scope import UnscopedSecretError, get_secret
 def _wx_secret(name: str, default: Optional[str] = None) -> Optional[str]:
     """Scope-aware WEIXIN_* read. Secondary profiles run scoped: a miss returns ``default``
     (never borrow ``os.environ``). The DEFAULT profile runs *unscoped* under multiplexing,
-    where ``get_secret`` raises; there ``os.environ`` is its own value, so fall back."""
+    where ``get_secret`` raises; there ``os.environ`` is its own value, so fall back.
+
+    Same pattern as the Slack ``SLACK_APP_TOKEN`` read (#59739) and WhatsApp's ``_get_wsecret``.
+    """
     try:
         return get_secret(name, default)
     except UnscopedSecretError:
@@ -90,7 +93,13 @@ def _is_session_expired(resp: Dict[str, Any], ret: Any, errcode: Any) -> bool:
 def _make_ssl_connector() -> Optional["aiohttp.TCPConnector"]:
     """TCPConnector with certifi's CA bundle (``ilinkai.weixin.qq.com`` fails some system stores, e.g. Homebrew
     OpenSSL); None without certifi so aiohttp's default (honors ``SSL_CERT_FILE`` under trust_env) applies.
-    ``keepalive_timeout=2`` + ``enable_cleanup_closed`` drain idle CLOSE_WAIT sockets behind proxies like Warp."""
+    ``keepalive_timeout=2`` + ``enable_cleanup_closed`` drain idle CLOSE_WAIT sockets behind proxies like Warp.
+
+    Uses a tight ``keepalive_timeout=2`` (default aiohttp: 30s) so idle connections drain promptly behind
+    proxies like Cloudflare Warp that leave peer-initiated FIN in ``CLOSE_WAIT`` (same class as #18451).
+    ``enable_cleanup_closed=True`` helps the connector clean up sockets that the remote side has already
+    closed.
+    """
     try:
         import ssl
         import certifi
@@ -531,7 +540,13 @@ def _extract_text(item_list: List[Dict[str, Any]]) -> str:
             # Tencent's ``voice_item.text`` is their STT output and is wrong for non-Chinese audio.
             # When raw audio exists return "" so gateway/run.py's central STT transcribes the download;
             # otherwise use Weixin's transcript but mark its voice origin.
+            # #27300: Tencent Cloud's `voice_item.text` is their STT output, which is wrong for any
+            # non-Chinese audio (the original report was a Russian voice message that came back as English
+            # gibberish). Return empty so the central STT pipeline in ``gateway/run.py`` produces the body
+            # from the downloaded audio instead.
             voice_item = item.get("voice_item") or {}
+            # Use it, but preserve the voice origin so the agent can distinguish this from text the user
+            # typed (#65022).
             voice_text = str(voice_item.get("text") or "")
             if not (voice_item.get("media") or {}) and voice_text:
                 return f"[Voice transcription provided by Weixin]\n{voice_text}"
@@ -841,6 +856,11 @@ class WeixinAdapter(BasePlatformAdapter):
                     # Full failure streak: recycle the session. Failed connects through a local proxy (e.g.
                     # Clash) strand sockets the keepalive reaper never sees; on macOS the 256-fd soft limit
                     # then yields EMFILE and a crash. Closing the session tears down every socket.
+                    # Clash on 127.0.0.1:7890) can strand sockets that never return to the connector's
+                    # keepalive pool, so the tight keepalive_timeout never reaps them. On macOS the default
+                    # 256-fd soft limit turns that drip into `[Errno 24] Too many open files` and a gateway
+                    # crash (#79889). Closing the session tears down its connector and every socket it
+                    # holds; a fresh session starts the next attempt from zero fds.
                     await self._recycle_poll_session()
 
     async def _recycle_poll_session(self) -> None:
@@ -958,6 +978,11 @@ class WeixinAdapter(BasePlatformAdapter):
             aes_key_b64 = media.get("aes_key")
             if item_key == "image_item" and payload.get("aeskey"):  # image_item may carry a raw hex ``aeskey`` beside the media block
                 aes_key_b64 = base64.b64encode(bytes.fromhex(str(payload.get("aeskey")))).decode("ascii") or aes_key_b64
+            # #27300: previously short-circuited when ``voice_item.text`` was set on the assumption that
+            # Tencent Cloud's STT was good enough. For non-Chinese audio that text is garbage (e.g. a
+            # Russian message comes back as English phonemes) — we must always download the raw audio so
+            # ``gateway/run.py``'s central STT pipeline can re-transcribe with the user's configured
+            # mlx-whisper / whisper.cpp / faster-whisper backend.
             data = await _download_and_decrypt_media(
                 self._poll_session, cdn_base_url=self._cdn_base_url, encrypted_query_param=media.get("encrypt_query_param"),
                 aes_key_b64=aes_key_b64, full_url=media.get("full_url"), timeout_seconds=timeout_seconds)

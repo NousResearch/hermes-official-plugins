@@ -34,9 +34,9 @@ from utils import env_float
 from gateway.platforms._shared import get_scoped_secret as _get_scoped_secret
 from plugins.platforms.wecom.send_queue import ChatSendQueueMixin
 from plugins.platforms.wecom.media import WeComMediaMixin, APP_CMD_SEND
-from plugins.platforms.wecom.streaming import (  # noqa: F401 — re-exported for tests/stream_consumer
-    WeComStreamMixin, WeComStreamExpiredError, ReplyQueue, StreamTurn, APP_CMD_RESPONSE,
-    STREAM_EXPIRED_ERRCODE, STREAM_NOT_SUBSCRIBED_ERRCODE, MAX_STREAM_CONTENT_LENGTH, MAX_INTERMEDIATE_FRAMES,
+from plugins.platforms.wecom.streaming import (
+    WeComStreamMixin, ReplyQueue, StreamTurn, APP_CMD_RESPONSE,
+    STREAM_NOT_SUBSCRIBED_ERRCODE, MAX_STREAM_CONTENT_LENGTH,
     STREAM_SAFE_DURATION_SECONDS, STREAM_KEEPALIVE_INTERVAL_SECONDS, STREAM_KEEPALIVE_ENABLED_DEFAULT,
 )
 

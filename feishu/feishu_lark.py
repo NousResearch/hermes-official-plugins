@@ -55,6 +55,16 @@ def build_request(method, uri, paths=None, queries=None, body=None):
     return builder.build()
 
 
+def lark_call(client, method, uri, paths=None, queries=None, body=None):
+    """Build + execute a BaseRequest; returns (code, msg, data_dict).
+
+    Tool handlers run synchronously in a worker thread (no running event loop), so the
+    blocking lark client is called directly.
+    """
+    response = client.request(build_request(method, uri, paths, queries, body))
+    return getattr(response, "code", None), getattr(response, "msg", ""), response_data(response)
+
+
 def raw_body(response):
     """Parsed JSON object of the raw HTTP body, or None when absent/unparseable/not a dict."""
     raw = getattr(response, "raw", None)

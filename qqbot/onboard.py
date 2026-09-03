@@ -21,10 +21,7 @@ logger = logging.getLogger(__name__)
 
 class BindStatus(IntEnum):
     """Status codes returned by ``_poll_bind_result``."""
-    NONE = 0
-    PENDING = 1
-    COMPLETED = 2
-    EXPIRED = 3
+    NONE, PENDING, COMPLETED, EXPIRED = 0, 1, 2, 3
 
 
 try:
@@ -73,12 +70,8 @@ def _create_bind_task(timeout: float = ONBOARD_API_TIMEOUT) -> Tuple[str, str]:
 
 def _poll_bind_result(task_id: str, timeout: float = ONBOARD_API_TIMEOUT) -> Tuple[BindStatus, str, str, str]:
     """Poll *task_id*; returns ``(status, bot_appid, bot_encrypt_secret, user_openid)``."""
-    data = _portal_post(ONBOARD_POLL_PATH, {"task_id": task_id}, timeout, "poll_bind_result failed")
-    d = data.get("data", {})
-    return(
-        BindStatus(d.get("status", 0)), str(d.get("bot_appid", "")),
-        d.get("bot_encrypt_secret", ""), d.get("user_openid", ""),
-    )
+    d = _portal_post(ONBOARD_POLL_PATH, {"task_id": task_id}, timeout, "poll_bind_result failed").get("data", {})
+    return BindStatus(d.get("status", 0)), str(d.get("bot_appid", "")), d.get("bot_encrypt_secret", ""), d.get("user_openid", "")
 
 
 def build_connect_url(task_id: str) -> str:

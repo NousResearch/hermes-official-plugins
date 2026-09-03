@@ -21,10 +21,8 @@ def _get_hermes_version() -> str:
 def build_user_agent() -> str:
     """``QQBotAdapter/<qqbot_version> (Python/<py_version>; <os>; Hermes/<hermes_version>)``."""
     v = sys.version_info
-    return (
-        f"QQBotAdapter/{QQBOT_VERSION} (Python/{v.major}.{v.minor}.{v.micro}; "
-        f"{platform.system().lower()}; Hermes/{_get_hermes_version()})"
-    )
+    return (f"QQBotAdapter/{QQBOT_VERSION} (Python/{v.major}.{v.minor}.{v.micro}; "
+            f"{platform.system().lower()}; Hermes/{_get_hermes_version()})")
 
 
 def get_api_headers() -> Dict[str, str]:
@@ -37,8 +35,5 @@ def coerce_list(value: Any) -> List[str]:
     """Coerce a comma-separated string / list / tuple / set / scalar into a trimmed string list."""
     if value is None:
         return []
-    if isinstance(value, str):
-        return [item.strip() for item in value.split(",") if item.strip()]
-    if isinstance(value, (list, tuple, set)):
-        return [str(item).strip() for item in value if str(item).strip()]
-    return [str(value).strip()] if str(value).strip() else []
+    items = value.split(",") if isinstance(value, str) else value if isinstance(value, (list, tuple, set)) else [value]
+    return [s for s in (str(item).strip() for item in items) if s]

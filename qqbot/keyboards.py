@@ -102,16 +102,14 @@ def parse_update_prompt_button_data(button_data: str) -> Optional[str]:
 
 # ── Keyboard builders ──
 
-def _make_callback_button(btn_id: str, label: str, visited_label: str, data: str, style: int, group_id: str) -> KeyboardButton:
-    return KeyboardButton(
-        id=btn_id,
-        render_data=KeyboardButtonRenderData(label=label, visited_label=visited_label, style=style),
-        action=KeyboardButtonAction(type=1, data=data),
-        group_id=group_id)
-
-
-def _single_row_keyboard(buttons: List[KeyboardButton]) -> InlineKeyboard:
-    return InlineKeyboard(content=KeyboardContent(rows=[KeyboardRow(buttons=buttons)]))
+def _single_row_keyboard(group_id: str, *buttons: tuple) -> InlineKeyboard:
+    """One row of callback buttons from ``(id, label, visited_label, data, style)`` tuples."""
+    row = KeyboardRow(buttons=[
+        KeyboardButton(
+            id=btn_id, group_id=group_id, action=KeyboardButtonAction(type=1, data=data),
+            render_data=KeyboardButtonRenderData(label=label, visited_label=visited, style=style))
+        for btn_id, label, visited, data, style in buttons])
+    return InlineKeyboard(content=KeyboardContent(rows=[row]))
 
 
 def build_approval_keyboard(session_key: str, *, allow_permanent: bool = True) -> InlineKeyboard:
@@ -119,18 +117,19 @@ def build_approval_keyboard(session_key: str, *, allow_permanent: bool = True) -
     ⭐ is hidden when persistent scope is unavailable; *session_key* is embedded in
     ``button_data`` so the decision routes to the right approval."""
     prefix = f"{APPROVAL_BUTTON_PREFIX}{session_key}"
-    buttons = [_make_callback_button("allow", "✅ 允许一次", "已允许", f"{prefix}:allow-once", 1, "approval")]
+    buttons = [("allow", "✅ 允许一次", "已允许", f"{prefix}:allow-once", 1)]
     if allow_permanent:
-        buttons.append(_make_callback_button("always", "⭐ 始终允许", "已始终允许", f"{prefix}:allow-always", 1, "approval"))
-    buttons.append(_make_callback_button("deny", "❌ 拒绝", "已拒绝", f"{prefix}:deny", 0, "approval"))
-    return _single_row_keyboard(buttons)
+        buttons.append(("always", "⭐ 始终允许", "已始终允许", f"{prefix}:allow-always", 1))
+    buttons.append(("deny", "❌ 拒绝", "已拒绝", f"{prefix}:deny", 0))
+    return _single_row_keyboard("approval", *buttons)
 
 
 def build_update_prompt_keyboard() -> InlineKeyboard:
     """Build a Yes/No keyboard for update confirmation prompts."""
-    return _single_row_keyboard([
-        _make_callback_button("yes", "✓ 确认", "已确认", f"{UPDATE_PROMPT_PREFIX}y", 1, "update_prompt"),
-        _make_callback_button("no", "✗ 取消", "已取消", f"{UPDATE_PROMPT_PREFIX}n", 0, "update_prompt")])
+    return _single_row_keyboard(
+        "update_prompt",
+        ("yes", "✓ 确认", "已确认", f"{UPDATE_PROMPT_PREFIX}y", 1),
+        ("no", "✗ 取消", "已取消", f"{UPDATE_PROMPT_PREFIX}n", 0))
 
 
 # ── ApprovalRequest + text builder ──

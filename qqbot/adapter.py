@@ -79,6 +79,14 @@ def check_qq_requirements() -> bool:
 _VOICE_EXTENSIONS = (".silk", ".amr", ".mp3", ".wav", ".ogg", ".m4a", ".aac", ".speex", ".flac")
 _STT_PROVIDER_BASE_URLS = {
     "zai": "https://open.bigmodel.cn/api/coding/paas/v4",
+    # Aliases that target direct REST APIs not modeled as first-class providers in PROVIDER_REGISTRY. Used
+    # for ``auxiliary.<task>.provider`` so users can write the obvious name and have it resolve to a working
+    # ``custom`` endpoint without needing to know our internal provider IDs. Why these specifically:
+    # PROVIDER_REGISTRY has ``openai-codex`` (OAuth) and ``custom`` (manual base_url + OPENAI_API_KEY) but
+    # no plain ``openai`` for direct API-key access. Users predictably type ``provider: openai`` and expect
+    # it to use OPENAI_API_KEY against api.openai.com. Previously this silently fell back to the user's main
+    # provider, sending OpenAI model names to e.g. DeepSeek and producing cryptic ``unknown variant
+    # 'image_url'`` errors (issue #31179).
     "openai": "https://api.openai.com/v1",
     "glm": "https://open.bigmodel.cn/api/coding/paas/v4"}
 _AUDIO_URL_EXTENSIONS = {".silk", ".amr", ".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac"}
@@ -195,6 +203,7 @@ class QQAdapter(BasePlatformAdapter):
 
         try:
             # Tighter keepalive pool so idle CLOSE_WAIT sockets drain faster behind proxies.
+            # See #18451.
             from gateway.platforms._http_client_limits import platform_httpx_limits
             from tools.url_safety import create_ssrf_safe_async_client
             self._http_client = create_ssrf_safe_async_client(

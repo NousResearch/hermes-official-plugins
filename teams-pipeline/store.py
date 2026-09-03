@@ -8,6 +8,7 @@ import os
 import threading
 from copy import deepcopy
 from datetime import datetime, timezone
+from functools import partialmethod
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Dict, Optional
@@ -41,9 +42,7 @@ class TeamsPipelineStore:
 
     def _load(self) -> None:
         with self._lock:
-            if not self.path.exists():
-                return
-            data = json.loads(self.path.read_text(encoding="utf-8") or "{}")
+            data = json.loads(self.path.read_text(encoding="utf-8") or "{}") if self.path.exists() else None
             if isinstance(data, dict):
                 self._state = {bucket: dict(data.get(bucket) or {}) for bucket in _BUCKETS}
 
@@ -76,14 +75,14 @@ class TeamsPipelineStore:
             self._persist()
             return deepcopy(merged)
 
-    def list_subscriptions(self) -> Dict[str, Dict[str, Any]]:
-        return self._list("subscriptions")
-
-    def get_subscription(self, subscription_id: str) -> Optional[Dict[str, Any]]:
-        return self._get("subscriptions", subscription_id)
-
-    def upsert_subscription(self, subscription_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._upsert("subscriptions", "subscription_id", subscription_id, payload)
+    list_subscriptions = partialmethod(_list, "subscriptions")
+    get_subscription = partialmethod(_get, "subscriptions")
+    upsert_subscription = partialmethod(_upsert, "subscriptions", "subscription_id")
+    list_jobs = partialmethod(_list, "jobs")
+    get_job = partialmethod(_get, "jobs")
+    upsert_job = partialmethod(_upsert, "jobs", "job_id")
+    get_sink_record = partialmethod(_get, "sink_records")
+    upsert_sink_record = partialmethod(_upsert, "sink_records", "sink_key")
 
     def delete_subscription(self, subscription_id: str) -> bool:
         with self._lock:
@@ -99,35 +98,16 @@ class TeamsPipelineStore:
         canonical = json.dumps(notification, sort_keys=True, separators=(",", ":"))
         return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
-    def record_notification_receipt(
-        self, receipt_key: str, payload: Optional[Dict[str, Any]] = None, *, received_at: Optional[str] = None
-    ) -> bool:
+    def record_notification_receipt(self, receipt_key: str, payload: Optional[Dict[str, Any]] = None, *, received_at: Optional[str] = None) -> bool:
         """Record a receipt once; returns False when the key was already seen (duplicate delivery)."""
         with self._lock:
             if receipt_key in self._state["notification_receipts"]:
                 return False
-            self._state["notification_receipts"][receipt_key] = {
-                "received_at": received_at or _utc_now_iso(),
-                "payload": deepcopy(payload) if isinstance(payload, dict) else payload,
-            }
+            self._state["notification_receipts"][receipt_key] = {"received_at": received_at or _utc_now_iso(),
+                                                                 "payload": deepcopy(payload) if isinstance(payload, dict) else payload}
             self._persist()
             return True
 
     def stats(self) -> Dict[str, int]:
         with self._lock:
             return {bucket: len(self._state[bucket]) for bucket in _BUCKETS}
-
-    def upsert_job(self, job_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._upsert("jobs", "job_id", job_id, payload)
-
-    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
-        return self._get("jobs", job_id)
-
-    def list_jobs(self) -> Dict[str, Dict[str, Any]]:
-        return self._list("jobs")
-
-    def upsert_sink_record(self, sink_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._upsert("sink_records", "sink_key", sink_key, payload)
-
-    def get_sink_record(self, sink_key: str) -> Optional[Dict[str, Any]]:
-        return self._get("sink_records", sink_key)

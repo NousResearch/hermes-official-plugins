@@ -24,9 +24,7 @@ def _parse_datetime(value: Any) -> datetime | None:
 
 
 def _serialize_datetime(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    return None if value is None else value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _camel(name: str) -> str:
@@ -35,37 +33,31 @@ def _camel(name: str) -> str:
 
 
 def _pick(payload: dict[str, Any], *keys: str) -> Any:
-    """Equivalent of ``payload.get(k1) or payload.get(k2) or ...`` (returns the last value when all are falsy)."""
-    value = None
-    for key in keys:
-        value = payload.get(key)
-        if value:
-            return value
-    return value
+    """``payload.get(k1) or payload.get(k2) or ...`` (returns the last value when all are falsy)."""
+    return next((payload.get(key) for key in keys if payload.get(key)), payload.get(keys[-1]))
 
 
-def _str(value: Any) -> str:
-    return str(value or "").strip()
+_str = lambda value: str(value or "").strip()  # noqa: E731
+_list = lambda value: list(value or [])  # noqa: E731
+_dict = lambda value: dict(value or {})  # noqa: E731
+_nested = lambda model: (lambda value: model.from_dict(value) if value else None)  # noqa: E731
 
 
-def _list(value: Any) -> list[Any]:
-    return list(value or [])
-
-
-def _dict(value: Any) -> dict[str, Any]:
-    return dict(value or {})
-
-
-def _nested(model: type["_Model"]) -> Callable[[Any], Any]:
-    return lambda value: model.from_dict(value) if value else None
+def _serialize_value(value: Any) -> Any:
+    """Datetimes -> ISO Z; nested models -> dicts; empty lists/dicts -> None (dropped by ``to_dict``)."""
+    if isinstance(value, datetime):
+        return _serialize_datetime(value)
+    if isinstance(value, list):
+        return [item.to_dict() if isinstance(item, _Model) else item for item in value] or None
+    if isinstance(value, dict):
+        return value or None
+    return value.to_dict() if isinstance(value, _Model) else value
 
 
 class _Model:
-    """Shared snake/camelCase ``from_dict`` and None-dropping ``to_dict`` for the dataclasses below.
-
-    ``_ALIASES`` overrides the default ``(snake_name, camelName)`` lookup keys; ``_CONVERT`` post-processes
-    the picked raw value; ``_REQUIRED`` string fields must be non-blank; ``_DATETIMES`` are parsed in place.
-    """
+    """Shared snake/camelCase ``from_dict`` and None-dropping ``to_dict``. ``_ALIASES`` overrides the default
+    ``(snake_name, camelName)`` lookup keys; ``_CONVERT`` post-processes the picked value; ``_REQUIRED`` string
+    fields must be non-blank; ``_DATETIMES`` are parsed in place."""
 
     _ALIASES: ClassVar[dict[str, tuple[str, ...]]] = {}
     _CONVERT: ClassVar[dict[str, Callable[[Any], Any]]] = {}
@@ -74,28 +66,14 @@ class _Model:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]):
-        kwargs = {}
-        for spec in fields(cls):
-            value = _pick(payload, *cls._ALIASES.get(spec.name, (spec.name, _camel(spec.name))))
-            convert = cls._CONVERT.get(spec.name)
-            kwargs[spec.name] = convert(value) if convert else value
-        return cls(**kwargs)
+        return cls(**{
+            spec.name: cls._CONVERT.get(spec.name, lambda v: v)(_pick(payload, *cls._ALIASES.get(spec.name, (spec.name, _camel(spec.name)))))
+            for spec in fields(cls)
+        })
 
     def to_dict(self) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for spec in fields(self):
-            value = getattr(self, spec.name)
-            if isinstance(value, datetime):
-                value = _serialize_datetime(value)
-            elif isinstance(value, list):
-                value = [item.to_dict() if isinstance(item, _Model) else item for item in value] or None
-            elif isinstance(value, dict):
-                value = value or None
-            elif isinstance(value, _Model):
-                value = value.to_dict()
-            if value is not None:
-                result[spec.name] = value
-        return result
+        out = {spec.name: _serialize_value(getattr(self, spec.name)) for spec in fields(self)}
+        return {key: value for key, value in out.items() if value is not None}
 
     def __post_init__(self) -> None:
         for name in self._REQUIRED:
@@ -116,10 +94,7 @@ class GraphSubscription(_Model):
     latest_renewal_at: datetime | None = None
     status: str | None = None
 
-    _ALIASES = {
-        "subscription_id": ("subscription_id", "id"),
-        "expiration_datetime": ("expiration_datetime", "expirationDateTime"),
-    }
+    _ALIASES = {"subscription_id": ("subscription_id", "id"), "expiration_datetime": ("expiration_datetime", "expirationDateTime")}
     _REQUIRED = ("subscription_id", "resource", "change_type", "notification_url")
     _CONVERT = dict.fromkeys(_REQUIRED, _str)
     _DATETIMES = ("expiration_datetime", "latest_renewal_at")
@@ -159,12 +134,9 @@ class MeetingArtifact(_Model):
     metadata: dict[str, Any] = field(default_factory=dict)
 
     _ALIASES = {
-        "artifact_id": ("artifact_id", "id"),
-        "display_name": ("display_name", "displayName", "name"),
-        "source_url": ("source_url", "sourceUrl", "webUrl"),
-        "download_url": ("download_url", "downloadUrl", "@microsoft.graph.downloadUrl"),
-        "created_at": ("created_at", "createdDateTime"),
-        "available_at": ("available_at", "availableDateTime", "lastModifiedDateTime"),
+        "artifact_id": ("artifact_id", "id"), "display_name": ("display_name", "displayName", "name"),
+        "source_url": ("source_url", "sourceUrl", "webUrl"), "download_url": ("download_url", "downloadUrl", "@microsoft.graph.downloadUrl"),
+        "created_at": ("created_at", "createdDateTime"), "available_at": ("available_at", "availableDateTime", "lastModifiedDateTime"),
         "size_bytes": ("size_bytes", "size"),
     }
     _CONVERT = {"artifact_id": _str, "metadata": _dict}
@@ -202,10 +174,8 @@ class TeamsMeetingSummaryPayload(_Model):
     # Nested payloads are only read from their snake_case keys.
     _ALIASES = {"meeting_ref": ("meeting_ref",), "source_artifacts": ("source_artifacts",)}
     _CONVERT = {
-        **dict.fromkeys(("participants", "key_decisions", "action_items", "risks"), _list),
-        "call_metrics": _dict,
-        "meeting_ref": TeamsMeetingRef.from_dict,
-        "source_artifacts": lambda value: [MeetingArtifact.from_dict(item) for item in value or []],
+        **dict.fromkeys(("participants", "key_decisions", "action_items", "risks"), _list), "call_metrics": _dict,
+        "meeting_ref": TeamsMeetingRef.from_dict, "source_artifacts": lambda value: [MeetingArtifact.from_dict(item) for item in value or []],
     }
     _DATETIMES = ("start_time", "end_time")
 
@@ -232,11 +202,8 @@ class TeamsMeetingPipelineJob(_Model):
 
     _REQUIRED = ("job_id", "event_id", "source_event_type", "dedupe_key", "status")
     _CONVERT = {
-        **dict.fromkeys(_REQUIRED, _str),
-        "retry_count": lambda value: value or 0,
-        "meeting_ref": _nested(TeamsMeetingRef),
-        "summary_payload": _nested(TeamsMeetingSummaryPayload),
-        "error_info": _dict,
+        **dict.fromkeys(_REQUIRED, _str), "retry_count": lambda value: value or 0, "error_info": _dict,
+        "meeting_ref": _nested(TeamsMeetingRef), "summary_payload": _nested(TeamsMeetingSummaryPayload),
     }
     _DATETIMES = ("created_at", "updated_at")
 
@@ -245,7 +212,4 @@ class TeamsMeetingPipelineJob(_Model):
         self.retry_count = int(self.retry_count)
 
 
-__all__ = [
-    "ArtifactType", "GraphSubscription", "MeetingArtifact",
-    "TeamsMeetingPipelineJob", "TeamsMeetingRef", "TeamsMeetingSummaryPayload",
-]
+__all__ = ["ArtifactType", "GraphSubscription", "MeetingArtifact", "TeamsMeetingPipelineJob", "TeamsMeetingRef", "TeamsMeetingSummaryPayload"]

@@ -99,7 +99,7 @@ def test_build_pipeline_runtime_reuses_existing_teams_adapter_surface(monkeypatc
 
     monkeypatch.setattr(runtime_module, "build_graph_client", lambda: object())
     monkeypatch.setattr(runtime_module, "resolve_teams_pipeline_store_path", lambda: tmp_path / "teams-store.json")
-    monkeypatch.setattr("plugins.platforms.teams.adapter.TeamsSummaryWriter", FakeWriter)
+    monkeypatch.setattr("plugins.platforms.teams.summary_writer.TeamsSummaryWriter", FakeWriter)
 
     gateway = SimpleNamespace(
         config=GatewayConfig(

@@ -53,7 +53,7 @@ def build_pipeline_runtime(gateway: Any) -> TeamsMeetingPipeline:
     pipeline_config = build_pipeline_runtime_config(gateway.config)
     if teams_config and teams_config.enabled and (pipeline_config.get("teams_delivery") or {}).get("enabled"):
         try:
-            from plugins.platforms.teams.adapter import TeamsSummaryWriter
+            from plugins.platforms.teams.summary_writer import TeamsSummaryWriter
         except ImportError:
             logger.debug("TeamsSummaryWriter unavailable; Teams outbound delivery remains disabled until the adapter layer is present.")
         else:

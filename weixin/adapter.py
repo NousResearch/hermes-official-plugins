@@ -1,26 +1,10 @@
-"""Weixin (WeChat personal account) adapter over Tencent's iLink Bot API.
-
-Long-poll ``getupdates`` drives inbound delivery; every outbound reply must echo the
-peer's latest ``context_token``; media moves through an AES-128-ECB encrypted CDN;
-``qr_login`` backs the gateway setup wizard.
-"""
+"""Weixin (WeChat personal account) adapter over Tencent's iLink Bot API. Long-poll ``getupdates`` drives inbound
+delivery; every outbound reply must echo the peer's latest ``context_token``; media moves through an AES-128-ECB
+encrypted CDN; ``qr_login`` backs the gateway setup wizard."""
 
 from __future__ import annotations
 
-import asyncio
-import base64
-import contextlib
-import hashlib
-import json
-import logging
-import mimetypes
-import os
-import re
-import secrets
-import tempfile
-import textwrap
-import time
-import uuid
+import asyncio, base64, contextlib, hashlib, json, logging, mimetypes, os, re, secrets, tempfile, textwrap, time, uuid  # noqa: E401
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -28,7 +12,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import quote, urlparse
 
 logger = logging.getLogger(__name__)
-
 WEIXIN_COPY_LINE_WIDTH = 120
 
 try:
@@ -77,31 +60,19 @@ def _extra_or_env(extra: Dict[str, Any], key: str, default: str) -> Any:
 
 ILINK_BASE_URL = "https://ilinkai.weixin.qq.com"
 WEIXIN_CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c"
-ILINK_APP_ID = "bot"
-CHANNEL_VERSION = "2.2.0"
-ILINK_APP_CLIENT_VERSION = (2 << 16) | (2 << 8) | 0
-
-EP_GET_UPDATES = "ilink/bot/getupdates"
-EP_SEND_MESSAGE = "ilink/bot/sendmessage"
-EP_SEND_TYPING = "ilink/bot/sendtyping"
-EP_GET_CONFIG = "ilink/bot/getconfig"
-EP_GET_UPLOAD_URL = "ilink/bot/getuploadurl"
-EP_GET_BOT_QR = "ilink/bot/get_bot_qrcode"
-EP_GET_QR_STATUS = "ilink/bot/get_qrcode_status"
-
+ILINK_APP_ID, CHANNEL_VERSION, ILINK_APP_CLIENT_VERSION = "bot", "2.2.0", (2 << 16) | (2 << 8) | 0
+EP_GET_UPDATES, EP_SEND_MESSAGE, EP_SEND_TYPING = "ilink/bot/getupdates", "ilink/bot/sendmessage", "ilink/bot/sendtyping"
+EP_GET_CONFIG, EP_GET_UPLOAD_URL = "ilink/bot/getconfig", "ilink/bot/getuploadurl"
+EP_GET_BOT_QR, EP_GET_QR_STATUS = "ilink/bot/get_bot_qrcode", "ilink/bot/get_qrcode_status"
 LONG_POLL_TIMEOUT_MS, API_TIMEOUT_MS, CONFIG_TIMEOUT_MS, QR_TIMEOUT_MS = 35_000, 15_000, 10_000, 35_000
 MAX_CONSECUTIVE_FAILURES, RETRY_DELAY_SECONDS, BACKOFF_DELAY_SECONDS = 3, 2, 30
-SESSION_EXPIRED_ERRCODE = -14
-RATE_LIMIT_ERRCODE = -2  # iLink frequency limit — backoff and retry
+SESSION_EXPIRED_ERRCODE, RATE_LIMIT_ERRCODE = -14, -2  # -2: iLink frequency limit — backoff and retry
 MESSAGE_DEDUP_TTL_SECONDS = 300
-
 MEDIA_IMAGE, MEDIA_VIDEO, MEDIA_FILE, MEDIA_VOICE = 1, 2, 3, 4  # getuploadurl media_type
 ITEM_TEXT, ITEM_IMAGE, ITEM_VOICE, ITEM_FILE, ITEM_VIDEO = 1, 2, 3, 4, 5  # item_list entry types
 MSG_TYPE_BOT, MSG_STATE_FINISH = 2, 2
 TYPING_START, TYPING_STOP = 1, 2
-
 _LIVE_ADAPTERS: Dict[str, Any] = {}
-
 _HEADER_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _TABLE_RULE_RE = re.compile(r"^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$")
 _FENCE_RE = re.compile(r"^```([^\n`]*)\s*$")
@@ -187,8 +158,8 @@ def _read_json(path: Path) -> Any:
 
 
 def save_weixin_account(hermes_home: str, *, account_id: str, token: str, base_url: str, user_id: str = "") -> None:
-    saved_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     path = _account_dir(hermes_home) / f"{account_id}.json"
+    saved_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     atomic_json_write(path, {"token": token, "base_url": base_url, "user_id": user_id, "saved_at": saved_at})
     with contextlib.suppress(OSError):
         path.chmod(0o600)
@@ -205,7 +176,8 @@ class ContextTokenStore:
         self._root = _account_dir(hermes_home)
         self._cache: Dict[str, str] = {}
 
-    def _key(self, account_id: str, user_id: str) -> str:
+    @staticmethod
+    def _key(account_id: str, user_id: str) -> str:
         return f"{account_id}:{user_id}"
 
     def restore(self, account_id: str) -> None:
@@ -277,8 +249,8 @@ async def _api_request(
     session: "aiohttp.ClientSession", method: str, *, base_url: str, endpoint: str, headers: Dict[str, str], timeout_ms: int, body: Optional[str] = None,
 ) -> Dict[str, Any]:
     async def _do() -> Dict[str, Any]:
-        url, kwargs = f"{base_url.rstrip('/')}/{endpoint}", ({"data": body} if body is not None else {})
-        async with getattr(session, method.lower())(url, headers=headers, **kwargs) as response:
+        kwargs = {"data": body} if body is not None else {}
+        async with getattr(session, method.lower())(f"{base_url.rstrip('/')}/{endpoint}", headers=headers, **kwargs) as response:
             raw = await response.text()
             if not response.ok:
                 raise RuntimeError(f"iLink {method} {endpoint} HTTP {response.status}: {raw[:200]}")
@@ -527,9 +499,7 @@ def _coerce_bool(value: Any, default: bool = True) -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     text = str(value).strip().lower()
-    if text in {"1", "true", "yes", "on"}:
-        return True
-    return False if text in {"0", "false", "no", "off"} else default
+    return True if text in {"1", "true", "yes", "on"} else False if text in {"0", "false", "no", "off"} else default
 
 
 def _extract_text(item_list: List[Dict[str, Any]]) -> str:
@@ -565,9 +535,7 @@ def _message_type_from_media(media_types: List[str], text: str) -> MessageType:
     for prefix, message_type in _MIME_PREFIX_TYPES:
         if any(m.startswith(prefix) for m in media_types):
             return message_type
-    if media_types:
-        return MessageType.DOCUMENT
-    return MessageType.COMMAND if text.startswith("/") else MessageType.TEXT
+    return MessageType.DOCUMENT if media_types else MessageType.COMMAND if text.startswith("/") else MessageType.TEXT
 
 
 def _load_sync_buf(hermes_home: str, account_id: str) -> str:
@@ -701,9 +669,7 @@ class WeixinAdapter(BasePlatformAdapter):
     supports_code_blocks = True  # Weixin renders fenced code blocks
     splits_long_messages = True  # send() chunks via _split_text()
     MAX_MESSAGE_LENGTH = 2000
-    # WeChat cannot edit sent messages — streaming must use the send-final-only
-    # path so the cursor (▉) is never left visible.
-    SUPPORTS_MESSAGE_EDITING = False
+    SUPPORTS_MESSAGE_EDITING = False  # WeChat cannot edit; streaming must send-final-only so the cursor (▉) is never left visible
     _SPLIT_THRESHOLD = 1800  # iLink chunks at ~2048 chars
 
     def __init__(self, config: PlatformConfig):
@@ -735,8 +701,8 @@ class WeixinAdapter(BasePlatformAdapter):
         self._allow_from = self._coerce_list(_wx_secret("WEIXIN_ALLOWED_USERS", "") if allow_from is None else allow_from)
         self._group_allow_from = self._coerce_list(_wx_secret("WEIXIN_GROUP_ALLOWED_USERS", "") if group_allow_from is None else group_allow_from)
         self._split_multiline_messages = _coerce_bool(extra.get("split_multiline_messages") or os.getenv("WEIXIN_SPLIT_MULTILINE_MESSAGES"), default=False)
-        # Text debounce batching (Telegram pattern): iLink delivers messages individually, so rapid
-        # bursts would each trigger a separate agent run. 3s / 5s (after a ~2048-char split chunk) suit iLink's cadence.
+        # Text debounce batching (Telegram pattern): iLink delivers messages individually, so rapid bursts would each
+        # trigger a separate agent run. 3s / 5s (after a ~2048-char split chunk) suit iLink's cadence.
         self._text_batch_delay_seconds = self._coerce_float_extra("text_batch_delay_seconds", 3.0)
         self._text_batch_split_delay_seconds = self._coerce_float_extra("text_batch_split_delay_seconds", 5.0)
         self._pending_text_batches: Dict[str, MessageEvent] = {}
@@ -850,9 +816,8 @@ class WeixinAdapter(BasePlatformAdapter):
                     consecutive_failures = await backoff()
                     continue
                 consecutive_failures = 0
-                new_sync_buf = str(response.get("get_updates_buf") or "")
-                if new_sync_buf:
-                    sync_buf = new_sync_buf
+                if response.get("get_updates_buf"):
+                    sync_buf = str(response["get_updates_buf"])
                     _save_sync_buf(self._hermes_home, self._account_id, sync_buf)
                 for message in response.get("msgs") or []:
                     asyncio.create_task(self._process_message_safe(message))
@@ -872,8 +837,7 @@ class WeixinAdapter(BasePlatformAdapter):
         """Swap in a fresh ``_poll_session`` *then* close the old one, so concurrent tasks never see a closed session."""
         if not self._running or aiohttp is None:
             return
-        old = self._poll_session
-        self._poll_session = _new_session()
+        old, self._poll_session = self._poll_session, _new_session()
         if old is not None and not old.closed:
             try:
                 await old.close()
@@ -909,8 +873,7 @@ class WeixinAdapter(BasePlatformAdapter):
             self._token_store.set(self._account_id, sender_id, context_token)
         if self._poll_session and self._token and not self._typing_cache.get(sender_id):
             asyncio.create_task(self._fetch_typing_ticket(self._poll_session, sender_id, context_token or None, "getConfig failed"))
-        media_paths: List[str] = []
-        media_types: List[str] = []
+        media_paths, media_types = [], []  # type: List[str], List[str]
         for item in item_list:
             ref_item = (item.get("ref_msg") or {}).get("message_item")
             for candidate in (item, ref_item) if isinstance(ref_item, dict) else (item,):
@@ -928,8 +891,7 @@ class WeixinAdapter(BasePlatformAdapter):
             await self.handle_message(event)
 
     def _open_dm_opted_in(self) -> bool:
-        # Scoped reads: the default profile's allow-all flag must not leak into a
-        # multiplexed secondary profile's admission gate.
+        # Scoped reads: the default profile's allow-all flag must not leak into a multiplexed secondary profile's gate.
         return any((_wx_secret(name, "") or "").lower() in {"true", "1", "yes"} for name in ("GATEWAY_ALLOW_ALL_USERS", "WEIXIN_ALLOW_ALL_USERS"))
 
     def _is_dm_allowed(self, sender_id: str) -> bool:
@@ -945,8 +907,6 @@ class WeixinAdapter(BasePlatformAdapter):
     def enforces_own_access_policy(self) -> bool:
         """Weixin gates DM/group access at intake via dm_policy/group_policy."""
         return True
-
-    # -- text debounce batching --------------------------------------------------------------
 
     def _text_batch_key(self, event: MessageEvent) -> str:
         from gateway.session import build_session_key
@@ -1023,9 +983,9 @@ class WeixinAdapter(BasePlatformAdapter):
         return self._rate_limit_cooldown_remaining() > 0
 
     async def _send_text_chunk(self, *, chat_id: str, chunk: str, context_token: Optional[str], client_id: str) -> None:
-        """Send one text chunk with retry/backoff under the adapter-wide text gate. On session-expired
-        (errcode -14) retry once *without* ``context_token`` — iLink accepts tokenless sends as a
-        degraded fallback, which keeps cron pushes working when no user message refreshed the session."""
+        """Send one text chunk with retry/backoff under the adapter-wide text gate. On session-expired (errcode -14)
+        retry once *without* ``context_token`` — iLink accepts tokenless sends as a degraded fallback, which keeps cron
+        pushes working when no user message refreshed the session."""
         async with self._send_text_gate:
             last_error: Optional[Exception] = None
             retried_without_token = False
@@ -1163,8 +1123,7 @@ class WeixinAdapter(BasePlatformAdapter):
         return await self._send_file_result(chat_id, video_path, caption or "", "send_video")
 
     async def send_voice(self, chat_id: str, audio_path: str, caption: Optional[str] = None, reply_to=None, metadata=None) -> SendResult:
-        # Native outbound voice bubbles are not proven-working upstream; send a
-        # file attachment so users at least receive playable audio (even .silk).
+        # Native outbound voice bubbles are not proven-working upstream; a file attachment at least plays (even .silk).
         return await self._send_file_result(chat_id, audio_path, caption or "[voice message as attachment]", "send_voice", force_file_attachment=True)
 
     async def _download_remote_media(self, url: str) -> str:
@@ -1195,8 +1154,7 @@ class WeixinAdapter(BasePlatformAdapter):
             raise RuntimeError(f"getUploadUrl returned neither upload_param nor upload_full_url: {upload_response}")
         encrypted_query_param = await _upload_ciphertext(self._send_session, ciphertext=ciphertext, upload_url=upload_url)
         context_token = self._token_store.get(self._account_id, chat_id)
-        # iLink expects aes_key as base64(hex_string), not base64(raw_bytes) —
-        # otherwise images render as grey boxes because the key doesn't match.
+        # iLink expects aes_key as base64(hex_string), not base64(raw_bytes) — otherwise images render as grey boxes.
         item_kwargs = {
             "encrypt_query_param": encrypted_query_param, "aes_key_for_api": base64.b64encode(aes_key.hex().encode("ascii")).decode("ascii"),
             "ciphertext_size": len(ciphertext), "plaintext_size": rawsize, "filename": Path(path).name, "rawfilemd5": rawfilemd5}
@@ -1250,8 +1208,7 @@ async def _deliver_direct(
 async def send_weixin_direct(
     *, extra: Dict[str, Any], token: Optional[str], chat_id: str, message: str, media_files: Optional[List[Tuple[str, bool]]] = None,
 ) -> Dict[str, Any]:
-    """One-shot send helper for ``send_message`` and cron delivery. Reuses the live adapter's
-    session when one is connected on this loop; otherwise builds a throwaway adapter."""
+    """One-shot send for ``send_message``/cron: reuse the live adapter's session on this loop, else a throwaway adapter."""
     account_id = _extra_or_secret(extra, "account_id")
     base_url = _extra_or_secret(extra, "base_url", ILINK_BASE_URL).rstrip("/")
     cdn_base_url = _extra_or_secret(extra, "cdn_base_url", WEIXIN_CDN_BASE_URL).rstrip("/")

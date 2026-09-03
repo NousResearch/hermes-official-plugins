@@ -201,13 +201,12 @@ class RealtimeSpeaker:
             # One entry per iteration: the queue may grow while we speak.
             head = entries[0]
             text = (head.get("text") or "").strip()
+            result = {"ok": True, "bytes_written": 0, "duration_ms": 0.0}
             if text:
                 try:
                     result = self.session.speak(text)
                 except Exception as exc:
                     result = {"ok": False, "error": str(exc)}
-            else:
-                result = {"ok": True, "bytes_written": 0, "duration_ms": 0.0}
             self._append_processed(head, result)
 
             # Re-read (new entries may have arrived), then drop the head by position or id.

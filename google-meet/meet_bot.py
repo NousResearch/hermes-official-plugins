@@ -103,8 +103,7 @@ class _BotState:
         write_json_atomic(self.status_path, data)
 
     def set(self, **kwargs) -> None:
-        for k, v in kwargs.items():
-            setattr(self, k, v)
+        self.__dict__.update(kwargs)
         self._flush()
 
 
@@ -377,11 +376,11 @@ def _join(page, cfg: _BotConfig, state: _BotState) -> None:
             continue
         try:
             btn.click(timeout=3_000)
-            if label == "Ask to join":
-                state.set(lobby_waiting=True)
-            break
         except Exception:
             continue
+        if label == "Ask to join":
+            state.set(lobby_waiting=True)
+        break
 
 
 def _drain_loop(page, cfg: _BotConfig, state: _BotState, rt: dict, stop_flag: dict) -> None:

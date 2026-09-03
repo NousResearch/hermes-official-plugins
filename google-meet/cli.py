@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import platform
 import shutil
@@ -104,13 +105,9 @@ def _cmd_setup() -> int:
     system_ok = system in {"Linux", "Darwin"}
     print(f"  platform       : {system}  [{'ok' if system_ok else 'unsupported'}]")
 
-    try:
-        import playwright  # noqa: F401
-        pw_ok = True
-        print("  playwright     : installed")
-    except ImportError:
-        pw_ok = False
-        print("  playwright     : NOT installed — run: pip install playwright")
+    pw_ok = importlib.util.find_spec("playwright") is not None
+    print("  playwright     : installed" if pw_ok
+          else "  playwright     : NOT installed — run: pip install playwright")
 
     chromium_ok = False
     chromium_msg = "unknown"

@@ -40,7 +40,7 @@ except ImportError:
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import (
     gateway_trust_env, BasePlatformAdapter, MessageEvent, MessageType, SendResult,
-    _ssrf_redirect_guard, cache_document_from_bytes, cache_image_from_bytes)
+    _ssrf_redirect_guard, cache_document_from_bytes_async, cache_image_from_bytes_async)
 from gateway.platforms.helpers import strip_markdown
 from gateway.platforms.media_cache import ext_for_mime
 
@@ -976,12 +976,12 @@ class QQAdapter(BasePlatformAdapter):
         if content_type.startswith("image/"):
             # Historical qqbot mapping: trust mimetypes' guess (never the shared table), fall back to .jpg.
             ext = ext_for_mime(content_type, use_defaults=False, use_mimetypes=True, fallback=".jpg") or ".jpg"
-            return cache_image_from_bytes(data, ext)
+            return await cache_image_from_bytes_async(data, ext)
         if content_type == "voice" or content_type.startswith("audio/"):
             # QQ voice is usually .amr/.silk — convert to .wav for STT engines.
             return await self._convert_audio_to_wav(data, url)
         filename = original_name or Path(urlparse(url).path).name or "qq_attachment"
-        return cache_document_from_bytes(data, filename)
+        return await cache_document_from_bytes_async(data, filename)
 
     @staticmethod
     def _is_voice_content_type(content_type: str, filename: str) -> bool:
@@ -1245,16 +1245,16 @@ class QQAdapter(BasePlatformAdapter):
         try:
             if not await convert(src_path, wav_path):
                 logger.warning("[%s] audio conversion failed for %s (format=%s)", self._log_tag, source_url[:60], ext)
-                return cache_document_from_bytes(audio_data, f"qq_voice{ext}")
+                return await cache_document_from_bytes_async(audio_data, f"qq_voice{ext}")
         except Exception:
-            return cache_document_from_bytes(audio_data, f"qq_voice{ext}")
+            return await cache_document_from_bytes_async(audio_data, f"qq_voice{ext}")
         finally:
             self._unlink_quiet(src_path)
 
         try:
             wav_data = Path(wav_path).read_bytes()
             os.unlink(wav_path)
-            return cache_document_from_bytes(wav_data, "qq_voice.wav")
+            return await cache_document_from_bytes_async(wav_data, "qq_voice.wav")
         except Exception as exc:
             logger.debug("[%s] Failed to read converted wav: %s", self._log_tag, exc)
             return None

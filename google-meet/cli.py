@@ -22,7 +22,7 @@ from hermes_constants import get_hermes_home
 
 from plugins.google_meet import process_manager as pm
 from plugins.google_meet.meet_bot import _is_safe_meet_url
-from plugins.google_meet.node.cli import register_cli as _register_node_cli
+from plugins.google_meet.node.cli import node_command, register_cli as _register_node_cli
 from plugins.google_meet.tools import resolve_node
 
 
@@ -71,14 +71,6 @@ def register_cli(subparser: argparse.ArgumentParser) -> None:
     subparser.set_defaults(func=meet_command)
 
 
-def _cmd_node(args: argparse.Namespace) -> int:
-    fn = getattr(args, "func", None)
-    if fn is None or fn is meet_command:
-        print("usage: hermes meet node {run,list,approve,remove,status,ping}")
-        return 2
-    return fn(args)
-
-
 _DISPATCH = {
     "setup": lambda a: _cmd_setup(),
     "install": lambda a: _cmd_install(realtime=bool(getattr(a, "realtime", False)),
@@ -90,7 +82,7 @@ _DISPATCH = {
     "transcript": lambda a: _cmd_transcript(last=a.last),
     "say": lambda a: _cmd_say(text=a.text, node=getattr(a, "node", None)),
     "stop": lambda a: _print_result(pm.stop(reason="hermes meet stop")),
-    "node": _cmd_node}
+    "node": node_command}  # node subparsers are required=True, so a sub-command is always present
 
 
 def meet_command(args: argparse.Namespace) -> int:

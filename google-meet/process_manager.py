@@ -42,11 +42,6 @@ def _pid_alive(pid: int) -> bool:
     return bool(pid) and _pid_exists(pid)
 
 
-def _active_pid() -> int:
-    active = _read_active()
-    return int(active.get("pid", 0)) if active else 0
-
-
 def _kill(pid: int, sig) -> None:
     with contextlib.suppress(ProcessLookupError):
         os.kill(pid, sig)
@@ -64,7 +59,7 @@ def start(url: str, *, out_dir: Optional[Path] = None, headed: bool = False,
     from plugins.google_meet.meet_bot import _is_safe_meet_url, _meeting_id_from_url
     if not _is_safe_meet_url(url):
         return {"ok": False, "error": "refusing: only https://meet.google.com/ URLs are allowed. got: " + repr(url)}
-    if _pid_alive(_active_pid()):
+    if _pid_alive(int((_read_active() or {}).get("pid", 0))):
         stop(reason="replaced by new meet_join")
     meeting_id = _meeting_id_from_url(url)
     out = out_dir or (_root() / meeting_id)
@@ -163,7 +158,7 @@ def stop(*, reason: str = "requested") -> Dict[str, Any]:
             if not _pid_alive(pid):
                 break
             time.sleep(0.5)
-        if _pid_alive(pid):
+        else:
             _kill(pid, signal.SIGKILL)  # windows-footgun: ok — POSIX-only plugin (google_meet registers no-op on Windows; see __init__.py)
     (_root() / ".active.json").unlink(missing_ok=True)
     return {"ok": True, "reason": reason, "meetingId": active.get("meeting_id"),

@@ -70,20 +70,19 @@ def register_cli(subparser: argparse.ArgumentParser) -> None:
 
 _DISPATCH = {
     "setup": lambda a: _cmd_setup(),
-    "install": lambda a: _cmd_install(realtime=bool(getattr(a, "realtime", False)),
-                                      assume_yes=bool(getattr(a, "yes", False))),
+    "install": lambda a: _cmd_install(realtime=bool(a.realtime), assume_yes=bool(a.yes)),
     "auth": lambda a: _cmd_auth(),
     "join": lambda a: _cmd_join(url=a.url, guest_name=a.guest_name, duration=a.duration, headed=a.headed,
-                                mode=getattr(a, "mode", "transcribe"), node=getattr(a, "node", None)),
+                                mode=a.mode, node=a.node),
     "status": lambda a: _print_result(pm.status()),
     "transcript": lambda a: _cmd_transcript(last=a.last),
-    "say": lambda a: _cmd_say(text=a.text, node=getattr(a, "node", None)),
+    "say": lambda a: _cmd_say(text=a.text, node=a.node),
     "stop": lambda a: _print_result(pm.stop(reason="hermes meet stop")),
     "node": node_command}  # node subparsers are required=True, so a sub-command is always present
 
 
 def meet_command(args: argparse.Namespace) -> int:
-    sub = getattr(args, "meet_command", None)
+    sub = args.meet_command
     if not sub:
         print("usage: hermes meet {setup,auth,join,status,transcript,say,stop,node}")
         return 2
@@ -100,8 +99,7 @@ def _cmd_setup() -> int:
     system_ok = system in {"Linux", "Darwin"}
     print(f"  platform       : {system}  [{'ok' if system_ok else 'unsupported'}]")
     pw_ok = importlib.util.find_spec("playwright") is not None
-    print("  playwright     : installed" if pw_ok
-          else "  playwright     : NOT installed — run: pip install playwright")
+    print("  playwright     : " + ("installed" if pw_ok else "NOT installed — run: pip install playwright"))
     chromium_ok, chromium_msg = False, "unknown"
     if pw_ok:
         try:
@@ -114,8 +112,7 @@ def _cmd_setup() -> int:
             chromium_msg = f"probe failed: {e}"
     print(f"  chromium       : {chromium_msg}")
     auth_path = _auth_state_path()
-    print("  google auth    : "
-          + (f"ok ({auth_path})" if auth_path.is_file() else "not saved — run: hermes meet auth"))
+    print("  google auth    : " + (f"ok ({auth_path})" if auth_path.is_file() else "not saved — run: hermes meet auth"))
     print()
     all_ok = system_ok and pw_ok and chromium_ok
     print("ready. Join a meeting:  hermes meet join https://meet.google.com/abc-defg-hij" if all_ok
@@ -182,7 +179,7 @@ def _cmd_install(*, realtime: bool, assume_yes: bool) -> int:
                     stdin=subprocess.DEVNULL)
             except Exception:
                 have_bh = False
-            needs = ([] if have_bh else ["blackhole-2ch"]) + ([] if shutil.which("ffmpeg") else ["ffmpeg"])
+            needs = [pkg for pkg, have in (("blackhole-2ch", have_bh), ("ffmpeg", shutil.which("ffmpeg"))) if not have]
             if not needs:
                 print("  BlackHole and ffmpeg already installed.")
             elif not shutil.which("brew"):
@@ -214,8 +211,7 @@ def _cmd_auth() -> int:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=False)
             context = browser.new_context()
-            page = context.new_page()
-            page.goto("https://accounts.google.com/", wait_until="domcontentloaded")
+            context.new_page().goto("https://accounts.google.com/", wait_until="domcontentloaded")
             with contextlib.suppress(EOFError):
                 input("press Enter after you've signed in ... ")
             context.storage_state(path=str(path))

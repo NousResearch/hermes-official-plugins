@@ -18,8 +18,8 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional
 
 from plugins.google_meet._jsonfile import write_json_atomic
@@ -255,8 +255,8 @@ def _start_realtime_speaker(rt: dict, cfg: "_BotConfig", stop_flag: dict, state:
         state.set(error=f"realtime connect failed: {e}")
         return
     rt["session"] = session
-    speaker = RealtimeSpeaker(
-        session=session, queue_path=queue_path, processed_path=cfg.out_dir / "say_processed.jsonl")
+    speaker = RealtimeSpeaker(session=session, queue_path=queue_path,
+                              processed_path=cfg.out_dir / "say_processed.jsonl")
 
     def _speaker_loop():
         try:
@@ -291,9 +291,8 @@ def _setup_realtime(rt: dict, api_key: str, state: _BotState) -> None:
         return
     try:
         from plugins.google_meet.audio_bridge import AudioBridge
-        bridge = AudioBridge()
-        rt["bridge_info"] = bridge.setup()
-        rt["bridge"] = bridge
+        rt["bridge"] = AudioBridge()
+        rt["bridge_info"] = rt["bridge"].setup()
         state.set(realtime=True, realtime_device=rt["bridge_info"].get("device_name"))
     except Exception as e:
         state.set(error=f"audio bridge setup failed: {e} — falling back to transcribe")
@@ -310,22 +309,7 @@ def _teardown_realtime(rt: dict) -> None:
             _quiet(getattr(rt[key], method), **kw)
 
 
-@dataclass
-class _BotConfig:
-    """Everything the bot reads from ``HERMES_MEET_*`` env vars."""
-
-    url: str
-    out_dir: Optional[Path]
-    headed: bool
-    auth_state: str
-    guest_name: str
-    duration_s: Optional[float]
-    realtime: bool
-    realtime_api_key: str
-    realtime_model: str
-    realtime_voice: str
-    realtime_instructions: str
-    lobby_timeout: float
+_BotConfig = SimpleNamespace  # everything the bot reads from ``HERMES_MEET_*`` env vars
 
 
 def _config_from_env() -> _BotConfig:

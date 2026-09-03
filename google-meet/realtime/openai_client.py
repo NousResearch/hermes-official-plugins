@@ -59,14 +59,9 @@ class RealtimeSession:
             self._ws = connect(url, additional_headers=headers)
         except TypeError:
             self._ws = connect(url, extra_headers=headers)
-        self._send_json({
-            "type": "session.update",
-            "session": {
-                "voice": self.voice,
-                "instructions": self.instructions,
-                "modalities": ["audio", "text"],
-                "output_audio_format": "pcm16",
-                "input_audio_format": "pcm16"}})
+        self._send_json({"type": "session.update", "session": {
+            "voice": self.voice, "instructions": self.instructions, "modalities": ["audio", "text"],
+            "output_audio_format": "pcm16", "input_audio_format": "pcm16"}})
 
     def close(self) -> None:
         if self._ws is not None:
@@ -80,10 +75,8 @@ class RealtimeSession:
         if self._ws is None:
             raise RuntimeError("RealtimeSession.connect() must be called first")
         start = time.monotonic()
-        self._send_json({
-            "type": "conversation.item.create",
-            "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]},
-        })
+        self._send_json({"type": "conversation.item.create", "item": {
+            "type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}})
         self._send_json({"type": "response.create", "response": {"modalities": ["audio"]}})
         bytes_written = 0
         with contextlib.ExitStack() as stack:
@@ -98,14 +91,14 @@ class RealtimeSession:
                 ftype = frame.get("type")
                 if ftype == "error":
                     raise RuntimeError(f"realtime error: {frame.get('error') or frame}")
-                if ftype == "response.audio.delta" and sink_fp is not None:
-                    chunk = _decode_audio(frame.get("delta") or frame.get("audio") or "")
-                    if chunk:
-                        sink_fp.write(chunk)
-                        sink_fp.flush()
-                        bytes_written += len(chunk)
-                        self.audio_bytes_out += len(chunk)
-                        self.last_audio_out_at = time.time()
+                chunk = _decode_audio(frame.get("delta") or frame.get("audio") or "") if (
+                    ftype == "response.audio.delta" and sink_fp is not None) else b""
+                if chunk:
+                    sink_fp.write(chunk)
+                    sink_fp.flush()
+                    bytes_written += len(chunk)
+                    self.audio_bytes_out += len(chunk)
+                    self.last_audio_out_at = time.time()
         return {"ok": True, "bytes_written": bytes_written, "duration_ms": (time.monotonic() - start) * 1000.0}
 
     def cancel_response(self) -> bool:
@@ -137,12 +130,10 @@ class RealtimeSession:
                 raw = self._ws.recv()
             if raw is None:
                 return None
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 frame = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
-            except (TypeError, ValueError):
-                continue
-            if isinstance(frame, dict):
-                return frame
+                if isinstance(frame, dict):
+                    return frame
 
 
 class RealtimeSpeaker:
@@ -160,13 +151,11 @@ class RealtimeSpeaker:
             return []
         out: list[dict] = []
         for line in self.queue_path.read_text(encoding="utf-8").splitlines():
-            try:
+            with contextlib.suppress(ValueError):
                 entry = json.loads(line) if line.strip() else None
-            except ValueError:
-                continue
-            if isinstance(entry, dict):
-                entry.setdefault("id", str(uuid.uuid4()))
-                out.append(entry)
+                if isinstance(entry, dict):
+                    entry.setdefault("id", str(uuid.uuid4()))
+                    out.append(entry)
         return out
 
     def _rewrite_queue(self, remaining: list[dict]) -> None:
@@ -200,7 +189,5 @@ class RealtimeSpeaker:
             self._append_processed(head, result)
             # Re-read (new entries may have arrived), then drop the head by position or id.
             latest = self._read_queue()
-            if latest and latest[0].get("id") == head.get("id"):
-                self._rewrite_queue(latest[1:])
-            else:
-                self._rewrite_queue([e for e in latest if e.get("id") != head.get("id")])
+            self._rewrite_queue(latest[1:] if latest and latest[0].get("id") == head.get("id")
+                                else [e for e in latest if e.get("id") != head.get("id")])

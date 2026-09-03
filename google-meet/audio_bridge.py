@@ -42,12 +42,11 @@ class AudioBridge:
     def setup(self) -> dict:
         """Provision the device; raises RuntimeError on unsupported platforms or missing tools."""
         system = platform.system()
-        if system == "Linux":
-            return self._setup_linux()
-        if system == "Darwin":
-            return self._setup_darwin()
-        raise RuntimeError("windows not supported in v2" if system == "Windows"
-                           else f"unsupported platform: {system}")
+        impl = {"Linux": self._setup_linux, "Darwin": self._setup_darwin}.get(system)
+        if impl is None:
+            raise RuntimeError("windows not supported in v2" if system == "Windows"
+                               else f"unsupported platform: {system}")
+        return impl()
 
     def teardown(self) -> None:
         """Release the virtual audio device. Idempotent; never raises."""

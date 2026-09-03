@@ -192,10 +192,8 @@ def _account_dir(hermes_home: str) -> Path:
 
 def _read_json(path: Path) -> Any:
     """Parse a JSON file; ``None`` when missing or unparseable."""
-    if not path.exists():
-        return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
     except Exception:
         return None
 
@@ -221,14 +219,11 @@ class ContextTokenStore:
         self._root = _account_dir(hermes_home)
         self._cache: Dict[str, str] = {}
 
-    def _path(self, account_id: str) -> Path:
-        return self._root / f"{account_id}.context-tokens.json"
-
     def _key(self, account_id: str, user_id: str) -> str:
         return f"{account_id}:{user_id}"
 
     def restore(self, account_id: str) -> None:
-        path = self._path(account_id)
+        path = self._root / f"{account_id}.context-tokens.json"
         if not path.exists():
             return
         try:
@@ -252,7 +247,7 @@ class ContextTokenStore:
         prefix = f"{account_id}:"
         payload = {key[len(prefix):]: value for key, value in self._cache.items() if key.startswith(prefix)}
         try:
-            atomic_json_write(self._path(account_id), payload)
+            atomic_json_write(self._root / f"{account_id}.context-tokens.json", payload)
         except Exception as exc:
             logger.warning("weixin: failed to persist context tokens for %s: %s", _safe_id(account_id), exc)
 
@@ -516,11 +511,9 @@ def _split_delivery_units_for_weixin(content: str) -> List[str]:
             if current and line.strip() and raw_line.startswith((" ", "\t")):
                 current.append(line)
                 continue
-            if current:
-                units.append("\n".join(current).strip())
-            current = [line] if line.strip() else []
-        if current:
             units.append("\n".join(current).strip())
+            current = [line] if line.strip() else []
+        units.append("\n".join(current).strip())
     return [unit for unit in units if unit]
 
 
@@ -820,11 +813,10 @@ class WeixinAdapter(BasePlatformAdapter):
         self._text_batch_split_delay_seconds = self._coerce_float_extra("text_batch_split_delay_seconds", 5.0)
         self._pending_text_batches: Dict[str, MessageEvent] = {}
         self._pending_text_batch_tasks: Dict[str, asyncio.Task] = {}
-        if self._account_id and not self._token:
-            persisted = load_weixin_account(hermes_home, self._account_id)
-            if persisted:
-                self._token = str(persisted.get("token") or "").strip()
-                self._base_url = str(persisted.get("base_url") or self._base_url).strip().rstrip("/")
+        persisted = load_weixin_account(hermes_home, self._account_id) if self._account_id and not self._token else None
+        if persisted:
+            self._token = str(persisted.get("token") or "").strip()
+            self._base_url = str(persisted.get("base_url") or self._base_url).strip().rstrip("/")
 
     def _coerce_float_extra(self, key: str, default: float) -> float:
         """Float from ``config.extra``; fed to ``asyncio.sleep()``, so NaN/Inf/negative/unparseable → default."""
@@ -904,18 +896,18 @@ class WeixinAdapter(BasePlatformAdapter):
         self._mark_disconnected()
         logger.info("[%s] Disconnected", self.name)
 
-    @staticmethod
-    async def _poll_backoff(consecutive_failures: int) -> int:
-        """Sleep for the failure streak; returns the new streak count (0 after a full streak)."""
-        streak_done = consecutive_failures >= MAX_CONSECUTIVE_FAILURES
-        await asyncio.sleep(BACKOFF_DELAY_SECONDS if streak_done else RETRY_DELAY_SECONDS)
-        return 0 if streak_done else consecutive_failures
-
     async def _poll_loop(self) -> None:
         assert self._poll_session is not None
         sync_buf = _load_sync_buf(self._hermes_home, self._account_id)
         timeout_ms = LONG_POLL_TIMEOUT_MS
         consecutive_failures = 0
+
+        async def backoff() -> int:
+            """Sleep for the failure streak; returns the new streak count (0 after a full streak)."""
+            streak_done = consecutive_failures >= MAX_CONSECUTIVE_FAILURES
+            await asyncio.sleep(BACKOFF_DELAY_SECONDS if streak_done else RETRY_DELAY_SECONDS)
+            return 0 if streak_done else consecutive_failures
+
         while self._running:
             try:
                 response = await _get_updates(self._poll_session, base_url=self._base_url, token=self._token, sync_buf=sync_buf, timeout_ms=timeout_ms)
@@ -932,7 +924,7 @@ class WeixinAdapter(BasePlatformAdapter):
                     consecutive_failures += 1
                     logger.warning("[%s] getUpdates failed ret=%s errcode=%s errmsg=%s (%d/%d)", self.name, ret, errcode,
                                    response.get("errmsg", ""), consecutive_failures, MAX_CONSECUTIVE_FAILURES)
-                    consecutive_failures = await self._poll_backoff(consecutive_failures)
+                    consecutive_failures = await backoff()
                     continue
                 consecutive_failures = 0
                 new_sync_buf = str(response.get("get_updates_buf") or "")
@@ -946,7 +938,7 @@ class WeixinAdapter(BasePlatformAdapter):
             except Exception as exc:
                 consecutive_failures += 1
                 logger.error("[%s] poll error (%d/%d): %s", self.name, consecutive_failures, MAX_CONSECUTIVE_FAILURES, exc)
-                consecutive_failures = await self._poll_backoff(consecutive_failures)
+                consecutive_failures = await backoff()
                 if consecutive_failures == 0:
                     # Full failure streak: recycle the session. Failed connects through a local proxy (e.g.
                     # Clash) strand sockets the keepalive reaper never sees; on macOS the 256-fd soft limit
@@ -1002,10 +994,9 @@ class WeixinAdapter(BasePlatformAdapter):
         media_paths: List[str] = []
         media_types: List[str] = []
         for item in item_list:
-            await self._collect_media(item, media_paths, media_types)
             ref_item = (item.get("ref_msg") or {}).get("message_item")
-            if isinstance(ref_item, dict):
-                await self._collect_media(ref_item, media_paths, media_types)
+            for candidate in (item, ref_item) if isinstance(ref_item, dict) else (item,):
+                await self._collect_media(candidate, media_paths, media_types)
         if not text and not media_paths:
             return
         source = self.build_source(chat_id=effective_chat_id, chat_type=chat_type, user_id=sender_id, user_name=sender_id)
@@ -1058,8 +1049,7 @@ class WeixinAdapter(BasePlatformAdapter):
         current_task = asyncio.current_task()
         try:
             pending = self._pending_text_batches.get(key)
-            last_len = getattr(pending, "_last_chunk_len", 0) if pending else 0
-            split = last_len >= self._SPLIT_THRESHOLD
+            split = (getattr(pending, "_last_chunk_len", 0) if pending else 0) >= self._SPLIT_THRESHOLD
             await asyncio.sleep(self._text_batch_split_delay_seconds if split else self._text_batch_delay_seconds)
             if self._pending_text_batch_tasks.get(key) is not current_task:
                 return
@@ -1072,9 +1062,7 @@ class WeixinAdapter(BasePlatformAdapter):
 
     async def _collect_media(self, item: Dict[str, Any], media_paths: List[str], media_types: List[str]) -> None:
         spec = _INBOUND_MEDIA.get(item.get("type"))
-        if spec is None:
-            return
-        path, mime = await self._download_media(item, spec)
+        path, mime = await self._download_media(item, spec) if spec else (None, "")
         if path:
             media_paths.append(path)
             media_types.append(mime)
@@ -1086,8 +1074,7 @@ class WeixinAdapter(BasePlatformAdapter):
         payload = item.get(item_key) or {}
         media = payload.get("media") or {}
         filename = str(payload.get("file_name") or "document.bin")
-        if mime is None:
-            mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        mime = mime or mimetypes.guess_type(filename)[0] or "application/octet-stream"
         try:
             aes_key_b64 = media.get("aes_key")
             if item_key == "image_item" and payload.get("aeskey"):
@@ -1119,9 +1106,6 @@ class WeixinAdapter(BasePlatformAdapter):
     def _rate_limit_cooldown_remaining(self) -> float:
         return max(0.0, self._rate_limit_circuit_until - time.monotonic())
 
-    def _rate_limit_error(self) -> RuntimeError:
-        return RuntimeError(f"iLink sendmessage rate limited; cooldown active for {self._rate_limit_cooldown_remaining():.1f}s")
-
     def _record_rate_limit_event(self) -> bool:
         """Record a genuine iLink rate limit and return True if breaker opened."""
         now = time.monotonic()
@@ -1143,12 +1127,11 @@ class WeixinAdapter(BasePlatformAdapter):
             retried_without_token = False
             for attempt in range(self._send_chunk_retries + 1):
                 if self._rate_limit_cooldown_remaining() > 0:
-                    raise self._rate_limit_error()
+                    raise RuntimeError(f"iLink sendmessage rate limited; cooldown active for {self._rate_limit_cooldown_remaining():.1f}s")
                 try:
                     resp = await _send_message(
-                        self._send_session, base_url=self._base_url, token=self._token, to=chat_id,
-                        text=chunk, context_token=context_token, client_id=client_id,
-                    )
+                        self._send_session, base_url=self._base_url, token=self._token, to=chat_id, text=chunk,
+                        context_token=context_token, client_id=client_id)
                     if resp and isinstance(resp, dict):
                         ret, errcode = resp.get("ret"), resp.get("errcode")
                         if (ret is not None and ret != 0) or (errcode is not None and errcode != 0):
@@ -1163,7 +1146,8 @@ class WeixinAdapter(BasePlatformAdapter):
                                 # Keep a descriptive error for when the loop exhausts while still limited.
                                 last_error = RuntimeError(f"iLink sendmessage rate limited: ret={ret} errcode={errcode} errmsg={errmsg}")
                                 if self._record_rate_limit_event():
-                                    last_error = self._rate_limit_error()
+                                    last_error = RuntimeError(
+                                        f"iLink sendmessage rate limited; cooldown active for {self._rate_limit_cooldown_remaining():.1f}s")
                                     break
                                 if attempt >= self._send_chunk_retries:
                                     break
@@ -1181,10 +1165,8 @@ class WeixinAdapter(BasePlatformAdapter):
                     if attempt >= self._send_chunk_retries:
                         break
                     wait = self._send_chunk_retry_delay_seconds * (attempt + 1)
-                    logger.warning(
-                        "[%s] send chunk failed to=%s attempt=%d/%d, retrying in %.2fs: %s",
-                        self.name, _safe_id(chat_id), attempt + 1, self._send_chunk_retries + 1, wait, exc,
-                    )
+                    logger.warning("[%s] send chunk failed to=%s attempt=%d/%d, retrying in %.2fs: %s",
+                                   self.name, _safe_id(chat_id), attempt + 1, self._send_chunk_retries + 1, wait, exc)
                     if wait > 0:
                         await asyncio.sleep(wait)
             assert last_error is not None
@@ -1197,19 +1179,13 @@ class WeixinAdapter(BasePlatformAdapter):
         last_message_id: Optional[str] = None
         # Extract MEDIA: tags and bare local file paths before text delivery.
         media_files, cleaned_content = self.extract_media(content)
-        media_files = self.filter_media_delivery_paths(media_files)
-        _, image_cleaned = self.extract_images(cleaned_content)
-        local_files, final_content = self.extract_local_files(image_cleaned)
-        local_files = self.filter_local_delivery_paths(local_files)
-        deliveries = [(p, v, "media") for p, v in media_files] + [(p, False, "local file") for p in local_files]
+        local_files, final_content = self.extract_local_files(self.extract_images(cleaned_content)[1])
+        deliveries = [(p, v, "media") for p, v in self.filter_media_delivery_paths(media_files)]
+        deliveries += [(p, False, "local file") for p in self.filter_local_delivery_paths(local_files)]
         try:
             for path, is_voice, label in deliveries:
                 ext = Path(path).suffix.lower()
-                sender, key = "send_document", "file_path"
-                for exts, method, path_key in _OUTBOUND_BY_EXT:
-                    if is_voice or ext in exts:
-                        sender, key = method, path_key
-                        break
+                sender, key = next(((m, k) for exts, m, k in _OUTBOUND_BY_EXT if is_voice or ext in exts), ("send_document", "file_path"))
                 try:
                     await getattr(self, sender)(chat_id=chat_id, metadata=metadata, **{key: path})
                 except Exception as exc:
@@ -1230,24 +1206,19 @@ class WeixinAdapter(BasePlatformAdapter):
         """Return a valid typing ticket, refreshing via getConfig once the 600s TTL evicts it —
         otherwise ``stop_typing`` no-ops and the WeChat client shows the indicator forever."""
         ticket = self._typing_cache.get(chat_id)
-        if ticket:
-            return ticket
-        if not self._send_session or not self._token:
-            return None
-        context_token = self._token_store.get(self._account_id, chat_id)
-        return await self._fetch_typing_ticket(self._send_session, chat_id, context_token, "typing ticket refresh failed")
+        if ticket or not self._send_session or not self._token:
+            return ticket or None
+        return await self._fetch_typing_ticket(
+            self._send_session, chat_id, self._token_store.get(self._account_id, chat_id), "typing ticket refresh failed")
 
     async def _set_typing(self, chat_id: str, status: int, label: str) -> None:
-        if not self._send_session or not self._token:
-            return
         typing_ticket = await self._ensure_typing_ticket(chat_id)
         if not typing_ticket:
             return
         try:
             await _api_post(
-                self._send_session, base_url=self._base_url, endpoint=EP_SEND_TYPING,
+                self._send_session, base_url=self._base_url, endpoint=EP_SEND_TYPING, token=self._token, timeout_ms=CONFIG_TIMEOUT_MS,
                 payload={"ilink_user_id": chat_id, "typing_ticket": typing_ticket, "status": status},
-                token=self._token, timeout_ms=CONFIG_TIMEOUT_MS,
             )
         except Exception as exc:
             logger.debug("[%s] typing %s failed for %s: %s", self.name, label, _safe_id(chat_id), exc)
@@ -1262,12 +1233,9 @@ class WeixinAdapter(BasePlatformAdapter):
         self, chat_id: str, image_url: str, caption: str, reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None,
     ) -> SendResult:
         cleanup = image_url.startswith(("http://", "https://"))
-        if cleanup:
-            file_path = await self._download_remote_media(image_url)
-        else:
-            file_path = image_url.replace("file://", "")
-            if not os.path.isabs(file_path):
-                file_path = os.path.abspath(file_path)
+        file_path = await self._download_remote_media(image_url) if cleanup else image_url.replace("file://", "")
+        if not cleanup and not os.path.isabs(file_path):
+            file_path = os.path.abspath(file_path)
         try:
             return await self.send_document(chat_id, file_path, caption=caption, metadata=metadata)
         finally:
@@ -1395,10 +1363,8 @@ async def _deliver_direct(
         last_result = await sender(chat_id, media_path)
         if not last_result.success:
             return {"error": f"Weixin media send failed: {last_result.error}"}
-    return {
-        "success": True, "platform": "weixin", "chat_id": chat_id,
-        "message_id": last_result.message_id if last_result else None, "context_token_used": bool(context_token),
-    }
+    message_id = last_result.message_id if last_result else None
+    return {"success": True, "platform": "weixin", "chat_id": chat_id, "message_id": message_id, "context_token_used": bool(context_token)}
 
 
 async def send_weixin_direct(
@@ -1422,10 +1388,8 @@ async def send_weixin_direct(
     if send_session is not None and not send_session.closed and send_session._loop is asyncio.get_running_loop():
         return await _deliver_direct(live_adapter, chat_id, message, media_files, context_token)
     async with _new_session() as session:
-        adapter = WeixinAdapter(PlatformConfig(
-            enabled=True, token=resolved_token,
-            extra={**dict(extra or {}), "account_id": account_id, "base_url": base_url, "cdn_base_url": cdn_base_url},
-        ))
+        merged = {**dict(extra or {}), "account_id": account_id, "base_url": base_url, "cdn_base_url": cdn_base_url}
+        adapter = WeixinAdapter(PlatformConfig(enabled=True, token=resolved_token, extra=merged))
         adapter._send_session = adapter._session = session
         adapter._token_store = token_store
         return await _deliver_direct(adapter, chat_id, message, media_files, context_token)

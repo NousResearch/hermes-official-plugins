@@ -17,7 +17,6 @@ import mimetypes
 import os
 import re
 import secrets
-import struct
 import tempfile
 import textwrap
 import time
@@ -155,41 +154,28 @@ def _safe_id(value: Optional[str], keep: int = 8) -> str:
     return raw[:keep] if raw else "?"
 
 
-def _json_dumps(payload: Dict[str, Any]) -> str:
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-
-
 def _pkcs7_pad(data: bytes, block_size: int = 16) -> bytes:
     pad_len = block_size - (len(data) % block_size)
     return data + bytes([pad_len] * pad_len)
 
 
-def _aes_cipher(key: bytes):
-    return Cipher(algorithms.AES(key), modes.ECB(), backend=default_backend())
-
-
 def _aes128_ecb_encrypt(plaintext: bytes, key: bytes) -> bytes:
-    encryptor = _aes_cipher(key).encryptor()
+    encryptor = Cipher(algorithms.AES(key), modes.ECB(), backend=default_backend()).encryptor()
     return encryptor.update(_pkcs7_pad(plaintext)) + encryptor.finalize()
 
 
 def _aes128_ecb_decrypt(ciphertext: bytes, key: bytes) -> bytes:
-    decryptor = _aes_cipher(key).decryptor()
+    """Decrypt and strip PKCS#7 padding when it is well-formed (else return the raw block output)."""
+    decryptor = Cipher(algorithms.AES(key), modes.ECB(), backend=default_backend()).decryptor()
     padded = decryptor.update(ciphertext) + decryptor.finalize()
-    if not padded:
-        return padded
-    pad_len = padded[-1]
+    pad_len = padded[-1] if padded else 0
     if 1 <= pad_len <= 16 and padded.endswith(bytes([pad_len]) * pad_len):
         return padded[:-pad_len]
     return padded
 
 
-def _base_info() -> Dict[str, Any]:
-    return {"channel_version": CHANNEL_VERSION}
-
-
 def _headers(token: Optional[str], body: str) -> Dict[str, str]:
-    uin = base64.b64encode(str(struct.unpack(">I", secrets.token_bytes(4))[0]).encode("utf-8")).decode("ascii")
+    uin = base64.b64encode(str(int.from_bytes(secrets.token_bytes(4), "big")).encode("utf-8")).decode("ascii")
     return {
         "Content-Type": "application/json", "AuthorizationType": "ilink_bot_token",
         "Content-Length": str(len(body.encode("utf-8"))), "X-WECHAT-UIN": uin,
@@ -289,14 +275,6 @@ class TypingTicketCache:
         self._cache[user_id] = (ticket, time.time())
 
 
-def _cdn_download_url(cdn_base_url: str, encrypted_query_param: str) -> str:
-    return f"{cdn_base_url.rstrip('/')}/download?encrypted_query_param={quote(encrypted_query_param, safe='')}"
-
-
-def _cdn_upload_url(cdn_base_url: str, upload_param: str, filekey: str) -> str:
-    return f"{cdn_base_url.rstrip('/')}/upload?encrypted_query_param={quote(upload_param, safe='')}&filekey={quote(filekey, safe='')}"
-
-
 def _parse_aes_key(aes_key_b64: str) -> bytes:
     decoded = base64.b64decode(aes_key_b64)
     if len(decoded) == 16:
@@ -338,7 +316,7 @@ async def _api_request(
 async def _api_post(
     session: "aiohttp.ClientSession", *, base_url: str, endpoint: str, payload: Dict[str, Any], token: Optional[str], timeout_ms: int,
 ) -> Dict[str, Any]:
-    body = _json_dumps({**payload, "base_info": _base_info()})
+    body = json.dumps({**payload, "base_info": {"channel_version": CHANNEL_VERSION}}, ensure_ascii=False, separators=(",", ":"))
     return await _api_request(session, "POST", base_url=base_url, endpoint=endpoint, headers=_headers(token, body), timeout_ms=timeout_ms, body=body)
 
 
@@ -355,8 +333,7 @@ async def _get_updates(session: "aiohttp.ClientSession", *, base_url: str, token
 
 
 async def _send_items(
-    session: "aiohttp.ClientSession", *, base_url: str, token: str, to: str, item_list: List[Dict[str, Any]],
-    context_token: Optional[str], client_id: str,
+    session: "aiohttp.ClientSession", *, base_url: str, token: str, to: str, item_list: List[Dict[str, Any]], context_token: Optional[str], client_id: str,
 ) -> Dict[str, Any]:
     """POST one ``sendmessage`` with the given item list; returns the raw response."""
     message: Dict[str, Any] = {
@@ -374,10 +351,8 @@ async def _send_message(
     """Send a text message. Returns the raw API response (may carry ``errcode: -14`` etc.)."""
     if not text or not text.strip():
         raise ValueError("_send_message: text must not be empty")
-    return await _send_items(
-        session, base_url=base_url, token=token, to=to, item_list=[{"type": ITEM_TEXT, "text_item": {"text": text}}],
-        context_token=context_token, client_id=client_id,
-    )
+    item_list = [{"type": ITEM_TEXT, "text_item": {"text": text}}]
+    return await _send_items(session, base_url=base_url, token=token, to=to, item_list=item_list, context_token=context_token, client_id=client_id)
 
 
 async def _get_config(session: "aiohttp.ClientSession", *, base_url: str, token: str, user_id: str, context_token: Optional[str]) -> Dict[str, Any]:
@@ -442,11 +417,11 @@ def _assert_weixin_cdn_url(url: str) -> None:
 
 
 async def _download_and_decrypt_media(
-    session: "aiohttp.ClientSession", *, cdn_base_url: str, encrypted_query_param: Optional[str],
-    aes_key_b64: Optional[str], full_url: Optional[str], timeout_seconds: float,
+    session: "aiohttp.ClientSession", *, cdn_base_url: str, encrypted_query_param: Optional[str], aes_key_b64: Optional[str],
+    full_url: Optional[str], timeout_seconds: float,
 ) -> bytes:
     if encrypted_query_param:
-        url = _cdn_download_url(cdn_base_url, encrypted_query_param)
+        url = f"{cdn_base_url.rstrip('/')}/download?encrypted_query_param={quote(encrypted_query_param, safe='')}"
     elif full_url:
         _assert_weixin_cdn_url(full_url)
         url = full_url
@@ -837,12 +812,8 @@ class WeixinAdapter(BasePlatformAdapter):
         # ``extra`` wins even when falsy (an explicit empty list disables the env allowlist).
         allow_from, group_allow_from = extra.get("allow_from"), extra.get("group_allow_from")
         self._allow_from = self._coerce_list(_wx_secret("WEIXIN_ALLOWED_USERS", "") if allow_from is None else allow_from)
-        self._group_allow_from = self._coerce_list(
-            _wx_secret("WEIXIN_GROUP_ALLOWED_USERS", "") if group_allow_from is None else group_allow_from
-        )
-        self._split_multiline_messages = _coerce_bool(
-            extra.get("split_multiline_messages") or os.getenv("WEIXIN_SPLIT_MULTILINE_MESSAGES"), default=False,
-        )
+        self._group_allow_from = self._coerce_list(_wx_secret("WEIXIN_GROUP_ALLOWED_USERS", "") if group_allow_from is None else group_allow_from)
+        self._split_multiline_messages = _coerce_bool(extra.get("split_multiline_messages") or os.getenv("WEIXIN_SPLIT_MULTILINE_MESSAGES"), default=False)
         # Text debounce batching (Telegram pattern): iLink delivers messages individually, so rapid
         # bursts would each trigger a separate agent run. 3s / 5s (after a ~2048-char split chunk) suit iLink's cadence.
         self._text_batch_delay_seconds = self._coerce_float_extra("text_batch_delay_seconds", 3.0)
@@ -883,9 +854,8 @@ class WeixinAdapter(BasePlatformAdapter):
         )
         for ok, code, reason in preflight:
             if not ok:
-                message = f"Weixin startup failed: {reason}"
-                self._set_fatal_error(code, message, retryable=False)
-                logger.warning("[%s] %s", self.name, message)
+                self._set_fatal_error(code, f"Weixin startup failed: {reason}", retryable=False)
+                logger.warning("[%s] Weixin startup failed: %s", self.name, reason)
                 return False
         try:
             if not self._acquire_platform_lock('weixin-bot-token', self._token, 'Weixin bot token'):
@@ -895,9 +865,7 @@ class WeixinAdapter(BasePlatformAdapter):
         self._poll_session = _new_session()
         # total=None disables aiohttp's ClientTimeout so send() works via run_coroutine_threadsafe()
         # from cron; _api_post/_api_get enforce timeouts with asyncio.wait_for() instead.
-        self._send_session = _new_session(
-            timeout=aiohttp.ClientTimeout(total=None, connect=None, sock_connect=None, sock_read=None)
-        )
+        self._send_session = _new_session(timeout=aiohttp.ClientTimeout(total=None, connect=None, sock_connect=None, sock_read=None))
         self._token_store.restore(self._account_id)
         self._poll_task = asyncio.create_task(self._poll_loop(), name="weixin-poll")
         self._mark_connected()
@@ -962,10 +930,8 @@ class WeixinAdapter(BasePlatformAdapter):
                         consecutive_failures = 0
                         continue
                     consecutive_failures += 1
-                    logger.warning(
-                        "[%s] getUpdates failed ret=%s errcode=%s errmsg=%s (%d/%d)", self.name, ret, errcode,
-                        response.get("errmsg", ""), consecutive_failures, MAX_CONSECUTIVE_FAILURES,
-                    )
+                    logger.warning("[%s] getUpdates failed ret=%s errcode=%s errmsg=%s (%d/%d)", self.name, ret, errcode,
+                                   response.get("errmsg", ""), consecutive_failures, MAX_CONSECUTIVE_FAILURES)
                     consecutive_failures = await self._poll_backoff(consecutive_failures)
                     continue
                 consecutive_failures = 0
@@ -1031,7 +997,8 @@ class WeixinAdapter(BasePlatformAdapter):
         context_token = str(message.get("context_token") or "").strip()
         if context_token:
             self._token_store.set(self._account_id, sender_id, context_token)
-        asyncio.create_task(self._maybe_fetch_typing_ticket(sender_id, context_token or None))
+        if self._poll_session and self._token and not self._typing_cache.get(sender_id):
+            asyncio.create_task(self._fetch_typing_ticket(self._poll_session, sender_id, context_token or None, "getConfig failed"))
         media_paths: List[str] = []
         media_types: List[str] = []
         for item in item_list:
@@ -1043,9 +1010,8 @@ class WeixinAdapter(BasePlatformAdapter):
             return
         source = self.build_source(chat_id=effective_chat_id, chat_type=chat_type, user_id=sender_id, user_name=sender_id)
         event = MessageEvent(
-            text=text, message_type=_message_type_from_media(media_types, text), source=source,
-            raw_message=message, message_id=message_id or None, media_urls=media_paths,
-            media_types=media_types, timestamp=datetime.now(),
+            text=text, message_type=_message_type_from_media(media_types, text), source=source, raw_message=message,
+            message_id=message_id or None, media_urls=media_paths, media_types=media_types, timestamp=datetime.now(),
         )
         logger.info("[%s] inbound from=%s type=%s media=%d", self.name, _safe_id(sender_id), source.chat_type, len(media_paths))
         if event.message_type == MessageType.TEXT:
@@ -1129,17 +1095,14 @@ class WeixinAdapter(BasePlatformAdapter):
                 aes_key_b64 = base64.b64encode(bytes.fromhex(str(payload.get("aeskey")))).decode("ascii") or aes_key_b64
             data = await _download_and_decrypt_media(
                 self._poll_session, cdn_base_url=self._cdn_base_url, encrypted_query_param=media.get("encrypt_query_param"),
-                aes_key_b64=aes_key_b64, full_url=media.get("full_url"), timeout_seconds=timeout_seconds,
-            )
+                aes_key_b64=aes_key_b64, full_url=media.get("full_url"), timeout_seconds=timeout_seconds)
             return cache_fn(data, filename), mime
         except Exception as exc:
             logger.warning("[%s] %s download failed: %s", self.name, label, exc)
             return None, mime
 
-    async def _download_voice(self, item: Dict[str, Any]) -> Optional[str]:
-        return (await self._download_media(item, _INBOUND_MEDIA[ITEM_VOICE]))[0]
-
     async def _fetch_typing_ticket(self, session: Any, user_id: str, context_token: Optional[str], failure_label: str) -> Optional[str]:
+        """getConfig for a typing ticket (cached on success); ``None`` on failure."""
         try:
             response = await _get_config(session, base_url=self._base_url, token=self._token, user_id=user_id, context_token=context_token)
             typing_ticket = str(response.get("typing_ticket") or "")
@@ -1149,11 +1112,6 @@ class WeixinAdapter(BasePlatformAdapter):
         except Exception as exc:
             logger.debug("[%s] %s for %s: %s", self.name, failure_label, _safe_id(user_id), exc)
         return None
-
-    async def _maybe_fetch_typing_ticket(self, user_id: str, context_token: Optional[str]) -> None:
-        if not self._poll_session or not self._token or self._typing_cache.get(user_id):
-            return
-        await self._fetch_typing_ticket(self._poll_session, user_id, context_token, "getConfig failed")
 
     def _split_text(self, content: str) -> List[str]:
         return _split_text_for_weixin_delivery(content, self.MAX_MESSAGE_LENGTH, self._split_multiline_messages)
@@ -1173,9 +1131,7 @@ class WeixinAdapter(BasePlatformAdapter):
         if len(self._rate_limit_events) < self._rate_limit_circuit_threshold:
             return False
         if self._rate_limit_circuit_open_seconds > 0:
-            self._rate_limit_circuit_until = max(
-                self._rate_limit_circuit_until, time.monotonic() + self._rate_limit_circuit_open_seconds,
-            )
+            self._rate_limit_circuit_until = max(self._rate_limit_circuit_until, time.monotonic() + self._rate_limit_circuit_open_seconds)
         return self._rate_limit_cooldown_remaining() > 0
 
     async def _send_text_chunk(self, *, chat_id: str, chunk: str, context_token: Optional[str], client_id: str) -> None:
@@ -1320,12 +1276,12 @@ class WeixinAdapter(BasePlatformAdapter):
                     os.unlink(file_path)
 
     async def send_image_file(
-        self, chat_id: str, image_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None, **kwargs,
+        self, chat_id: str, image_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None, **kwargs,
     ) -> SendResult:
         return await self.send_document(chat_id=chat_id, file_path=image_path, caption=caption, metadata=metadata)
 
     async def _send_file_result(self, chat_id: str, path: str, caption: str, label: str, **kwargs: Any) -> SendResult:
+        """``_send_file`` wrapped into a SendResult (shared by send_document/send_video/send_voice)."""
         if not self._send_session or not self._token:
             return SendResult(success=False, error="Not connected")
         try:
@@ -1335,8 +1291,8 @@ class WeixinAdapter(BasePlatformAdapter):
             return SendResult(success=False, error=str(exc))
 
     async def send_document(
-        self, chat_id: str, file_path: str, caption: Optional[str] = None, file_name: Optional[str] = None,
-        reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None, **kwargs,
+        self, chat_id: str, file_path: str, caption: Optional[str] = None, file_name: Optional[str] = None, reply_to: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None, **kwargs,
     ) -> SendResult:
         return await self._send_file_result(chat_id, file_path, caption or "", "send_document")
 
@@ -1378,7 +1334,9 @@ class WeixinAdapter(BasePlatformAdapter):
         upload_param = str(upload_response.get("upload_param") or "")
         ciphertext = _aes128_ecb_encrypt(plaintext, aes_key)
         # Prefer upload_full_url (direct CDN), else construct from upload_param. Both use POST — PUT 404s on the CDN.
-        upload_url = str(upload_response.get("upload_full_url") or "") or (upload_param and _cdn_upload_url(self._cdn_base_url, upload_param, filekey))
+        upload_url = str(upload_response.get("upload_full_url") or "") or (
+            upload_param and f"{self._cdn_base_url.rstrip('/')}/upload?encrypted_query_param={quote(upload_param, safe='')}&filekey={quote(filekey, safe='')}"
+        )
         if not upload_url:
             raise RuntimeError(f"getUploadUrl returned neither upload_param nor upload_full_url: {upload_response}")
         encrypted_query_param = await _upload_ciphertext(self._send_session, ciphertext=ciphertext, upload_url=upload_url)
@@ -1469,7 +1427,5 @@ async def send_weixin_direct(
             extra={**dict(extra or {}), "account_id": account_id, "base_url": base_url, "cdn_base_url": cdn_base_url},
         ))
         adapter._send_session = adapter._session = session
-        adapter._token, adapter._account_id = resolved_token, account_id
-        adapter._base_url, adapter._cdn_base_url = base_url, cdn_base_url
         adapter._token_store = token_store
         return await _deliver_direct(adapter, chat_id, message, media_files, context_token)

@@ -28,6 +28,10 @@ def _root() -> Path:
     return Path(get_hermes_home()) / "workspace" / "meetings"
 
 
+def _active_file() -> Path:
+    return _root() / ".active.json"
+
+
 def _read_active() -> Optional[Dict[str, Any]]:
     p = _active_file()
     if not p.is_file():
@@ -39,7 +43,7 @@ def _read_active() -> Optional[Dict[str, Any]]:
 
 
 def _write_active(data: Dict[str, Any]) -> None:
-    write_json_atomic(_root() / ".active.json", data)
+    write_json_atomic(_active_file(), data)
 
 
 def _pid_alive(pid: int) -> bool:
@@ -191,6 +195,6 @@ def stop(*, reason: str = "requested") -> Dict[str, Any]:
             time.sleep(0.5)
         else:
             _kill(pid, signal.SIGKILL)  # windows-footgun: ok — POSIX-only plugin (google_meet registers no-op on Windows; see __init__.py)
-    (_root() / ".active.json").unlink(missing_ok=True)
+    _active_file().unlink(missing_ok=True)
     return {"ok": True, "reason": reason, "meetingId": active.get("meeting_id"),
             "transcriptPath": str(Path(out_dir) / "transcript.txt") if out_dir else None}

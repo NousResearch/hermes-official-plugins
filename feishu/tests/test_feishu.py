@@ -10,10 +10,13 @@ import unittest
 from collections import OrderedDict
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Dict
+from typing import TYPE_CHECKING, Dict
 from unittest.mock import AsyncMock, Mock, patch
 
-from gateway.platforms.base import ProcessingOutcome
+from gateway.platforms.event import ProcessingOutcome
+
+if TYPE_CHECKING:
+    from plugins.platforms.feishu.adapter import FeishuAdapter
 
 import pytest
 _SYS_ENV = {}
@@ -920,7 +923,7 @@ class TestAdapterBehavior(unittest.TestCase):
     @patch.dict(os.environ, _SYS_ENV, clear=False)
     def test_process_inbound_message_uses_event_sender_identity_only(self):
         from gateway.config import PlatformConfig
-        from gateway.platforms.base import MessageType
+        from gateway.platforms.event import MessageType
         from plugins.platforms.feishu.adapter import FeishuAdapter
 
         adapter = FeishuAdapter(PlatformConfig())
@@ -974,7 +977,7 @@ class TestAdapterBehavior(unittest.TestCase):
     )
     def test_text_batch_flushes_when_message_count_limit_is_hit(self):
         from gateway.config import PlatformConfig
-        from gateway.platforms.base import MessageEvent, MessageType
+        from gateway.platforms.event import MessageEvent, MessageType
         from plugins.platforms.feishu.adapter import FeishuAdapter
         from gateway.session import SessionSource
 
@@ -1018,7 +1021,7 @@ class TestAdapterBehavior(unittest.TestCase):
     @patch.dict(os.environ, _SYS_ENV, clear=False)
     def test_media_batch_merges_rapid_photo_messages(self):
         from gateway.config import PlatformConfig
-        from gateway.platforms.base import MessageEvent, MessageType
+        from gateway.platforms.event import MessageEvent, MessageType
         from plugins.platforms.feishu.adapter import FeishuAdapter
         from gateway.session import SessionSource
 
@@ -2299,7 +2302,7 @@ class TestFeishuProcessInboundMessage(unittest.TestCase):
 
 
     def test_non_command_message_with_mentions_injects_hint(self):
-        from gateway.platforms.base import MessageType
+        from gateway.platforms.event import MessageType
 
         adapter = self._build_adapter()
         alice = SimpleNamespace(

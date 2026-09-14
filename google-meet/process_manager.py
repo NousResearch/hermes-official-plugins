@@ -21,7 +21,8 @@ from typing import Any, Dict, Optional
 
 from hermes_constants import get_hermes_home
 
-from plugins.google_meet._jsonfile import read_json, write_json_atomic
+from plugins.google_meet._jsonfile import read_json
+from utils import atomic_json_write
 
 
 def _root() -> Path:
@@ -43,7 +44,7 @@ def _read_active() -> Optional[Dict[str, Any]]:
 
 
 def _write_active(data: Dict[str, Any]) -> None:
-    write_json_atomic(_active_file(), data)
+    atomic_json_write(_active_file(), data)
 
 
 def _pid_alive(pid: int) -> bool:

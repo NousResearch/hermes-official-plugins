@@ -1709,11 +1709,12 @@ class TestDedupTTL(unittest.TestCase):
         from gateway.config import PlatformConfig
         from plugins.platforms.feishu.adapter import FeishuAdapter
 
-        # Keep the per-test HERMES_HOME through the env wipe: the adapter resolves its
-        # dedup store from get_hermes_home() at construction, and a cleared environment
-        # falls back to the operator's real ~/.hermes, whose live ids leak into writes[-1].
-        with patch.dict(os.environ, {"HERMES_HOME": os.environ["HERMES_HOME"]}, clear=True):
-            adapter = FeishuAdapter(PlatformConfig())
+        # The class-level env wipe drops the per-test HERMES_HOME, so the adapter resolves
+        # its dedup store under the operator's real ~/.hermes and every id a live gateway
+        # persisted leaks into writes[-1]. Pin the store to a scratch path instead.
+        with tempfile.TemporaryDirectory() as scratch:
+            with patch("plugins.platforms.feishu.adapter.get_hermes_home", return_value=Path(scratch)):
+                adapter = FeishuAdapter(PlatformConfig())
         writes = []
         calls = [0]
 

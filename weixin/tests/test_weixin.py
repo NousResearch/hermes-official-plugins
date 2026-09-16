@@ -322,6 +322,21 @@ class TestWeixinChunkDelivery:
         assert send_message_mock.await_count == 2
         assert sleep_mock.await_count == 1
 
+    @pytest.mark.parametrize("error_field", ["ret", "errcode"])
+    @patch("gateway.platforms.weixin._send_message", new_callable=AsyncMock)
+    def test_prepare_failed_retries_without_context_token(self, send_message_mock, error_field):
+        adapter = self._connected_adapter()
+        adapter._rate_limit_circuit_threshold = 1
+        adapter._token_store._cache[adapter._token_store._key(adapter._account_id, "wxid_test123")] = "ctx-token"
+        prepare_failed = {error_field: weixin.RATE_LIMIT_ERRCODE, "errmsg": "prepare failed"}
+        send_message_mock.side_effect = [prepare_failed, {"ret": 0}]
+
+        result = asyncio.run(adapter.send("wxid_test123", "hello"))
+
+        assert result.success is True
+        assert [call.kwargs["context_token"] for call in send_message_mock.await_args_list] == ["ctx-token", None]
+        assert adapter._rate_limit_circuit_until == 0.0
+
 
 class TestWeixinOutboundMedia:
 
@@ -879,4 +894,3 @@ class TestWeixinVoiceGatewayHandoff:
             "VOICE event body leaked Tencent's STT text — runner would trust "
             "the wrong transcript instead of re-transcribing (#27300)."
         )
-

@@ -66,8 +66,11 @@ _FENCE_RE = re.compile(r"^```([^\n`]*)\s*$")
 
 
 def _is_stale_session_ret(ret: "Optional[int]", errcode: "Optional[int]", errmsg: "Optional[str]") -> bool:
-    """ret/errcode=-2 with 'unknown error' is a stale-session signal (like -14), not a real rate limit."""
-    return (ret == RATE_LIMIT_ERRCODE or errcode == RATE_LIMIT_ERRCODE) and (errmsg or "").lower() == "unknown error"
+    """Recognize stale-session variants of iLink's ``-2`` response, not real rate limits."""
+    return (ret == RATE_LIMIT_ERRCODE or errcode == RATE_LIMIT_ERRCODE) and (errmsg or "").lower() in {
+        "unknown error",
+        "prepare failed",
+    }
 
 
 def _is_session_expired(resp: Dict[str, Any], ret: Any, errcode: Any) -> bool:

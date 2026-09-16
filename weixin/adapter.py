@@ -1150,14 +1150,28 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
             "ciphertext_size": len(ciphertext), "plaintext_size": rawsize, "filename": Path(path).name, "rawfilemd5": rawfilemd5}
         if media_type == MEDIA_VOICE and path.endswith(".silk"):
             item_kwargs.update(encode_type=6, sample_rate=24000, bits_per_sample=16)
+        item_lists: List[List[Dict[str, Any]]] = [[item_builder(**item_kwargs)]]
         if caption:
-            await _send_message(
-                self._send_session, base_url=self._base_url, token=self._token, to=chat_id, text=self.format_message(caption),
-                context_token=context_token, client_id=f"hermes-weixin-{uuid.uuid4().hex}")
-        last_message_id = f"hermes-weixin-{uuid.uuid4().hex}"
-        await _send_items(
-            self._send_session, base_url=self._base_url, token=self._token, to=chat_id, item_list=[item_builder(**item_kwargs)],
-            context_token=context_token, client_id=last_message_id)
+            item_lists.insert(0, [{"type": ITEM_TEXT, "text_item": {"text": self.format_message(caption)}}])
+        last_message_id = ""
+        for item_list in item_lists:
+            last_message_id = f"hermes-weixin-{uuid.uuid4().hex}"
+            while True:
+                resp = await _send_items(
+                    self._send_session, base_url=self._base_url, token=self._token, to=chat_id, item_list=item_list,
+                    context_token=context_token, client_id=last_message_id)
+                ret, errcode = (resp.get("ret"), resp.get("errcode")) if resp and isinstance(resp, dict) else (None, None)
+                if (ret is None or ret == 0) and (errcode is None or errcode == 0):
+                    break
+                # Same stale-session fallback as _send_text_chunk: re-send once without context_token. Clearing the
+                # token also covers the remaining item lists (caption, then media) and bounds this loop.
+                if _is_session_expired(resp, ret, errcode) and context_token:
+                    context_token = None
+                    self._token_store._cache.pop(self._token_store._key(self._account_id, chat_id), None)
+                    logger.warning("[%s] session expired for %s; re-sending media without context_token", self.name, _safe_id(chat_id))
+                    continue
+                errmsg = resp.get("errmsg") or resp.get("msg")
+                raise RuntimeError(f"iLink sendmessage error: ret={ret} errcode={errcode} errmsg={errmsg or 'unknown error'}")
         return last_message_id
 
     def _outbound_media_builder(self, path: str, force_file_attachment: bool = False):

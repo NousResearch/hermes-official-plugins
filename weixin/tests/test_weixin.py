@@ -350,6 +350,23 @@ class TestWeixinChunkDelivery:
         assert result.success is True
         assert [call.kwargs["context_token"] for call in send_message_mock.await_args_list] == ["ctx-token", None]
 
+    @patch.object(weixin, "_send_items", new_callable=AsyncMock)
+    @patch.object(weixin, "_upload_ciphertext", new=AsyncMock(return_value="enc-q"))
+    @patch.object(weixin, "_get_upload_url", new=AsyncMock(return_value={"upload_full_url": "https://cdn.example.com/upload"}))
+    def test_media_send_reads_ret_and_resends_without_token_on_stale_session(self, send_items_mock, tmp_path):
+        """The media leg (cron media_files / send_document) must honour iLink ret like _send_text_chunk: a stale-token
+        ``ret=-2 prepare failed`` gets one tokenless re-send, and a persistent error is a failure, not success (#112709)."""
+        adapter = self._connected_adapter()
+        doc = tmp_path / "report.pdf"
+        doc.write_bytes(b"%PDF-1.4")
+        send_items_mock.return_value = {"ret": -2, "errmsg": "prepare failed"}
+
+        result = asyncio.run(adapter.send_document("wxid_test123", str(doc)))
+
+        assert result.success is False
+        assert "prepare failed" in (result.error or "")
+        assert [call.kwargs["context_token"] for call in send_items_mock.await_args_list] == ["ctx-token", None]
+
 
 class TestWeixinOutboundMedia:
 

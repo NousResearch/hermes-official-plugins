@@ -337,6 +337,19 @@ class TestWeixinChunkDelivery:
         assert [call.kwargs["context_token"] for call in send_message_mock.await_args_list] == ["ctx-token", None]
         assert adapter._rate_limit_circuit_until == 0.0
 
+    @patch("gateway.platforms.weixin._send_message", new_callable=AsyncMock)
+    def test_tokenless_resend_does_not_consume_retry_budget(self, send_message_mock):
+        """With ``send_chunk_retries=0`` the stale-session re-send must still happen: it is a different payload,
+        not a failed attempt, so it must not eat the (only) retry slot and fall out of the loop (#112709)."""
+        adapter = self._connected_adapter()
+        adapter._send_chunk_retries = 0
+        send_message_mock.side_effect = [{"ret": weixin.SESSION_EXPIRED_ERRCODE, "errmsg": "session expired"}, {"ret": 0}]
+
+        result = asyncio.run(adapter.send("wxid_test123", "hello"))
+
+        assert result.success is True
+        assert [call.kwargs["context_token"] for call in send_message_mock.await_args_list] == ["ctx-token", None]
+
 
 class TestWeixinOutboundMedia:
 

@@ -974,7 +974,8 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         async with self._send_text_gate:
             last_error: Optional[Exception] = None
             retried_without_token = False
-            for attempt in range(self._send_chunk_retries + 1):
+            attempt = 0  # counts real failures only — the tokenless re-send must not eat the retry budget
+            while True:
                 if self._rate_limit_cooldown_remaining() > 0:
                     raise RuntimeError(f"iLink sendmessage rate limited; cooldown active for {self._rate_limit_cooldown_remaining():.1f}s")
                 try:
@@ -999,6 +1000,7 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
                             break
                         if attempt >= self._send_chunk_retries:
                             break
+                        attempt += 1
                         wait = self._send_chunk_retry_delay_seconds * 3  # 3x backoff for rate limit
                         logger.warning("[%s] rate limited for %s; backing off %.1fs before retry", self.name, _safe_id(chat_id), wait)
                         await asyncio.sleep(wait)
@@ -1010,9 +1012,10 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
                     last_error = exc
                     if attempt >= self._send_chunk_retries:
                         break
-                    wait = self._send_chunk_retry_delay_seconds * (attempt + 1)
+                    attempt += 1
+                    wait = self._send_chunk_retry_delay_seconds * attempt
                     logger.warning("[%s] send chunk failed to=%s attempt=%d/%d, retrying in %.2fs: %s",
-                                   self.name, _safe_id(chat_id), attempt + 1, self._send_chunk_retries + 1, wait, exc)
+                                   self.name, _safe_id(chat_id), attempt, self._send_chunk_retries + 1, wait, exc)
                     if wait > 0:
                         await asyncio.sleep(wait)
             assert last_error is not None

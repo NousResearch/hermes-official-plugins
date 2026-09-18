@@ -335,6 +335,7 @@ class TestAdapterModule(unittest.TestCase):
 
         fake_client = _FakeWSClient()
         fake_adapter = SimpleNamespace(
+            _loop=None,
             _ws_thread_loop=None,
             _ws_reconnect_nonce=2,
             _ws_reconnect_interval=3,
@@ -344,6 +345,7 @@ class TestAdapterModule(unittest.TestCase):
         fake_client_module = ModuleType("lark_oapi.ws.client")
         fake_client_module.loop = None
         fake_client_module.websockets = SimpleNamespace(connect=AsyncMock())
+        fake_client_module.Client = type("Client", (), {"_receive_message_loop": lambda self: None})
         fake_ws_module = ModuleType("lark_oapi.ws")
         fake_ws_module.client = fake_client_module
         fake_root_module = ModuleType("lark_oapi")

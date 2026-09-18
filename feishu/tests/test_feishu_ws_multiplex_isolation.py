@@ -27,6 +27,12 @@ def _inject_fake_lark_module(monkeypatch, connect=None):
     client_mod = types.ModuleType("lark_oapi.ws.client")
     client_mod.loop = SimpleNamespace(name="sdk-default-loop")
     client_mod.websockets = SimpleNamespace(connect=connect)
+
+    class Client:  # the SDK class whose receive loop the isolation shim wraps
+        async def _receive_message_loop(self):
+            await asyncio.sleep(3600)
+
+    client_mod.Client = Client
     lark.ws = lark_ws
     lark_ws.client = client_mod
     monkeypatch.setitem(sys.modules, "lark_oapi", lark)
@@ -38,6 +44,7 @@ def _inject_fake_lark_module(monkeypatch, connect=None):
 
 def _adapter_stub(**overrides):
     stub = SimpleNamespace(
+        _loop=None,
         _ws_thread_loop=None,
         _ws_reconnect_nonce=None,
         _ws_reconnect_interval=None,
@@ -108,8 +115,8 @@ def test_dead_receive_loop_unparks_start_and_exits_the_thread(monkeypatch, caplo
             self._auto_reconnect = False
 
         async def _receive_message_loop(self):
-            # Mirror lark_oapi 1.6.8: bare raise (no reconnect) out of an
-            # unawaited create_task when Hermes disables _auto_reconnect.
+            # Mirror lark_oapi 1.6.8: bare raise out of an unawaited create_task
+            # (reconnect ladder disabled, or its ClientException re-raise).
             await asyncio.sleep(0.01)
             raise ConnectionError("simulated half-open peer")
 
@@ -145,17 +152,19 @@ def test_dead_receive_loop_unparks_start_and_exits_the_thread(monkeypatch, caplo
     assert "simulated half-open peer" in caplog.text
 
 
-def test_live_receive_loop_keeps_start_parked(monkeypatch):
-    """The exit-notify wrap must only fire when the receive loop actually
-    dies — a healthy socket keeps start() parked (no false-positive stop)."""
+def test_receive_loop_normal_return_keeps_start_parked(monkeypatch):
+    """The exit-notify wrap must only fire on an exception. When the SDK's own
+    reconnect ladder succeeds, the old receive loop *returns* (a fresh one was
+    scheduled by ``_connect``) — stopping the loop there would tear down the
+    healthy rebuilt link on every transient blip."""
     client_mod = _inject_fake_lark_module(monkeypatch)
-    parked = threading.Event()
+    returned = threading.Event()
     loop_holder = {}
 
     class FakeSDKClient:
         async def _receive_message_loop(self):
-            parked.set()
-            await asyncio.sleep(3600)
+            await asyncio.sleep(0.01)
+            returned.set()  # ladder reconnected: coroutine returns normally
 
         def start(self):
             loop = client_mod.loop
@@ -178,12 +187,11 @@ def test_live_receive_loop_keeps_start_parked(monkeypatch):
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
-    assert parked.wait(timeout=10)
+    assert returned.wait(timeout=10)
     thread.join(timeout=0.5)
-    assert thread.is_alive()  # healthy link: start() stays parked
-    # Clean teardown for the test process: wake the parked selector and stop
-    # the worker loop from this (foreign) thread, then let the thread's own
-    # finally block close it out.
+    assert thread.is_alive()  # start() stays parked on the rebuilt link
+    # Clean teardown for the test process: stop the worker loop from this
+    # (foreign) thread, then let the thread's own finally block close it out.
     loop_holder["loop"].call_soon_threadsafe(loop_holder["loop"].stop)
     thread.join(timeout=10)
     assert not thread.is_alive()
@@ -197,7 +205,9 @@ def _supervisor_stub():
         _ws_restart_backoff=0.01,
         connect_calls=0,
         connect_should_fail=0,
+        status_writes=[],
     )
+    stub._write_runtime_status_safe = lambda context, **kw: stub.status_writes.append(kw["platform_state"])
 
     async def _connect_websocket():
         stub.connect_calls += 1
@@ -236,9 +246,12 @@ def test_supervisor_restarts_a_dead_ws_thread_with_backoff():
             await task
         except asyncio.CancelledError:
             pass
-        return stub.connect_calls
+        return stub
 
-    assert asyncio.run(scenario()) == 2  # failed restart, then a successful one
+    stub = asyncio.run(scenario())
+    assert stub.connect_calls == 2  # failed restart, then a successful one
+    # The lost link is published as ``retrying`` (``connected`` is re-stamped by ``_ws_link_up``).
+    assert stub.status_writes[0] == "retrying"
 
 
 def test_supervisor_stops_when_disconnect_nils_the_client():

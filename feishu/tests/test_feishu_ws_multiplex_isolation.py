@@ -197,6 +197,42 @@ def test_receive_loop_normal_return_keeps_start_parked(monkeypatch):
     assert not thread.is_alive()
 
 
+def test_sdk_reconnect_ladder_publishes_retrying(monkeypatch):
+    """#113662, live path: with ``_auto_reconnect`` on, a receive-loop error runs
+    the SDK's own ``_reconnect()`` ladder inside the WS thread — the thread does
+    not die, so the supervisor never publishes ``retrying``. The SDK's
+    ``on_reconnecting`` observer must hop to the adapter loop and publish it."""
+    _inject_fake_lark_module(monkeypatch)
+    adapter_loop = asyncio.new_event_loop()
+
+    class FakeSDKClient:
+        def __init__(self):
+            self.on_reconnecting = lambda: None  # SDK default: no-op observer
+
+        def start(self):
+            self.on_reconnecting()  # what lark_oapi ``_reconnect()`` fires first
+
+    client = FakeSDKClient()
+    stub = _adapter_stub(_loop=adapter_loop, _running=True, _ws_client=client, status_writes=[])
+    stub._write_runtime_status_safe = lambda context, **kw: stub.status_writes.append(kw["platform_state"])
+    stub._ws_link_retrying = types.MethodType(feishu_adapter.FeishuAdapter._ws_link_retrying, stub)
+
+    thread = threading.Thread(target=feishu_adapter._run_official_feishu_ws_client, args=(client, stub), daemon=True)
+    thread.start()
+    thread.join(timeout=10)
+    assert not thread.is_alive()
+
+    async def drain():
+        for _ in range(100):
+            if stub.status_writes:
+                break
+            await asyncio.sleep(0.01)
+
+    adapter_loop.run_until_complete(drain())
+    adapter_loop.close()
+    assert stub.status_writes == ["retrying"]
+
+
 def _supervisor_stub():
     stub = SimpleNamespace(
         _running=True,

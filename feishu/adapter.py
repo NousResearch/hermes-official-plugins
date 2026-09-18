@@ -1091,6 +1091,10 @@ def _run_official_feishu_ws_client(ws_client: Any, adapter: Any) -> None:
             setattr(ws_client, "_reconnect_interval", adapter._ws_reconnect_interval)
             if adapter._ws_ping_interval is not None:
                 setattr(ws_client, "_ping_interval", adapter._ws_ping_interval)
+            # SDK observer (lark-oapi ``Client.on_reconnecting``, fired first thing in ``_reconnect()``):
+            # on the live link ``_auto_reconnect`` is on, so the ladder runs *inside* the receive loop
+            # and the thread never dies — without this the supervisor's ``retrying`` is never published.
+            setattr(ws_client, "on_reconnecting", _on_reconnecting)
         except Exception:
             logger.debug("[Feishu] Failed to apply websocket runtime overrides", exc_info=True)
 
@@ -1100,6 +1104,10 @@ def _run_official_feishu_ws_client(ws_client: Any, adapter: Any) -> None:
         if value is not None
     }
     adapter_loop = adapter._loop
+
+    def _on_reconnecting() -> None:
+        if adapter_loop is not None and not adapter_loop.is_closed():
+            adapter_loop.call_soon_threadsafe(adapter._ws_link_retrying, ws_client)
 
     def _on_link_up() -> None:
         # Fired on the WS thread when the SDK scheduled a receive loop (handshake done); hop to the
@@ -3772,6 +3780,14 @@ class FeishuAdapter(BasePlatformAdapter):
         """WS thread reports its link is up (SDK receive loop scheduled); re-stamp ``connected`` after a rebuild."""
         if self._running and self._ws_client is ws_client:
             self._mark_connected()
+
+    def _ws_link_retrying(self, ws_client: Any) -> None:
+        """WS thread reports the SDK's own reconnect ladder started; ``_ws_link_up`` re-stamps ``connected``."""
+        if self._running and self._ws_client is ws_client:
+            self._write_runtime_status_safe(
+                "ws_link_lost", platform_state="retrying", error_code=None,
+                error_message="Feishu websocket link lost; reconnecting",
+            )
 
     async def _connect_websocket(self) -> None:
         if not FEISHU_WEBSOCKET_AVAILABLE:

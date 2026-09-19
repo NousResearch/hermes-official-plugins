@@ -81,7 +81,6 @@ def check_qq_requirements() -> bool:
 
 
 _VOICE_EXTENSIONS = (".silk", ".amr", ".mp3", ".wav", ".ogg", ".m4a", ".aac", ".speex", ".flac")
-_STT_DEFAULT_TIMEOUT = 60.0  # seconds; matches stt.openai.timeout's default
 _STT_PROVIDER_BASE_URLS = {
     "zai": "https://open.bigmodel.cn/api/coding/paas/v4",
     # Aliases that target direct REST APIs not modeled as first-class providers in PROVIDER_REGISTRY. Used
@@ -1203,15 +1202,13 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         vars; None when unconfigured (QQ's built-in ASR still works). ``timeout`` (seconds,
         default 60) follows the shared STT client default so a self-hosted model's cold start
         is not cut off at 30s (#112939)."""
+        from tools.transcription_common import DEFAULT_STT_TIMEOUT, _config_number  # lazy: keep adapter light
         stt_cfg = (self.config.extra or {}).get("stt")
         if isinstance(stt_cfg, dict) and stt_cfg.get("enabled") is not False:
             base_url = stt_cfg.get("baseUrl") or stt_cfg.get("base_url", "")
             api_key = stt_cfg.get("apiKey") or stt_cfg.get("api_key", "")
             model = stt_cfg.get("model", "")
-            try:
-                timeout = float(stt_cfg.get("timeout", _STT_DEFAULT_TIMEOUT))
-            except (TypeError, ValueError):
-                timeout = _STT_DEFAULT_TIMEOUT
+            timeout = _config_number(stt_cfg, "timeout", DEFAULT_STT_TIMEOUT)
             if base_url and api_key:
                 return {"base_url": base_url.rstrip("/"), "api_key": api_key, "model": model or "whisper-1",
                         "timeout": timeout}
@@ -1228,7 +1225,7 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
             base_url = _resolve_qq_secret("QQ_STT_BASE_URL", _STT_PROVIDER_BASE_URLS["zai"])
             model = _resolve_qq_secret("QQ_STT_MODEL", "glm-asr")
             return {"base_url": base_url.rstrip("/"), "api_key": qq_stt_key, "model": model,
-                    "timeout": _STT_DEFAULT_TIMEOUT}
+                    "timeout": DEFAULT_STT_TIMEOUT}
         return None
 
     async def _call_stt(self, wav_path: str) -> Optional[str]:

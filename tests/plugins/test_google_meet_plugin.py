@@ -271,6 +271,85 @@ def test_detect_admission_returns_false_on_error():
 
 
 # ---------------------------------------------------------------------------
+# Realtime join path: late Join button, muted mic, PCM pump fed after start-up (#80875)
+# ---------------------------------------------------------------------------
+
+class _Toggle:
+    """Playwright-locator stand-in: visible when *present*, records clicks on *page*."""
+
+    def __init__(self, page, present, label):
+        self.page, self.present, self.label = page, present, label
+
+    first = property(lambda self: self)
+    def count(self): return 1 if self.present() else 0
+    def is_visible(self): return self.present()
+    def click(self, timeout=None): self.page.clicked.append(self.label)
+
+
+def test_join_polls_for_late_button_and_admission_unmutes_mic(tmp_path):
+    """Meet renders Join now / the mic toggle asynchronously; a one-shot click missed it (#80875)."""
+    import time
+
+    from plugins.google_meet.meet_bot import _BotConfig, _BotState, _ensure_mic_on, _join
+
+    class _Page:
+        def __init__(self, ready_at, mic_muted):
+            self.ready_at, self.mic_muted, self.clicked = ready_at, mic_muted, []
+
+        def locator(self, sel):
+            muted = "Turn on microphone" in sel
+            return _Toggle(self, lambda: self.mic_muted == muted, sel)
+
+        def get_by_role(self, role, name=None, exact=False):
+            return _Toggle(self, lambda: name == "Join now" and time.time() >= self.ready_at, name)
+
+    state = _BotState(tmp_path, "abc-defg-hij", "https://meet.google.com/abc-defg-hij")
+    page = _Page(ready_at=time.time() + 0.6, mic_muted=True)
+    _join(page, _BotConfig(guest_name="Bot"), state, timeout=5.0)
+    assert page.clicked == ["Join now"]
+
+    assert _ensure_mic_on(page) == "unmuted_clicked"
+    assert any("Turn on microphone" in c for c in page.clicked)
+    # Control: an already-live mic is reported, never toggled off.
+    live = _Page(ready_at=0, mic_muted=False)
+    assert _ensure_mic_on(live) == "unmuted" and live.clicked == []
+
+
+def test_pcm_pump_receives_audio_appended_after_start(tmp_path, monkeypatch):
+    """The pump used to read the empty speaker.pcm to EOF and exit before Realtime spoke (#80875)."""
+    import subprocess
+    import time
+
+    from plugins.google_meet import meet_bot
+
+    pcm, sink = tmp_path / "speaker.pcm", tmp_path / "device.bin"
+    pcm.write_bytes(b"")
+    real_popen = subprocess.Popen
+
+    def cat_popen(cmd, **kw):  # `cat` stands in for paplay: same stdin / file-EOF semantics
+        assert cmd[0] == "paplay" and cmd[-1] == "-"
+        kw["stdout"] = open(sink, "wb")
+        return real_popen(["cat"], **kw)
+
+    monkeypatch.setattr(meet_bot.subprocess, "Popen", cat_popen)
+    rt, stop = {}, {"stop": False}
+    state = meet_bot._BotState(tmp_path, "abc-defg-hij", "https://meet.google.com/abc-defg-hij")
+    meet_bot._start_pcm_pump(rt, {"platform": "linux", "write_target": "sink"}, pcm, state, stop)
+    time.sleep(0.2)
+    with open(pcm, "ab") as f:
+        f.write(b"\x01\x02" * 2000)
+    deadline = time.time() + 5
+    while time.time() < deadline and sink.stat().st_size < 4000:
+        time.sleep(0.05)
+    assert rt["pcm_pump"].poll() is None
+    assert sink.stat().st_size == 4000
+    stop["stop"] = True
+    meet_bot._teardown_realtime({**rt, "speaker_thread": None, "session": None, "bridge": None})
+    assert not rt["pcm_tail_thread"].is_alive()
+    assert state.mic_state is None and "micState" in state.status_path.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
 # Realtime session counters + cancel_response (barge-in)
 # ---------------------------------------------------------------------------
 

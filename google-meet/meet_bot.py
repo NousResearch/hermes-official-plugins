@@ -211,8 +211,8 @@ def _pcm_tail_loop(proc, pcm_path: Path, stop_flag: dict, poll_interval: float =
                     continue
                 proc.stdin.write(chunk)
                 proc.stdin.flush()
-    except Exception:
-        pass  # pump exited / pipe closed: nothing left to stream to
+    except (OSError, ValueError):
+        pass  # pump exited / pipe closed (BrokenPipeError, write on closed stdin): nothing left to stream to
     finally:
         _quiet(proc.stdin.close)
 

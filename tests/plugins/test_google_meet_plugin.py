@@ -371,6 +371,25 @@ def test_pcm_pump_receives_audio_appended_after_start(tmp_path, monkeypatch):
     assert state.mic_state is None and "micState" in state.status_path.read_text(encoding="utf-8")
 
 
+def test_pcm_tail_loop_swallows_only_pipe_errors(tmp_path):
+    """A closed pump pipe is expected and quiet; any other tail-thread bug must not be silenced."""
+    from types import SimpleNamespace
+
+    from plugins.google_meet.meet_bot import _pcm_tail_loop
+
+    pcm = tmp_path / "speaker.pcm"
+    pcm.write_bytes(b"\x00" * 16)
+
+    def proc(exc):
+        def write(_chunk): raise exc
+        return SimpleNamespace(poll=lambda: None, stdin=SimpleNamespace(write=write, flush=lambda: None,
+                                                                        close=lambda: None))
+
+    _pcm_tail_loop(proc(BrokenPipeError()), pcm, {"stop": False})  # quiet
+    with pytest.raises(RuntimeError):
+        _pcm_tail_loop(proc(RuntimeError("bug")), pcm, {"stop": False})
+
+
 # ---------------------------------------------------------------------------
 # Realtime session counters + cancel_response (barge-in)
 # ---------------------------------------------------------------------------

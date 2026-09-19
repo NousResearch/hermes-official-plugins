@@ -4235,8 +4235,9 @@ def _qr_register_inner(*, initial_domain: str, timeout_seconds: int) -> Optional
         print(f"\n  Scan the QR code above, or open this URL directly:\n  {qr_url}")
     else:
         print(f"  Open this URL in Feishu / Lark on your phone:\n\n  {qr_url}\n")
-        from hermes_cli.managed_uv import pip_install_hint
-        print(f"  Tip: {pip_install_hint('qrcode')}  to display a scannable QR code here next time")
+        print("  Tip: from the Hermes environment, run: "
+              "python -c \"from pm import sync_venv; sync_venv(['messaging'], explicit=True)\" "
+              "to display a scannable QR code here next time")
     print()
     result = _poll_registration(
         device_code=begin["device_code"], interval=begin["interval"],

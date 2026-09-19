@@ -287,14 +287,15 @@ class _Toggle:
 
 
 def test_join_polls_for_late_button_and_admission_unmutes_mic(tmp_path):
-    """Meet renders Join now / the mic toggle asynchronously; a one-shot click missed it (#80875)."""
+    """Meet renders Join now / the mic toggle asynchronously; a one-shot click missed it (#80875).
+    The mic check is driven through ``_drain_loop``'s admission branch — the production call site."""
     import time
 
-    from plugins.google_meet.meet_bot import _BotConfig, _BotState, _ensure_mic_on, _join
+    from plugins.google_meet.meet_bot import _ADMISSION_PROBE_JS, _BotConfig, _BotState, _drain_loop, _join
 
     class _Page:
-        def __init__(self, ready_at, mic_muted):
-            self.ready_at, self.mic_muted, self.clicked = ready_at, mic_muted, []
+        def __init__(self, ready_at, mic_muted, stop):
+            self.ready_at, self.mic_muted, self.stop, self.clicked = ready_at, mic_muted, stop, []
 
         def locator(self, sel):
             muted = "Turn on microphone" in sel
@@ -303,16 +304,37 @@ def test_join_polls_for_late_button_and_admission_unmutes_mic(tmp_path):
         def get_by_role(self, role, name=None, exact=False):
             return _Toggle(self, lambda: name == "Join now" and time.time() >= self.ready_at, name)
 
+        def evaluate(self, js):  # admitted immediately; the caption drain ends the loop after one pass
+            if js is _ADMISSION_PROBE_JS:
+                return True
+            self.stop["stop"] = True
+            return []
+
+        def is_closed(self): return False
+
+    def admitted(mic_muted):
+        stop = {"stop": False}
+        page = _Page(ready_at=0, mic_muted=mic_muted, stop=stop)
+        state = _BotState(tmp_path / str(mic_muted), "abc-defg-hij", "https://meet.google.com/abc-defg-hij")
+        with patch("plugins.google_meet.meet_bot.time.sleep"):
+            _drain_loop(page, _BotConfig(guest_name="Bot", duration_s=0, lobby_timeout=30), state,
+                        {"session": None}, stop)
+        assert state.in_call is True
+        return page, state
+
+    stop = {"stop": False}
     state = _BotState(tmp_path, "abc-defg-hij", "https://meet.google.com/abc-defg-hij")
-    page = _Page(ready_at=time.time() + 0.6, mic_muted=True)
+    page = _Page(ready_at=time.time() + 0.6, mic_muted=True, stop=stop)
     _join(page, _BotConfig(guest_name="Bot"), state, timeout=5.0)
     assert page.clicked == ["Join now"]
 
-    assert _ensure_mic_on(page) == "unmuted_clicked"
+    page, state = admitted(mic_muted=True)
+    assert state.mic_state == "unmuted_clicked"
     assert any("Turn on microphone" in c for c in page.clicked)
+    assert json.loads(state.status_path.read_text(encoding="utf-8"))["micState"] == "unmuted_clicked"
     # Control: an already-live mic is reported, never toggled off.
-    live = _Page(ready_at=0, mic_muted=False)
-    assert _ensure_mic_on(live) == "unmuted" and live.clicked == []
+    live, state = admitted(mic_muted=False)
+    assert state.mic_state == "unmuted" and live.clicked == []
 
 
 def test_pcm_pump_receives_audio_appended_after_start(tmp_path, monkeypatch):

@@ -287,6 +287,15 @@ class TestResolveSTTConfig:
         with mock.patch.dict(os.environ, {}, clear=True):
             assert adapter._resolve_stt_config() is None
 
+    def test_timeout_defaults_to_60_and_honours_config(self):
+        """The STT request timeout is configurable and no longer a fixed 30s (#112939)."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            adapter = self._make_adapter(app_id="a", client_secret="b", stt={"apiKey": "k", "provider": "zai"})
+            assert adapter._resolve_stt_config()["timeout"] == 60.0
+            adapter = self._make_adapter(app_id="a", client_secret="b",
+                                         stt={"apiKey": "k", "provider": "zai", "timeout": "95"})
+            assert adapter._resolve_stt_config()["timeout"] == 95.0
+
 
 # ---------------------------------------------------------------------------
 # _detect_message_type

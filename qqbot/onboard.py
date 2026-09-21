@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from pm import install_hint
 import logging
 import time
 from enum import IntEnum
@@ -98,7 +99,7 @@ def qr_register(timeout_seconds: int = 600) -> Optional[dict]:
         else:
             print(f"  Open this URL in QQ on your phone:\n  {url}")
             print("  For a scannable QR code, run: "
-                  "python -c \"from pm import sync_venv; sync_venv(['messaging'], explicit=True)\"")
+                  f"{install_hint('messaging')}")
         print()
         while time.monotonic() < deadline:
             try:

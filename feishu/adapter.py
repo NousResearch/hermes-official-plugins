@@ -18,6 +18,7 @@ Session keys prefer union_id (user_id_alt) over open_id (user_id) for stability.
 
 from __future__ import annotations
 
+from pm import install_hint
 import asyncio
 import collections
 import concurrent.futures
@@ -4236,7 +4237,7 @@ def _qr_register_inner(*, initial_domain: str, timeout_seconds: int) -> Optional
     else:
         print(f"  Open this URL in Feishu / Lark on your phone:\n\n  {qr_url}\n")
         print("  Tip: from the Hermes environment, run: "
-              "python -c \"from pm import sync_venv; sync_venv(['messaging'], explicit=True)\" "
+              f"{install_hint('messaging')} "
               "to display a scannable QR code here next time")
     print()
     result = _poll_registration(

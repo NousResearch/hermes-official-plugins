@@ -244,7 +244,7 @@ class TestQrRegister:
 
         output = capsys.readouterr().out
         assert "https://example.com/qr" in output
-        assert "sync_venv(['messaging'], explicit=True)" in output
+        assert "hermes pm install --extra messaging" in output
         assert "pip install" not in output
 
     # -- Contract: expected errors → None, unexpected errors → propagate --

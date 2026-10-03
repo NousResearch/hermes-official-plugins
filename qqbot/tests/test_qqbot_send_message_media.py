@@ -102,6 +102,36 @@ class TestSendToPlatformQqbotMediaRouting:
         assert call.args[2] == ""
 
 
+def _token_client(post_handler):
+    """httpx.AsyncClient fake whose ``post`` delegates to ``post_handler(url, json)``."""
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            return post_handler(url, json)
+
+    class _HttpxMod:
+        AsyncClient = _Client
+
+    return _HttpxMod()
+
+
+def _token_ok():
+    def _post(url, json):
+        assert "getAppAccessToken" in url
+        return SimpleNamespace(status_code=200, json=lambda: {"access_token": "at-1"})
+
+    return _post
+
+
 class TestSendQqbotMedia:
     def test_media_path_calls_deliver_after_token(self, tmp_path):
         img = tmp_path / "logo.png"
@@ -207,6 +237,101 @@ class TestSendQqbotMedia:
         assert ("upload", "c2c", MEDIA_TYPE_IMAGE) in calls
         assert ("upload", "group", MEDIA_TYPE_IMAGE) in calls
         assert ("send", "group", "FI-99", "cap") in calls
+
+
+class TestQqbotMediaFailureFallsBackToText:
+    """Screen finding: media-delivery failure must not lose the caption/message text
+    (main degraded to text + omission warning; the media path returned a bare error)."""
+
+    def test_missing_media_file_still_delivers_caption_as_text(self, tmp_path):
+        missing = tmp_path / "gone.png"  # never written: stale path
+        posted = []
+
+        def _post(url, json):
+            if "getAppAccessToken" in url:
+                return SimpleNamespace(status_code=200, json=lambda: {"access_token": "at-1"})
+            posted.append((url, json))
+            return SimpleNamespace(status_code=200, json=lambda: {"id": "text-mid"})
+
+        with patch.dict("sys.modules", {"httpx": _token_client(_post)}):
+            result = asyncio.run(
+                _send_qqbot(
+                    _pconfig(),
+                    "user-openid",
+                    "",
+                    media_files=[(str(missing), False)],
+                    caption="the caption text",
+                )
+            )
+
+        assert result.get("success") is True, result
+        assert any(json and json.get("content") == "the caption text" for _, json in posted), posted
+        assert any("omitted" in w or "skipping" in w for w in result.get("warnings", [])), result
+
+    def test_upload_quota_error_still_delivers_caption_as_text(self, tmp_path):
+        img = tmp_path / "big.png"
+        img.write_bytes(b"png")
+
+        async def _deliver(client, headers, chat_id, media_path, is_voice, caption=None):
+            return {"error": "QQBot media send failed (guild/channel native media is unsupported; "
+                             "tried c2c and group): c2c: QQ Bot API error [400] "
+                             "/v2/users/user-openid/files: daily upload quota exceeded"}
+
+        posted = []
+
+        def _post(url, json):
+            if "getAppAccessToken" in url:
+                return SimpleNamespace(status_code=200, json=lambda: {"access_token": "at-1"})
+            posted.append((url, json))
+            return SimpleNamespace(status_code=200, json=lambda: {"id": "text-mid"})
+
+        with patch.dict("sys.modules", {"httpx": _token_client(_post)}), patch(
+            "tools.send_message_senders._qqbot_deliver_one_media", new=AsyncMock(side_effect=_deliver)
+        ):
+            result = asyncio.run(
+                _send_qqbot(
+                    _pconfig(),
+                    "user-openid",
+                    "",
+                    media_files=[(str(img), False)],
+                    caption="urgent notice",
+                )
+            )
+
+        assert result.get("success") is True, result
+        assert any(json and json.get("content") == "urgent notice" for _, json in posted), posted
+        assert result.get("warnings"), "media failure must be surfaced as a warning"
+
+    def test_non_caption_message_text_sent_before_failed_media_is_not_duplicated(self, tmp_path):
+        img = tmp_path / "x.png"
+        img.write_bytes(b"x")
+        posted = []
+
+        def _post(url, json):
+            if "getAppAccessToken" in url:
+                return SimpleNamespace(status_code=200, json=lambda: {"access_token": "at-1"})
+            posted.append((url, json))
+            return SimpleNamespace(status_code=200, json=lambda: {"id": "mid"})
+
+        with patch.dict("sys.modules", {"httpx": _token_client(_post)}), patch(
+            "tools.send_message_senders._qqbot_deliver_one_media",
+            new=AsyncMock(return_value={"error": "QQBot media send failed: too large"}),
+        ):
+            result = asyncio.run(
+                _send_qqbot(
+                    _pconfig(),
+                    "user-openid",
+                    "read this text",
+                    media_files=[(str(img), False)],
+                )
+            )
+
+        # Main's contract: the already-delivered text survives; the media failure becomes a
+        # warning on the result, not a bare error that discards the send.
+        assert result.get("success") is True, result
+        contents = [json.get("content") for _, json in posted if json]
+        assert contents.count("read this text") == 1, posted
+        assert result.get("warnings"), "media failure must be surfaced as a warning"
 
 
 class TestQqbotSendMediaMessageBody:

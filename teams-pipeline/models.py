@@ -180,7 +180,7 @@ class TeamsMeetingSummaryPayload(_Model):
     _DATETIMES = ("start_time", "end_time")
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "TeamsMeetingSummaryPayload":
+    def from_dict(cls, payload: dict[str, Any]) -> TeamsMeetingSummaryPayload:
         # meeting_ref is mandatory: a missing key raises KeyError rather than building a half-empty payload.
         return super().from_dict({**payload, "meeting_ref": payload["meeting_ref"]})
 

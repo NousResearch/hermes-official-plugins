@@ -1285,7 +1285,7 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
 
     # ── Outbound messaging — REST API ──
 
-    def _require_http_client(self) -> "httpx.AsyncClient":
+    def _require_http_client(self) -> httpx.AsyncClient:
         if not self._http_client:
             raise RuntimeError("HTTP client not initialized — not connected?")
         return self._http_client

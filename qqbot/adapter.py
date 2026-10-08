@@ -19,7 +19,7 @@ import os
 import re
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -1670,5 +1670,5 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
             with contextlib.suppress(ValueError, TypeError):
                 return datetime.fromisoformat(raw)
             with contextlib.suppress(ValueError, TypeError):
-                return datetime.fromtimestamp(int(raw) / 1000, tz=timezone.utc)
-        return datetime.now(tz=timezone.utc)
+                return datetime.fromtimestamp(int(raw) / 1000, tz=UTC)
+        return datetime.now(tz=UTC)

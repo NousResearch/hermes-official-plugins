@@ -1582,7 +1582,7 @@ class FeishuAdapter(BasePlatformAdapter):
                 # A CLOSE frame is one control frame; if 5s isn't enough the link is already wedged.
                 await asyncio.wait_for(asyncio.wrap_future(future), timeout=5.0)
                 logger.debug("[Feishu] Sent WebSocket CLOSE frame to Feishu")
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     "[Feishu] CLOSE frame not acknowledged within 5s — "
                     "Feishu may briefly route messages to the stale "
@@ -1609,7 +1609,7 @@ class FeishuAdapter(BasePlatformAdapter):
                 logger.debug("[Feishu] Waiting for websocket thread to exit (timeout=10s)")
                 await asyncio.wait_for(asyncio.shield(ws_future), timeout=10.0)
                 logger.debug("[Feishu] Websocket thread exited cleanly")
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("[Feishu] Websocket thread did not exit within 10s - may be stuck")
             except asyncio.CancelledError:
                 logger.debug("[Feishu] Websocket thread cancelled during disconnect")
@@ -2826,7 +2826,7 @@ class FeishuAdapter(BasePlatformAdapter):
         except ValueError:
             logger.warning("[Feishu] Webhook body exceeds limit from %s", remote_ip)
             return self._webhook_reject(remote_ip, "413", 413, "Request body too large")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("[Feishu] Webhook body read timed out after %ds from %s", _FEISHU_WEBHOOK_BODY_TIMEOUT_SECONDS, remote_ip)
             return self._webhook_reject(remote_ip, "408", 408, "Request Timeout")
         except Exception:

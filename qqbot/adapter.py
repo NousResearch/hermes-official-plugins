@@ -1188,7 +1188,7 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
                     "[%s] ffmpeg failed for %s: %s",
                     self._log_tag, Path(src_path).name, stderr[:200].decode(errors="replace"))
                 return None
-        except (asyncio.TimeoutError, FileNotFoundError) as exc:
+        except (TimeoutError, FileNotFoundError) as exc:
             logger.warning("[%s] ffmpeg conversion error: %s", self._log_tag, exc)
             return None
 

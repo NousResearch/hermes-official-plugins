@@ -291,7 +291,7 @@ async def _api_get(session: "aiohttp.ClientSession", *, base_url: str, endpoint:
 async def _get_updates(session: "aiohttp.ClientSession", *, base_url: str, token: str, sync_buf: str, timeout_ms: int) -> dict[str, Any]:
     try:
         return await _api_post(session, base_url=base_url, endpoint=EP_GET_UPDATES, payload={"get_updates_buf": sync_buf}, token=token, timeout_ms=timeout_ms)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return {"ret": 0, "msgs": [], "get_updates_buf": sync_buf}
 
 

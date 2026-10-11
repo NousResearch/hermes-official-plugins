@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import copy
+from collections import deque
 import hashlib
 import inspect
 import json
@@ -366,6 +367,42 @@ def _with_windows_essentials(env):
     return env
 
 
+def _with_login_identity(env):
+    """Carry the login identity Claude Code's local check reads into the child env.
+
+    Without ``USER`` a perfectly logged-in CLI reports ``loggedIn: false`` - instantly, with
+    empty stderr and no upstream request (#44; confirmed with ``claude auth status`` in the
+    issue thread). A supervised gateway (launchd background, containers, cron) or a filtered
+    env dict can omit it even when the process itself has one, so derive it before spawn:
+    from the parent environment, else from the running uid on POSIX.
+    """
+    if os.name == 'nt':
+        name = env.get('USERNAME') or env.get('USER') or os.environ.get('USERNAME') or ''
+        if name:
+            env.setdefault('USERNAME', name)
+            env.setdefault('USER', name)
+        return env
+    name = env.get('USER') or os.environ.get('USER') or ''
+    if not name:
+        try:
+            import pwd
+            name = pwd.getpwuid(os.getuid()).pw_name
+        except (ImportError, KeyError):
+            name = ''
+    if name:
+        env.setdefault('USER', name)
+        env.setdefault('LOGNAME', name)
+    return env
+
+
+def _stderr_tail(native_stderr):
+    """The first native stderr lines, for the raised error - a gateway-only failure with
+    stderr sent to DEVNULL is undiagnosable (#44): the reporter had to patch the plugin to
+    learn the stream was empty."""
+    text = ' '.join(line.strip() for line in native_stderr if line.strip())
+    return f' (native stderr: {text[:400]})' if text else ''
+
+
 class Stream:
     def __init__(self, iterator, request):
         self.iterator, self.request = iterator, request
@@ -598,6 +635,8 @@ class Client:
         hermes_names = {native: hermes for hermes, native in names.items()}
         p = None
         reader = None
+        err_drain = None
+        native_stderr = deque(maxlen=40)
         try:
             timeout = kwargs.get('timeout', self.timeout)
             timeout = getattr(timeout, 'read', timeout)
@@ -609,7 +648,7 @@ class Client:
                 root = Path(tmp)
                 (root / 'tools.json').write_text(json.dumps(manifest), encoding='utf-8')
                 mcp = {'mcpServers': {'hermes': {'command': sys.executable, 'args': [str(Path(__file__).with_name('inert_mcp.py')), str(root / 'tools.json')]}}}
-                env = _with_windows_essentials(dict(self.env if self.env is not None else os.environ))
+                env = _with_login_identity(_with_windows_essentials(dict(self.env if self.env is not None else os.environ)))
                 if self.env is None:
                     conflicts = [key for key in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_FOUNDRY_API_KEY') if env.get(key)]
                     conflicts += [key for key in ('CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY') if env.get(key, '').lower() not in ('', '0', 'false', 'no', 'off')]
@@ -645,7 +684,25 @@ class Client:
                 effort = parsed.get('output_config', {}).get('effort')
                 if effort:
                     command += ['--effort', effort]
-                p = request.spawn(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding='utf-8', cwd=self._workdir(), env=env)
+                p = request.spawn(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', cwd=self._workdir(), env=env)
+                # Native's stderr is diagnosis, not noise: a gateway-only failure (issue #44)
+                # previously vanished into DEVNULL, and the reporter had to patch the plugin to
+                # learn the stream was empty. Drain on a thread so the child never blocks.
+                native_stderr = deque(maxlen=40)
+
+                def drain_err():
+                    try:
+                        for line in p.stderr:
+                            native_stderr.append(line)
+                    except Exception:
+                        pass
+                    finally:
+                        try:
+                            p.stderr.close()
+                        except Exception:
+                            pass
+                err_drain = threading.Thread(target=drain_err, daemon=True)
+                err_drain.start()
                 events = queue.Queue()
                 def read():
                     try:
@@ -675,7 +732,7 @@ class Client:
                             continue
                         if isinstance(event, Exception):
                             # The offending stdout line is the whole diagnosis (a shim banner, a stray print); keep it.
-                            raise RuntimeError('Invalid native stream-json output: ' + repr((getattr(event, 'doc', None) or str(event))[:300])) from event
+                            raise RuntimeError('Invalid native stream-json output: ' + repr((getattr(event, 'doc', None) or str(event))[:300]) + _stderr_tail(native_stderr)) from event
                         deadline = time.monotonic() + timeout
                         return event
                 for index, frame in enumerate(frames):
@@ -721,6 +778,8 @@ class Client:
                             yield self._chunk(kwargs['model'], {'reasoning_content': delta['thinking']})
                 p.wait(timeout=max(.1, deadline-time.monotonic()))
                 reader.join(timeout=1)
+                if err_drain is not None:
+                    err_drain.join(timeout=1)
                 if request.cancelled.is_set():
                     raise RuntimeError('Claude request cancelled')
                 admission = request.admission
@@ -739,7 +798,7 @@ class Client:
                 if native_error and not native_failure_handled:
                     if native_error_code == 'authentication_failed' and not admission.used:
                         # No usable login where Hermes runs native: it refuses before any upstream request; only its /api/hello pre-flight reaches the relay.
-                        raise ClaudeCodeLoggedOut(f'{LOGGED_OUT_HINT} (native: {native_error})')
+                        raise ClaudeCodeLoggedOut(f'{LOGGED_OUT_HINT} (native: {native_error}){_stderr_tail(native_stderr)}')
                     raise ClaudeAPIError('Native API error: ' + native_error, NATIVE_ERROR_STATUS.get(str(native_error_code)))
                 if len(results) != 1 or not assistants or not stopped:
                     raise RuntimeError('Incomplete native response: assistant, message_stop and one result required')
@@ -760,7 +819,7 @@ class Client:
                         calls.append({'id': block['id'], 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(block['input'], separators=(',', ':'), allow_nan=False)}})
                 boundary = bool(calls) and final.get('subtype') == 'error_max_turns' and p.returncode == 1
                 if not boundary and not native_failure_handled and (p.returncode != 0 or final.get('is_error') or final.get('subtype') != 'success'):
-                    raise RuntimeError('Native request failed: ' + str(final.get('subtype')))
+                    raise RuntimeError('Native request failed: ' + str(final.get('subtype')) + _stderr_tail(native_stderr))
                 usage = assistants[0]['usage'] if admission.used else final.get('usage')
                 if not isinstance(usage, dict) or not all(isinstance(usage.get(k), (int, float)) for k in ('input_tokens', 'output_tokens')):
                     raise RuntimeError('Native result missing complete token usage')

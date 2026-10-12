@@ -133,6 +133,24 @@ class HomeAssistantAdapter(BasePlatformAdapter):
             logger.warning("[%s] No HASS_TOKEN configured", self.name)
             return False
         try:
+            # Idempotent reconnect. The gateway's reconnect watcher re-enters connect()
+            # (gateway/run_adapters.py) while the previous connection is still live, so close
+            # and cancel whatever this call would otherwise orphan: otherwise every such
+            # reconnect leaves the old websocket ClientSession + the old REST ClientSession
+            # open (aiohttp later reports "Unclosed client session" when GC collects them)
+            # and a second _listen_loop running against the same adapter.
+            await self._cleanup_ws()
+            await self._close(self._rest_session)
+            self._rest_session = None
+            if self._listen_task is not None and not self._listen_task.done():
+                self._listen_task.cancel()
+                try:
+                    await self._listen_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:  # a dying listener must not block the reconnect
+                    logger.debug("[%s] stale listener exited with an error", self.name, exc_info=True)
+            self._listen_task = None
             if not await self._ws_connect():
                 return False
             self._rest_session = self._new_session()  # dedicated REST session for send()

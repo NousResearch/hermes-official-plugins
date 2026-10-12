@@ -408,6 +408,14 @@ class Admission:
             return text
         return message if isinstance(message, str) else text
 
+    def rearm(self, timeout, queried):
+        """Warm sessions: admit exactly one more upstream request (the next Hermes step), under that step's timeout,
+        anchored on that step's queried frame."""
+        with self.lock:
+            self.timeout, self.used, self.denied, self.queried = timeout, False, 0, queried
+            self.request_id = self.status = self.failure = self.unrestored = None
+            self.capture, self.error_body = Capture(), b''
+
     def abort(self):
         with self.lock:
             self.cancelled = True

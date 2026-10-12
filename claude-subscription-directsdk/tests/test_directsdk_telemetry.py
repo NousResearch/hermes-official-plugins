@@ -27,7 +27,8 @@ def _set_telemetry(value):
 
 
 def _base_env(tmp_path, **extra):
-    env = {k: v for k, v in os.environ.items() if k not in QUIET and k != "DISABLE_AUTOUPDATER"}
+    # The fake CLI speaks the per-call protocol: a suite run under CLAUDE_SUBSCRIPTION_DIRECTSDK_WARM=1 must not reach it.
+    env = {k: v for k, v in os.environ.items() if k not in QUIET and k not in ("DISABLE_AUTOUPDATER", "CLAUDE_SUBSCRIPTION_DIRECTSDK_WARM")}
     return {**env, "PATH": os.defpath, "ENV_CAPTURE": str(tmp_path / "env.jsonl"), **extra}
 
 

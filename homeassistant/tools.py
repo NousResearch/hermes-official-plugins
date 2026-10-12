@@ -27,11 +27,26 @@ def tool_error(message: str) -> str:
     return json.dumps({"error": str(message)}, ensure_ascii=False)
 
 
-def _get_config():
-    """Return the active profile's Home Assistant URL and token."""
+def url_scheme_problem(url: str) -> Optional[str]:
+    """Why ``url`` can't be the Home Assistant base URL, or None when it can.
+
+    Without a scheme every request URL becomes ``host/api/...``, which aiohttp rejects with only that
+    string as the reason, so the misconfiguration would surface as an endless series of opaque errors.
+    """
+    if url.startswith(("http://", "https://")):
+        return None
     return (
-        (get_secret("HASS_URL", "http://homeassistant.local:8123") or "").rstrip("/"),
-        get_secret("HASS_TOKEN", "") or "")
+        f"Home Assistant URL {url!r} has no http:// or https:// scheme. Set HASS_URL (or "
+        "platforms.homeassistant.extra.url) to the full URL, e.g. https://ha.example.com or "
+        "http://homeassistant.local:8123")
+
+
+def _get_config():
+    """Return the active profile's Home Assistant URL and token; raise ValueError on a URL without a scheme."""
+    hass_url = (get_secret("HASS_URL", "http://homeassistant.local:8123") or "").rstrip("/")
+    if problem := url_scheme_problem(hass_url):
+        raise ValueError(problem)
+    return hass_url, get_secret("HASS_TOKEN", "") or ""
 
 
 # Valid HA entity_id (e.g. "light.living_room", "sensor.temperature_1").

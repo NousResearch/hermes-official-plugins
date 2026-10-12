@@ -347,3 +347,18 @@ class TestStringData:
         result = json.loads(_handle_call_service({
             "domain": "light", "service": "turn_on", "data": "{not json"}))
         assert "Invalid JSON string" in result["error"]
+
+
+class TestUrlWithoutScheme:
+    def test_scheme_is_required(self):
+        from homeassistant_plugin.tools import url_scheme_problem
+
+        assert url_scheme_problem("https://ha.example.com") is None
+        assert url_scheme_problem("http://homeassistant.local:8123") is None
+        assert "HASS_URL" in url_scheme_problem("ha.example.com")
+
+    def test_tool_call_reports_the_cause(self, monkeypatch):
+        monkeypatch.setenv("HASS_URL", "ha.example.com")
+        monkeypatch.setenv("HASS_TOKEN", "tok")
+        result = json.loads(_handle_get_state({"entity_id": "light.kitchen"}))
+        assert "no http:// or https:// scheme" in result["error"]

@@ -29,6 +29,8 @@ from gateway.platforms.base import gateway_trust_env, BasePlatformAdapter, SendR
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.platforms._shared import get_scoped_secret as _get_scoped_secret, send_error
 
+from .tools import url_scheme_problem
+
 logger = logging.getLogger(__name__)
 
 # Title of the persistent notification outbound replies are posted as.
@@ -131,6 +133,11 @@ class HomeAssistantAdapter(BasePlatformAdapter):
             return False
         if not self._hass_token:
             logger.warning("[%s] No HASS_TOKEN configured", self.name)
+            return False
+        if problem := url_scheme_problem(self._hass_url):
+            logger.error("[%s] %s", self.name, problem)
+            # Not retryable: only a config edit fixes it, so reconnecting would fail the same way forever.
+            self._set_fatal_error("homeassistant_url_scheme", problem, retryable=False)
             return False
         try:
             if not await self._ws_connect():
@@ -342,6 +349,8 @@ async def _standalone_send(
     token = (getattr(pconfig, "token", None) or _get_scoped_secret("HASS_TOKEN", "")).strip()
     if not hass_url or not token:
         return send_error("Home Assistant standalone send: HASS_URL and HASS_TOKEN must both be set")
+    if problem := url_scheme_problem(hass_url):
+        return send_error(f"Home Assistant standalone send: {problem}")
     url = f"{hass_url}/api/services/notify/notify"
     payload = {"message": message, "target": chat_id}
     try:

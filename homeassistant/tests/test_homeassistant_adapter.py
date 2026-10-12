@@ -398,3 +398,31 @@ class TestMultiplexEndpointScope:
         assert result["success"] is True
         assert seen["url"].startswith(self.SECONDARY["HASS_URL"] + "/")
         assert self.SECONDARY["HASS_TOKEN"] in seen["auth"]
+
+
+# ---------------------------------------------------------------------------
+# A URL without a scheme is a config error, not a connection failure
+# ---------------------------------------------------------------------------
+
+
+class TestUrlWithoutScheme:
+    @pytest.mark.asyncio
+    async def test_connect_fails_once_with_a_named_cause(self, monkeypatch, tmp_path):
+        """``ha.example.com`` used to become the WS URL ``ha.example.com/api/websocket`` and retry forever."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        adapter = _make_adapter(url="ha.example.com")
+        adapter._ws_connect = AsyncMock()
+
+        assert await adapter.connect() is False
+        adapter._ws_connect.assert_not_awaited()
+        assert adapter.has_fatal_error and not adapter.fatal_error_retryable
+        assert "no http:// or https:// scheme" in adapter.fatal_error_message
+        assert "HASS_URL" in adapter.fatal_error_message
+
+    @pytest.mark.asyncio
+    async def test_standalone_send_names_the_cause(self):
+        import homeassistant_plugin.adapter as ha
+
+        result = await ha._standalone_send(
+            PlatformConfig(enabled=True, token="tok", extra={"url": "ha.example.com"}), "x", "hi")
+        assert "no http:// or https:// scheme" in str(result)

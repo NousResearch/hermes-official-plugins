@@ -41,7 +41,7 @@ def _discovery_envs(profile, tmp_path, **extra):
     env = _base_env(tmp_path, FAKE_STATE=json.dumps({**PRO, "models": PINNED_PICKER}), **extra)
     assert profile.discover_models(command=[sys.executable, str(script)], env=env)
     envs = _captured(tmp_path)
-    assert len(envs) == 2  # auth status, then the initialize handshake
+    assert len(envs) == 3  # the /usage login settle, auth status, then the initialize handshake
     return envs
 
 

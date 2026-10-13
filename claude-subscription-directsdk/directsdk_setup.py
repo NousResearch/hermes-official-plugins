@@ -11,7 +11,9 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from collections.abc import Mapping
+from pathlib import Path
 
 try:
     from .admission import Admission
@@ -106,6 +108,50 @@ def _child_env(env):
     return apply_traffic_policy(child)
 
 
+# Claude Code's refresh lock is `stale: 60000, update: 5000`: a live holder bumps its mtime every 5 s.
+_REFRESH_LOCK_STALE_S = 60
+
+
+def _config_dir(env, windows=os.name == "nt"):
+    """Claude Code's config dir: CLAUDE_CONFIG_DIR, else ``~/.claude`` with Node's ``os.homedir()`` rules
+    (%USERPROFILE% on Windows even when a Git Bash or MSYS shell sets HOME elsewhere; HOME everywhere else)."""
+    config = env.get("CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR") or env.get("CLAUDE_CONFIG_DIR")
+    if config:
+        return Path(config).expanduser()
+    home = (env.get("USERPROFILE") or env.get("HOME")) if windows else env.get("HOME")
+    return (Path(home) if home else Path.home()) / ".claude"
+
+
+def reap_orphaned_refresh_lock(env):
+    """Remove the empty ``.oauth_refresh.lock`` directory a Claude Code that exited mid-refresh left behind.
+
+    Claude Code never reclaims it (anthropics/claude-code#95236), so every later native request fails with
+    "another Claude Code process is refreshing it or exited mid-refresh". Only a lock older than Claude Code's
+    own stale window goes, and ``rmdir`` refuses a directory with contents."""
+    lock = _config_dir(env) / ".oauth_refresh.lock"
+    try:
+        if lock.is_dir() and time.time() - lock.stat().st_mtime > _REFRESH_LOCK_STALE_S:
+            lock.rmdir()
+    except OSError:
+        pass
+
+
+def settle_login(resolved, env, timeout):
+    """Let a due OAuth refresh land before a short-lived probe runs.
+
+    Every Claude Code command starts the refresh at init, and ``auth status`` exits before it lands
+    (anthropics/claude-code#95822): the lock is left behind and the server may already have rotated the
+    refresh token the CLI never saved, which forces a re-login. ``-p /usage`` is a local command that needs a
+    valid token, so it waits for that refresh to be saved before exiting; it sends no Messages request. The
+    plugin cannot tell whether a refresh is due without opening the credential store, so it always runs it."""
+    reap_orphaned_refresh_lock(env)
+    try:
+        subprocess.run(resolved + ["-p", "/usage"], env=_child_env(env), stdin=subprocess.DEVNULL,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+
+
 def _plan_label(raw):
     """``"pro"`` (auth status) and ``"Claude Pro"`` (handshake) name the same plan."""
     raw = str(raw or "").strip()
@@ -121,6 +167,7 @@ def setup_status(command=None, env=None, timeout=20):
     if resolved is None:
         return {"available": False, "logged_in": False, "plan": "", "detail": INSTALL_HINT, "login_command": None}
     login_command = resolved + ["auth", "login"]
+    settle_login(resolved, env, timeout)
     try:
         run = subprocess.run(resolved + ["auth", "status"], env=_child_env(env), stdin=subprocess.DEVNULL,
                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)

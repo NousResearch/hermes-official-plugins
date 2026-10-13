@@ -81,6 +81,8 @@ FAKE_CLI = textwrap.dedent('''
     state = json.loads(os.environ["FAKE_STATE"])
     if sys.argv[1:3] == ["auth", "status"]:
         print(json.dumps(state["auth"])); sys.exit(0 if state["auth"]["loggedIn"] else 1)
+    if sys.argv[-2:] == ["-p", "/usage"]:  # the login settle before auth status
+        print("Current week (all models): 1% used"); sys.exit(0)
     assert "-p" in sys.argv and "--input-format" in sys.argv, sys.argv
     req = json.loads(sys.stdin.readline())
     assert req["request"]["subtype"] == "initialize"

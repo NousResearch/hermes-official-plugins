@@ -25,11 +25,11 @@ from types import SimpleNamespace
 try:
     from .admission import Admission
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
-    from .directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_traffic_policy
+    from .directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_traffic_policy, reap_orphaned_refresh_lock
 except ImportError:
     from admission import Admission
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
-    from directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_traffic_policy
+    from directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_traffic_policy, reap_orphaned_refresh_lock
 
 
 # Hermes picks retry vs fallback from an error's status_code (main loop and auxiliary ladder alike).
@@ -607,6 +607,8 @@ class Client:
                 config = env.pop('CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR', None)
                 if config:
                     env['CLAUDE_CONFIG_DIR'] = config
+                # A refresh lock an earlier native left mid-refresh would fail this request (claude-code#95236).
+                reap_orphaned_refresh_lock(env)
                 # An inherited effort level would override the --effort Hermes passes below.
                 for key in ('CLAUDE_CODE_EXTRA_BODY', 'CLAUDE_CODE_EFFORT_LEVEL'):
                     env.pop(key, None)

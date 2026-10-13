@@ -53,7 +53,7 @@ claude auth login
 hermes --provider claude-subscription-directsdk-experimental -m sonnet
 ```
 
-Authentication belongs to the official CLI. The plugin never opens, copies, refreshes, or prints its credential files. No Hermes API key is required or sent by the plugin. The normal Hermes client path rejects inherited API-key, custom Anthropic endpoint, and cloud-backend overrides before spawning; the error names conflicting environment variables without printing their values. Remove those overrides from the launching environment when selecting OAuth. There is no silent HTTP/API-key fallback in this client.
+Authentication belongs to the official CLI. The plugin never opens, copies, refreshes, or prints its credential files. A Claude Code that exits mid-refresh leaves an empty `.oauth_refresh.lock` directory it never reclaims (anthropics/claude-code#95236), which fails every later request; before each probe and request the plugin removes one older than Claude Code's own 60 s stale window, and never a lock with contents. No Hermes API key is required or sent by the plugin. The normal Hermes client path rejects inherited API-key, custom Anthropic endpoint, and cloud-backend overrides before spawning; the error names conflicting environment variables without printing their values. Remove those overrides from the launching environment when selecting OAuth. There is no silent HTTP/API-key fallback in this client.
 
 Subscription entitlement and extra-usage settings still belong to the account and native service. Disable extra usage in the account if you do not want overage billing. A native list-price cost estimate is not proof of a subscription charge.
 
@@ -138,10 +138,10 @@ providers:
 
 ## Setup: `hermes model` → Claude Subscription DirectSDK (Experimental)
 
-Selecting the provider asks the Claude CLI itself, never Anthropic, before anything is saved:
+Selecting the provider asks the Claude CLI itself, with no Messages request, before anything is saved:
 
 1. **Installed?** `claude` must resolve on PATH, in a usual install directory, or through `CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND`. Otherwise one line: install with `npm install -g @anthropic-ai/claude-code`, and the flow stops without touching config.
-2. **Logged in?** `claude auth status` (local credential store, ~0.3s). Logged in shows `credentials: ✓ (Claude Pro)`. Logged out on a terminal starts `claude auth login` inline; it opens the browser and takes the pasted code, then the flow re-checks and continues. Without a TTY it prints the instruction and stops.
+2. **Logged in?** `claude -p /usage`, then `claude auth status` (local credential store, ~0.3s). Every Claude Code command starts a due OAuth refresh at init, and `auth status` exits before it lands (anthropics/claude-code#95822), which strands the refresh and can spend the refresh token. `/usage` needs a valid token, so it waits for that refresh to be saved first: one account request, ~0.6s, no Messages request. Logged in shows `credentials: ✓ (Claude Pro)`. Logged out on a terminal starts `claude auth login` inline; it opens the browser and takes the pasted code, then the flow re-checks and continues. Without a TTY it prints the instruction and stops.
 3. **Which models?** The CLI's `initialize` handshake returns the account's own picker (verified through the admission relay: zero upstream requests). Every row is listed; the pinned catalog below only adds metadata to the models it knows. Pinned rows are mapped to Hermes route ids and deduplicated (`opus` and `opus[1m]` are one 1M route). A model the catalog does not pin yet keeps the id and label the CLI announced and carries a dim `· unpinned` note; it gets `[1m]` only when the CLI itself offers that form, and a plain + `[1m]` pair collapses onto `[1m]` as pinned models do. Rows the CLI marks "Draws from usage credits", plus Fable on non-Max plans per Anthropic's plan rule, carry a dim `· usage credits` note (`· usage credits · unpinned` on an unpinned row); nothing is hidden. If the handshake fails the pinned catalog below is used.
 
 The same `discover_models()` feeds `provider_model_ids()`, so the TUI/Desktop pickers and `/model` list the account's picker too.

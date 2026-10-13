@@ -61,11 +61,36 @@ HASS_HOME_CHANNEL=mobile_app_my_phone
 | `HASS_TOKEN` | yes | Long-Lived Access Token. Enables both the tools and the gateway platform. |
 | `HASS_URL` | no | Base URL of your instance. Default `http://homeassistant.local:8123`. Seeds `platforms.homeassistant.extra.url` when the platform is enabled from env. |
 | `HASS_HOME_CHANNEL` | no | Default target for cron `deliver=homeassistant`. `HASS_HOME_CHANNEL_NAME` sets a display name. |
+| `HASS_ENTITY_DENYLIST` | no | Comma-separated entity ID prefixes or globs the tools always exclude (final veto). |
+| `HASS_ENTITY_ALLOWLIST` | no | Comma-separated entity ID prefixes or globs the tools are limited to (whitelist; unset = unrestricted). |
+| `HASS_MAX_ENTITIES` | no | Optional cap on `ha_list_entities` results (unset = no cap; a per-call `max` overrides it). |
 
 ### 3. Tools
 
 The four tools only appear when `HASS_TOKEN` is set. Turn the `homeassistant` toolset on or off per
 platform with `hermes tools`.
+
+`ha_list_entities` keeps responses small on large installs. Besides `domain`, it takes `area`
+(resolved against the Home Assistant area registry, so entities match even when their names do not
+mention the room; falls back to friendly-name matching if the registry is unreachable), `name` (a
+substring of friendly names and entity IDs), `entity_ids` (an exact list that supersedes the other
+filters) and `max` (a per-call cap). Each entity includes its area and device when known. A result
+cut by a cap is marked `truncated` with a note on how to narrow the query or get the rest.
+
+#### Operator entity filters (optional)
+
+Three environment variables constrain the tools without a code change. All are opt-in: unset means
+the tools behave exactly as before.
+
+| Variable | Effect |
+|---|---|
+| `HASS_ENTITY_DENYLIST` | Entity ID prefixes or globs (e.g. `office_thermostat_*,sensor.ghost_*`) that `ha_list_entities` always excludes. A final veto: it wins even against the allowlist, and `ha_get_state` refuses a matching entity before any network call. |
+| `HASS_ENTITY_ALLOWLIST` | Same format; when non-empty, results are restricted to matching entities. |
+| `HASS_MAX_ENTITIES` | Optional cap on how many entities `ha_list_entities` returns. Unset means no cap; a per-call `max` always overrides it. |
+
+Patterns match exact IDs, family prefixes (`.` and `_` are interchangeable at the boundary, so
+`office_thermostat_*` covers `office_thermostat.0_valve_position`) and shell-style globs
+(`climate.*`, `*.valve*`).
 
 ### 4. Gateway platform
 

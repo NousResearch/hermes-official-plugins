@@ -34,3 +34,15 @@ optional_env:
     description: "Default notify target for cron deliver=homeassistant (e.g. mobile_app_my_phone)"
     prompt: "Home Assistant default notify target"
     password: false
+  - name: HASS_ENTITY_DENYLIST
+    description: "Comma-separated entity_id prefixes or globs the HA tools always exclude (final veto)"
+    prompt: "Home Assistant entity denylist (e.g. office_thermostat_*)"
+    password: false
+  - name: HASS_ENTITY_ALLOWLIST
+    description: "Comma-separated entity_id prefixes or globs the HA tools are limited to (whitelist; the denylist still vetoes)"
+    prompt: "Home Assistant entity allowlist (e.g. climate.*, sensor.office_*)"
+    password: false
+  - name: HASS_MAX_ENTITIES
+    description: "Optional cap on ha_list_entities results (unset = no cap; a per-call max overrides it)"
+    prompt: "Home Assistant max entities per list call (empty = no cap)"
+    password: false

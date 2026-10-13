@@ -12,9 +12,9 @@ Required: Blender >=5.1, uv and Git available to the Hermes backend, network acc
 
 ## User setup
 
-1. Install the official Blender Lab MCP add-on using the instructions on the official page. The documented drag-and-drop flow may require two drops: one to add the Lab repository, the next to install the extension. Alternatively use Blender's Install from Disk action with the official extension ZIP.
-2. Enable the MCP extension and Blender's Online access preference after reviewing its security warning.
-3. Start the bridge from the add-on preferences (or its auto-start option), bound only to localhost with port 9876. Leave the default if using this package unchanged.
+1. Install the official Blender Lab MCP add-on using the instructions on the official page. Its **Drag and Drop into Blender** button needs two drops into the Blender window: the first adds the Blender Lab repository, the second installs the add-on. Alternatively use Blender's Install from Disk action with the official extension ZIP (the page's "download" link).
+2. Enable the MCP extension and Blender's **Allow Online Access** preference (Edit > Preferences > System > Network) after reviewing the page's security warning. Without it the add-on reports "Online access must be enabled in the system preferences" and the bridge does not start.
+3. Start the bridge from the add-on preferences (Edit > Preferences > Add-ons > MCP): **Auto Start** is on by default; otherwise click **Start MCP Bridge Server** and look for "Server is running". Keep it bound to localhost with port 9876, the defaults this package expects.
 4. Enable this Hermes plugin for the intended profile and refresh/restart as required by your Hermes release. Check a real `get_objects_summary` response before claiming Blender is connected.
 
 Never install an unrelated PyPI project named blender-mcp: this package deliberately fetches Blender Lab's source by full Git SHA.

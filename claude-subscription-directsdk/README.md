@@ -136,6 +136,18 @@ providers:
     stale_timeout_seconds: 900
 ```
 
+The plugin also carries its own stall watchdog (#35), so a hung call does not need the provider-level stale timeout at all. The read-idle deadline resets on every native event, and a stalled upstream can keep pinging while producing nothing — so neither number can tell a healthy long call from a stall. The watchdog can: it kills the native call after `stall_timeout_seconds` (default 300, `0` disables) without a model-progress event — text, thinking, signature or tool-input deltas, block starts, results. Pings and other keepalive traffic do not count. Configure it per profile:
+
+```yaml
+plugins:
+  entries:
+    claude-subscription-directsdk-experimental:
+      settings:
+        stall_timeout_seconds: 300
+```
+
+A watchdog kill surfaces as a timeout with a clear `no model progress` message, so Hermes retries or falls back at the stall bound instead of holding the turn for the whole read-idle limit.
+
 ## Setup: `hermes model` → Claude Subscription DirectSDK (Experimental)
 
 Selecting the provider asks the Claude CLI itself, never Anthropic, before anything is saved:

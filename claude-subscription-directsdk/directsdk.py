@@ -25,11 +25,11 @@ from types import SimpleNamespace
 try:
     from .admission import Admission
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
-    from .directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_traffic_policy
+    from .directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_traffic_policy, stall_timeout_seconds
 except ImportError:
     from admission import Admission
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
-    from directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_traffic_policy
+    from directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_traffic_policy, stall_timeout_seconds
 
 
 # Hermes picks retry vs fallback from an error's status_code (main loop and auxiliary ladder alike).
@@ -92,6 +92,21 @@ def projection(message):
         calls.append({'id': tc['id'], 'name': f['name'],
                       'input': json.loads(args) if isinstance(args, str) else args})
     return {'content': (message.get('content') or '').strip(), 'tool_calls': calls}
+
+
+def _is_progress(event):
+    """Whether a native event shows the model is doing work (#35).
+
+    Everything except pings and bare acknowledgments advances the stall clock: stream
+    deltas of any type (text, thinking, signature, input_json), block/message starts and
+    stops, assistant/system/user/result frames. A malformed line raises before this runs.
+    """
+    if not isinstance(event, dict):
+        return True
+    kind = event.get('type')
+    if kind == 'stream_event':
+        return event.get('event', {}).get('type') != 'ping'
+    return kind in ('assistant', 'user', 'system', 'result')
 
 
 def content_blocks(content):
@@ -634,6 +649,14 @@ class Client:
                     command += ['--effort', effort]
                 p = request.spawn(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding='utf-8', cwd=self._workdir(), env=env)
                 events = queue.Queue()
+                # Issue #35: the read-idle deadline below resets on every native event, so a stall
+                # fed by pings never fires it, and Hermes' non-stream watchdog only sees wall-clock
+                # time — a healthy long call and a stall look the same to it. Track model progress
+                # separately: non-progress traffic does not extend it, and a silence beyond the
+                # stall limit kills the call so Hermes retries or falls back immediately.
+                stall_limit = stall_timeout_seconds()
+                last_progress = time.monotonic()
+
                 def read():
                     try:
                         for line in p.stdout:
@@ -649,13 +672,18 @@ class Client:
                 reader.start()
                 deadline = time.monotonic() + timeout
                 def receive():
-                    nonlocal deadline
+                    nonlocal deadline, last_progress
                     while True:
                         if request.cancelled.is_set():
                             raise RuntimeError('Claude request cancelled')
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
                             raise TimeoutError('Claude request timed out')
+                        if stall_limit:
+                            silent = time.monotonic() - last_progress
+                            if silent > stall_limit:
+                                p.kill()
+                                raise TimeoutError(f'Claude request stalled: no model progress for {silent:.0f}s')
                         try:
                             event = events.get(timeout=min(remaining, .2))
                         except queue.Empty:
@@ -664,6 +692,8 @@ class Client:
                             # The offending stdout line is the whole diagnosis (a shim banner, a stray print); keep it.
                             raise RuntimeError('Invalid native stream-json output: ' + repr((getattr(event, 'doc', None) or str(event))[:300])) from event
                         deadline = time.monotonic() + timeout
+                        if _is_progress(event):
+                            last_progress = time.monotonic()
                         return event
                 for index, frame in enumerate(frames):
                     frame = copy.deepcopy(frame)

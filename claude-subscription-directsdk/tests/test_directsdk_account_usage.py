@@ -130,3 +130,72 @@ def test_network_failure_names_the_reason(api):
     api.reply = httpx.ConnectTimeout('slow')
     _, lines = _usage()
     assert lines[-1] == 'Unavailable: could not reach the usage API'
+
+
+def _write_creds_file(path, token="file-token", expires_in=timedelta(hours=1)):
+    import json
+    expires_at = int((datetime.now(timezone.utc) + expires_in).timestamp() * 1000)
+    payload = {"claudeAiOauth": {"accessToken": token, "refreshToken": "r", "expiresAt": expires_at}}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_usage_works_when_adopt_external_logins_is_false(api, tmp_path, monkeypatch):
+    # Simulates auth.adopt_external_logins: false where core's read_claude_code_credentials() returns None (#82).
+    api.creds = None
+    login_dir = tmp_path / "claude-login"
+    _write_creds_file(login_dir / ".credentials.json", token="adopted-login-token")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(login_dir))
+    snapshot, lines = _usage()
+    assert snapshot.unavailable_reason is None
+    assert api.requests[0][1]["Authorization"] == "Bearer adopted-login-token"
+
+
+def test_usage_honours_claude_config_dir_plugin_setting(api, tmp_path):
+    import json
+    from hermes_cli.config import get_config_path
+    api.creds = None
+    setting_dir = tmp_path / "profile-login"
+    _write_creds_file(setting_dir / ".credentials.json", token="profile-setting-token")
+    get_config_path().write_text(
+        "plugins:\n  enabled: []\n  entries:\n    %s:\n      settings:\n        %s: %s\n"
+        % (PROVIDER, "claude_config_dir", json.dumps(str(setting_dir))), encoding="utf-8")
+    snapshot, lines = _usage()
+    assert snapshot.unavailable_reason is None
+    assert api.requests[0][1]["Authorization"] == "Bearer profile-setting-token"
+
+
+def test_usage_honours_directsdk_config_dir_env_override(api, tmp_path, monkeypatch):
+    api.creds = None
+    env_dir = tmp_path / "env-override-login"
+    _write_creds_file(env_dir / ".credentials.json", token="override-token")
+    monkeypatch.setenv("CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR", str(env_dir))
+    snapshot, lines = _usage()
+    assert snapshot.unavailable_reason is None
+    assert api.requests[0][1]["Authorization"] == "Bearer override-token"
+
+
+def test_usage_reads_keychain_when_no_custom_config_dir(api, monkeypatch):
+    import agent.anthropic_credentials as credentials
+    api.creds = None
+    kc_token = "keychain-token"
+    kc_payload = _creds(timedelta(hours=2))
+    kc_payload["accessToken"] = kc_token
+    monkeypatch.setattr(credentials, "_read_claude_code_credentials_from_keychain", lambda: kc_payload, raising=False)
+    snapshot, lines = _usage()
+    assert snapshot.unavailable_reason is None
+    assert api.requests[0][1]["Authorization"] == f"Bearer {kc_token}"
+
+
+def test_usage_skips_keychain_when_custom_config_dir_configured(api, tmp_path, monkeypatch):
+    import agent.anthropic_credentials as credentials
+    api.creds = None
+    kc_payload = _creds(timedelta(hours=2))
+    kc_payload["accessToken"] = "keychain-token"
+    monkeypatch.setattr(credentials, "_read_claude_code_credentials_from_keychain", lambda: kc_payload, raising=False)
+    empty_custom_dir = tmp_path / "empty-dir"
+    empty_custom_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(empty_custom_dir))
+    snapshot, lines = _usage()
+    assert snapshot.unavailable_reason == "no Claude Code login found (run `claude` and log in)"
+    assert api.requests == []

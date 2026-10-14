@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import logging
 import math
 import os
+from pathlib import Path
 import shutil
 
 from providers import register_provider
@@ -11,10 +12,10 @@ from providers.base import ProviderProfile
 # Dual import: the Hermes loader imports this directory as a package; the flat test path does not.
 try:
     from .model_catalog import ALIASES, MODEL_METADATA, MODEL_CAPABILITIES, native_model
-    from .directsdk_setup import INSTALL_HINT, _resolve
+    from .directsdk_setup import INSTALL_HINT, _resolve, apply_config_dir
 except ImportError:
     from model_catalog import ALIASES, MODEL_METADATA, MODEL_CAPABILITIES, native_model
-    from directsdk_setup import INSTALL_HINT, _resolve
+    from directsdk_setup import INSTALL_HINT, _resolve, apply_config_dir
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,71 @@ def usage_windows(payload):
     return windows, details
 
 
+def _read_credentials_from_file(path):
+    if not path or not path.is_file():
+        return None
+    try:
+        import json
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    try:
+        from agent.anthropic_credentials import _claude_oauth_record
+        rec = _claude_oauth_record(data, "claude_code_credentials_file")
+        if rec:
+            return rec
+    except Exception:
+        pass
+    oauth_data = data.get("claudeAiOauth") if isinstance(data, dict) else None
+    access_token = oauth_data.get("accessToken", "") if isinstance(oauth_data, dict) else ""
+    if not access_token:
+        return None
+    return {
+        "accessToken": access_token,
+        "refreshToken": oauth_data.get("refreshToken", "") if isinstance(oauth_data, dict) else "",
+        "expiresAt": oauth_data.get("expiresAt", 0) if isinstance(oauth_data, dict) else 0,
+        "source": "claude_code_credentials_file",
+    }
+
+
+def _read_credentials_keychain():
+    try:
+        from agent.anthropic_credentials import _read_claude_code_credentials_from_keychain
+        return _read_claude_code_credentials_from_keychain()
+    except Exception:
+        return None
+
+
+def _pick_best_credentials(kc_creds, file_creds):
+    if not (kc_creds and file_creds):
+        return kc_creds or file_creds
+    try:
+        from agent.anthropic_credentials import is_claude_code_token_valid
+        kc_valid = is_claude_code_token_valid(kc_creds)
+        file_valid = is_claude_code_token_valid(file_creds)
+        if kc_valid != file_valid:
+            return kc_creds if kc_valid else file_creds
+    except Exception:
+        pass
+    return kc_creds if (kc_creds.get("expiresAt", 0) or 0) >= (file_creds.get("expiresAt", 0) or 0) else file_creds
+
+
+def _read_directsdk_credentials():
+    """Read Claude Code OAuth credentials directly, read-only.
+
+    Bypasses core's adoption gate (auth.adopt_external_logins: false), which exists to stop core
+    from borrowing/refreshing the grant. The plugin only reads usage limits and never refreshes.
+    Also honours the plugin's claude_config_dir setting and CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR.
+    """
+    child = dict(os.environ)
+    apply_config_dir(child)
+    custom_dir = child.get("CLAUDE_CONFIG_DIR", "").strip()
+    root = Path(custom_dir).expanduser() if custom_dir else Path.home() / ".claude"
+    file_creds = _read_credentials_from_file(root / ".credentials.json")
+    kc_creds = None if custom_dir else _read_credentials_keychain()
+    return _pick_best_credentials(kc_creds, file_creds)
+
+
 def _subscription_token():
     """The OAuth token native runs on, read-only: `CLAUDE_CODE_OAUTH_TOKEN`, else the Claude Code login.
 
@@ -89,7 +155,18 @@ def _subscription_token():
     token = os.environ.get('CLAUDE_CODE_OAUTH_TOKEN', '').strip()
     if token:
         return token, None
-    creds = read_claude_code_credentials()
+
+    # Check whether a plugin-specific custom config directory is configured for the active profile
+    child = {}
+    apply_config_dir(child)
+    has_profile_config = bool(child.get("CLAUDE_CONFIG_DIR"))
+
+    creds = None
+    if not has_profile_config:
+        creds = read_claude_code_credentials()
+    if not creds:
+        creds = _read_directsdk_credentials()
+
     if not creds or not creds.get('accessToken'):
         return None, 'no Claude Code login found (run `claude` and log in)'
     try:

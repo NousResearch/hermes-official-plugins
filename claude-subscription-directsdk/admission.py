@@ -12,6 +12,7 @@ import re
 import secrets
 import socket
 import ssl
+import sys
 import threading
 from urllib.parse import unquote, urlsplit
 import urllib.request
@@ -368,6 +369,25 @@ def upstream_proxy(upstream):
     return proxy.hostname, port, headers
 
 
+class _Server(HTTPServer):
+    """HTTPServer that stays quiet about a client that hung up before reading our answer.
+
+    Native (Bun's own HTTP client) sends a throwaway warm-up probe (observed as a GET/HEAD to
+    an `/api/hello`-style path) ahead of the real `/v1/messages` POST on every turn. Handler only
+    implements do_POST, so http.server's default dispatch answers the probe with a 501
+    ("Unsupported method") via send_error(); native never reads that body and disconnects
+    immediately, so the write raises BrokenPipeError/ConnectionResetError while send_error() is
+    still writing it. The 501 itself is expected and harmless to the real request (see the
+    archived hermes-plugin-claude-subscription-directsdk#17); the only bug worth fixing is
+    socketserver's default handle_error() dumping a scary-looking traceback to stderr for this
+    exact, harmless, every-turn race. Anything else still gets the real traceback.
+    """
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
+
+
 class Admission:
     def __init__(self, upstream, timeout, queried=None):
         self.upstream = urlsplit(upstream)
@@ -393,7 +413,7 @@ class Admission:
         self.capture = Capture()
         self.error_body = b''
         self.prefix = '/admit/' + secrets.token_urlsafe(32)
-        self.server = HTTPServer(('127.0.0.1', 0), Handler)
+        self.server = _Server(('127.0.0.1', 0), Handler)
         self.server.admission = self
         self.url = f'http://127.0.0.1:{self.server.server_port}' + self.prefix
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval':.05}, daemon=True)

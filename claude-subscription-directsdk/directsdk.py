@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import copy
+import hashlib
 import inspect
 import json
 import math
@@ -123,6 +124,40 @@ def content_blocks(content):
     return result
 
 
+def _normalize_history_tool_ids(frames):
+    """Map foreign IDs only on the outgoing wire; keep calls/results paired.
+
+    Anthropic rejects IDs containing e.g. ':' from another provider's history.
+    Preserve valid native IDs (and signed replay blocks), reserve them before
+    assigning deterministic foreign IDs, and avoid collisions in this request.
+    Never rewrite the source history, tool arguments, or result bodies.
+    """
+    references = []
+    for frame in frames:
+        for block in frame['message']['content']:
+            field = {'tool_use': 'id', 'tool_result': 'tool_use_id'}.get(block.get('type'))
+            if field is None:
+                continue
+            tool_id = block.get(field)
+            if not isinstance(tool_id, str) or not tool_id:
+                raise ValueError('Tool call/result IDs must be nonempty strings')
+            references.append((block, field, tool_id))
+    original_ids = {tool_id for _, _, tool_id in references}
+    used = {tool_id for tool_id in original_ids if re.fullmatch(r'[a-zA-Z0-9_-]+', tool_id)}
+    mapping = {}
+    for tool_id in sorted(original_ids - used):
+        base = 'toolu_hermes_' + hashlib.sha256(tool_id.encode('utf-8')).hexdigest()[:32]
+        candidate, suffix = base, 0
+        while candidate in used:
+            suffix += 1
+            candidate = f'{base}_{suffix}'
+        mapping[tool_id] = candidate
+        used.add(candidate)
+    for block, field, tool_id in references:
+        if tool_id in mapping:
+            block[field] = mapping[tool_id]
+
+
 def prepare_history(messages, names=None):
     system, frames = [], []
     for message in messages:
@@ -169,6 +204,7 @@ def prepare_history(messages, names=None):
             frames.append({'type': role, 'message': {'role': role, 'content': blocks}})
     if not frames or frames[-1]['type'] != 'user' or not frames[-1]['message']['content']:
         raise ValueError('History must end in a nonempty user/tool-result message; assistant prefill is unsupported')
+    _normalize_history_tool_ids(frames)
     return '\n\n'.join(system), frames
 
 

@@ -433,6 +433,28 @@ class Admission:
 
 
 class Handler(BaseHTTPRequestHandler):
+    def setup(self):
+        gate = self.server.admission
+        with gate.lock:
+            gate.sockets.add(self.request)
+            cancelled = gate.cancelled
+        try:
+            self.request.settimeout(gate.timeout)
+            if cancelled:
+                self.request.shutdown(socket.SHUT_RDWR)
+            super().setup()
+        except BaseException:
+            with gate.lock:
+                gate.sockets.discard(self.request)
+            raise
+
+    def finish(self):
+        try:
+            super().finish()
+        finally:
+            with self.server.admission.lock:
+                self.server.admission.sockets.discard(self.request)
+
     def log_message(self, *args):
         pass  # Native authorization and the per-call route must never enter logs.
 
@@ -453,7 +475,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 return
             gate.used = True
-            gate.sockets.add(self.connection)
         conn = None
         upstream_socket = None
         try:
@@ -518,7 +539,6 @@ class Handler(BaseHTTPRequestHandler):
             gate.failure = type(exc).__name__
         finally:
             with gate.lock:
-                gate.sockets.discard(self.connection)
                 gate.sockets.discard(upstream_socket)
             if conn:
                 conn.close()

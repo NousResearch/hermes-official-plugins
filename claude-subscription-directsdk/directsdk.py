@@ -51,6 +51,69 @@ class ClaudeAPIError(RuntimeError):
         self.status_code = status_code
 
 
+_CLEANUP_STEP_SECONDS = 5
+
+
+class ClaudeCleanupError(RuntimeError):
+    """Cleanup was attempted but not confirmed complete; retain errors and pending owners."""
+    def __init__(self, errors, pending_threads=(), *, request=None, process=None):
+        self.errors = tuple(errors)
+        self.pending_threads = tuple(pending_threads)
+        self.request, self.process = request, process
+        super().__init__('Claude request cleanup failed: ' + ', '.join(
+            f'{step} ({type(error).__name__})' for step, error in self.errors))
+
+
+def _start_cleanup(step, callback, errors):
+    outcome = []
+    def run():
+        try:
+            callback()
+        except BaseException as error:
+            outcome.append(error)
+    thread = threading.Thread(target=run, name='claude-directsdk-cleanup-' + step, daemon=True)
+    try:
+        thread.start()
+    except Exception as error:
+        errors.append((step, error))
+        return None, outcome
+    return thread, outcome
+
+
+def _record_cleanup(step, thread, outcome, errors, pending):
+    if thread.is_alive():
+        errors.append((step, TimeoutError('cleanup step did not finish within its wait budget')))
+        pending.append(thread)
+    else:
+        errors.extend((step, error) for error in outcome)
+
+
+def _cleanup_step(step, callback, errors, pending):
+    """Bound the caller's wait. A timed-out operation retains its resources and is reported."""
+    thread, outcome = _start_cleanup(step, callback, errors)
+    if thread is not None:
+        thread.join(timeout=_CLEANUP_STEP_SECONDS)
+        _record_cleanup(step, thread, outcome, errors, pending)
+    return thread
+
+
+async def _cleanup_async(step, callback, errors, pending):
+    # Do not use the default executor: the cancelled preparation may occupy its only worker.
+    thread, outcome = _start_cleanup(step, callback, errors)
+    if thread is None:
+        return
+    deadline = time.monotonic() + _CLEANUP_STEP_SECONDS
+    try:
+        while thread.is_alive() and time.monotonic() < deadline:
+            await asyncio.sleep(min(.02, max(0, deadline - time.monotonic())))
+    except asyncio.CancelledError:
+        if thread.is_alive():
+            errors.append((step, RuntimeError('cleanup wait interrupted by repeated cancellation')))
+            pending.append(thread)
+            return
+    _record_cleanup(step, thread, outcome, errors, pending)
+
+
 # Native's own error codes for errors it answers without a relayed upstream status.
 NATIVE_ERROR_STATUS = {
     'rate_limit': 429,  # plan/session limit ("You've hit your session limit")
@@ -301,17 +364,33 @@ class Request:
 
     def cancel(self):
         self.cancelled.set()
+        errors = []
         if self.admission is not None:
-            self.admission.abort()
+            try:
+                self.admission.abort()
+            except Exception as error:
+                errors.append(('relay-abort', error))
         with self.lock:
             if self.process is not None:
-                kill_process_tree(self.process)
+                try:
+                    kill_process_tree(self.process)
+                except Exception as error:
+                    errors.append(('group-kill', error))
+        if errors:
+            raise ClaudeCleanupError(errors, request=self, process=self.process)
 
     def spawn(self, command, *, stdin=subprocess.DEVNULL, **kwargs):
         with self.lock:
             if self.cancelled.is_set():
                 raise RuntimeError('Claude request cancelled')
-            self.process = subprocess.Popen(command, stdin=stdin, **kwargs, **_own_process_group())
+            if os.name != 'nt' and not _nonreaping_supported():
+                raise RuntimeError('POSIX non-reaping exit observation or exclusive SIGCHLD handling is unavailable; this platform/configuration is unsupported')
+            process = subprocess.Popen(command, stdin=stdin, **kwargs, **_own_process_group())
+            # The raw Popen stays private on POSIX: reaping its leader would release the
+            # PID before we have finished with the group that PID names.
+            self.process = _OwnedProcess(process) if os.name != 'nt' else process
+            if self.process is process:
+                process._hermes_owned_group = True
         return self.process
 
 
@@ -322,19 +401,129 @@ def _own_process_group():
     return {'start_new_session': True}
 
 
-def kill_process_tree(process):
-    """Kill native and every descendant: the npm shim is cmd.exe -> node on Windows, and a plain
-    Popen.kill() would orphan the node child that holds the real request open."""
-    if process.poll() is not None:
-        return
-    if os.name == 'nt':
-        subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-        return
+def _nonreaping_supported():
+    available = callable(getattr(os, 'waitid', None)) and all(hasattr(os, name) for name in (
+        'P_PID', 'WEXITED', 'WNOWAIT', 'WNOHANG'))
+    if not available or not hasattr(signal, 'SIGCHLD'):
+        return False
+    if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:
+        return False  # Auto-reaping or a custom reaper invalidates the PID retention contract.
     try:
-        os.killpg(process.pid, signal.SIGKILL)  # windows-footgun: ok — the nt branch above never reaches this line
-    except (ProcessLookupError, PermissionError):
-        # ESRCH: already gone. EPERM: macOS answers killpg with EPERM once the group leader is a zombie.
-        pass
+        # Our own PID cannot be our child. ECHILD proves the non-reaping syscall was accepted
+        # without creating, signaling, or reaping any process.
+        os.waitid(os.P_PID, os.getpid(), os.WEXITED | os.WNOWAIT | os.WNOHANG)
+    except ChildProcessError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def _darwin_group_empty(leader):
+    """Confirm no other members of this retained group using Darwin's targeted libproc API.
+
+    Only an exited, unreaped leader may call this. Incomplete/error results fail closed;
+    never enumerate or signal unrelated groups. The reserved PGID cannot be recycled.
+    """
+    import ctypes
+    library = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
+    query = library.proc_listpgrppids
+    query.argtypes = (ctypes.c_int, ctypes.c_void_p, ctypes.c_int)
+    query.restype = ctypes.c_int
+    members = (ctypes.c_int * 16)()
+    ctypes.set_errno(0)
+    count = query(leader, members, ctypes.sizeof(members))
+    if count < 0 or ctypes.get_errno():
+        raise OSError(ctypes.get_errno(), 'Could not confirm the retained process group is empty')
+    if count >= len(members):
+        return False  # A full/truncated buffer cannot prove emptiness.
+    return count == 0 or (count == 1 and members[0] == leader)
+
+
+class _OwnedProcess:
+    """Keep our group leader unreaped until group cleanup, preventing PGID reuse.
+
+    WNOWAIT observes exit without releasing the child's PID. All waits/polls through
+    this owner clear the group before the raw Popen can reap it. Cancellation clears
+    ownership once, under the same lock, and never signals a cached/recycled PID.
+    """
+    def __init__(self, process):
+        self._process = process
+        self._group_owned = True
+        self._group_lock = threading.RLock()
+
+    def __getattr__(self, name):
+        if name in ('pid', 'args', 'returncode', 'stdin', 'stdout', 'stderr'):
+            return getattr(self._process, name)
+        raise AttributeError(name)  # Raw methods can reap without going through this owner.
+
+    def _observe_exit(self):
+        if self._process.returncode is not None:
+            raise RuntimeError('Claude group leader was reaped outside its owner')
+        try:
+            return os.waitid(os.P_PID, self._process.pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+        except ChildProcessError as error:
+            raise RuntimeError('Claude group leader was reaped outside its owner') from error
+
+    def kill_group(self):
+        with self._group_lock:
+            if not self._group_owned:
+                return
+            exited = self._observe_exit()
+            try:
+                os.killpg(self._process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                self._group_owned = False
+            except PermissionError:
+                empty = False
+                if sys.platform == 'darwin' and exited is not None:
+                    try:
+                        empty = _darwin_group_empty(self._process.pid)
+                    except (OSError, AttributeError):
+                        pass  # Inspection failure cannot authorize reaping or retirement.
+                if not empty:
+                    raise
+                self._group_owned = False
+            else:
+                self._group_owned = False
+
+    def poll(self):
+        with self._group_lock:
+            process = self._process
+            if process.returncode is not None:
+                if self._group_owned:
+                    raise RuntimeError('Claude group leader was reaped outside its owner')
+                return process.returncode
+            exited = self._observe_exit()
+            if exited is None:
+                return None
+            self.kill_group()
+            return process.poll()
+
+    def wait(self, timeout=None):
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            result = self.poll()
+            if result is not None:
+                return result
+            if deadline is not None and time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(self._process.args, timeout)
+            time.sleep(.01)
+
+
+def kill_process_tree(process):
+    """Cancel only the process group created and retained by Request.spawn."""
+    if isinstance(process, _OwnedProcess):
+        process.kill_group()
+        return
+    if not getattr(process, '_hermes_owned_group', False):
+        return  # A caller's reaped Popen PID is not an ownership token.
+    if os.name == 'nt':
+        if process.poll() is not None:
+            return
+        subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False, timeout=_CLEANUP_STEP_SECONDS)
+        return
+    raise RuntimeError('Legacy POSIX group ownership is unsupported without a non-reaping owner')
 
 
 # Node, cmd.exe and Claude Code's own config lookup need these even when the caller hands us a
@@ -363,16 +552,27 @@ class Stream:
         with self._advancing:
             return next(self.iterator)
     def close(self):
-        self.request.cancel()
+        self.request.cancelled.set()
+        errors, pending = [], []
+        _cleanup_step('stream-cancel', self.request.cancel, errors, pending)
         # An active consumer unwinds itself after cancellation. A paused/unstarted
         # generator has no active owner and can be finalized here.
         if self._advancing.acquire(blocking=False):
-            try:
-                self.iterator.close()
-                with self.request.client._lock:
-                    self.request.client._requests.discard(self.request)
-            finally:
+            def finalize():
+                try:
+                    self.iterator.close()
+                finally:
+                    try:
+                        with self.request.client._lock:
+                            self.request.client._requests.discard(self.request)
+                    finally:
+                        self._advancing.release()
+            thread = _cleanup_step('iterator-close', finalize, errors, pending)
+            if thread is None:
+                # Dispatch failed; no callback owns the advancement lock.
                 self._advancing.release()
+        if errors:
+            raise ClaudeCleanupError(errors, pending, request=self.request, process=self.request.process)
     def __enter__(self):
         return self
     def __exit__(self, *_):
@@ -392,14 +592,24 @@ class AsyncStream:
                 return False, None
         try:
             present, item = await asyncio.to_thread(advance)
-        except asyncio.CancelledError:
-            self.stream.close()
+        except asyncio.CancelledError as cancelled:
+            self.stream.request.cancelled.set()
+            errors, pending = [], []
+            await _cleanup_async('async-stream-close', self.stream.close, errors, pending)
+            if errors:
+                raise ClaudeCleanupError(errors, pending, request=self.stream.request,
+                                         process=self.stream.request.process) from cancelled
             raise
         if not present:
             raise StopAsyncIteration
         return item
     async def aclose(self):
-        self.stream.close()
+        self.stream.request.cancelled.set()
+        errors, pending = [], []
+        await _cleanup_async('async-stream-close', self.stream.close, errors, pending)
+        if errors:
+            raise ClaudeCleanupError(errors, pending, request=self.stream.request,
+                                     process=self.stream.request.process)
     async def __aenter__(self):
         return self
     async def __aexit__(self, *_):
@@ -517,19 +727,29 @@ class Client:
         """Fast cross-thread cancellation: signal owned groups; never close caller-thread FDs."""
         with self._lock:
             requests = tuple(self._requests)
+            for request in requests:
+                request.cancelled.set()
+        errors, pending = [], []
         for request in requests:
-            request.cancel()
+            _cleanup_step('client-cancel', request.cancel, errors, pending)
+        if errors:
+            raise ClaudeCleanupError(errors, pending)
 
     def close(self):
         with self._lock:
             self._closed = True
             requests = tuple(self._requests)
+            for request in requests:
+                request.cancelled.set()
+        errors, pending = [], []
         for request in requests:
             stream = request.stream() if request.stream else None
             if stream is not None:
-                stream.close()
+                _cleanup_step('client-stream-close', stream.close, errors, pending)
             else:
-                request.cancel()
+                _cleanup_step('client-cancel', request.cancel, errors, pending)
+        if errors:
+            raise ClaudeCleanupError(errors, pending)
 
     def _workdir(self):
         """The shared cwd, else the one private cwd of this process."""
@@ -551,24 +771,51 @@ class Client:
         return self._create(**kwargs)
 
     async def _acreate(self, **kwargs):
-        task = asyncio.create_task(asyncio.to_thread(self._create, **kwargs))
+        request = self._register_request()
         try:
+            task = asyncio.create_task(asyncio.to_thread(self._prepare_request, request, kwargs))
             result = await task
             return AsyncStream(result) if kwargs.get('stream') else result
-        except asyncio.CancelledError:
-            self.cancel()
+        except BaseException as error:
+            request.cancelled.set()
+            errors, pending = [], []
+            try:
+                await _cleanup_async('async-cancel', request.cancel, errors, pending)
+            finally:
+                with self._lock:
+                    self._requests.discard(request)
+            if errors:
+                raise ClaudeCleanupError(errors, pending, request=request, process=request.process) from error
             raise
 
-    def _create(self, **kwargs):
-        body, manifest, names = request_body(kwargs)
-        system, frames = prepare_history(kwargs.get('messages', []), names)
-        if not isinstance(kwargs.get('model'), str) or not kwargs['model']:
-            raise ValueError('model is required')
+    def _register_request(self):
         request = Request(self)
         with self._lock:
             if self._closed:
                 raise RuntimeError('Claude client is closed')
             self._requests.add(request)
+        return request
+
+    def _create(self, **kwargs):
+        return self._prepare_request(self._register_request(), kwargs)
+
+    def _prepare_request(self, request, kwargs):
+        try:
+            if request.cancelled.is_set():
+                raise RuntimeError('Claude request cancelled')
+            body, manifest, names = request_body(kwargs)
+            system, frames = prepare_history(kwargs.get('messages', []), names)
+            if not isinstance(kwargs.get('model'), str) or not kwargs['model']:
+                raise ValueError('model is required')
+            if request.cancelled.is_set():
+                raise RuntimeError('Claude request cancelled')
+        except BaseException:
+            try:
+                request.cancel()
+            finally:
+                with self._lock:
+                    self._requests.discard(request)
+            raise
         stream = Stream(self._run(request, kwargs, body, manifest, names, system, frames), request)
         if kwargs.get('stream'):
             return stream
@@ -583,10 +830,12 @@ class Client:
     def _run(self, request, kwargs, body, manifest, names, system, frames):
         p = None
         reader = None
+        writer = None
+        writes = queue.Queue()
         try:
             timeout = kwargs.get('timeout', self.timeout)
             timeout = getattr(timeout, 'read', timeout)
-            if not isinstance(timeout, (int, float)) or timeout <= 0:
+            if not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
                 raise ValueError('timeout must be positive seconds')
             # Per-request files only; native runs in the stable cwd from _workdir. Windows stragglers
             # can still hold these open for a moment, and cleanup must not fail the request.
@@ -643,11 +892,55 @@ class Client:
                     finally:
                         # The consumer may close while paused at a yielded chunk.
                         # Reaping belongs to this owner thread, never cancel().
-                        p.wait()
-                        events.put(None)
-                reader = threading.Thread(target=read, daemon=True)
+                        try:
+                            p.wait(timeout=timeout)
+                        except Exception as error:
+                            events.put(ClaudeCleanupError([('reader-reap', error)], process=p))
+                        finally:
+                            events.put(None)
+                reader = threading.Thread(target=read, name='claude-directsdk-stdout', daemon=True)
                 reader.start()
+                def write():
+                    try:
+                        while True:
+                            data, ready, errors = writes.get()
+                            try:
+                                if data is None:
+                                    p.stdin.close()
+                                    return
+                                p.stdin.write(data)
+                                p.stdin.flush()
+                            except Exception as error:
+                                errors.append(error)
+                                return
+                            finally:
+                                ready.set()
+                    finally:
+                        if not p.stdin.closed:
+                            try:
+                                p.stdin.close()
+                            except OSError:
+                                pass  # An aborted child has closed the other end of the pipe.
+                writer = threading.Thread(target=write, name='claude-directsdk-stdin', daemon=True)
+                writer.start()
                 deadline = time.monotonic() + timeout
+                def send(data):
+                    nonlocal deadline
+                    ready, errors = threading.Event(), []
+                    writes.put((data, ready, errors))
+                    while not ready.is_set():
+                        if request.cancelled.is_set():
+                            raise RuntimeError('Claude request cancelled')
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError('Claude request timed out')
+                        ready.wait(min(remaining, .05))
+                    if request.cancelled.is_set():
+                        raise RuntimeError('Claude request cancelled')
+                    if errors:
+                        raise errors[0]
+                    # Timeout is a per-I/O idle budget, including blocked write/flush/EOF.
+                    deadline = time.monotonic() + timeout
                 def receive():
                     nonlocal deadline
                     while True:
@@ -661,6 +954,8 @@ class Client:
                         except queue.Empty:
                             continue
                         if isinstance(event, Exception):
+                            if isinstance(event, ClaudeCleanupError):
+                                raise event
                             # The offending stdout line is the whole diagnosis (a shim banner, a stray print); keep it.
                             raise RuntimeError('Invalid native stream-json output: ' + repr((getattr(event, 'doc', None) or str(event))[:300])) from event
                         deadline = time.monotonic() + timeout
@@ -669,8 +964,7 @@ class Client:
                     frame = copy.deepcopy(frame)
                     if frame['type'] == 'user' and index < len(frames) - 1:
                         frame['shouldQuery'] = False
-                    p.stdin.write(json.dumps(frame, allow_nan=False) + '\n')
-                    p.stdin.flush()
+                    send(json.dumps(frame, allow_nan=False) + '\n')
                     if frame.get('shouldQuery') is False:
                         while True:
                             ack = receive()
@@ -680,7 +974,7 @@ class Client:
                                 if ack.get('num_turns') != 0 or ack.get('is_error'):
                                     raise RuntimeError('Native history replay not supported: expected zero-turn acknowledgment')
                                 break
-                p.stdin.close()
+                send(None)
                 assistants, results, stopped, emitted = [], [], False, ''
                 native_error = native_error_code = None
                 while True:
@@ -786,18 +1080,44 @@ class Client:
                 chunk._response = response
                 yield chunk
         finally:
-            request.cancel()
-            if request.admission is not None:
-                request.admission.close()
+            self._finish_request(request, p, reader, writer, writes)
+
+    def _finish_request(self, request, p, reader, writer, writes):
+        request.cancelled.set()
+        errors, pending = [], []
+        original_error = sys.exc_info()[1]
+        try:
+            _cleanup_step('request-cancel', request.cancel, errors, pending)
+            if writer is not None:
+                writes.put((None, threading.Event(), []))
             if p is not None:
-                p.wait(timeout=5)
+                # An abort failure must not prevent a separate, identity-safe group retry.
+                _cleanup_step('group-kill', lambda: kill_process_tree(p), errors, pending)
+            if request.admission is not None:
+                _cleanup_step('relay-close', request.admission.close, errors, pending)
+            if p is not None:
+                _cleanup_step('process-wait', lambda: p.wait(timeout=_CLEANUP_STEP_SECONDS), errors, pending)
                 if reader is not None:
-                    reader.join(timeout=5)
-                for pipe in (p.stdin, p.stdout):
+                    _cleanup_step('reader-join', lambda: reader.join(timeout=_CLEANUP_STEP_SECONDS), errors, pending)
+                    if reader.is_alive():
+                        errors.append(('reader-join', TimeoutError('stdout owner is still active')))
+                        pending.append(reader)
+                if writer is not None:
+                    _cleanup_step('writer-join', lambda: writer.join(timeout=_CLEANUP_STEP_SECONDS), errors, pending)
+                    if writer.is_alive():
+                        errors.append(('writer-join', TimeoutError('stdin owner is still active')))
+                        pending.append(writer)
+                for step, pipe, owner in (('stdin-close', p.stdin, writer), ('stdout-close', p.stdout, reader)):
                     if pipe and not pipe.closed:
-                        pipe.close()
+                        if owner is not None and owner.is_alive():
+                            errors.append((step, RuntimeError('pipe retained by its active owner')))
+                        else:
+                            _cleanup_step(step, pipe.close, errors, pending)
+        finally:
             with self._lock:
                 self._requests.discard(request)
+        if errors:
+            raise ClaudeCleanupError(errors, pending, request=request, process=p) from original_error
 
     @staticmethod
     def _chunk(model, delta, finish=None, usage=None):

@@ -8,6 +8,7 @@ connection.
 from __future__ import annotations
 
 from gateway.platforms._shared import env_is_connected
+from gateway.platforms._shared import config_connected_extra
 
 from .adapter import QQAdapter, check_qq_requirements
 
@@ -128,6 +129,7 @@ def register(ctx) -> None:
         adapter_factory=QQAdapter,
         check_fn=check_qq_requirements,
         is_connected=is_connected,
+        config_connected_fn=config_connected_extra("app_id", "client_secret"),
         required_env=["QQ_APP_ID", "QQ_CLIENT_SECRET"],
         install_hint="QQBot: aiohttp/httpx missing or QQ_APP_ID/QQ_CLIENT_SECRET not configured",
         setup_fn=setup_qqbot,

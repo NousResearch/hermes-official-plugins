@@ -1276,6 +1276,7 @@ async def _standalone_send(pconfig: Any, chat_id: str, message: str, *, thread_i
         return await send_weixin_direct(extra=getattr(pconfig, "extra", None) or {}, token=getattr(pconfig, "token", None),
                                         chat_id=chat_id, message=message, media_files=media_files)
     except Exception as e:
+        logger.debug("Weixin standalone send failed", exc_info=True)
         return send_error(f"Weixin send failed: {e}")
 
 
@@ -1326,7 +1327,7 @@ def interactive_setup() -> None:
         print()
         gw.print_warning("  Weixin setup cancelled.")
         return
-    except Exception as exc:
+    except Exception as exc:  # health: allow BLE001 -- interactive wizard: any QR-login failure is shown and setup stops
         gw.print_error(f"  QR login failed: {exc}")
         return
     if not credentials:

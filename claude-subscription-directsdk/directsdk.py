@@ -21,6 +21,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 import weakref
 from types import SimpleNamespace
 
@@ -123,6 +124,16 @@ def content_blocks(content):
         else:
             raise ValueError(f'Unsupported content block: {kind}')
     return result
+
+
+def conversation_session_id(system, frames):
+    """A native session id that stays the same for every request of one conversation.
+
+    Derived from what the conversation starts with (the system prompt and the first frame), which every
+    request replays unchanged until compaction rewrites the history (a cache boundary anyway)."""
+    first = frames[0]['message'] if frames else None
+    digest = hashlib.sha256(json.dumps([system, first], sort_keys=True, ensure_ascii=False).encode('utf-8')).digest()
+    return str(uuid.UUID(bytes=digest[:16], version=4))
 
 
 def prepare_history(messages, names=None):
@@ -684,6 +695,10 @@ class Client:
                 effort = parsed.get('output_config', {}).get('effort')
                 if effort:
                     command += ['--effort', effort]
+                # One native session per conversation: native names a per-session scratchpad directory in the
+                # environment message near the top of every request, so a new session id per spawn moved the cache
+                # prefix on every call while feature flags are on.
+                command += ['--session-id', conversation_session_id(system, frames)]
                 p = request.spawn(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', cwd=self._workdir(), env=env)
                 # Native's stderr is diagnosis, not noise: a gateway-only failure (issue #44)
                 # previously vanished into DEVNULL, and the reporter had to patch the plugin to

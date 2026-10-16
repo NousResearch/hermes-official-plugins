@@ -1404,6 +1404,7 @@ _SEND_TARGET_RE = re.compile(r"^\s*((?:wxid|gh|v\d+|wm|wb)_[A-Za-z0-9_-]+|[A-Za-
 
 def register(ctx) -> None:
     """Plugin entry point — called by the Hermes plugin system."""
+    from . import gateway_env  # env -> GatewayConfig bridge (gateway.config_env)
     ctx.register_platform(
         target_ref_syntax_fn=regex_groups_parser(_SEND_TARGET_RE, thread_group=False),
         standalone_send=StandaloneSendPolicy(label="Weixin", media=True),
@@ -1422,4 +1423,6 @@ def register(ctx) -> None:
         own_policy_env=("WEIXIN_DM_POLICY", "WEIXIN_GROUP_POLICY"),
         platform_hint=_PLATFORM_HINT,
         display_tier="low",
+        env_overrides=gateway_env.ENV_OVERRIDES,
+        env_enable_credentials=gateway_env.ENV_ENABLE_CREDENTIALS,
     )

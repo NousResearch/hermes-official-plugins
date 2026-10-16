@@ -17,3 +17,11 @@ ENV_OVERRIDES = (
         home="WEIXIN_HOME_CHANNEL", home_strip=True,
     ),
 )
+
+# Authorization env names (``PlatformEntry`` fields). Core reads them from this file when the
+# live entry lacks them: a user plugin overriding this platform, safe mode, the plugin disabled.
+AUTHZ = {
+    "allowed_users_env": "WEIXIN_ALLOWED_USERS",
+    "allow_all_env": "WEIXIN_ALLOW_ALL_USERS",
+    "own_policy_env": ("WEIXIN_DM_POLICY", "WEIXIN_GROUP_POLICY"),
+}

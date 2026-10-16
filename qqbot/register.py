@@ -138,4 +138,6 @@ def register(ctx) -> None:
         emoji="🐧",
         cron_deliver_env_var="QQBOT_HOME_CHANNEL",
         standalone_sender_fn=standalone_send,
+        # QQ's dm/group policy is YAML-only (no env var); QQ_ALLOW_ALL_USERS is still the opt-in.
+        own_policy_env=("", ""),
     )

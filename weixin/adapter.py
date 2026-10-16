@@ -1400,4 +1400,6 @@ def register(ctx) -> None:
         cron_deliver_env_var="WEIXIN_HOME_CHANNEL",
         # Out-of-process send_message/cron; the adapter's own send() chunks (MAX_MESSAGE_LENGTH), so
         # max_message_length stays 0: send_message hands the full text + all media to one native send.
-        standalone_sender_fn=_standalone_send, max_message_length=0, emoji="💬", allow_update_command=True)
+        standalone_sender_fn=_standalone_send, max_message_length=0, emoji="💬", allow_update_command=True,
+        own_policy_env=("WEIXIN_DM_POLICY", "WEIXIN_GROUP_POLICY"),
+    )

@@ -4470,7 +4470,6 @@ def _apply_yaml_config(yaml_cfg: dict, feishu_cfg: dict) -> dict | None:
     return {"allow_bots": str(seeded["allow_bots"]).lower()} if seeded else None
 
 
-
 def _is_connected(config) -> bool:
     """Feishu counts as connected once app_id is configured."""
     extra = getattr(config, "extra", {}) or {}
@@ -4490,4 +4489,5 @@ def register(ctx) -> None:
         allow_all_env="FEISHU_ALLOW_ALL_USERS", cron_deliver_env_var="FEISHU_HOME_CHANNEL",
         standalone_sender_fn=_standalone_send, max_message_length=8000, emoji="🪽",
         allow_update_command=True,
+        allow_bots_env="FEISHU_ALLOW_BOTS",
     )

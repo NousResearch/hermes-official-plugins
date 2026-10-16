@@ -1,4 +1,4 @@
-"""QQ Bot platform plugin: env/YAML seeding, interactive setup, and registry entry.
+"""QQ Bot platform plugin: interactive setup and registry entry.
 
 The adapter stays in ``adapter.py``. This module is the only thing ``__init__``
 exports, so importing the package registers the platform and does not open a portal
@@ -7,35 +7,15 @@ connection.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Optional
 
-from gateway.platforms._shared import apply_yaml_bridge, get_scoped_secret
+from gateway.platforms._shared import get_scoped_secret
 
 from .adapter import QQAdapter, check_qq_requirements
-from .constants import MAX_MESSAGE_LENGTH
-
-_PLATFORM_HINT = (
-    "You are on QQ, a popular Chinese messaging platform. QQ supports markdown formatting "
-    "and emoji. You can send media files natively: include MEDIA:/absolute/path/to/file in "
-    "your response. Images are sent as native photos, and other files arrive as downloadable documents."
-)
-
-_YAML_BRIDGE = (
-    ("app_id", "QQ_APP_ID", "str"),
-    ("client_secret", "QQ_CLIENT_SECRET", "str"),
-    ("allow_from", "QQ_ALLOWED_USERS", "csv"),
-    ("group_allow_from", "QQ_GROUP_ALLOWED_USERS", "csv"),
-    ("markdown_support", "QQ_MARKDOWN_SUPPORT", "lower"),
-)
-_YAML_EXTRA_KEYS = ("dm_policy", "group_policy", "group_allowed_chats", "stt", "sandbox")
 
 
 def _scoped(name: str) -> str:
     return str(get_scoped_secret(name, "") or "").strip()
-
-
-def _truthy(raw: str) -> bool:
-    return raw.lower() in {"1", "true", "yes", "on"}
 
 
 def _credentials_configured(extra: Optional[dict] = None) -> bool:
@@ -43,39 +23,6 @@ def _credentials_configured(extra: Optional[dict] = None) -> bool:
     app_id = str(extra.get("app_id") or "").strip() or _scoped("QQ_APP_ID")
     secret = str(extra.get("client_secret") or "").strip() or _scoped("QQ_CLIENT_SECRET")
     return bool(app_id and secret)
-
-
-def env_enablement() -> Optional[dict]:
-    """Seed ``platforms.qqbot.extra`` from the profile's QQ env. ``None`` when the bot
-    is not configured, so importing the plugin never enables a connect loop."""
-    if not _credentials_configured():
-        return None
-    seed: dict[str, Any] = {"app_id": _scoped("QQ_APP_ID"), "client_secret": _scoped("QQ_CLIENT_SECRET")}
-    if allow := _scoped("QQ_ALLOWED_USERS"):
-        seed["allow_from"] = allow
-    if groups := _scoped("QQ_GROUP_ALLOWED_USERS"):
-        seed["group_allow_from"] = groups
-    if markdown := _scoped("QQ_MARKDOWN_SUPPORT"):
-        seed["markdown_support"] = _truthy(markdown)
-    chat_id = _scoped("QQBOT_HOME_CHANNEL") or _scoped("QQ_HOME_CHANNEL")
-    name = _scoped("QQBOT_HOME_CHANNEL_NAME") or _scoped("QQ_HOME_CHANNEL_NAME")
-    thread_id = _scoped("QQBOT_HOME_CHANNEL_THREAD_ID") or _scoped("QQ_HOME_CHANNEL_THREAD_ID")
-    if chat_id:
-        home = {"chat_id": chat_id, "name": name or "Home"}
-        if thread_id:
-            home["thread_id"] = thread_id
-        seed["home_channel"] = home
-    return seed
-
-
-def apply_yaml_config(_yaml_cfg: dict, platform_cfg: dict) -> Optional[dict]:
-    if not isinstance(platform_cfg, dict):
-        return None
-    seeded = apply_yaml_bridge(platform_cfg, _YAML_BRIDGE) or {}
-    for key in _YAML_EXTRA_KEYS:
-        if key in platform_cfg:
-            seeded[key] = platform_cfg[key]
-    return seeded or None
 
 
 def is_connected(pconfig) -> bool:
@@ -187,18 +134,13 @@ def register(ctx) -> None:
         label="QQ Bot",
         adapter_factory=QQAdapter,
         check_fn=check_qq_requirements,
-        validate_config=is_connected,
         is_connected=is_connected,
         required_env=["QQ_APP_ID", "QQ_CLIENT_SECRET"],
-        install_hint="aiohttp and httpx are required. Run: hermes pm repair",
+        install_hint="QQBot: aiohttp/httpx missing or QQ_APP_ID/QQ_CLIENT_SECRET not configured",
         setup_fn=setup_qqbot,
         allowed_users_env="QQ_ALLOWED_USERS",
         allow_all_env="QQ_ALLOW_ALL_USERS",
-        max_message_length=MAX_MESSAGE_LENGTH,
         emoji="🐧",
-        platform_hint=_PLATFORM_HINT,
-        env_enablement_fn=env_enablement,
-        apply_yaml_config_fn=apply_yaml_config,
         cron_deliver_env_var="QQBOT_HOME_CHANNEL",
         standalone_sender_fn=standalone_send,
     )

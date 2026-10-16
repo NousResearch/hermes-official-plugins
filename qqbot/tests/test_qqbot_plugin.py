@@ -13,46 +13,38 @@ def _clear_qq(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
 
-def test_unconfigured_plugin_does_not_enable(monkeypatch):
+def test_register_shape():
+    """The plugin registers the same identity/env/routing the core table carried."""
+    from gateway.platform_registry import PlatformEntry
+    from plugins.platforms.qqbot import register
+    from plugins.platforms.qqbot.adapter import QQAdapter, check_qq_requirements
+    from plugins.platforms.qqbot.register import setup_qqbot, standalone_send
+
+    captured = {}
+
+    class _Ctx:
+        def register_platform(self, **kwargs):
+            captured.update(kwargs)
+
+    register(_Ctx())
+    entry = PlatformEntry(**captured)
+    assert entry.name == "qqbot" and entry.label == "QQ Bot" and entry.emoji == "🐧"
+    assert entry.adapter_factory is QQAdapter and entry.check_fn is check_qq_requirements
+    assert entry.required_env == ["QQ_APP_ID", "QQ_CLIENT_SECRET"]
+    assert entry.allowed_users_env == "QQ_ALLOWED_USERS" and entry.allow_all_env == "QQ_ALLOW_ALL_USERS"
+    assert entry.cron_deliver_env_var == "QQBOT_HOME_CHANNEL"
+    assert entry.setup_fn is setup_qqbot and entry.standalone_sender_fn is standalone_send
+    # send_message never chunked QQ text before the move; the REST sender truncates itself.
+    assert entry.max_message_length == 0
+
+
+def test_is_connected_needs_both_credentials(monkeypatch):
     _clear_qq(monkeypatch)
-    from plugins.platforms.qqbot.register import env_enablement
+    from gateway.config import PlatformConfig
+    from plugins.platforms.qqbot.register import is_connected
 
-    assert env_enablement() is None
-
-
-def test_group_allowlist_and_home_seed(monkeypatch):
-    _clear_qq(monkeypatch)
-    monkeypatch.setenv("QQ_APP_ID", "app")
-    monkeypatch.setenv("QQ_CLIENT_SECRET", "sec")
-    monkeypatch.setenv("QQ_GROUP_ALLOWED_USERS", "group-1, group-2")
-    monkeypatch.setenv("QQBOT_HOME_CHANNEL", "home-chat")
-    monkeypatch.setenv("QQBOT_HOME_CHANNEL_NAME", "Lounge")
-    monkeypatch.setenv("QQBOT_HOME_CHANNEL_THREAD_ID", "thread-9")
-    monkeypatch.setenv("QQ_HOME_CHANNEL", "ignored")
-    from plugins.platforms.qqbot.register import env_enablement
-
-    seed = env_enablement()
-
-    assert seed["app_id"] == "app"
-    assert seed["group_allow_from"] == "group-1, group-2"
-    assert seed["home_channel"] == {
-        "chat_id": "home-chat", "name": "Lounge", "thread_id": "thread-9",
-    }
-
-
-def test_qq_prefixed_home_channel_still_seeds(monkeypatch):
-    _clear_qq(monkeypatch)
-    monkeypatch.setenv("QQ_APP_ID", "app")
-    monkeypatch.setenv("QQ_CLIENT_SECRET", "sec")
-    monkeypatch.setenv("QQ_HOME_CHANNEL", "renamed-chat")
-    monkeypatch.setenv("QQ_HOME_CHANNEL_THREAD_ID", "thread-2")
-    from plugins.platforms.qqbot.register import env_enablement
-
-    seed = env_enablement()
-
-    assert seed["home_channel"] == {
-        "chat_id": "renamed-chat", "name": "Home", "thread_id": "thread-2",
-    }
+    assert is_connected(PlatformConfig(enabled=True, extra={"app_id": "a"})) is False
+    assert is_connected(PlatformConfig(enabled=True, extra={"app_id": "a", "client_secret": "s"})) is True
 
 
 def test_qqbot_platform_hint_comes_from_the_builtin_table():

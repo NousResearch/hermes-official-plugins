@@ -245,9 +245,3 @@ async def send_qqbot(pconfig, chat_id, message, media_files=None, caption=None, 
             return await _qqbot_send_text_message(client, headers, chat_id, message or "")
     except Exception as e:
         return _error(f"QQBot send failed: {e}")
-
-
-
-
-# Tests and older call sites use this name.
-_send_qqbot = send_qqbot

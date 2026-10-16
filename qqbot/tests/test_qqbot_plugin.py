@@ -40,11 +40,16 @@ def test_register_shape():
 
 def test_is_connected_needs_both_credentials(monkeypatch):
     _clear_qq(monkeypatch)
+    import hermes_cli.gateway as gateway_mod
+    monkeypatch.setattr(gateway_mod, "get_env_value", lambda name: None)
     from gateway.config import PlatformConfig
     from plugins.platforms.qqbot.register import is_connected
 
     assert is_connected(PlatformConfig(enabled=True, extra={"app_id": "a"})) is False
     assert is_connected(PlatformConfig(enabled=True, extra={"app_id": "a", "client_secret": "s"})) is True
+    env = {"QQ_APP_ID": "a", "QQ_CLIENT_SECRET": "s"}
+    monkeypatch.setattr(gateway_mod, "get_env_value", env.get)
+    assert is_connected(PlatformConfig(enabled=True)) is True
 
 
 def test_qqbot_platform_hint_comes_from_the_builtin_table():

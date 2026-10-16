@@ -7,27 +7,20 @@ connection.
 
 from __future__ import annotations
 
-from typing import Optional
-
-from gateway.platforms._shared import get_scoped_secret
+from gateway.platforms._shared import env_is_connected
 
 from .adapter import QQAdapter, check_qq_requirements
 
 
-def _scoped(name: str) -> str:
-    return str(get_scoped_secret(name, "") or "").strip()
-
-
-def _credentials_configured(extra: Optional[dict] = None) -> bool:
-    extra = extra or {}
-    app_id = str(extra.get("app_id") or "").strip() or _scoped("QQ_APP_ID")
-    secret = str(extra.get("client_secret") or "").strip() or _scoped("QQ_CLIENT_SECRET")
-    return bool(app_id and secret)
+_env_configured = env_is_connected("QQ_APP_ID", "QQ_CLIENT_SECRET")
 
 
 def is_connected(pconfig) -> bool:
+    """Both credentials from ``extra`` (config.yaml) or the profile env / ``.env``."""
     extra = getattr(pconfig, "extra", None) or {}
-    return _credentials_configured(extra)
+    if str(extra.get("app_id") or "").strip() and str(extra.get("client_secret") or "").strip():
+        return True
+    return _env_configured(pconfig)
 
 
 async def standalone_send(pconfig, chat_id, message, *, thread_id=None, media_files=None,

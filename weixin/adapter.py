@@ -1390,6 +1390,16 @@ def interactive_setup() -> None:
         gw.print_info(f"  User ID: {user_id}")
 
 
+# System-prompt platform hint (PlatformEntry.platform_hint); cached-prompt bytes, keep stable.
+_PLATFORM_HINT = (
+    "You are on Weixin/WeChat. Markdown formatting is supported, so you may use it when it improves readability, "
+    "but keep the message compact and chat-friendly. You can send media files natively: include "
+    "MEDIA:/absolute/path/to/file in your response. Images are sent as native photos, videos play inline when "
+    "supported, and other files arrive as downloadable documents. You can also include image URLs in markdown "
+    "format ![alt](url) and they will be downloaded and sent as native media when possible."
+)
+
+
 def register(ctx) -> None:
     """Plugin entry point — called by the Hermes plugin system."""
     ctx.register_platform(
@@ -1402,4 +1412,6 @@ def register(ctx) -> None:
         # max_message_length stays 0: send_message hands the full text + all media to one native send.
         standalone_sender_fn=_standalone_send, max_message_length=0, emoji="💬", allow_update_command=True,
         own_policy_env=("WEIXIN_DM_POLICY", "WEIXIN_GROUP_POLICY"),
+        platform_hint=_PLATFORM_HINT,
+        display_tier="low",
     )

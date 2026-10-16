@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "rea",
   "version": "0.1.0",
-  "description": "Reverse engineer programs with REA: inspect native binaries, .NET assemblies, Electron/JavaScript apps, Android packages, firmware and browser activity through REA's MCP server (pinned rea-agents@6.4.0 over npx stdio), with REA's reverse-engineer-anything workflow skill bundled.",
+  "description": "Reverse engineer programs with REA: inspect native binaries, .NET assemblies, Electron/JavaScript apps, Android packages, firmware and browser activity through REA's MCP server (pinned rea-agents@6.4.0 over npx stdio), with REA's reverse-engineer-anything workflow skill and a crash-triage skill (core dump + binary to root cause) bundled.",
   "author": {
     "name": "Nous Research",
     "url": "https://github.com/NousResearch"
@@ -19,6 +19,8 @@
     "electron",
     "android",
     "firmware",
+    "crash",
+    "core-dump",
     "mcp"
   ]
 }

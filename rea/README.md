@@ -23,6 +23,13 @@ install ships:
   Hermes: it connects through this plugin instead of `rea setup`, finds tools
   through Hermes' tool search, and asks before steps that run or change
   something.
+- `skills/crash-triage/`: from a Linux core dump and the binary that crashed to
+  a root cause and a bug report you can paste into an issue. It reads the crash
+  with `inspect_recorded_crash`, places the program counter with
+  `inspect_binary_layout` and a small standard-library helper that decodes the
+  core's mapped-file list, classifies the crash (NULL dereference, stack
+  overflow, abort, ...), and never runs the program. Adapted from
+  [crashlens](https://github.com/mingleiw/crashlens) (MIT).
 
 ## Install
 
@@ -32,7 +39,8 @@ hermes plugins enable rea
 ```
 
 Then start a new Hermes session and ask, for example, "Use REA to inspect
-/Applications/Notes.app and explain how CSV export works."
+/Applications/Notes.app and explain how CSV export works." or "./parser
+crashed and left ./core. Why?"
 
 Requirements:
 
@@ -129,4 +137,6 @@ either is a commit to this repo followed by a reviewed SHA bump in the
 
 REA is made by [morluto](https://github.com/morluto) and released under the MIT
 license. The skill in `skills/reverse-engineer-anything/` is adapted from REA's
-bundled skill; its license is reproduced in [LICENSE](LICENSE).
+bundled skill; its license is reproduced in [LICENSE](LICENSE). The workflow in
+`skills/crash-triage/` is adapted from
+[crashlens](https://github.com/mingleiw/crashlens) by mingleiw (MIT).

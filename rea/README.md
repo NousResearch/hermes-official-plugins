@@ -41,6 +41,12 @@ Requirements:
 - Nothing else for static JavaScript/Electron/ASAR analysis, archive and
   package inventory, Go/Rust binary metadata, PE resources, .NET metadata and
   saved HAR captures.
+- For core dumps and offline ELF layout (`inspect_recorded_crash`,
+  `inspect_binary_layout`): a Python with pwntools 4.15.0, pyelftools 0.33 and
+  Unicorn 2.1.2, named in `~/.hermes/.env` as
+  `REA_PWNTOOLS_PYTHON=/path/to/venv/bin/python`. Hermes passes MCP servers only
+  a small set of environment variables, so `mcp.json` forwards this one
+  explicitly; a value exported only in your shell does not reach REA.
 - Bring your own engine for the rest: Ghidra plus a JDK, Hopper or IDA for
   native decompilation; JADX and Java for Android code; Binwalk/Unblob for
   firmware extraction; TShark, sigrok or WABT for their formats. REA never

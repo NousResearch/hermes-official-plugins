@@ -1254,6 +1254,12 @@ _INSTALL_HINT = "Weixin: aiohttp/cryptography not installed"
 _env_configured = env_is_connected("WEIXIN_ACCOUNT_ID", "WEIXIN_TOKEN")
 
 
+def _config_connected(config: Any) -> bool:
+    """``config_connected_fn``: account_id AND token in the merged PlatformConfig; a token alone is
+    not enough, so this platform opts out of the generic ``token or api_key`` shortcut."""
+    return bool(config.extra.get("account_id") and (config.token or config.extra.get("token")))
+
+
 def _is_connected(config: Any) -> bool:
     """Account ID AND token, from ``config`` or the scoped ``WEIXIN_*`` env (``gateway/config.py``'s
     Weixin connected check reads the same pair), else ``.env``, which a plain CLI process never loads
@@ -1389,6 +1395,7 @@ def register(ctx) -> None:
     ctx.register_platform(
         name="weixin", label="Weixin / WeChat", adapter_factory=WeixinAdapter, check_fn=check_weixin_requirements,
         is_connected=_is_connected, required_env=["WEIXIN_ACCOUNT_ID", "WEIXIN_TOKEN"], install_hint=_INSTALL_HINT,
+        config_connected_fn=_config_connected,
         setup_fn=interactive_setup, allowed_users_env="WEIXIN_ALLOWED_USERS", allow_all_env="WEIXIN_ALLOW_ALL_USERS",
         cron_deliver_env_var="WEIXIN_HOME_CHANNEL",
         # Out-of-process send_message/cron; the adapter's own send() chunks (MAX_MESSAGE_LENGTH), so

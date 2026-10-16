@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from gateway.platforms._shared import env_is_connected
 from gateway.platforms._shared import config_connected_extra
+from gateway.platforms.send_targets import StandaloneSendPolicy
 
 from .adapter import QQAdapter, check_qq_requirements
 
@@ -132,6 +133,7 @@ _PLATFORM_HINT = (
 
 def register(ctx) -> None:
     ctx.register_platform(
+        standalone_send=StandaloneSendPolicy(label="QQ Bot", media=True, captionable=True, text_direct=True),
         name="qqbot",
         label="QQ Bot",
         adapter_factory=QQAdapter,

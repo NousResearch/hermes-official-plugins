@@ -851,6 +851,11 @@ def register(ctx) -> None:
         target_ref_syntax_fn=parse_nonempty,
         standalone_send=StandaloneSendPolicy(text_direct=True),
         name="wecom", label="WeCom (Enterprise WeChat)", adapter_factory=WeComAdapter, check_fn=check_wecom_requirements,
+        dashboard_label="WeCom (group bot)",
+        dashboard_description="Send-only WeCom group bot via webhook.",
+        docs_url="https://developer.work.weixin.qq.com/document/path/91770",
+        dashboard_env_vars=("WECOM_BOT_ID", "WECOM_SECRET"),
+        dashboard_required_env=("WECOM_BOT_ID",),
         is_connected=_is_connected, validate_config=_is_connected, required_env=["WECOM_BOT_ID", "WECOM_SECRET"],
         setup_fn=interactive_setup, allowed_users_env="WECOM_ALLOWED_USERS", allow_all_env="WECOM_ALLOW_ALL_USERS",
         cron_deliver_env_var="WECOM_HOME_CHANNEL", standalone_sender_fn=_standalone_send, max_message_length=4000, **common,
@@ -863,6 +868,16 @@ def register(ctx) -> None:
     from plugins.platforms.wecom.callback_adapter import check_wecom_callback_requirements, ensure_wecom_callback_requirements
     ctx.register_platform(
         name="wecom_callback", label="WeCom Callback (self-built apps)", adapter_factory=_build_callback_adapter,
+        dashboard_label="WeCom (app)",
+        dashboard_description="Two-way WeCom integration via callback app.",
+        docs_url="https://developer.work.weixin.qq.com/document/path/90930",
+        dashboard_env_vars=(
+            "WECOM_CALLBACK_CORP_ID", "WECOM_CALLBACK_CORP_SECRET", "WECOM_CALLBACK_AGENT_ID",
+            "WECOM_CALLBACK_TOKEN", "WECOM_CALLBACK_ENCODING_AES_KEY",
+        ),
+        dashboard_required_env=(
+            "WECOM_CALLBACK_CORP_ID", "WECOM_CALLBACK_CORP_SECRET", "WECOM_CALLBACK_AGENT_ID",
+        ),
         check_fn=check_wecom_callback_requirements, ensure_deps_fn=ensure_wecom_callback_requirements,
         is_connected=_callback_is_connected, validate_config=_callback_is_connected,
         required_env=["WECOM_CALLBACK_CORP_ID", "WECOM_CALLBACK_CORP_SECRET"],

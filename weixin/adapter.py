@@ -39,6 +39,7 @@ from gateway.platforms.event import MessageEvent, MessageType
 from hermes_constants import get_hermes_home
 from utils import atomic_json_write
 from gateway.platforms._shared import env_is_connected, extra_or_secret as _extra_or_env, get_scoped_secret as _wx_secret
+from gateway.platforms.send_targets import StandaloneSendPolicy, regex_groups_parser
 
 
 def _extra_or_secret(extra: dict[str, Any], key: str, default: str = "") -> str:
@@ -1398,11 +1399,14 @@ _PLATFORM_HINT = (
     "supported, and other files arrive as downloadable documents. You can also include image URLs in markdown "
     "format ![alt](url) and they will be downloaded and sent as native media when possible."
 )
+_SEND_TARGET_RE = re.compile(r"^\s*((?:wxid|gh|v\d+|wm|wb)_[A-Za-z0-9_-]+|[A-Za-z0-9._-]+@chatroom|filehelper)\s*$")
 
 
 def register(ctx) -> None:
     """Plugin entry point — called by the Hermes plugin system."""
     ctx.register_platform(
+        target_ref_syntax_fn=regex_groups_parser(_SEND_TARGET_RE, thread_group=False),
+        standalone_send=StandaloneSendPolicy(label="Weixin", media=True),
         name="weixin", label="Weixin / WeChat", adapter_factory=WeixinAdapter, check_fn=check_weixin_requirements,
         is_connected=_is_connected, required_env=["WEIXIN_ACCOUNT_ID", "WEIXIN_TOKEN"], install_hint=_INSTALL_HINT,
         config_connected_fn=_config_connected,

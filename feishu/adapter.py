@@ -1,3 +1,4 @@
+# health: allow FILE_LINES -- platform-tables refactor: core's PLATFORM_HINTS/_PLATFORM_DEFAULTS rows for this platform moved onto its register() call (hint text lives in adapter_hint.py); the growth is only those kwargs
 """
 Feishu/Lark platform adapter.
 
@@ -4476,9 +4477,9 @@ def _is_connected(config) -> bool:
     return bool(extra.get("app_id"))
 
 
-
 def register(ctx) -> None:
     """Plugin entry point — called by the Hermes plugin system."""
+    from plugins.platforms.feishu.adapter_hint import PLATFORM_HINT
     ctx.register_platform(
         name="feishu", label="Feishu / Lark", adapter_factory=FeishuAdapter,
         check_fn=feishu_deps_present, ensure_deps_fn=check_feishu_requirements,
@@ -4490,4 +4491,6 @@ def register(ctx) -> None:
         standalone_sender_fn=_standalone_send, max_message_length=8000, emoji="🪽",
         allow_update_command=True,
         allow_bots_env="FEISHU_ALLOW_BOTS",
+        platform_hint=PLATFORM_HINT,
+        display_tier="medium",
     )

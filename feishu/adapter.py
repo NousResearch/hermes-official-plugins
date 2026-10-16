@@ -4482,6 +4482,7 @@ def register(ctx) -> None:
     from plugins.platforms.feishu.adapter_hint import PLATFORM_HINT
     from plugins.platforms.feishu.send_targets import SEND_ENTRY_KWARGS
     from .dashboard_card import DASHBOARD_CARD
+    from . import gateway_env  # env -> GatewayConfig bridge (gateway.config_env)
     ctx.register_platform(
         **SEND_ENTRY_KWARGS,  # send_message target syntax + routing
         name="feishu", label="Feishu / Lark", adapter_factory=FeishuAdapter,
@@ -4497,4 +4498,6 @@ def register(ctx) -> None:
         allow_bots_env="FEISHU_ALLOW_BOTS",
         platform_hint=PLATFORM_HINT,
         display_tier="medium",
+        env_overrides=gateway_env.ENV_OVERRIDES,
+        env_enable_credentials=gateway_env.ENV_ENABLE_CREDENTIALS,
     )

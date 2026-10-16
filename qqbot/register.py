@@ -147,14 +147,11 @@ def register(ctx) -> None:
         required_env=["QQ_APP_ID", "QQ_CLIENT_SECRET"],
         install_hint="QQBot: aiohttp/httpx missing or QQ_APP_ID/QQ_CLIENT_SECRET not configured",
         setup_fn=setup_qqbot,
-        allowed_users_env="QQ_ALLOWED_USERS",
-        allow_all_env="QQ_ALLOW_ALL_USERS",
         emoji="🐧",
         cron_deliver_env_var="QQBOT_HOME_CHANNEL",
         standalone_sender_fn=standalone_send,
         # QQ's dm/group policy is YAML-only (no env var); QQ_ALLOW_ALL_USERS is still the opt-in.
-        own_policy_env=("", ""),
         platform_hint=_PLATFORM_HINT,
         env_overrides=gateway_env.ENV_OVERRIDES,
-        env_enable_credentials=gateway_env.ENV_ENABLE_CREDENTIALS,
+        env_enable_credentials=gateway_env.ENV_ENABLE_CREDENTIALS, **gateway_env.AUTHZ,
     )

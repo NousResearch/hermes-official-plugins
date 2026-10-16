@@ -38,7 +38,7 @@ from gateway.platforms.base import (
 from gateway.platforms.event import MessageEvent, MessageType
 from hermes_constants import get_hermes_home
 from utils import atomic_json_write
-from gateway.platforms._shared import extra_or_secret as _extra_or_env, get_scoped_secret as _wx_secret
+from gateway.platforms._shared import env_is_connected, extra_or_secret as _extra_or_env, get_scoped_secret as _wx_secret
 
 
 def _extra_or_secret(extra: dict[str, Any], key: str, default: str = "") -> str:
@@ -1251,13 +1251,17 @@ async def send_weixin_direct(
 _INSTALL_HINT = "Weixin: aiohttp/cryptography not installed"
 
 
+_env_configured = env_is_connected("WEIXIN_ACCOUNT_ID", "WEIXIN_TOKEN")
+
+
 def _is_connected(config: Any) -> bool:
     """Account ID AND token, from ``config`` or the scoped ``WEIXIN_*`` env (``gateway/config.py``'s
-    Weixin connected check reads the same pair)."""
+    Weixin connected check reads the same pair), else ``.env``, which a plain CLI process never loads
+    into the environment (the old static setup row read it)."""
     extra = getattr(config, "extra", None) or {}
     account = _extra_or_secret(extra, "account_id")
     token = str(getattr(config, "token", None) or extra.get("token") or _wx_secret("WEIXIN_TOKEN", "")).strip()
-    return bool(account and token)
+    return bool(account and token) or _env_configured(config)
 
 
 async def _standalone_send(pconfig: Any, chat_id: str, message: str, *, thread_id: Optional[str] = None,

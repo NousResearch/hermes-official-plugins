@@ -4481,9 +4481,11 @@ def register(ctx) -> None:
     """Plugin entry point — called by the Hermes plugin system."""
     from plugins.platforms.feishu.adapter_hint import PLATFORM_HINT
     from plugins.platforms.feishu.send_targets import SEND_ENTRY_KWARGS
+    from .dashboard_card import DASHBOARD_CARD
     ctx.register_platform(
         **SEND_ENTRY_KWARGS,  # send_message target syntax + routing
         name="feishu", label="Feishu / Lark", adapter_factory=FeishuAdapter,
+        **DASHBOARD_CARD,
         check_fn=feishu_deps_present, ensure_deps_fn=check_feishu_requirements,
         is_connected=_is_connected, validate_config=_is_connected,
         required_env=["FEISHU_APP_ID", "FEISHU_APP_SECRET"],

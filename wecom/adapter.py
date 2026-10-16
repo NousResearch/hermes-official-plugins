@@ -35,6 +35,7 @@ from gateway.platforms.event import MessageEvent, MessageType
 from utils import env_float
 
 from gateway.platforms._shared import get_scoped_secret as _get_scoped_secret, send_error
+from gateway.platforms.send_targets import StandaloneSendPolicy, parse_nonempty
 from plugins.platforms.wecom.send_queue import ChatSendQueueMixin
 from plugins.platforms.wecom.media import WeComMediaMixin, APP_CMD_SEND
 from plugins.platforms.wecom.streaming import (
@@ -847,6 +848,8 @@ _WECOM_PLATFORM_HINT = (
 def register(ctx) -> None:
     common = dict(install_hint="Run `hermes setup` to install WeCom support.", emoji="💼", allow_update_command=True)
     ctx.register_platform(
+        target_ref_syntax_fn=parse_nonempty,
+        standalone_send=StandaloneSendPolicy(text_direct=True),
         name="wecom", label="WeCom (Enterprise WeChat)", adapter_factory=WeComAdapter, check_fn=check_wecom_requirements,
         is_connected=_is_connected, validate_config=_is_connected, required_env=["WECOM_BOT_ID", "WECOM_SECRET"],
         setup_fn=interactive_setup, allowed_users_env="WECOM_ALLOWED_USERS", allow_all_env="WECOM_ALLOW_ALL_USERS",

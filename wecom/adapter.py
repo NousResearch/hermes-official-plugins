@@ -834,6 +834,16 @@ def _build_callback_adapter(config):
     return WecomCallbackAdapter(config)
 
 
+# System-prompt platform hint (PlatformEntry.platform_hint); cached-prompt bytes, keep stable.
+_WECOM_PLATFORM_HINT = (
+    "You are on WeCom (\u4f01\u4e1a\u5fae\u4fe1). Markdown is supported. "
+    "You can send files natively: write MEDIA:/absolute/path/to/file in your response. "
+    "Images (.jpg, .png, .webp) send as photos (\u226410 MB), other files as documents (\u226420 MB), videos "
+    "(.mp4) play inline. Voice messages must be AMR \u2014 other audio formats send as file attachments. Image "
+    "URLs via ![alt](url) are downloaded and sent as photos. Never claim you lack file-sending."
+)
+
+
 def register(ctx) -> None:
     common = dict(install_hint="Run `hermes setup` to install WeCom support.", emoji="💼", allow_update_command=True)
     ctx.register_platform(
@@ -842,6 +852,10 @@ def register(ctx) -> None:
         setup_fn=interactive_setup, allowed_users_env="WECOM_ALLOWED_USERS", allow_all_env="WECOM_ALLOW_ALL_USERS",
         cron_deliver_env_var="WECOM_HOME_CHANNEL", standalone_sender_fn=_standalone_send, max_message_length=4000, **common,
         own_policy_env=("WECOM_DM_POLICY", "WECOM_GROUP_POLICY"),
+        platform_hint=_WECOM_PLATFORM_HINT,
+        display_tier="low",
+        # Non-editable, but its native "stream" msgtype gives a typing animation + cumulative updates.
+        display_overrides={"streaming": True},
     )
     from plugins.platforms.wecom.callback_adapter import check_wecom_callback_requirements, ensure_wecom_callback_requirements
     ctx.register_platform(
@@ -850,4 +864,5 @@ def register(ctx) -> None:
         is_connected=_callback_is_connected, validate_config=_callback_is_connected,
         required_env=["WECOM_CALLBACK_CORP_ID", "WECOM_CALLBACK_CORP_SECRET"],
         allowed_users_env="WECOM_CALLBACK_ALLOWED_USERS", allow_all_env="WECOM_CALLBACK_ALLOW_ALL_USERS", **common,
+        display_tier="low",
     )

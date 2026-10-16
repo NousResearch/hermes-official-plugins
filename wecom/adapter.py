@@ -847,6 +847,7 @@ _WECOM_PLATFORM_HINT = (
 
 def register(ctx) -> None:
     common = dict(install_hint="Run `hermes setup` to install WeCom support.", emoji="💼", allow_update_command=True)
+    from . import gateway_env  # env -> GatewayConfig bridge (gateway.config_env)
     ctx.register_platform(
         target_ref_syntax_fn=parse_nonempty,
         standalone_send=StandaloneSendPolicy(text_direct=True),
@@ -864,6 +865,8 @@ def register(ctx) -> None:
         display_tier="low",
         # Non-editable, but its native "stream" msgtype gives a typing animation + cumulative updates.
         display_overrides={"streaming": True},
+        env_overrides=gateway_env.ENV_OVERRIDES,
+        env_enable_credentials=gateway_env.ENV_ENABLE_CREDENTIALS,
     )
     from plugins.platforms.wecom.callback_adapter import check_wecom_callback_requirements, ensure_wecom_callback_requirements
     ctx.register_platform(
@@ -883,4 +886,6 @@ def register(ctx) -> None:
         required_env=["WECOM_CALLBACK_CORP_ID", "WECOM_CALLBACK_CORP_SECRET"],
         allowed_users_env="WECOM_CALLBACK_ALLOWED_USERS", allow_all_env="WECOM_CALLBACK_ALLOW_ALL_USERS", **common,
         display_tier="low",
+        env_overrides=gateway_env.CALLBACK_ENV_OVERRIDES,
+        env_enable_credentials=gateway_env.CALLBACK_ENV_ENABLE_CREDENTIALS,
     )

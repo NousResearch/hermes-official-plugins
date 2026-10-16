@@ -132,6 +132,7 @@ _PLATFORM_HINT = (
 
 
 def register(ctx) -> None:
+    from . import gateway_env  # env -> GatewayConfig bridge (gateway.config_env)
     ctx.register_platform(
         standalone_send=StandaloneSendPolicy(label="QQ Bot", media=True, captionable=True, text_direct=True),
         name="qqbot",
@@ -154,4 +155,6 @@ def register(ctx) -> None:
         # QQ's dm/group policy is YAML-only (no env var); QQ_ALLOW_ALL_USERS is still the opt-in.
         own_policy_env=("", ""),
         platform_hint=_PLATFORM_HINT,
+        env_overrides=gateway_env.ENV_OVERRIDES,
+        env_enable_credentials=gateway_env.ENV_ENABLE_CREDENTIALS,
     )

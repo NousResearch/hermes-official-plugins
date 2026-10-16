@@ -858,15 +858,14 @@ def register(ctx) -> None:
         dashboard_env_vars=("WECOM_BOT_ID", "WECOM_SECRET"),
         dashboard_required_env=("WECOM_BOT_ID",),
         is_connected=_is_connected, validate_config=_is_connected, required_env=["WECOM_BOT_ID", "WECOM_SECRET"],
-        setup_fn=interactive_setup, allowed_users_env="WECOM_ALLOWED_USERS", allow_all_env="WECOM_ALLOW_ALL_USERS",
+        setup_fn=interactive_setup,
         cron_deliver_env_var="WECOM_HOME_CHANNEL", standalone_sender_fn=_standalone_send, max_message_length=4000, **common,
-        own_policy_env=("WECOM_DM_POLICY", "WECOM_GROUP_POLICY"),
         platform_hint=_WECOM_PLATFORM_HINT,
         display_tier="low",
         # Non-editable, but its native "stream" msgtype gives a typing animation + cumulative updates.
         display_overrides={"streaming": True},
         env_overrides=gateway_env.ENV_OVERRIDES,
-        env_enable_credentials=gateway_env.ENV_ENABLE_CREDENTIALS,
+        env_enable_credentials=gateway_env.ENV_ENABLE_CREDENTIALS, **gateway_env.AUTHZ,
     )
     from plugins.platforms.wecom.callback_adapter import check_wecom_callback_requirements, ensure_wecom_callback_requirements
     ctx.register_platform(
@@ -883,9 +882,8 @@ def register(ctx) -> None:
         ),
         check_fn=check_wecom_callback_requirements, ensure_deps_fn=ensure_wecom_callback_requirements,
         is_connected=_callback_is_connected, validate_config=_callback_is_connected,
-        required_env=["WECOM_CALLBACK_CORP_ID", "WECOM_CALLBACK_CORP_SECRET"],
-        allowed_users_env="WECOM_CALLBACK_ALLOWED_USERS", allow_all_env="WECOM_CALLBACK_ALLOW_ALL_USERS", **common,
+        required_env=["WECOM_CALLBACK_CORP_ID", "WECOM_CALLBACK_CORP_SECRET"], **common,
         display_tier="low",
         env_overrides=gateway_env.CALLBACK_ENV_OVERRIDES,
-        env_enable_credentials=gateway_env.CALLBACK_ENV_ENABLE_CREDENTIALS,
+        env_enable_credentials=gateway_env.CALLBACK_ENV_ENABLE_CREDENTIALS, **gateway_env.CALLBACK_AUTHZ,
     )

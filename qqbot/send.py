@@ -4,6 +4,7 @@ Media uploads through C2C then group; guild channels have no native media path.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -209,7 +210,7 @@ async def send_qqbot(pconfig, chat_id, message, media_files=None, caption=None, 
                     # Caption applies to the first bubble only (single-file
                     # caption split already enforced by the caller).
                     media_caption = caption if index == 0 else None
-                    if not os.path.exists(media_path):
+                    if not await asyncio.to_thread(os.path.exists, media_path):
                         from urllib.parse import urlparse as _urlparse
                         if _urlparse(str(media_path)).scheme not in {"http", "https"}:
                             warnings.append(f"QQBot media file not found, skipping: {media_path}")
@@ -244,4 +245,5 @@ async def send_qqbot(pconfig, chat_id, message, media_files=None, caption=None, 
             # --- Text-only path: first 2xx wins (pre-media behavior) ---
             return await _qqbot_send_text_message(client, headers, chat_id, message or "")
     except Exception as e:
+        logger.debug("QQBot standalone send failed", exc_info=True)
         return _error(f"QQBot send failed: {e}")

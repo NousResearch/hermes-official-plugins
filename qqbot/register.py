@@ -122,6 +122,14 @@ def setup_qqbot() -> None:
     _gw().print_info(f"  App ID: {credentials['app_id']}")
 
 
+# System-prompt platform hint (PlatformEntry.platform_hint); cached-prompt bytes, keep stable.
+_PLATFORM_HINT = (
+    "You are on QQ, a popular Chinese messaging platform. QQ supports markdown formatting "
+    "and emoji. You can send media files natively: include MEDIA:/absolute/path/to/file in "
+    "your response. Images are sent as native photos, and other files arrive as downloadable documents."
+)
+
+
 def register(ctx) -> None:
     ctx.register_platform(
         name="qqbot",
@@ -140,4 +148,5 @@ def register(ctx) -> None:
         standalone_sender_fn=standalone_send,
         # QQ's dm/group policy is YAML-only (no env var); QQ_ALLOW_ALL_USERS is still the opt-in.
         own_policy_env=("", ""),
+        platform_hint=_PLATFORM_HINT,
     )

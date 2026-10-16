@@ -1180,7 +1180,7 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         try:
             proc = await asyncio.create_subprocess_exec(
                 "ffmpeg", "-y", "-i", src_path, "-ar", "16000", "-ac", "1", wav_path,
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
             await asyncio.wait_for(proc.wait(), timeout=30)
             if proc.returncode != 0:
                 stderr = await proc.stderr.read() if proc.stderr else b""

@@ -99,6 +99,12 @@ DraftGenerator = Callable[[str, str], Awaitable[str]]  # (customer_text, custome
 SendMessage = Callable[..., Awaitable[Any]]  # delegates to bot.send_message kwargs
 
 
+class BusinessDeliveryNotAttempted(RuntimeError):
+    """A send failure known to have happened before any delivery attempt."""
+
+    delivery_not_attempted = True
+
+
 # ---------------------------------------------------------------------------
 # Manager
 # ---------------------------------------------------------------------------
@@ -132,10 +138,78 @@ class BusinessModeManager:
         # New customer messages reset the timer so a typing burst yields one draft.
         self._debounce_tasks: Dict[str, asyncio.Task] = {}
         self._debounce_buffers: Dict[str, Dict[str, Any]] = {}
+        self._connection_locks: Dict[str, asyncio.Lock] = {}
 
         # Owner DMs that are in "next message = edited reply" mode.
         # Keyed by owner_chat_id → draft_id awaiting the override text.
         self._edit_capture: Dict[str, int] = {}
+        # Monotonic per-owner generation. Unlike the capture itself, this is
+        # retained after consumption so an older suspended send cannot infer
+        # that an empty capture slot is safe to reclaim.
+        self._edit_capture_generation: Dict[str, int] = {}
+        # Edit capture is deliberately process-local. Rows left behind by a
+        # prior manager instance cannot be reconstructed safely.
+        self._db.invalidate_awaiting_edit_drafts()
+
+    def _connection_lock(self, connection_id: str) -> asyncio.Lock:
+        return self._connection_locks.setdefault(str(connection_id), asyncio.Lock())
+
+    @staticmethod
+    def _ownership_matches(
+        connection: Optional[Dict[str, Any]], snapshot: Dict[str, Any],
+    ) -> bool:
+        if connection is None:
+            return False
+        try:
+            revision_matches = int(connection.get("owner_revision")) == int(
+                snapshot.get("owner_revision")
+            )
+        except (TypeError, ValueError):
+            return False
+        return (
+            str(connection.get("owner_user_id"))
+            == str(snapshot.get("owner_user_id"))
+            and str(connection.get("owner_chat_id"))
+            == str(snapshot.get("owner_chat_id"))
+            and revision_matches
+        )
+
+    def _release_draft_for_retry(
+        self, draft: Dict[str, Any], *, retry_status: str,
+    ) -> Optional[Dict[str, Any]]:
+        return self._db.release_telegram_business_draft_for_retry(
+            int(draft["draft_id"]),
+            retry_status=retry_status,
+            expected_owner_user_id=str(draft.get("owner_user_id")),
+            expected_owner_chat_id=str(draft.get("owner_chat_id")),
+            expected_owner_revision=int(draft.get("owner_revision")),
+        )
+
+    def _activate_edit_capture(self, owner_chat_id: str, draft_id: int) -> int:
+        owner_key = str(owner_chat_id)
+        previous_draft_id = self._edit_capture.get(owner_key)
+        if previous_draft_id is not None and previous_draft_id != draft_id:
+            self._db.transition_telegram_business_draft(
+                previous_draft_id,
+                from_status="awaiting_edit",
+                to_status="superseded",
+            )
+        generation = self._edit_capture_generation.get(owner_key, 0) + 1
+        self._edit_capture_generation[owner_key] = generation
+        self._edit_capture[owner_key] = draft_id
+        return generation
+
+    def _restore_edit_capture(
+        self, owner_chat_id: str, draft_id: int, generation: int,
+    ) -> bool:
+        """Restore only if no newer owner selection has ever advanced it."""
+        owner_key = str(owner_chat_id)
+        if self._edit_capture_generation.get(owner_key, 0) != generation:
+            return False
+        if owner_key in self._edit_capture:
+            return False
+        self._edit_capture[owner_key] = draft_id
+        return True
 
     # ------------------------------------------------------------------
     # BusinessConnection updates (established / edited / ended).
@@ -170,14 +244,15 @@ class BusinessModeManager:
         else:
             can_reply = bool(getattr(business_connection, "can_reply", False))
 
-        previous = self._db.get_telegram_business_connection(str(conn_id))
-        self._db.upsert_telegram_business_connection(
-            connection_id=str(conn_id),
-            owner_user_id=str(owner_user_id),
-            owner_chat_id=str(owner_chat_id),
-            can_reply=can_reply,
-            is_enabled=is_enabled,
-        )
+        async with self._connection_lock(str(conn_id)):
+            previous = self._db.get_telegram_business_connection(str(conn_id))
+            self._db.upsert_telegram_business_connection(
+                connection_id=str(conn_id),
+                owner_user_id=str(owner_user_id),
+                owner_chat_id=str(owner_chat_id),
+                can_reply=can_reply,
+                is_enabled=is_enabled,
+            )
 
         # First-time onboarding DM.
         if previous is None and is_enabled:
@@ -274,7 +349,9 @@ class BusinessModeManager:
         # Buffer the latest message info — the timer will read this at fire time.
         self._debounce_buffers[key] = {
             "conn_id": str(conn_id),
+            "owner_user_id": str(conn.get("owner_user_id")),
             "owner_chat_id": str(conn.get("owner_chat_id")),
+            "owner_revision": int(conn.get("owner_revision")),
             "customer_chat_id": str(customer_chat_id),
             "customer_msg_id": str(getattr(message, "message_id", "") or ""),
             "customer_text": text,
@@ -308,7 +385,11 @@ class BusinessModeManager:
         # Re-check the connection state — owner may have hit /biz pause
         # during the debounce window.
         conn = self._db.get_telegram_business_connection(buf["conn_id"])
-        if not conn or not conn.get("is_enabled") or not conn.get("auto_draft", True):
+        if (
+            not self._ownership_matches(conn, buf)
+            or not conn.get("is_enabled")
+            or not conn.get("auto_draft", True)
+        ):
             return
         if buf["customer_chat_id"] in (conn.get("paused_chats") or []):
             return
@@ -319,18 +400,27 @@ class BusinessModeManager:
             )
         except Exception as exc:
             logger.exception("Business-mode draft generator failed: %s", exc)
-            try:
-                await self._send(
-                    chat_id=int(buf["owner_chat_id"]),
-                    text=(
-                        "⚠️ I couldn't draft a reply to "
-                        f"{buf['customer_name']}: {exc}.\n\n"
-                        f"Their message was:\n\n{buf['customer_text']}"
-                    ),
-                    disable_notification=True,
-                )
-            except Exception:
-                pass
+            async with self._connection_lock(buf["conn_id"]):
+                current = self._db.get_telegram_business_connection(buf["conn_id"])
+                if (
+                    not self._ownership_matches(current, buf)
+                    or not current.get("is_enabled")
+                    or not current.get("auto_draft", True)
+                    or buf["customer_chat_id"] in (current.get("paused_chats") or [])
+                ):
+                    return
+                try:
+                    await self._send(
+                        chat_id=int(buf["owner_chat_id"]),
+                        text=(
+                            "⚠️ I couldn't draft a reply to "
+                            f"{buf['customer_name']}: {exc}.\n\n"
+                            f"Their message was:\n\n{buf['customer_text']}"
+                        ),
+                        disable_notification=True,
+                    )
+                except Exception:
+                    pass
             return
 
         draft_text = (draft_text or "").strip()
@@ -338,44 +428,93 @@ class BusinessModeManager:
             logger.debug("Empty draft for %s — skipping", key)
             return
 
-        draft_id = self._db.create_telegram_business_draft(
-            connection_id=buf["conn_id"],
-            owner_chat_id=buf["owner_chat_id"],
-            customer_chat_id=buf["customer_chat_id"],
-            customer_msg_id=buf["customer_msg_id"] or None,
-            customer_text=buf["customer_text"],
-            draft_text=draft_text,
-            ttl_seconds=self._draft_ttl_seconds,
-        )
+        generated_conn = self._db.get_telegram_business_connection(buf["conn_id"])
+        if (
+            not self._ownership_matches(generated_conn, buf)
+            or not generated_conn.get("is_enabled")
+            or not generated_conn.get("auto_draft", True)
+            or buf["customer_chat_id"] in (generated_conn.get("paused_chats") or [])
+        ):
+            return
 
         owner_message = self._render_draft_owner_message(
             customer_name=buf["customer_name"],
             customer_text=buf["customer_text"],
             draft_text=draft_text,
         )
-        keyboard = self._build_draft_keyboard(draft_id, can_reply=bool(conn.get("can_reply")))
-
-        try:
-            sent = await self._send(
-                chat_id=int(buf["owner_chat_id"]),
-                text=owner_message,
-                reply_markup=keyboard,
-                disable_notification=False,
+        async with self._connection_lock(buf["conn_id"]):
+            current = self._db.get_telegram_business_connection(buf["conn_id"])
+            if (
+                not self._ownership_matches(current, buf)
+                or not current.get("is_enabled")
+                or not current.get("auto_draft", True)
+                or buf["customer_chat_id"] in (current.get("paused_chats") or [])
+            ):
+                return
+            draft_id = self._db.create_telegram_business_draft(
+                connection_id=buf["conn_id"],
+                owner_user_id=buf["owner_user_id"],
+                owner_chat_id=buf["owner_chat_id"],
+                owner_revision=buf["owner_revision"],
+                customer_chat_id=buf["customer_chat_id"],
+                customer_msg_id=buf["customer_msg_id"] or None,
+                customer_text=buf["customer_text"],
+                draft_text=draft_text,
+                ttl_seconds=self._draft_ttl_seconds,
             )
-        except Exception as exc:
-            logger.warning("Failed to deliver business-mode draft to owner %s: %s",
-                           buf["owner_chat_id"], exc)
-            # Mark the draft expired so we don't leave an unactionable row.
-            self._db.resolve_telegram_business_draft(draft_id, status="expired")
-            return
+            if draft_id is None:
+                return
+            keyboard = self._build_draft_keyboard(
+                draft_id, can_reply=bool(current.get("can_reply")),
+            )
+            try:
+                sent = await self._send(
+                    chat_id=int(buf["owner_chat_id"]),
+                    text=owner_message,
+                    reply_markup=keyboard,
+                    disable_notification=False,
+                )
+            except Exception as exc:
+                logger.warning("Failed to deliver business-mode draft to owner %s: %s",
+                               buf["owner_chat_id"], exc)
+                # Mark the draft expired so we don't leave an unactionable row.
+                self._db.resolve_telegram_business_draft(draft_id, status="expired")
+                return
 
-        owner_msg_id = getattr(sent, "message_id", None)
-        if owner_msg_id is not None:
-            self._db.set_telegram_business_draft_owner_message(draft_id, str(owner_msg_id))
+            owner_msg_id = getattr(sent, "message_id", None)
+            if owner_msg_id is not None:
+                self._db.set_telegram_business_draft_owner_message(
+                    draft_id, str(owner_msg_id),
+                )
 
     # ------------------------------------------------------------------
     # Inline-button callback dispatch (bd:choice:draft_id)
     # ------------------------------------------------------------------
+
+    def _draft_unavailable_text(self, draft_id: int) -> str:
+        draft = self._db.get_telegram_business_draft(draft_id)
+        if draft is None or draft.get("status") == "expired":
+            return "That draft has expired."
+        return "That draft has already been resolved or is being processed."
+
+    @staticmethod
+    def _connection_delivery_error(
+        conn: Optional[Dict[str, Any]], *, require_reply: bool = True,
+    ) -> Optional[str]:
+        if conn is None:
+            return "⚠️ Business connection no longer exists. Nothing was sent."
+        if not conn.get("is_enabled"):
+            return "⚠️ Business connection is inactive. Nothing was sent."
+        if require_reply and not conn.get("can_reply"):
+            return (
+                "⚠️ Send-on-your-behalf is OFF — enable it in Telegram → "
+                "Business → Chatbots, then try again."
+            )
+        return None
+
+    @staticmethod
+    def _delivery_failure_is_retryable(exc: Exception) -> bool:
+        return bool(getattr(exc, "delivery_not_attempted", False))
 
     async def handle_callback(
         self,
@@ -409,7 +548,7 @@ class BusinessModeManager:
             await answer(text="That draft has expired.")
             return True
         if draft.get("status") != "pending":
-            await answer(text="That draft has already been resolved.")
+            await answer(text=self._draft_unavailable_text(draft_id))
             return True
 
         # Only the owner of this connection may act on the buttons. Reject
@@ -422,12 +561,28 @@ class BusinessModeManager:
         if not conn:
             await answer(text="Connection no longer exists.")
             return True
-        if str(caller_user_id) != str(conn.get("owner_user_id")):
+        if not self._ownership_matches(conn, draft):
+            self._db.transition_telegram_business_draft(
+                draft_id, from_status="pending", to_status="superseded",
+            )
+            await answer(
+                text="⛔ The connected account owner changed. This old draft was superseded."
+            )
+            return True
+        if (
+            str(caller_user_id) != str(draft.get("owner_user_id"))
+            or str(caller_user_id) != str(conn.get("owner_user_id"))
+        ):
             await answer(text="⛔ Only the connected account owner can use these buttons.")
             return True
 
         if choice == CHOICE_DISCARD:
-            self._db.resolve_telegram_business_draft(draft_id, status="discarded")
+            claimed = self._db.transition_telegram_business_draft(
+                draft_id, from_status="pending", to_status="discarded",
+            )
+            if claimed is None:
+                await answer(text=self._draft_unavailable_text(draft_id))
+                return True
             await answer(text="✕ Discarded")
             try:
                 await edit_message_text(
@@ -439,7 +594,32 @@ class BusinessModeManager:
             return True
 
         if choice == CHOICE_EDIT:
-            self._edit_capture[str(conn["owner_chat_id"])] = draft_id
+            claimed = self._db.transition_telegram_business_draft(
+                draft_id, from_status="pending", to_status="awaiting_edit",
+            )
+            if claimed is None:
+                await answer(text=self._draft_unavailable_text(draft_id))
+                return True
+            current_conn = self._db.get_telegram_business_connection(
+                draft["connection_id"]
+            )
+            connection_error = self._connection_delivery_error(
+                current_conn, require_reply=False,
+            )
+            owner_changed = current_conn is not None and not self._ownership_matches(
+                current_conn, draft,
+            )
+            if owner_changed:
+                connection_error = "⛔ The connected account owner changed."
+            if connection_error:
+                self._db.transition_telegram_business_draft(
+                    draft_id,
+                    from_status="awaiting_edit",
+                    to_status="superseded" if owner_changed else "pending",
+                )
+                await answer(text=connection_error)
+                return True
+            self._activate_edit_capture(str(conn["owner_chat_id"]), draft_id)
             await answer(text="✎ Send me the text to deliver")
             try:
                 await edit_message_text(
@@ -454,28 +634,99 @@ class BusinessModeManager:
             return True
 
         if choice == CHOICE_SEND:
-            if not conn.get("can_reply"):
-                await answer(
-                    text=(
-                        "⚠️ Send-on-your-behalf is OFF — enable it in Telegram → "
-                        "Business → Chatbots, then try again."
-                    )
-                )
-                return True
-            try:
-                await self._send(
-                    chat_id=int(draft["customer_chat_id"]),
-                    text=draft["draft_text"],
-                    business_connection_id=draft["connection_id"],
-                )
-            except Exception as exc:
-                logger.warning("Business send failed for draft %s: %s", draft_id, exc)
-                await answer(text=f"⚠️ Send failed: {exc}")
-                return True
-
-            self._db.resolve_telegram_business_draft(
-                draft_id, status="sent", final_sent_text=draft["draft_text"],
+            claimed = self._db.transition_telegram_business_draft(
+                draft_id, from_status="pending", to_status="sending",
             )
+            if claimed is None:
+                await answer(text=self._draft_unavailable_text(draft_id))
+                return True
+            failure_text: Optional[str] = None
+            async with self._connection_lock(draft["connection_id"]):
+                current_conn = self._db.get_telegram_business_connection(
+                    draft["connection_id"]
+                )
+                connection_error = self._connection_delivery_error(current_conn)
+                owner_changed = current_conn is not None and not self._ownership_matches(
+                    current_conn, draft,
+                )
+                if owner_changed:
+                    connection_error = "⛔ The connected account owner changed."
+                if connection_error:
+                    released = self._release_draft_for_retry(
+                        draft, retry_status="pending",
+                    )
+                    released_status = released.get("status") if released else None
+                    if released_status == "pending":
+                        failure_text = connection_error
+                    elif released_status == "superseded":
+                        if owner_changed:
+                            failure_text = (
+                                "⛔ The connected account owner changed. "
+                                "This old draft was superseded."
+                            )
+                        elif current_conn is None:
+                            failure_text = (
+                                "⚠️ Business connection no longer exists. "
+                                "This draft was closed without sending."
+                            )
+                        else:
+                            failure_text = (
+                                "This old draft was superseded by a newer message."
+                            )
+                    elif released_status == "expired":
+                        failure_text = "That draft has expired."
+                    else:
+                        failure_text = self._draft_unavailable_text(draft_id)
+                else:
+                    try:
+                        await self._send(
+                            chat_id=int(draft["customer_chat_id"]),
+                            text=draft["draft_text"],
+                            business_connection_id=draft["connection_id"],
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Business send failed for draft %s: %s", draft_id, exc,
+                        )
+                        if self._delivery_failure_is_retryable(exc):
+                            released = self._release_draft_for_retry(
+                                draft, retry_status="pending",
+                            )
+                            released_status = (
+                                released.get("status") if released else None
+                            )
+                            if released_status == "pending":
+                                failure_text = (
+                                    f"⚠️ Send failed: {exc}. You can try again."
+                                )
+                            elif released_status == "superseded":
+                                failure_text = (
+                                    f"⚠️ Send failed: {exc}. This old draft was "
+                                    "superseded by a newer message."
+                                )
+                            elif released_status == "expired":
+                                failure_text = (
+                                    f"⚠️ Send failed: {exc}. This draft has expired."
+                                )
+                            else:
+                                failure_text = self._draft_unavailable_text(draft_id)
+                        else:
+                            self._db.transition_telegram_business_draft(
+                                draft_id, from_status="sending", to_status="failed",
+                            )
+                            failure_text = (
+                                f"⚠️ Send failed: {exc}. Delivery outcome is unknown, "
+                                "so this draft cannot be retried safely."
+                            )
+                    else:
+                        self._db.transition_telegram_business_draft(
+                            draft_id, from_status="sending", to_status="sent",
+                            final_sent_text=draft["draft_text"],
+                        )
+
+            if failure_text is not None:
+                await answer(text=failure_text)
+                return True
             await answer(text="✓ Sent")
             try:
                 await edit_message_text(
@@ -504,14 +755,18 @@ class BusinessModeManager:
         Returns True if the message was consumed by the edit-capture flow
         (so the caller shouldn't dispatch it to the normal command path).
         """
-        draft_id = self._edit_capture.pop(str(owner_chat_id), None)
+        owner_key = str(owner_chat_id)
+        draft_id = self._edit_capture.pop(owner_key, None)
         if draft_id is None:
             return False
+        capture_generation = self._edit_capture_generation.get(owner_key, 0)
 
         override = (text or "").strip()
         if not override:
             # Empty edit attempt → restore capture and let the user retry.
-            self._edit_capture[str(owner_chat_id)] = draft_id
+            self._restore_edit_capture(
+                owner_key, draft_id, capture_generation,
+            )
             try:
                 await self._send(
                     chat_id=int(owner_chat_id),
@@ -523,56 +778,174 @@ class BusinessModeManager:
             return True
 
         draft = self._db.get_telegram_business_draft(draft_id)
-        if not draft or draft.get("status") not in {"pending", "awaiting_edit"}:
+        if not draft or draft.get("status") != "awaiting_edit":
             try:
                 await self._send(
                     chat_id=int(owner_chat_id),
-                    text="That draft has expired or was already resolved.",
+                    text=self._draft_unavailable_text(draft_id),
                     disable_notification=True,
                 )
             except Exception:
                 pass
             return True
 
+        if str(draft.get("owner_chat_id")) != str(owner_chat_id):
+            return False
+
         conn = self._db.get_telegram_business_connection(draft["connection_id"])
-        if not conn:
-            return True
-        if not conn.get("can_reply"):
+        connection_error = self._connection_delivery_error(conn)
+        owner_changed = conn is not None and not self._ownership_matches(conn, draft)
+        if owner_changed:
+            connection_error = "⛔ The connected account owner changed."
+        if connection_error:
+            if owner_changed:
+                self._db.transition_telegram_business_draft(
+                    draft_id, from_status="awaiting_edit", to_status="superseded",
+                )
+            else:
+                self._restore_edit_capture(
+                    owner_key, draft_id, capture_generation,
+                )
             try:
                 await self._send(
                     chat_id=int(owner_chat_id),
-                    text=(
-                        "⚠️ Send-on-your-behalf is OFF in Telegram → Business → "
-                        "Chatbots. I can't deliver this — copy the text and send it "
-                        "manually."
-                    ),
+                    text=connection_error,
                     disable_notification=False,
                 )
             except Exception:
                 pass
             return True
 
-        try:
-            await self._send(
-                chat_id=int(draft["customer_chat_id"]),
-                text=override,
-                business_connection_id=draft["connection_id"],
-            )
-        except Exception as exc:
-            logger.warning("Business edit-send failed for draft %s: %s", draft_id, exc)
-            try:
-                await self._send(
-                    chat_id=int(owner_chat_id),
-                    text=f"⚠️ Send failed: {exc}",
-                    disable_notification=False,
-                )
-            except Exception:
-                pass
-            return True
-
-        self._db.resolve_telegram_business_draft(
-            draft_id, status="edited", final_sent_text=override,
+        claimed = self._db.transition_telegram_business_draft(
+            draft_id, from_status="awaiting_edit", to_status="sending",
         )
+        if claimed is None:
+            try:
+                await self._send(
+                    chat_id=int(owner_chat_id),
+                    text=self._draft_unavailable_text(draft_id),
+                    disable_notification=True,
+                )
+            except Exception:
+                pass
+            return True
+
+        failure_text: Optional[str] = None
+        async with self._connection_lock(draft["connection_id"]):
+            current_conn = self._db.get_telegram_business_connection(
+                draft["connection_id"]
+            )
+            connection_error = self._connection_delivery_error(current_conn)
+            owner_changed = (
+                current_conn is not None
+                and not self._ownership_matches(current_conn, draft)
+            )
+            if owner_changed:
+                connection_error = "⛔ The connected account owner changed."
+            if connection_error:
+                released = self._release_draft_for_retry(
+                    draft, retry_status="awaiting_edit",
+                )
+                released_status = released.get("status") if released else None
+                if released_status == "awaiting_edit" and self._restore_edit_capture(
+                    owner_key, draft_id, capture_generation,
+                ):
+                    failure_text = connection_error
+                elif released_status == "awaiting_edit":
+                    self._db.transition_telegram_business_draft(
+                        draft_id,
+                        from_status="awaiting_edit",
+                        to_status="superseded",
+                    )
+                    failure_text = "This old draft was superseded by a newer edit flow."
+                elif released_status == "superseded":
+                    if owner_changed:
+                        failure_text = (
+                            "⛔ The connected account owner changed. "
+                            "This old draft was superseded."
+                        )
+                    elif current_conn is None:
+                        failure_text = (
+                            "⚠️ Business connection no longer exists. "
+                            "This draft was closed without sending."
+                        )
+                    else:
+                        failure_text = "This old draft was superseded by a newer message."
+                elif released_status == "expired":
+                    failure_text = "That draft has expired."
+                else:
+                    failure_text = self._draft_unavailable_text(draft_id)
+            else:
+                try:
+                    await self._send(
+                        chat_id=int(draft["customer_chat_id"]),
+                        text=override,
+                        business_connection_id=draft["connection_id"],
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Business edit-send failed for draft %s: %s", draft_id, exc,
+                    )
+                    if self._delivery_failure_is_retryable(exc):
+                        released = self._release_draft_for_retry(
+                            draft, retry_status="awaiting_edit",
+                        )
+                        released_status = released.get("status") if released else None
+                        if (
+                            released_status == "awaiting_edit"
+                            and self._restore_edit_capture(
+                                owner_key, draft_id, capture_generation,
+                            )
+                        ):
+                            failure_text = (
+                                f"⚠️ Send failed: {exc}. Send another edit to retry."
+                            )
+                        elif released_status == "awaiting_edit":
+                            self._db.transition_telegram_business_draft(
+                                draft_id,
+                                from_status="awaiting_edit",
+                                to_status="superseded",
+                            )
+                            failure_text = (
+                                f"⚠️ Send failed: {exc}. This old draft was "
+                                "superseded by a newer edit flow."
+                            )
+                        elif released_status == "superseded":
+                            failure_text = (
+                                f"⚠️ Send failed: {exc}. This old draft was "
+                                "superseded by a newer message."
+                            )
+                        elif released_status == "expired":
+                            failure_text = (
+                                f"⚠️ Send failed: {exc}. This draft has expired."
+                            )
+                        else:
+                            failure_text = self._draft_unavailable_text(draft_id)
+                    else:
+                        self._db.transition_telegram_business_draft(
+                            draft_id, from_status="sending", to_status="failed",
+                        )
+                        failure_text = (
+                            f"⚠️ Send failed: {exc}. Delivery outcome is unknown, "
+                            "so this draft cannot be retried safely."
+                        )
+                else:
+                    self._db.transition_telegram_business_draft(
+                        draft_id, from_status="sending", to_status="edited",
+                        final_sent_text=override,
+                    )
+
+        if failure_text is not None:
+            try:
+                await self._send(
+                    chat_id=int(owner_chat_id),
+                    text=failure_text,
+                    disable_notification=False,
+                )
+            except Exception:
+                pass
+            return True
+
         try:
             await self._send(
                 chat_id=int(owner_chat_id),

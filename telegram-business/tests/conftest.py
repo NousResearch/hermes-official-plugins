@@ -17,7 +17,12 @@ _ROOT = Path(__file__).resolve().parents[1]
 
 
 def _ensure_telegram_stub() -> None:
-    if "telegram" in sys.modules:
+    try:
+        __import__("telegram")
+        __import__("telegram.ext")
+    except ImportError:
+        pass
+    else:
         return
     telegram = types.ModuleType("telegram")
     telegram.InlineKeyboardButton = MagicMock(name="InlineKeyboardButton")

@@ -78,7 +78,7 @@ def test_haiku_5_5_never_receives_the_thinking_disable():
     for route in ('haiku', 'claude-haiku-5-5', 'claude-haiku-5-5[1m]'):
         assert 'thinking' not in body(route, {'enabled': False}), route
         assert 'context_management' not in body(route, {'enabled': False}), route
-        assert body(route, {'enabled': True, 'effort': 'medium'})['thinking'] == {'type': 'adaptive'}, route
+        assert body(route, {'enabled': True, 'effort': 'medium'})['thinking'] == {'type': 'adaptive', 'display': 'summarized'}, route
     for route in ('claude-haiku-4-5', 'claude-haiku-4-5-20251001'):
         assert body(route, {'enabled': False})['thinking'] == {'type': 'disabled'}, route
         assert 'thinking' not in body(route, {'enabled': True, 'effort': 'medium'}), route

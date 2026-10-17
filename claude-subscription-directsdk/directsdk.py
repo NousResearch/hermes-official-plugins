@@ -274,7 +274,7 @@ def request_body(kwargs):
             # Routes without adaptive thinking (Haiku 4.5) 400 on the block; their own
             # default thinking plus the effort signal below stand in for it.
             if reasoning.get('enabled') is True and supports_adaptive_thinking(kwargs.get('model')):
-                body['thinking'] = {'type': 'adaptive'}
+                body['thinking'] = {'type': 'adaptive', 'display': 'summarized'}
             if effort:
                 body['output_config'] = {'effort': effort}
     response_format = kwargs.get('response_format', body.pop('response_format', None))

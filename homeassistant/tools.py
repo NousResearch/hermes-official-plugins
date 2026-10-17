@@ -76,8 +76,16 @@ def _get_headers(token: str = "") -> Dict[str, str]:
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
-async def _api_json(method: str, path: str, timeout: float, payload: Any = None) -> Any:
-    """One HA REST call (GET or POST JSON) that raises on HTTP errors and returns the JSON body."""
+async def _api_json(
+    method: str, path: str, timeout: float, payload: Any = None, return_response: bool = False,
+) -> Any:
+    """One HA REST call (GET or POST JSON) that raises on HTTP errors and returns the JSON body.
+
+    ``return_response`` (POST only): HA rejects response-returning services (``weather.get_forecasts``,
+    ``calendar.get_events``, ...) with HTTP 400 until ``?return_response`` is added, and most other
+    services reject that flag. So the call goes out plain and is retried once with the flag only when
+    the 400 body asks for it.
+    """
     import aiohttp
     hass_url, hass_token = _get_config()
     kwargs: Dict[str, Any] = {"headers": _get_headers(hass_token), "timeout": aiohttp.ClientTimeout(total=timeout)}
@@ -85,6 +93,11 @@ async def _api_json(method: str, path: str, timeout: float, payload: Any = None)
         kwargs["json"] = payload
     async with aiohttp.ClientSession() as session:
         async with session.request(method, f"{hass_url}{path}", **kwargs) as resp:
+            if method == "POST" and return_response and resp.status == 400:
+                if "return_response" in (await resp.text()).lower():
+                    async with session.request(method, f"{hass_url}{path}?return_response", **kwargs) as retry:
+                        retry.raise_for_status()
+                        return await retry.json()
             resp.raise_for_status()
             return await resp.json()
 
@@ -128,17 +141,28 @@ def _build_service_payload(entity_id: Optional[str] = None, data: Optional[Dict[
 
 
 def _parse_service_response(domain: str, service: str, result: Any) -> Dict[str, Any]:
+    """Normalize both HA reply shapes: a bare list of changed states (plain call) or
+    ``{"changed_states": [...], "service_response": {...}}`` (``?return_response``)."""
+    states: Any = result
+    service_response = None
+    if isinstance(result, dict):
+        states = result.get("changed_states") or []
+        service_response = result.get("service_response")
     affected = []
-    if isinstance(result, list):
-        affected = [{"entity_id": s.get("entity_id", ""), "state": s.get("state", "")} for s in result]
-    return {"success": True, "service": f"{domain}.{service}", "affected_entities": affected}
+    if isinstance(states, list):
+        affected = [{"entity_id": s.get("entity_id", ""), "state": s.get("state", "")} for s in states]
+    out: Dict[str, Any] = {"success": True, "service": f"{domain}.{service}", "affected_entities": affected}
+    if service_response is not None:
+        out["response"] = service_response
+    return out
 
 
 async def _async_call_service(
     domain: str, service: str, entity_id: Optional[str] = None, data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     result = await _api_json(
-        "POST", f"/api/services/{domain}/{service}", 15, _build_service_payload(entity_id, data))
+        "POST", f"/api/services/{domain}/{service}", 15, _build_service_payload(entity_id, data),
+        return_response=True)
     return _parse_service_response(domain, service, result)
 
 

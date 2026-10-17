@@ -43,10 +43,12 @@ Discard → dropped, the customer sees nothing
 ## Install
 
 ```bash
-git clone https://github.com/NousResearch/hermes-official-plugins/tree/main/telegram-business \
-    ~/.hermes/plugins/telegram-business
+hermes plugins install hermes-telegram-business
 hermes plugins enable telegram-business
 ```
+
+That installs the reviewed version from the plugin catalog. To track this repo's `main` instead:
+`hermes plugins install NousResearch/hermes-official-plugins#telegram-business`.
 
 Restart the gateway (`hermes gateway restart`). Then:
 

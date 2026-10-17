@@ -34,8 +34,11 @@ Backend routes (mounted at `/api/plugins/memory-wiki/`, behind the dashboard's n
 | `GET /days?limit=` | daily logs |
 | `GET /days/{date}` | one `YYYY-MM-DD` log (404 when unknown) |
 
-Profile scoping is handled by the host (`?profile=<name>` on any REST call); the routes resolve
-`HERMES_HOME` per request.
+The routes capture `get_hermes_home()` from the request context before dispatching work to a
+worker. Database and memory-file reads use that captured home. Profile selection requires the
+host to supply a scoped context; `?profile=` alone does not establish one in this plugin.
+The inspected host SDK does not add management profiles to plugin URLs, and its plugin routes
+have no profile-scoping middleware. Dashboard profile-switch integration remains a host gap.
 
 ## Install
 
@@ -78,8 +81,10 @@ hermes-memory-wiki/
 ## Development
 
 ```bash
-npm install                 # esbuild only; React comes from the host SDK at runtime
-npm run build               # rebuild dashboard/dist/index.js — commit the result
+npm ci                      # build tools and dev-only rendered UI test dependencies
+npm run build               # rebuild the tracked dashboard/dist/index.js
+npm run check               # syntax-check the bundle
+npm run test:ui             # rebuild and render with React DOM/jsdom (Node 22.13+ or 24+)
 HERMES_AGENT_REPO=~/.hermes/hermes-agent \
   ~/.hermes/hermes-agent/.venv/bin/python -m pytest tests/ -o "addopts="
 ```
@@ -87,6 +92,58 @@ HERMES_AGENT_REPO=~/.hermes/hermes-agent \
 `dashboard/dist/index.js` is a plain IIFE; the dashboard caches it aggressively, so after a
 rebuild restart the server or navigate away and back. Adding a manifest at runtime needs
 `GET /api/dashboard/plugins/rescan`; changing `plugin_api.py` needs a server restart.
+
+## Search reuse and verification
+
+`/subjects` caches complete finalized subjects before query filtering, sorting and truncation.
+Keys contain the absolute database path and the original session scope
+`max(limit * 5, limit, 100)`. Different queries with that scope reuse extraction and snippets;
+search never filters only the unfiltered top results. Extraction, weighting and ordering are
+unchanged. Overview (50 subjects), searches (100 by default), details and daily logs retain
+their original scopes. Overview, detail and day aggregation remain uncached.
+
+The process-local LRU keeps at most eight entries, with a combined 16 MiB serialized-payload
+budget (Python object overhead is additional). Database and WAL device/inode, size, modification
+and change timestamps invalidate reuse. Empty WAL and absent WAL are equivalent because a
+read-only SQLite attach can create an empty WAL. Expiry after five seconds is a fallback for
+coarse filesystem timestamps. Expired entries are removed on the next search. Missing databases
+are not cached. Work raced by a metadata change is returned only to that in-flight caller and
+is not cached; concurrent writes can affect that response just as in the original aggregation.
+No full database hashing or persistent connections are used. Connections close in their worker,
+including error paths. Callers receive detached copies.
+
+A single lock coalesces cold search requests and bounds retained work. This also serializes
+cold searches across profiles; it is a deliberate simple tradeoff. All database aggregation,
+search filtering and memory-file reads run off the event loop. UI tests render the tracked
+bundle and exercise immediate debounce status, errors, empty results, stale replies, transport
+cancellation, clearing and unmount cleanup through the SDK boundary.
+
+Run the synthetic benchmark from the repository root:
+
+```bash
+HERMES_AGENT_REPO=~/.hermes/hermes-agent \
+  ~/.hermes/hermes-agent/.venv/bin/python scripts/benchmark_search.py
+```
+
+It loads the baseline API/core from `9bc3913` (override with `--baseline`), creates a temporary
+600-session / 7,200-message database, and compares exact API outputs for five queries, then
+repeats five times. Only synthetic content is used. A representative local run measured
+806 ms baseline first query, 849 ms current cold query, and repeated medians of 772 ms versus
+32 ms (about 24x faster). **The improvement is warm-cache only; cold work is slightly slower.**
+Timing varies by machine and activity; the script asserts output parity and prints its digest.
+
+The Python suite includes a strict expected failure for the existing real-host `?profile=` gap.
+The real-host discovery/auth test and overlapping A/B/A ContextVar-scoped router tests are
+separate passing checks. Do not interpret those scoped tests as proof of dashboard profile
+selection support.
+
+React and jsdom are dev-only; production still uses host SDK React. If registry access is
+unavailable but the host has these dependencies installed, the rendered tests can use them
+read-only without changing the host:
+
+```bash
+NODE_PATH="$HERMES_AGENT_REPO/node_modules" npm run test:ui
+```
 
 ## Credits
 

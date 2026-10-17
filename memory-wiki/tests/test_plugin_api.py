@@ -97,7 +97,8 @@ def test_fresh_profile_without_state_db_returns_empty_overview(hermes_home, plug
     assert not (hermes_home / "state.db").exists(), "a read-only plugin must not create state.db"
 
 
-def test_real_web_server_discovers_enables_and_mounts_the_plugin(hermes_home, monkeypatch):
+@pytest.fixture
+def real_host_client(hermes_home, monkeypatch):
     """The dashboard host's own discovery + enable gate + API mount, with this repo installed."""
     import importlib
     import sys
@@ -115,7 +116,11 @@ def test_real_web_server_discovers_enables_and_mounts_the_plugin(hermes_home, mo
     sys.modules.pop("hermes_dashboard_plugin_memory-wiki", None)
     web_server = importlib.import_module("hermes_cli.web_server")
 
-    client = TestClient(web_server.app)
+    return TestClient(web_server.app)
+
+
+def test_real_web_server_discovers_enables_and_mounts_the_plugin(real_host_client):
+    client = real_host_client
     listed = client.get("/api/dashboard/plugins").json()
     names = [p["name"] for p in (listed.get("plugins") if isinstance(listed, dict) else listed)]
     assert "memory-wiki" in names
@@ -124,3 +129,65 @@ def test_real_web_server_discovers_enables_and_mounts_the_plugin(hermes_home, mo
     ok = client.get("/api/plugins/memory-wiki/overview", headers={"X-Hermes-Session-Token": "test-token"})
     assert ok.status_code == 200
     assert any(subject["slug"] == "memory-wiki" for subject in ok.json()["subjects"])
+
+
+def test_search_reuses_complete_subjects_before_filtering(client, memory_wiki_core, monkeypatch):
+    calls = []
+    original = memory_wiki_core.extract_subject_candidates
+
+    def counted(*args):
+        calls.append(1)
+        return original(*args)
+
+    monkeypatch.setattr(memory_wiki_core, "extract_subject_candidates", counted)
+    first = client.get("/api/plugins/memory-wiki/subjects?limit=1").json()
+    count = len(calls)
+    result = client.get("/api/plugins/memory-wiki/subjects?q=memory-wiki&limit=1").json()
+    assert result["subjects"]
+    assert result["subjects"] != first["subjects"]
+    assert len(calls) == count
+
+
+def test_routes_do_not_block_event_loop(hermes_home, plugin_api, memory_wiki_core, monkeypatch):
+    import asyncio
+    import threading
+
+    _seed_state_db(hermes_home)
+    entered = threading.Event()
+    release = threading.Event()
+    original = memory_wiki_core.build_memory_subjects
+
+    def slow(*args, **kwargs):
+        entered.set()
+        assert release.wait(2), "aggregation blocked the event loop"
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(memory_wiki_core, "build_memory_subjects", slow)
+
+    async def run():
+        task = asyncio.create_task(plugin_api.get_subject("memory-wiki"))
+        try:
+            for _ in range(100):
+                if entered.is_set():
+                    break
+                await asyncio.sleep(.01)
+            assert entered.is_set()
+        finally:
+            release.set()
+        assert (await task)["subject"]
+
+    asyncio.run(run())
+
+
+@pytest.mark.xfail(strict=True, reason="Host does not scope plugin routes for ?profile= (pre-existing integration gap)")
+def test_real_host_selected_profile(real_host_client, hermes_home):
+    profile = hermes_home / "profiles" / "beta"
+    profile.mkdir(parents=True)
+    _seed_state_db(profile)
+    (profile / "memories" / "MEMORY.md").write_text("Beta profile note")
+    response = real_host_client.get(
+        "/api/plugins/memory-wiki/overview?profile=beta",
+        headers={"X-Hermes-Session-Token": "test-token"},
+    )
+    assert response.status_code == 200
+    assert response.json()["notes"]["memory"] == ["Beta profile note"]

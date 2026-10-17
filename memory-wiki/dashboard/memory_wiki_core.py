@@ -220,7 +220,13 @@ def build_memory_subjects(db, *, limit: int = 100, query: str | None = None) -> 
 
     if limit <= 0:
         return []
-    sessions = _load_memory_sessions(db, limit=max(limit * 5, limit, 100))
+    results = build_subject_index(db, session_limit=max(limit * 5, limit, 100))
+    return select_subjects(results, limit=limit, query=query)
+
+
+def build_subject_index(db, *, session_limit: int) -> list[dict]:
+    """Build complete finalized subjects for one history scope, before query/limit."""
+    sessions = _load_memory_sessions(db, limit=session_limit)
     subjects: dict[str, dict] = {}
 
     for session, messages in sessions:
@@ -263,6 +269,12 @@ def build_memory_subjects(db, *, limit: int = 100, query: str | None = None) -> 
             subject["snippets"].extend(snippets_by_slug.get(candidate.slug, []))
 
     results = [_finalize_subject(subject) for subject in subjects.values()]
+    return results
+
+
+def select_subjects(results: list[dict], *, limit: int, query: str | None = None) -> list[dict]:
+    """Keep the original filter, ordering and truncation semantics."""
+    results = list(results)
     if query:
         needle = query.lower().strip()
         results = [
@@ -386,7 +398,9 @@ def _read_memory_entries(path: Path, delimiter: str) -> list[str]:
     return [entry for entry in (chunk.strip() for chunk in raw.split(delimiter)) if entry]
 
 
-def build_memory_overview(db, *, subject_limit: int = 50, day_limit: int = 30) -> dict:
+def build_memory_overview(
+    db, *, subject_limit: int = 50, day_limit: int = 30, memory_dir: Path | None = None,
+) -> dict:
     """Return overview payload for Memory Wiki dashboard/API consumers."""
 
     recent = db.list_sessions_rich(
@@ -398,7 +412,7 @@ def build_memory_overview(db, *, subject_limit: int = 50, day_limit: int = 30) -
         "subjects": build_memory_subjects(db, limit=subject_limit),
         "daily_logs": build_daily_logs(db, limit_days=day_limit),
         "recent_sessions": [_session_info(session) for session in recent],
-        "notes": build_memory_notes(),
+        "notes": build_memory_notes(memory_dir),
     }
 
 

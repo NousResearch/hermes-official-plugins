@@ -279,31 +279,35 @@ function OverviewView({ go }) {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    SDK.fetchJSON(`${API}/overview`)
-      .then(setOverview)
-      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load memory wiki"))
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    const controller = new AbortController();
+    SDK.fetchJSON(`${API}/overview`, { signal: controller.signal })
+      .then((resp) => { if (!cancelled) setOverview(resp); })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load memory wiki");
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; controller.abort(); };
   }, []);
 
   useEffect(() => {
     const trimmed = search.trim();
-    if (!trimmed) {
-      setSearchResults(null);
-      return undefined;
-    }
+    if (!trimmed) return undefined;
     let cancelled = false;
+    const controller = new AbortController();
     const timer = window.setTimeout(() => {
       const qs = new URLSearchParams({ q: trimmed, limit: "100" });
-      SDK.fetchJSON(`${API}/subjects?${qs.toString()}`)
+      SDK.fetchJSON(`${API}/subjects?${qs.toString()}`, { signal: controller.signal })
         .then((resp) => {
-          if (!cancelled) setSearchResults(resp.subjects);
+          if (!cancelled) setSearchResults({ query: search, subjects: resp.subjects });
         })
         .catch(() => {
-          if (!cancelled) setSearchResults([]);
+          if (!cancelled) setSearchResults({ query: search, error: true });
         });
     }, 250);
     return () => {
       cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, [search]);
@@ -311,7 +315,11 @@ function OverviewView({ go }) {
   if (loading) return <LoadingState />;
   if (error || !overview) return <ErrorState message={error ?? "Memory wiki unavailable"} />;
 
-  const visibleSubjects = searchResults ?? overview.subjects ?? [];
+  const searching = Boolean(search.trim());
+  const currentResult = searchResults?.query === search ? searchResults : null;
+  const searchPending = searching && !currentResult;
+  const searchFailed = searching && currentResult?.error;
+  const visibleSubjects = searching ? currentResult?.subjects ?? [] : overview.subjects ?? [];
 
   return (
     <PageShell>
@@ -333,7 +341,10 @@ function OverviewView({ go }) {
       <div className="max-w-xl">
         <Input
           value={search}
-          onChange={(event) => setSearch(event.target.value)}
+          onChange={(event) => {
+            setSearchResults(null);
+            setSearch(event.target.value);
+          }}
           placeholder="Search subjects…"
           aria-label="Search subjects"
         />
@@ -341,12 +352,20 @@ function OverviewView({ go }) {
 
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">Subjects</h2>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <p role="status" aria-live="polite" className="text-sm text-muted-foreground">
+          {searchPending ? "Searching subjects…" : ""}
+        </p>
+        {searchFailed && (
+          <p role="alert" className="text-sm text-destructive">
+            Could not search subjects. Change your search or clear it to try again.
+          </p>
+        )}
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3" aria-busy={searchPending}>
           {visibleSubjects.map((subject) => (
             <SubjectCard key={subject.slug} subject={subject} go={go} />
           ))}
         </div>
-        {visibleSubjects.length === 0 && (
+        {!searchPending && !searchFailed && visibleSubjects.length === 0 && (
           <p className="text-sm text-muted-foreground">
             {search.trim() ? "No subjects match your search." : "No subjects yet — run a few sessions first."}
           </p>

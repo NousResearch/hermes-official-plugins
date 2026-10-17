@@ -3,6 +3,8 @@ import json
 import os
 import sys
 
+import pytest
+
 from test_directsdk import FAKE
 
 EXPECTED = {
@@ -78,7 +80,25 @@ def test_haiku_5_5_never_receives_the_thinking_disable():
     for route in ('haiku', 'claude-haiku-5-5', 'claude-haiku-5-5[1m]'):
         assert 'thinking' not in body(route, {'enabled': False}), route
         assert 'context_management' not in body(route, {'enabled': False}), route
-        assert body(route, {'enabled': True, 'effort': 'medium'})['thinking'] == {'type': 'adaptive'}, route
+        assert body(route, {'enabled': True, 'effort': 'medium'})['thinking'] == {'type': 'adaptive', 'display': 'summarized'}, route
     for route in ('claude-haiku-4-5', 'claude-haiku-4-5-20251001'):
         assert body(route, {'enabled': False})['thinking'] == {'type': 'disabled'}, route
         assert 'thinking' not in body(route, {'enabled': True, 'effort': 'medium'}), route
+
+
+@pytest.mark.parametrize('route', [
+    'sonnet', 'claude-sonnet-5-5', 'claude-sonnet-5-5[1m]',
+    'haiku', 'claude-haiku-5-5', 'claude-haiku-5-5[1m]',
+    'opus', 'claude-opus-5-5', 'claude-opus-5-5[1m]',
+    'fable', 'claude-fable-5-1', 'claude-fable-5-1[1m]',
+])
+def test_every_pinned_adaptive_route_asks_for_summarized_display(route):
+    """4.7+ answers adaptive thinking with a signature and no text unless `display` is requested, so
+    Hermes' reasoning panel stays blank on this provider. Every pinned route that receives adaptive
+    thinking must carry it, not just the one the request-shape test happens to use: a route added to
+    the catalog without it would silently ship signature-only blocks again."""
+    import directsdk
+    body = json.loads(directsdk.request_body({
+        'model': route, 'messages': [{'role': 'user', 'content': 'go'}],
+        'extra_body': {'reasoning': {'enabled': True, 'effort': 'medium'}}})[0])
+    assert body['thinking'] == {'type': 'adaptive', 'display': 'summarized'}, route

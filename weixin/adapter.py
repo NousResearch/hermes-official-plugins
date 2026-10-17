@@ -91,7 +91,8 @@ def _session_not_ready_error(ret: Any, errcode: Any, errmsg: Any) -> RuntimeErro
 
 def _make_ssl_connector() -> Optional[aiohttp.TCPConnector]:
     """TCPConnector with certifi's CA bundle (``ilinkai.weixin.qq.com`` fails some system stores, e.g. Homebrew
-    OpenSSL); None without certifi so aiohttp's default (honors ``SSL_CERT_FILE`` under trust_env) applies.
+    OpenSSL); None when no certifi bundle resolves (absent, or deleted by an install-environment rotation and
+    not re-derivable), so aiohttp's default (honors ``SSL_CERT_FILE`` under trust_env) applies.
     ``keepalive_timeout=2`` + ``enable_cleanup_closed`` drain idle CLOSE_WAIT sockets behind proxies like Warp.
 
     Uses a tight ``keepalive_timeout=2`` (default aiohttp: 30s) so idle connections drain promptly behind
@@ -111,7 +112,7 @@ def _make_ssl_connector() -> Optional[aiohttp.TCPConnector]:
     # from, so a long-lived gateway does not pin a cacert.pem that no longer exists (#137255).
     cafile = certifi_bundle_path()
     if cafile is None:
-        return None  # no bundle: aiohttp's default (honors SSL_CERT_FILE under trust_env) applies
+        return None
     return aiohttp.TCPConnector(ssl=ssl.create_default_context(cafile=cafile), keepalive_timeout=2, enable_cleanup_closed=True)
 
 

@@ -606,6 +606,26 @@ class Admission:
         self.server.server_close()
 
 
+def _is_session_title_request(payload):
+    """Native's first-turn session-title side request (#39): no tools, JSON-schema {title}."""
+    try:
+        body = json.loads(payload)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(body, dict):
+        return False
+    if body.get('tools'):
+        return False
+    fmt = ((body.get('output_config') or {}).get('format') or {})
+    if fmt.get('type') != 'json_schema':
+        return False
+    schema = fmt.get('schema') or {}
+    if not isinstance(schema, dict):
+        return False
+    props = schema.get('properties')
+    return isinstance(props, dict) and set(props) == {'title'}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass  # Native authorization and the per-call route must never enter logs.
@@ -615,6 +635,21 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path)
         if path.path != gate.prefix + '/v1/messages' or self.headers.get('Origin'):
             self.send_error(404)
+            return
+        try:
+            content_length = int(self.headers.get('Content-Length', '0'))
+        except (TypeError, ValueError):
+            content_length = 0
+        payload = self.rfile.read(content_length) if content_length > 0 else b''
+        # Drop native's session-title side request without consuming the single admission (#39).
+        if _is_session_title_request(payload):
+            body = b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_MODEL_ADMISSION_CONSUMED"}}'
+            self.send_response(400)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
             return
         with gate.lock:
             if gate.cancelled or gate.used:
@@ -632,7 +667,6 @@ class Handler(BaseHTTPRequestHandler):
         upstream_socket = None
         try:
             self.connection.settimeout(gate.timeout)
-            payload = self.rfile.read(int(self.headers['Content-Length']))
             try:
                 payload = restore_queried_turn(payload, gate.queried)
             except QueriedTurnMismatch as exc:

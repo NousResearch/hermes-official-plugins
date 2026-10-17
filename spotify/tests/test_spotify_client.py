@@ -10,7 +10,47 @@ import json
 import pytest
 
 from hermes_cli.auth_constants import AuthError
-from spotify_plugin import spotify_client as spotify_mod
+from spotify_plugin import spotify_client as spotify_mod, spotify_tools
+
+
+class _PlaylistClient:
+    def __init__(self):
+        self.calls = []
+
+    def request(self, method, path, *, params=None, json_body=None):
+        self.calls.append((method, path, params))
+        if path.endswith("/items"):
+            assert params is not None
+            return {"items": [{"track": {"id": "page-2"}}], "offset": params["offset"], "total": 101}
+        return {"id": "playlist-1", "tracks": {"items": [{"track": {"id": "page-1"}}]}}
+
+
+def test_playlist_get_uses_items_endpoint_for_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _PlaylistClient()
+    monkeypatch.setattr(spotify_tools, "SpotifyClient", lambda: client)
+
+    result = json.loads(spotify_tools._handle_spotify_playlists({
+        "action": "get", "playlist_id": "playlist-1", "limit": 50, "offset": 50
+    }))
+
+    assert result["id"] == "playlist-1"
+    assert result["tracks"]["items"][0]["track"]["id"] == "page-2"
+    assert client.calls == [
+        ("GET", "/playlists/playlist-1", {"market": None}),
+        ("GET", "/playlists/playlist-1/items", {"limit": 50, "offset": 50, "market": None}),
+    ]
+
+
+def test_playlist_get_without_pagination_keeps_metadata_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _PlaylistClient()
+    monkeypatch.setattr(spotify_tools, "SpotifyClient", lambda: client)
+
+    result = json.loads(spotify_tools._handle_spotify_playlists({
+        "action": "get", "playlist_id": "playlist-1"
+    }))
+
+    assert result["tracks"]["items"][0]["track"]["id"] == "page-1"
+    assert client.calls == [("GET", "/playlists/playlist-1", {"market": None})]
 
 
 class _FakeResponse:

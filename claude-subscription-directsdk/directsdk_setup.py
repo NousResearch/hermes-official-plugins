@@ -228,6 +228,36 @@ def discover_models(command=None, env=None, timeout=40):
     return list(routes.values())
 
 
+STALL_SETTING = "stall_timeout_seconds"
+DEFAULT_STALL_TIMEOUT = 300
+
+
+def stall_timeout_seconds():
+    """The ``stall_timeout_seconds`` plugin setting, default 300; 0 disables.
+
+    Bounds model silence, not liveness: the native call is killed when no model-progress
+    event (text/thinking/signature/tool-input deltas, block starts, results) arrives for
+    this long. Ping and keepalive traffic does not count, so a stalled call is bounded even
+    when the connection itself stays alive — the gap the read-idle timeout cannot cover,
+    because that deadline resets on every native event including pings (#35). Read from the
+    active profile's config on every spawn like ``telemetry_enabled``.
+    """
+    try:
+        from hermes_cli.config import load_config_readonly
+        value = load_config_readonly()
+    except Exception:
+        return DEFAULT_STALL_TIMEOUT
+    for segment in ("plugins", "entries", PLUGIN_ID, "settings", STALL_SETTING):
+        if not isinstance(value, Mapping) or segment not in value:
+            return DEFAULT_STALL_TIMEOUT
+        value = value[segment]
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        return DEFAULT_STALL_TIMEOUT
+    return parsed if parsed >= 0 else DEFAULT_STALL_TIMEOUT
+
+
 def _catalog_label(model):
     """``claude-opus-4-8`` -> ``Opus 4.8``; a trailing snapshot date is dropped."""
     parts = model.removeprefix("claude-").split("-")

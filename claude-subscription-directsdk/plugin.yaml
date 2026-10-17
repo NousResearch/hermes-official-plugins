@@ -31,3 +31,10 @@ config_schema:
       Let Claude Code send its usage telemetry and fetch feature flags. Feature flags unlock newer
       models in the model picker; turn off to keep Claude Code quiet (the picker may then list fewer
       models).
+  stall_timeout_seconds:
+    type: int
+    default: 300
+    label: Stall watchdog (seconds)
+    description: >-
+      Kill a native call when no model-progress event arrives for this long (0 disables). Bounds
+      model silence, not total call time.

@@ -27,11 +27,11 @@ from types import SimpleNamespace
 try:
     from .admission import Admission
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
-    from .directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy
+    from .directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy, stall_timeout_seconds
 except ImportError:
     from admission import Admission
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
-    from directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy
+    from directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy, stall_timeout_seconds
 
 
 # Hermes picks retry vs fallback from an error's status_code (main loop and auxiliary ladder alike).
@@ -94,6 +94,33 @@ def projection(message):
         calls.append({'id': tc['id'], 'name': f['name'],
                       'input': json.loads(args) if isinstance(args, str) else args})
     return {'content': (message.get('content') or '').strip(), 'tool_calls': calls}
+
+
+def _is_progress(event):
+    """Whether a native event shows the model is doing work (#35).
+
+    Everything except pings and bare acknowledgments advances the stall clock: stream
+    deltas of any type (text, thinking, signature, input_json), block/message starts and
+    stops, assistant/system/user/result frames. A malformed line raises before this runs.
+
+    A thinking block that streams no deltas (display "omitted", the default on 5.x) still
+    counts as live while it is open: pings arriving inside an open thinking block reset
+    the clock, because they are the only signal the model is still thinking. Pings outside
+    an open thinking block never count, so a stalled call that merely keeps the connection
+    alive is still bounded.
+    """
+    if not isinstance(event, dict):
+        return True
+    kind = event.get('type')
+    if kind == 'stream_event':
+        native = event.get('event') or {}
+        ntype = native.get('type')
+        if ntype == 'ping':
+            # Resolved by the caller against the open-thinking state; here we only report
+            # that a ping is not itself a content event. The receive() loop decides.
+            return False
+        return True
+    return kind in ('assistant', 'user', 'system', 'result')
 
 
 def content_blocks(content):
@@ -718,14 +745,27 @@ class Client:
                 reader = threading.Thread(target=read, daemon=True)
                 reader.start()
                 deadline = time.monotonic() + timeout
+                progress_deadline = None
+                in_thinking = False
                 def receive():
-                    nonlocal deadline
+                    nonlocal deadline, progress_deadline, in_thinking
                     while True:
                         if request.cancelled.is_set():
                             raise RuntimeError('Claude request cancelled')
-                        remaining = deadline - time.monotonic()
+                        now = time.monotonic()
+                        remaining = deadline - now
                         if remaining <= 0:
                             raise TimeoutError('Claude request timed out')
+                        limit = stall_timeout_seconds()
+                        if limit and limit > 0:
+                            if progress_deadline is None:
+                                progress_deadline = now + limit
+                            stall_remaining = progress_deadline - now
+                            if stall_remaining <= 0:
+                                kill_process_tree(p)
+                                raise TimeoutError(f'Claude request stalled: no model progress for {limit}s')
+                            if stall_remaining < remaining:
+                                remaining = stall_remaining
                         try:
                             event = events.get(timeout=min(remaining, .2))
                         except queue.Empty:
@@ -733,7 +773,23 @@ class Client:
                         if isinstance(event, Exception):
                             # The offending stdout line is the whole diagnosis (a shim banner, a stray print); keep it.
                             raise RuntimeError('Invalid native stream-json output: ' + repr((getattr(event, 'doc', None) or str(event))[:300]) + _stderr_tail(native_stderr)) from event
+                        # Classify thinking-block state and progress before resetting clocks.
+                        native_event = event.get('event') if isinstance(event, dict) and event.get('type') == 'stream_event' else None
+                        is_ping = isinstance(native_event, dict) and native_event.get('type') == 'ping'
+                        was_progress = _is_progress(event) or (is_ping and in_thinking)
+                        if isinstance(native_event, dict):
+                            ntype = native_event.get('type')
+                            if ntype == 'content_block_start':
+                                cb = native_event.get('content_block') or {}
+                                if cb.get('type') == 'thinking':
+                                    in_thinking = True
+                            elif ntype in ('content_block_stop', 'message_stop'):
+                                in_thinking = False
+                        elif isinstance(event, dict) and event.get('type') in ('assistant', 'result', 'user', 'system'):
+                            in_thinking = False
                         deadline = time.monotonic() + timeout
+                        if limit and limit > 0 and was_progress:
+                            progress_deadline = time.monotonic() + limit
                         return event
                 for index, frame in enumerate(frames):
                     frame = copy.deepcopy(frame)

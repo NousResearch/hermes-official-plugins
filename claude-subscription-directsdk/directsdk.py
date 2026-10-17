@@ -103,11 +103,10 @@ def _is_progress(event):
     deltas of any type (text, thinking, signature, input_json), block/message starts and
     stops, assistant/system/user/result frames. A malformed line raises before this runs.
 
-    A thinking block that streams no deltas (display "omitted", the default on 5.x) still
-    counts as live while it is open: pings arriving inside an open thinking block reset
-    the clock, because they are the only signal the model is still thinking. Pings outside
-    an open thinking block never count, so a stalled call that merely keeps the connection
-    alive is still bounded.
+    Pings never count as progress, even inside a thinking block: Claude Code emits its own
+    pings on a fixed cadence (and none at all when the upstream goes fully silent), so they
+    cannot distinguish a healthy think from a stall. Soundness relies on summarized
+    thinking (#45) streaming deltas the clock can see.
     """
     if not isinstance(event, dict):
         return True
@@ -116,8 +115,7 @@ def _is_progress(event):
         native = event.get('event') or {}
         ntype = native.get('type')
         if ntype == 'ping':
-            # Resolved by the caller against the open-thinking state; here we only report
-            # that a ping is not itself a content event. The receive() loop decides.
+            # Pings never count as model progress (see _is_progress docstring).
             return False
         return True
     return kind in ('assistant', 'user', 'system', 'result')
@@ -746,9 +744,8 @@ class Client:
                 reader.start()
                 deadline = time.monotonic() + timeout
                 progress_deadline = None
-                in_thinking = False
                 def receive():
-                    nonlocal deadline, progress_deadline, in_thinking
+                    nonlocal deadline, progress_deadline
                     while True:
                         if request.cancelled.is_set():
                             raise RuntimeError('Claude request cancelled')
@@ -773,20 +770,7 @@ class Client:
                         if isinstance(event, Exception):
                             # The offending stdout line is the whole diagnosis (a shim banner, a stray print); keep it.
                             raise RuntimeError('Invalid native stream-json output: ' + repr((getattr(event, 'doc', None) or str(event))[:300]) + _stderr_tail(native_stderr)) from event
-                        # Classify thinking-block state and progress before resetting clocks.
-                        native_event = event.get('event') if isinstance(event, dict) and event.get('type') == 'stream_event' else None
-                        is_ping = isinstance(native_event, dict) and native_event.get('type') == 'ping'
-                        was_progress = _is_progress(event) or (is_ping and in_thinking)
-                        if isinstance(native_event, dict):
-                            ntype = native_event.get('type')
-                            if ntype == 'content_block_start':
-                                cb = native_event.get('content_block') or {}
-                                if cb.get('type') == 'thinking':
-                                    in_thinking = True
-                            elif ntype in ('content_block_stop', 'message_stop'):
-                                in_thinking = False
-                        elif isinstance(event, dict) and event.get('type') in ('assistant', 'result', 'user', 'system'):
-                            in_thinking = False
+                        was_progress = _is_progress(event)
                         deadline = time.monotonic() + timeout
                         if limit and limit > 0 and was_progress:
                             progress_deadline = time.monotonic() + limit

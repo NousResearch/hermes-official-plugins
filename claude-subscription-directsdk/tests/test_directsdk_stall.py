@@ -139,19 +139,3 @@ def test_zero_disables_the_stall_watchdog(tmp_path, monkeypatch):
         thread.join()
         peer.server_close()
 
-
-def test_omitted_thinking_does_not_false_positive(tmp_path, monkeypatch):
-    """An omitted-thinking upstream (pings only inside an open thinking block) completes."""
-    monkeypatch.setattr(directsdk, 'stall_timeout_seconds', lambda: 1)
-    native = tmp_path / 'native.py'
-    native.write_text(NATIVE)
-    client = directsdk.Client(
-        command=[sys.executable, str(native), 'omitted_think'],
-        env={'PATH': os.defpath, 'HOME': str(tmp_path)},
-        timeout=25,
-    )
-    try:
-        result = client.create(model='sonnet', messages=[{'role': 'user', 'content': 'fixture'}])
-        assert result.choices[0].message.content == 'FIRST'
-    finally:
-        client.close()

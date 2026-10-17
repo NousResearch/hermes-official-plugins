@@ -80,16 +80,56 @@ def usage_windows(payload):
 
 
 def _subscription_token():
-    """The OAuth token native runs on, read-only: `CLAUDE_CODE_OAUTH_TOKEN`, else the Claude Code login.
+    """The OAuth token native runs on, read-only: CLAUDE_CODE_OAUTH_TOKEN, else the Claude Code login.
 
     Never core's `resolve_anthropic_token`: it refreshes an expired login, and Claude's refresh
     tokens are single-use, so a refresh here would race native's own and can log the user out.
+
+    The read is deliberately not gated on `auth.adopt_external_logins`: native owns this login
+    (it is never borrowed for core), and the opt-out exists to stop core from refreshing it.
+    Disabling it must not blank `/usage` (issue #82).
     """
-    from agent.anthropic_credentials import is_claude_code_token_valid, read_claude_code_credentials
     token = os.environ.get('CLAUDE_CODE_OAUTH_TOKEN', '').strip()
     if token:
         return token, None
-    creds = read_claude_code_credentials()
+    # Honor the plugin's config dir (and the env override) without mutating the process env.
+    try:
+        from .directsdk_setup import apply_config_dir
+    except ImportError:
+        from directsdk_setup import apply_config_dir
+    env = apply_config_dir(dict(os.environ))
+    config_dir = env.get('CLAUDE_CONFIG_DIR')
+    prev = os.environ.get('CLAUDE_CONFIG_DIR')
+    if config_dir:
+        os.environ['CLAUDE_CONFIG_DIR'] = config_dir
+    try:
+        from agent.anthropic_credentials import is_claude_code_token_valid, read_claude_code_credentials
+        creds = read_claude_code_credentials()
+        if creds is None:
+            # Adoption disabled: bypass the gate and read the file/keychain directly (#82).
+            try:
+                from agent.anthropic_credentials import (
+                    _read_claude_code_credentials_from_file,
+                    _read_claude_code_credentials_from_keychain,
+                )
+                kc = _read_claude_code_credentials_from_keychain()
+                fc = _read_claude_code_credentials_from_file()
+                if not (kc and fc):
+                    creds = kc or fc
+                else:
+                    kc_valid = is_claude_code_token_valid(kc)
+                    fc_valid = is_claude_code_token_valid(fc)
+                    if kc_valid != fc_valid:
+                        creds = kc if kc_valid else fc
+                    else:
+                        creds = kc if (kc.get('expiresAt', 0) or 0) >= (fc.get('expiresAt', 0) or 0) else fc
+            except (ImportError, AttributeError):
+                creds = None
+    finally:
+        if prev is None:
+            os.environ.pop('CLAUDE_CONFIG_DIR', None)
+        else:
+            os.environ['CLAUDE_CONFIG_DIR'] = prev
     if not creds or not creds.get('accessToken'):
         return None, 'no Claude Code login found (run `claude` and log in)'
     try:

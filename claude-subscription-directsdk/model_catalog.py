@@ -31,14 +31,37 @@ ALIASES = {
 NO_ADAPTIVE_THINKING = frozenset({'claude-haiku-4-5-20251001'})
 
 
-def native_model(model):
+def _resolve_route(model):
+    """Resolve a route spelling (full, short, dotted, aliased) to a pinned canonical id or itself."""
+    if not isinstance(model, str):
+        return model
     base = model.removesuffix('[1m]')
-    canonical = ALIASES.get(base, base)
+    if base in ALIASES:
+        return ALIASES[base]
+    if base in CONTEXT_WINDOWS:
+        return base
+    candidate = base
+    if not candidate.startswith('claude-'):
+        candidate = 'claude-' + candidate
+    candidate = candidate.replace('.', '-')
+    if candidate in ALIASES:
+        return ALIASES[candidate]
+    if candidate in CONTEXT_WINDOWS:
+        return candidate
+    return base
+
+
+def native_model(model):
+    if not isinstance(model, str):
+        return model
+    base = model.removesuffix('[1m]')
+    canonical = _resolve_route(base)
     window = CONTEXT_WINDOWS.get(canonical)
+    long_context = model.endswith('[1m]')
     if window == 1_000_000:
         return canonical + '[1m]'
     if window == 200_000:
-        if model.endswith('[1m]'):
+        if long_context:
             raise ValueError('Haiku 4.5 does not support a 1M context window')
         return canonical
     return model
@@ -47,14 +70,16 @@ def native_model(model):
 def accepts_thinking_disable(model):
     # Same tolerance as supports_adaptive_thinking: an absent model still reaches `model is required`.
     base = model.removesuffix('[1m]') if isinstance(model, str) else ''
-    return not ALIASES.get(base, base).startswith(MANDATORY_THINKING)
+    canonical = _resolve_route(base)
+    return not canonical.startswith(MANDATORY_THINKING)
 
 
 def supports_adaptive_thinking(model):
     # Body assembly precedes model validation, so an absent or invalid route answers True
     # and still reaches the existing `model is required` error.
     base = model.removesuffix('[1m]') if isinstance(model, str) else ''
-    return ALIASES.get(base, base) not in NO_ADAPTIVE_THINKING
+    canonical = _resolve_route(base)
+    return canonical not in NO_ADAPTIVE_THINKING
 
 
 MODEL_METADATA = {

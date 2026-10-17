@@ -27,11 +27,11 @@ from types import SimpleNamespace
 try:
     from .admission import Admission
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
-    from .directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy
+    from .directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy, stall_timeout_seconds
 except ImportError:
     from admission import Admission
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
-    from directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy
+    from directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy, stall_timeout_seconds
 
 
 # Hermes picks retry vs fallback from an error's status_code (main loop and auxiliary ladder alike).
@@ -94,6 +94,31 @@ def projection(message):
         calls.append({'id': tc['id'], 'name': f['name'],
                       'input': json.loads(args) if isinstance(args, str) else args})
     return {'content': (message.get('content') or '').strip(), 'tool_calls': calls}
+
+
+def _is_progress(event):
+    """Whether a native event shows the model is doing work (#35).
+
+    Everything except pings and bare acknowledgments advances the stall clock: stream
+    deltas of any type (text, thinking, signature, input_json), block/message starts and
+    stops, assistant/system/user/result frames. A malformed line raises before this runs.
+
+    Pings never count as progress, even inside a thinking block: Claude Code emits its own
+    pings on a fixed cadence (and none at all when the upstream goes fully silent), so they
+    cannot distinguish a healthy think from a stall. Soundness relies on summarized
+    thinking (#45) streaming deltas the clock can see.
+    """
+    if not isinstance(event, dict):
+        return True
+    kind = event.get('type')
+    if kind == 'stream_event':
+        native = event.get('event') or {}
+        ntype = native.get('type')
+        if ntype == 'ping':
+            # Pings never count as model progress (see _is_progress docstring).
+            return False
+        return True
+    return kind in ('assistant', 'user', 'system', 'result')
 
 
 def content_blocks(content):
@@ -247,7 +272,7 @@ def request_body(kwargs):
             # Routes without adaptive thinking (Haiku 4.5) 400 on the block; their own
             # default thinking plus the effort signal below stand in for it.
             if reasoning.get('enabled') is True and supports_adaptive_thinking(kwargs.get('model')):
-                body['thinking'] = {'type': 'adaptive'}
+                body['thinking'] = {'type': 'adaptive', 'display': 'summarized'}
             if effort:
                 body['output_config'] = {'effort': effort}
     response_format = kwargs.get('response_format', body.pop('response_format', None))
@@ -718,14 +743,26 @@ class Client:
                 reader = threading.Thread(target=read, daemon=True)
                 reader.start()
                 deadline = time.monotonic() + timeout
+                progress_deadline = None
                 def receive():
-                    nonlocal deadline
+                    nonlocal deadline, progress_deadline
                     while True:
                         if request.cancelled.is_set():
                             raise RuntimeError('Claude request cancelled')
-                        remaining = deadline - time.monotonic()
+                        now = time.monotonic()
+                        remaining = deadline - now
                         if remaining <= 0:
                             raise TimeoutError('Claude request timed out')
+                        limit = stall_timeout_seconds()
+                        if limit and limit > 0:
+                            if progress_deadline is None:
+                                progress_deadline = now + limit
+                            stall_remaining = progress_deadline - now
+                            if stall_remaining <= 0:
+                                kill_process_tree(p)
+                                raise TimeoutError(f'Claude request stalled: no model progress for {limit}s')
+                            if stall_remaining < remaining:
+                                remaining = stall_remaining
                         try:
                             event = events.get(timeout=min(remaining, .2))
                         except queue.Empty:
@@ -733,7 +770,10 @@ class Client:
                         if isinstance(event, Exception):
                             # The offending stdout line is the whole diagnosis (a shim banner, a stray print); keep it.
                             raise RuntimeError('Invalid native stream-json output: ' + repr((getattr(event, 'doc', None) or str(event))[:300]) + _stderr_tail(native_stderr)) from event
+                        was_progress = _is_progress(event)
                         deadline = time.monotonic() + timeout
+                        if limit and limit > 0 and was_progress:
+                            progress_deadline = time.monotonic() + limit
                         return event
                 for index, frame in enumerate(frames):
                     frame = copy.deepcopy(frame)

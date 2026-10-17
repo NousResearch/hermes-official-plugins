@@ -574,12 +574,16 @@ async def _local_comment_prompt(client: Any, comment_id: str, reply_id: str, fro
                                       target_index=target_index, referenced_docs=await _referenced_docs_text(client, replies, file_token), **doc)
 
 
-async def handle_drive_comment_event(client: Any, data: Any, *, self_open_id: str = "") -> None:
-    """Run a drive-comment event in its adapter's profile scope."""
-    from agent.secret_scope import current_secret_scope
+async def handle_drive_comment_event(client: Any, data: Any, *, self_open_id: str = "", secondary: bool = False) -> None:
+    """Run a drive-comment event in its adapter's profile scope (``secondary``: the adapter belongs
+    to a multiplexed secondary profile, so it never borrows the launch scope)."""
+    from agent.secret_scope import current_secret_scope, is_multiplex_active
 
     if current_secret_scope() is not None:
         return await _handle_drive_comment_event(client, data, self_open_id=self_open_id)
+    if secondary and is_multiplex_active():
+        # Its connect-time scope was lost: fail closed instead of running on the launch credentials.
+        return logger.warning("[Feishu-Comment] Dropping unscoped comment event from a secondary profile adapter")
     # SDK callbacks for the launch adapter can arrive without the connect-time
     # context. Once multiplexing is active, bind the launch tenant explicitly
     # before this path resolves comment rules, config, or model credentials.

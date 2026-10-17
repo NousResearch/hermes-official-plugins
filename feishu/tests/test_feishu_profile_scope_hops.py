@@ -222,3 +222,50 @@ def test_ws_client_thread_and_its_loop_callbacks_carry_the_adapter_profile_scope
 
     asyncio.run(scenario())
     assert seen == {"ws_thread": ("routed", "routed-value"), "loop_callback": ("routed", "routed-value")}
+
+
+def test_an_unscoped_comment_from_a_secondary_adapter_fails_closed(tmp_path, monkeypatch):
+    """Review on #140186: only the launch adapter's unscoped callback may borrow the launch scope.
+    A secondary's callback that lost its context must not run its comment turn on the launch
+    profile's credentials; it is refused before any rule, config or model read."""
+    from plugins.platforms.feishu import feishu_comment as fc
+
+    launch_home = tmp_path / "launch"
+    launch_home.mkdir()
+    (launch_home / ".env").write_text("FEISHU_PROBE_TOKEN=launch-env-value\n")
+    monkeypatch.setenv("HERMES_HOME", str(launch_home))
+    ran = []
+    event = SimpleNamespace(event={
+        "comment_id": "c1", "reply_id": "", "is_mentioned": True, "timestamp": "1",
+        "notice_meta": {"file_token": "docx_t", "file_type": "docx", "notice_type": "add_reply",
+                        "from_user_id": {"open_id": "ou_user"}, "to_user_id": {"open_id": "ou_bot"}},
+    })
+    set_multiplex_active(True)
+    try:
+        with patch.object(fc, "_handle_drive_comment_event", AsyncMock(side_effect=lambda *a, **k: ran.append(_observe(launch_home)))):
+            asyncio.run(fc.handle_drive_comment_event(object(), event, self_open_id="ou_bot", secondary=True))
+            assert ran == []
+            asyncio.run(fc.handle_drive_comment_event(object(), event, self_open_id="ou_bot"))
+    finally:
+        set_multiplex_active(False)
+    assert ran == [("routed", "launch-env-value")]
+
+
+def test_the_adapter_tells_the_comment_handler_whether_it_is_a_secondary(monkeypatch):
+    """The Feishu adapter passes ``secondary`` from its multiplex owner profile."""
+    from plugins.platforms.feishu import adapter as fa
+    from plugins.platforms.feishu import feishu_comment as fc
+
+    calls = []
+
+    async def _handler(client, data, *, self_open_id="", secondary=False):
+        calls.append(secondary)
+    monkeypatch.setattr(fc, "handle_drive_comment_event", _handler)
+    adapter = object.__new__(fa.FeishuAdapter)
+    adapter._client, adapter._bot_open_id = object(), "ou_bot"
+    adapter._submit_if_ready = lambda label, make: asyncio.run(make())
+    adapter.set_owner_profile(None)
+    adapter._on_drive_comment_event(object())
+    adapter.set_owner_profile("b")
+    adapter._on_drive_comment_event(object())
+    assert calls == [False, True]

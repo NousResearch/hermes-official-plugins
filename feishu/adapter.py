@@ -2159,10 +2159,8 @@ class FeishuAdapter(BasePlatformAdapter):
     def _on_drive_comment_event(self, data: Any) -> None:
         """drive.notice.comment_add_v1 → feishu_comment.handle_drive_comment_event on the adapter loop."""
         from plugins.platforms.feishu.feishu_comment import handle_drive_comment_event
-        self._submit_if_ready(
-            "drive comment event",
-            lambda: handle_drive_comment_event(self._client, data, self_open_id=self._bot_open_id),
-        )
+        self._submit_if_ready("drive comment event", lambda: handle_drive_comment_event(
+            self._client, data, self_open_id=self._bot_open_id, secondary=bool(getattr(self, "_owner_profile", None))))
 
     def _on_meeting_invited_event(self, data: Any) -> None:
         """vc.bot.meeting_invited_v1 → feishu_meeting_invite.handle_meeting_invited_event."""

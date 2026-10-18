@@ -1,8 +1,8 @@
 ---
 name: crash-triage
-description: Find out why a native Linux program crashed, from its core dump and the binary, with REA, and turn that into a root cause and a bug report. Use when the user has a core file (./core, coredumpctl, a crash artifact from CI or production) or a segfault, abort, SIGFPE, SIGBUS or SIGILL in a C, C++, Rust, Go or other native program, and asks why it died. Read-only - never runs the program.
+description: Find out why a native Linux program crashed, from its core dump and the binary, with REA, and turn that into a root cause and a bug report. Use when the user has a core file (./core, coredumpctl, a crash artifact from CI or production) or a segfault, abort, SIGFPE, SIGBUS or SIGILL in a C, C++, Rust, Go or other native program, and asks why it died. Works on stripped binaries with no source (functions named from unwind tables, pseudocode of the crashing function and its caller via REA + Ghidra). Read-only - never runs the program.
 metadata:
-  version: "1"
+  version: "2"
 ---
 
 <!-- Workflow adapted for Hermes Agent from crashlens (https://github.com/mingleiw/crashlens, MIT). Uses REA's recorded-crash and binary-layout tools from this plugin. -->
@@ -35,8 +35,10 @@ provider is unavailable, follow that skill's connection and recovery guide.
   `coredumpctl list` then `coredumpctl dump <pid> -o core` on systemd hosts;
   otherwise the path the crash reporter or CI artifact gives.
 - **The exact binary that crashed.** A rebuilt binary gives wrong function
-  names. If elfutils is installed, `eu-unstrip -n --core CORE` lists the build ID
-  of every module recorded in the core; compare with `readelf -n BINARY`.
+  names. Step 3's helper compares the binary's GNU build ID with the one in the
+  core's copy of its headers (`build_id.match`). On `false`, stop and ask for
+  the right build instead of reporting names. A copy saved under another name
+  is still found, by build ID (`mapped_as`).
 - Optional: the program's log (what it was doing), the source checkout, and gdb.
 
 `inspect_recorded_crash` and `inspect_binary_layout` need the caller-supplied
@@ -63,16 +65,25 @@ REA returns the core's NT_FILE note as raw bytes. Decode it with this skill's
 helper (standard library only, reads the files, runs nothing):
 
 ```bash
-python3 <this skill's directory>/scripts/core_mappings.py CORE --binary BINARY --addr <pc>
+python3 <this skill's directory>/scripts/core_mappings.py CORE --binary BINARY --addr <pc> [--addr <return address - 1> ...]
 ```
 
-It prints the mapped files, the binary's load bias, and for each address the
-module plus either a `linked` address (inside the binary) or a `module_offset`
-(inside a library). Then call `inspect_binary_layout` with the binary's path
-(`"detail": "summary"` for a large binary, then page its functions) and find
-the function whose `value <= linked < value + size`. Report it as
-`function+offset`, and label it computed (from the recorded pc plus the
-mapping), not recorded.
+It prints the mapped files, the build-ID check, the binary's load bias, and for
+each address the module plus either a `linked` address (inside the binary) or
+a `module_offset` (inside a library). For an address in the binary it also
+gives its `file_offset` and the `function` that contains it, from
+`.eh_frame_hdr`. For a caller frame from a backtrace, pass its return address
+minus 1, so it lands on the call instruction rather than the one after it.
+
+Then call `inspect_binary_layout` with the binary's path (`"detail": "summary"`
+for a large binary, then page its functions) and find the function whose
+`value <= linked < value + size`. Report it as `function+offset`, and label it
+computed (from the recorded pc plus the mapping), not recorded.
+
+**Stripped binary** (no function symbols in the layout): use the helper's
+`function` instead. Its bounds come from the unwind tables, which survive
+`strip`. Name it `sub_<start>` as the helper does (`sub_11d4+0x1f`) and say the
+name is derived from `.eh_frame`, not a symbol.
 
 If the pc is in a library (libc's `strlen`, `memcpy`, `free`, ...), the library
 is rarely at fault: the caller passed a bad pointer or freed memory twice. The
@@ -111,9 +122,16 @@ faulting frame: say so in the report instead of guessing callers. With debug inf
 For NULL and garbage-pointer crashes, find the register that held the bad value:
 decode the faulting instruction (gdb's `x/8i $pc`, or `open_binary` then
 `analyze_function` on the function from step 3; warn that the first
-Ghidra-backed query on a large binary can take minutes). The memory operand
-(`mov (%rax),%eax` with `rax = 0`) names the register; then follow where that
-register was loaded from. Pseudocode is decompiler output, not the original
+Ghidra-backed query on a large binary can take minutes). Without gdb, binutils
+prints the whole function by its link-time bounds from step 3, reading the file
+only:
+
+```bash
+objdump -d --no-show-raw-insn --start-address=<function.start> --stop-address=<function.end> BINARY
+```
+
+Find the `linked` address in it. The memory operand (`mov (%rax),%eax` with
+`rax = 0`) names the register; then follow where that register was loaded from. Pseudocode is decompiler output, not the original
 source: corroborate it with the assembly.
 
 ## 6. Find the root cause
@@ -124,6 +142,18 @@ unchecked error), who freed the memory, why the recursion never stopped.
 
 - With the source checkout, read the failing function and its callers, and
   `git log -L` or `git blame` the lines to see what changed recently.
+- Without source, walk back with the decompiler. Decompile the crashing
+  function, then the caller frame, with REA's `procedure_pseudo_code` (find it
+  with `tool_search`, for example `rea pseudo code`), selecting each one by
+  `"procedure": "file-offset:<function.file_offset>"` from step 3's helper. REA
+  maps the file offset to the decompiler's address, so do not add an image base
+  yourself (Ghidra may rebase a PIE image). The caller usually shows where the
+  value came from: a `free` before the call, a lookup whose failure is not
+  checked, a length computed as 0. This needs REA's Ghidra provider: Ghidra
+  12.1.x, `GHIDRA_INSTALL_DIR` in the Hermes profile's `.env` (like
+  `REA_PWNTOOLS_PYTHON` above) and a JDK 21 on PATH. If it is unavailable, say
+  so and reason from the disassembly. Label pseudocode as decompiler output,
+  not the original source.
 - Heap-corruption aborts point at the allocator that noticed the damage, not
   the code that caused it. Recommend rebuilding with
   `-fsanitize=address,undefined -g` and rerunning the failing case, which names
@@ -148,6 +178,7 @@ Use this shape, in GitHub Markdown, so it can be pasted into an issue:
 | Fault address | `0x0` |
 | Program counter | `0x...` |
 | Location | `<function+offset> (<module>+0x...)`, `<file:line>` if known |
+| Build ID | matches the core / does not match / not recorded |
 | Confidence | high / medium / low |
 | Signature | <crash type> + top 3 function names in the user's code |
 
@@ -157,6 +188,8 @@ Use this shape, in GitHub Markdown, so it can be pasted into an issue:
 ## Suggested next steps
 ## Evidence and limitations
 - Core and binary SHA-256, REA Evidence IDs, gdb used or not
+- Names derived from `.eh_frame` for a stripped binary, and any pseudocode
+  labelled as decompiler output
 - Which facts were recorded (signal, registers), computed (function+offset)
   or inferred (crash type, cause)
 - The program was not executed

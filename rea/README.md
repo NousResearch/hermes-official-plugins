@@ -30,9 +30,10 @@ install ships:
   core's mapped-file list and checks the binary's build ID against the core,
   classifies the crash (NULL dereference, stack overflow, abort, ...), and
   never runs the program. Stripped binaries work too: the helper names
-  functions from the unwind tables, and with REA's Ghidra provider the skill
-  decompiles the crashing function and its caller to find where the bad value
-  was made. Adapted from [crashlens](https://github.com/mingleiw/crashlens) (MIT).
+  functions from the unwind tables, and the skill walks back from the crashing
+  function to the caller that produced the bad value (in the disassembly, or
+  in REA's pseudocode when a decompiler provider is available). Adapted from
+  [crashlens](https://github.com/mingleiw/crashlens) (MIT).
 
 ## Install
 
@@ -58,12 +59,8 @@ Requirements:
   `REA_PWNTOOLS_PYTHON=/path/to/venv/bin/python`. Hermes passes MCP servers only
   a small set of environment variables, so `mcp.json` forwards this one
   explicitly; a value exported only in your shell does not reach REA.
-- For Ghidra decompilation (including the crash-triage skill's pseudocode of
-  stripped functions): Ghidra 12.1.x with `GHIDRA_INSTALL_DIR=/path/to/ghidra`
-  in `~/.hermes/.env`, which `mcp.json` forwards like the line above, and a JDK
-  21 on PATH.
-- Bring your own engine for the rest: Hopper or IDA for native
-  decompilation; JADX and Java for Android code; Binwalk/Unblob for
+- Bring your own engine for the rest: Ghidra plus a JDK, Hopper or IDA for
+  native decompilation; JADX and Java for Android code; Binwalk/Unblob for
   firmware extraction; TShark, sigrok or WABT for their formats. REA never
   installs these, and the skill tells the agent not to either.
 

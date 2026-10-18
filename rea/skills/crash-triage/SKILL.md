@@ -1,6 +1,6 @@
 ---
 name: crash-triage
-description: Find out why a native Linux program crashed, from its core dump and the binary, with REA, and turn that into a root cause and a bug report. Use when the user has a core file (./core, coredumpctl, a crash artifact from CI or production) or a segfault, abort, SIGFPE, SIGBUS or SIGILL in a C, C++, Rust, Go or other native program, and asks why it died. Works on stripped binaries with no source (functions named from unwind tables, pseudocode of the crashing function and its caller via REA + Ghidra). Read-only - never runs the program.
+description: Find out why a native Linux program crashed, from its core dump and the binary, with REA, and turn that into a root cause and a bug report. Use when the user has a core file (./core, coredumpctl, a crash artifact from CI or production) or a segfault, abort, SIGFPE, SIGBUS or SIGILL in a C, C++, Rust, Go or other native program, and asks why it died. Works on stripped binaries with no source (functions named from unwind tables, then a walk back from the crashing function to its caller). Read-only - never runs the program.
 metadata:
   version: "2"
 ---
@@ -36,9 +36,9 @@ provider is unavailable, follow that skill's connection and recovery guide.
   otherwise the path the crash reporter or CI artifact gives.
 - **The exact binary that crashed.** A rebuilt binary gives wrong function
   names. Step 3's helper compares the binary's GNU build ID with the one in the
-  core's copy of its headers (`build_id.match`). On `false`, stop and ask for
-  the right build instead of reporting names. A copy saved under another name
-  is still found, by build ID (`mapped_as`).
+  core's copy of its headers (`build_id.match`). On `false` it places no
+  addresses in the binary: stop and ask for the right build. A copy saved under
+  another name is still found, by build ID (`mapped_as`).
 - Optional: the program's log (what it was doing), the source checkout, and gdb.
 
 `inspect_recorded_crash` and `inspect_binary_layout` need the caller-supplied
@@ -68,12 +68,12 @@ helper (standard library only, reads the files, runs nothing):
 python3 <this skill's directory>/scripts/core_mappings.py CORE --binary BINARY --addr <pc> [--addr <return address - 1> ...]
 ```
 
-It prints the mapped files, the build-ID check, the binary's load bias, and for
-each address the module plus either a `linked` address (inside the binary) or
-a `module_offset` (inside a library). For an address in the binary it also
-gives its `file_offset` and the `function` that contains it, from
-`.eh_frame_hdr`. For a caller frame from a backtrace, pass its return address
-minus 1, so it lands on the call instruction rather than the one after it.
+It prints the mapped files, the build-ID check, the binary's load bias and link
+base, and for each address the module plus either a `linked` address (inside
+the binary) or a `module_offset` (inside a library). For an address in the
+binary it also gives the `function` that contains it, from `.eh_frame_hdr`.
+For a caller frame from a backtrace, pass its return address minus 1, so it
+lands on the call instruction rather than the one after it.
 
 Then call `inspect_binary_layout` with the binary's path (`"detail": "summary"`
 for a large binary, then page its functions) and find the function whose
@@ -131,8 +131,9 @@ objdump -d --no-show-raw-insn --start-address=<function.start> --stop-address=<f
 ```
 
 Find the `linked` address in it. The memory operand (`mov (%rax),%eax` with
-`rax = 0`) names the register; then follow where that register was loaded from. Pseudocode is decompiler output, not the original
-source: corroborate it with the assembly.
+`rax = 0`) names the register; then follow where that register was loaded
+from. Pseudocode is decompiler output, not the original source: corroborate it
+with the assembly.
 
 ## 6. Find the root cause
 
@@ -142,18 +143,19 @@ unchecked error), who freed the memory, why the recursion never stopped.
 
 - With the source checkout, read the failing function and its callers, and
   `git log -L` or `git blame` the lines to see what changed recently.
-- Without source, walk back with the decompiler. Decompile the crashing
-  function, then the caller frame, with REA's `procedure_pseudo_code` (find it
-  with `tool_search`, for example `rea pseudo code`), selecting each one by
-  `"procedure": "file-offset:<function.file_offset>"` from step 3's helper. REA
-  maps the file offset to the decompiler's address, so do not add an image base
-  yourself (Ghidra may rebase a PIE image). The caller usually shows where the
-  value came from: a `free` before the call, a lookup whose failure is not
-  checked, a length computed as 0. This needs REA's Ghidra provider: Ghidra
-  12.1.x, `GHIDRA_INSTALL_DIR` in the Hermes profile's `.env` (like
-  `REA_PWNTOOLS_PYTHON` above) and a JDK 21 on PATH. If it is unavailable, say
-  so and reason from the disassembly. Label pseudocode as decompiler output,
-  not the original source.
+- Without source, walk back to the caller. Place the caller frame's return
+  address minus 1 with the helper and disassemble that function the same way
+  (step 5). Read the code before the call: it usually shows where the value
+  came from, such as a `free` of the same pointer, a lookup whose failure is
+  not checked, or a length computed as 0. The core's memory can confirm it (the
+  caller's stack slots, the heap chunk the pointer names).
+- If REA has a decompiler provider available, `procedure_pseudo_code` (find it
+  with `tool_search`, for example `rea pseudo code`) gives the same functions as
+  pseudocode. Select each by the decompiler's own address: the session reports
+  its `image_base` (Ghidra may rebase a PIE image, for example to `0x100000`),
+  so the address is `image_base + (function.start - link_base)`, with
+  `link_base` from the helper. Label pseudocode as decompiler output, not the
+  original source, and check it against the assembly.
 - Heap-corruption aborts point at the allocator that noticed the damage, not
   the code that caused it. Recommend rebuilding with
   `-fsanitize=address,undefined -g` and rerunning the failing case, which names

@@ -936,7 +936,7 @@ class TestUsageFromSanitizedResponse:
         monkeypatch.setitem(mod._TRACE_STATE, mod._trace_key("task-1", "session-1"), state)
         captured = {}
 
-        def fake_end_observation(obs, *, output=None, metadata=None, usage_details=None, cost_details=None):
+        def fake_end_observation(obs, *, output=None, metadata=None, usage_details=None, cost_details=None, **_):
             captured["usage_details"] = usage_details
 
         monkeypatch.setattr(mod, "_end_observation", fake_end_observation)
@@ -1101,6 +1101,57 @@ class TestModelAttribution:
         )
         assert seen["model"] == "actual/served-model"
 
+    def _post_with(self, mod, monkeypatch, **kw):
+        monkeypatch.setattr(mod, "_get_langfuse", lambda: object())
+        monkeypatch.setattr(mod, "_usage_and_cost", lambda *a, **k: ({"input": 1, "output": 1}, {}))
+        mod._TRACE_STATE.clear()
+
+        class _Gen:
+            def __init__(self): self.updates = []
+            def update(self, **u): self.updates.append(u)
+            def end(self, **u): pass
+
+        class _Root:
+            def update(self, **u): pass
+            def end(self, **u): pass
+            def set_trace_io(self, **u): pass
+
+        turn_id = "s:t:turn4"
+        key = mod._trace_key("t", "s", turn_id=turn_id)
+        state = mod.TraceState(trace_id="x", root_span=_Root())
+        gen = state.generations["1"] = _Gen()
+        mod._TRACE_STATE[key] = state
+
+        class _Resp:
+            usage = {"prompt_tokens": 1, "completion_tokens": 1}
+
+        mod.on_post_llm_call(task_id="t", session_id="s", turn_id=turn_id, api_call_count=1,
+                             response=_Resp(), assistant_content_chars=2, **kw)
+        return [u for u in gen.updates]
+
+    def test_post_api_request_records_served_model_on_generation(self, monkeypatch):
+        """The generation starts with the requested model; the served one must replace it."""
+        mod = self._fresh_plugin()
+        updates = self._post_with(mod, monkeypatch, model="requested/alias",
+                                  response_model="actual/served-model")
+        assert any(u.get("model") == "actual/served-model" for u in updates)
+        meta = next(u["metadata"] for u in updates if "metadata" in u)
+        assert meta["requested_model"] == "requested/alias"
+
+    def test_post_api_request_without_response_model_keeps_requested(self, monkeypatch):
+        mod = self._fresh_plugin()
+        updates = self._post_with(mod, monkeypatch, model="requested/alias", response_model=None)
+        assert not any("model" in u for u in updates)
+        meta = next(u["metadata"] for u in updates if "metadata" in u)
+        assert "requested_model" not in meta
+
+    def test_post_api_request_same_model_adds_no_requested_meta(self, monkeypatch):
+        mod = self._fresh_plugin()
+        updates = self._post_with(mod, monkeypatch, model="m", response_model="m")
+        assert any(u.get("model") == "m" for u in updates)
+        meta = next(u["metadata"] for u in updates if "metadata" in u)
+        assert "requested_model" not in meta
+
 
 # ---------------------------------------------------------------------------
 # Cost total: explicit "total" alongside the per-type breakdown
@@ -1147,7 +1198,7 @@ class TestCostTotal:
         monkeypatch.setitem(mod._TRACE_STATE, mod._trace_key("task-1", "session-1"), state)
         captured = {}
 
-        def fake_end_observation(obs, *, output=None, metadata=None, usage_details=None, cost_details=None):
+        def fake_end_observation(obs, *, output=None, metadata=None, usage_details=None, cost_details=None, **_):
             captured["cost_details"] = cost_details
 
         monkeypatch.setattr(mod, "_end_observation", fake_end_observation)
@@ -2399,6 +2450,7 @@ class TestCanonicalCostExport:
             metadata=None,
             usage_details=None,
             cost_details=None,
+            **_,
         ):
             captured["usage_details"] = usage_details
             captured["cost_details"] = cost_details

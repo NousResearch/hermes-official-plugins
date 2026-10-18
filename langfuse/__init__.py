@@ -714,14 +714,15 @@ def _start_child_observation(state: TraceState, *, name: str, as_type: str, inpu
 
 def _end_observation(observation: Any, *, output: Any = None, metadata: Optional[dict] = None,
                      usage_details: Optional[dict] = None, cost_details: Optional[dict] = None,
-                     level: Optional[str] = None, status_message: Optional[str] = None) -> None:
+                     level: Optional[str] = None, status_message: Optional[str] = None,
+                     model: Optional[str] = None) -> None:
     if observation is None:
         return
     with _failsafe("end observation"):
         update_kwargs = {**({} if output is None else {"output": output}),
                          **{k: v for k, v in (("metadata", metadata), ("usage_details", usage_details),
                                               ("cost_details", cost_details), ("level", level),
-                                              ("status_message", status_message)) if v}}
+                                              ("status_message", status_message), ("model", model)) if v}}
         if update_kwargs:
             observation.update(**update_kwargs)
         observation.end()
@@ -948,8 +949,10 @@ def on_post_llm_call(*, task_id: str = "", session_id: str = "", provider: str =
         return
 
     # The response echoes the model that actually served the request.
-    if isinstance(response_model, str) and response_model:
-        model = response_model
+    requested_model = model
+    served_model = response_model if isinstance(response_model, str) and response_model else None
+    if served_model:
+        model = served_model
 
     state, generation = _pop_generation(task_key, api_call_count)
     if state is None or generation is None:
@@ -982,7 +985,12 @@ def on_post_llm_call(*, task_id: str = "", session_id: str = "", provider: str =
 
     gen_metadata = {"tool_call_count": len(output.get("tool_calls", [])) or assistant_tool_call_count,
                     **_duration_meta(api_duration), **({"finish_reason": finish_reason} if finish_reason else {})}
-    _end_observation(generation, output=output, usage_details=usage_details, cost_details=cost_details, metadata=gen_metadata)
+    # The generation was started with the requested model; record the served one on it,
+    # keeping the request in metadata when the two differ (routers, aliases, fallbacks).
+    if served_model and requested_model and served_model != requested_model:
+        gen_metadata["requested_model"] = requested_model
+    _end_observation(generation, output=output, usage_details=usage_details, cost_details=cost_details,
+                     metadata=gen_metadata, model=served_model)
 
     has_tools = bool(getattr(assistant_message, "tool_calls", None)) if assistant_message else assistant_tool_call_count > 0
     if not has_tools and output.get("content"):

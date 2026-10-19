@@ -329,7 +329,18 @@ async def _api_json(method: str, path: str, timeout: float, payload: Any = None)
         kwargs["json"] = payload
     async with aiohttp.ClientSession() as session:
         async with session.request(method, f"{hass_url}{path}", **kwargs) as resp:
-            resp.raise_for_status()
+            if resp.status >= 400:
+                # Capture the HA error body into the exception: HA's 400/404 messages
+                # (e.g. "Service call requires responses but caller did not ask for
+                # responses. Add ?return_response to query parameters.") are what the
+                # caller needs to react, and aiohttp's default str() drops them.
+                try:
+                    text = await resp.text()
+                except Exception:
+                    text = ""
+                raise aiohttp.ClientResponseError(
+                    resp.request_info, resp.history, status=resp.status,
+                    message=f"message={text!r}")
             return await resp.json()
 
 
@@ -570,19 +581,72 @@ def _build_service_payload(entity_id: Optional[str] = None, data: Optional[Dict[
     return payload
 
 
-def _parse_service_response(domain: str, service: str, result: Any) -> Dict[str, Any]:
+def _parse_service_response(domain: str, service: str, result: Any, entity_id: Optional[str] = None) -> Dict[str, Any]:
+    """Compact a HA service response. Handles both shapes: a bare list of changed states
+    (default), and ``{"changed_states": [...], "service_response": {...}}`` (calls made with
+    ``?return_response``, required by response services like weather.get_forecasts)."""
     affected = []
+    service_response = None
     if isinstance(result, list):
-        affected = [{"entity_id": s.get("entity_id", ""), "state": s.get("state", "")} for s in result]
-    return {"success": True, "service": f"{domain}.{service}", "affected_entities": affected}
+        affected = [{"entity_id": s.get("entity_id", ""), "state": s.get("state", "")} for s in result if isinstance(s, dict)]
+    elif isinstance(result, dict):
+        for s in result.get("changed_states") or []:
+            if isinstance(s, dict):
+                affected.append({"entity_id": s.get("entity_id", ""), "state": s.get("state", "")})
+        if result.get("service_response") is not None:
+            service_response = result["service_response"]
+    out: Dict[str, Any] = {"success": True, "service": f"{domain}.{service}", "affected_entities": affected}
+    if service_response is not None:
+        out["service_response"] = service_response
+    if entity_id and not affected and service_response is None:
+        # HA returns 200 with an empty list when nothing changed — _async_call_service
+        # verifies why (missing / wrong domain / already in the requested state) and
+        # refines this message before it reaches the agent.
+        out["success"] = False
+        out["error"] = f"{domain}.{service} affected no entities for {entity_id}"
+    return out
 
 
 async def _async_call_service(
     domain: str, service: str, entity_id: Optional[str] = None, data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    result = await _api_json(
-        "POST", f"/api/services/{domain}/{service}", 15, _build_service_payload(entity_id, data))
-    return _parse_service_response(domain, service, result)
+    payload = _build_service_payload(entity_id, data)
+    try:
+        result = await _api_json("POST", f"/api/services/{domain}/{service}", 15, payload)
+    except Exception as e:
+        # Response services (e.g. weather.get_forecasts) 400 unless the call asks for the
+        # response; plain services 400 when it does — so retry once with the flag only when
+        # HA says responses are required.
+        if "requires responses" in str(e):
+            result = await _api_json("POST", f"/api/services/{domain}/{service}?return_response", 15, payload)
+        else:
+            raise
+    out = _parse_service_response(domain, service, result, entity_id)
+    if out.get("success") is False and entity_id:
+        # HA returns only states that actually changed: an empty result can mean the target
+        # is missing from this domain, OR the entity already had the requested state. Check
+        # which, so the agent gets an actionable answer instead of a guess.
+        try:
+            state = await _api_json("GET", f"/api/states/{entity_id}", 10)
+        except Exception:
+            out["error"] = (
+                f"{domain}.{service} affected no entities: {entity_id} does not exist in "
+                f"Home Assistant. Check the exact entity_id with ha_list_entities."
+            )
+            return out
+        actual_domain = state["entity_id"].split(".", 1)[0]
+        if actual_domain != domain:
+            out["error"] = (
+                f"{domain}.{service} affected no entities: {entity_id} exists but is in the "
+                f"'{actual_domain}' domain, not '{domain}'. Service calls only affect entities "
+                f"of their own domain — call {actual_domain}.{service} instead."
+            )
+            return out
+        # Exists in the right domain: the state was already as requested — intent satisfied.
+        out["success"] = True
+        del out["error"]
+        out["note"] = f"{entity_id} was already in state '{state['state']}' — nothing to change."
+    return out
 
 
 async def _async_list_services(domain: Optional[str] = None) -> Dict[str, Any]:
@@ -824,6 +888,13 @@ HA_CALL_SERVICE_SCHEMA: Dict[str, Any] = {
     "description": (
         "Call a Home Assistant service to control a device. Use ha_list_services "
         "to discover available services and their parameters for each domain. "
+        "Never guess an entity_id: call ha_list_entities first (optionally with a "
+        "domain filter) and use the exact ids it returns. The service domain MUST "
+        "match the entity's own domain: a light.* entity needs light.turn_on, a "
+        "switch.* entity needs switch.turn_on, an input_boolean.* toggle needs "
+        "input_boolean.turn_on — calling the wrong domain affects nothing. The "
+        "error field explains exactly what went wrong (missing entity, wrong "
+        "domain, or already in that state) — follow its suggestion and retry. "
         "If the operator restricts entities, target explicit entity_ids: calls "
         "on restricted entities, or by area/device/label or with no target, are refused."
     ),

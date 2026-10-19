@@ -11,6 +11,7 @@ import json
 import logging
 from unittest.mock import AsyncMock, patch
 
+import aiohttp
 import pytest
 
 import homeassistant_plugin.tools as ha_tool
@@ -19,6 +20,7 @@ from homeassistant_plugin.tools import (
     _filter_and_summarize,
     _build_service_payload,
     _parse_service_response,
+    _async_call_service,
     _get_headers,
     _get_entity_filter_config,
     _parse_entity_filter_patterns,
@@ -112,6 +114,100 @@ class TestParseServiceResponse:
         assert result["service"] == "light.turn_on"
         assert len(result["affected_entities"]) == 2
         assert result["affected_entities"][0]["entity_id"] == "light.bedroom"
+
+    def test_dict_response_with_service_response(self):
+        # Response services (weather.get_forecasts) called with ?return_response
+        # return {"changed_states": [...], "service_response": {...}}.
+        ha_response = {
+            "changed_states": [{"entity_id": "weather.home", "state": "recording", "attributes": {}}],
+            "service_response": {"forecast": [{"condition": "clear"}]},
+        }
+        result = _parse_service_response("weather", "get_forecasts", ha_response, "weather.home")
+        assert result["success"] is True
+        assert result["service_response"] == {"forecast": [{"condition": "clear"}]}
+        assert result["affected_entities"][0]["entity_id"] == "weather.home"
+
+    def test_empty_response_with_entity_id_flags_noop(self):
+        # HA returns 200 + [] when nothing changed; with an entity_id that must be
+        # surfaced as a no-op so _async_call_service can verify why.
+        result = _parse_service_response("light", "turn_on", [], "light.bedroom")
+        assert result["success"] is False
+        assert "affected no entities" in result["error"]
+
+    def test_empty_response_without_entity_id_is_success(self):
+        # No target entity (e.g. turn_on all lights): empty list is a valid success.
+        result = _parse_service_response("light", "turn_on", [])
+        assert result["success"] is True
+        assert "error" not in result
+
+
+class TestCallServiceVerification:
+    """_async_call_service must verify an empty response instead of reporting a bare success."""
+
+    @staticmethod
+    def _err(status, message):
+        # str() of ClientResponseError reads request_info.real_url, so the tests must
+        # supply a real RequestInfo (production always does, via resp.request_info).
+        info = aiohttp.RequestInfo("GET", "http://ha/api", ())
+        return aiohttp.ClientResponseError(info, (), status=status, message=message)
+
+    def _call(self, post_result, get_state_result, domain="light", service="turn_on", entity="light.bedroom"):
+        async def fake_api_json(method, path, timeout, payload=None):
+            if method == "POST":
+                return post_result
+            if method == "GET" and path.startswith("/api/states/"):
+                return get_state_result
+            raise AssertionError(f"unexpected request {method} {path}")
+
+        with patch.object(ha_tool, "_api_json", side_effect=fake_api_json):
+            return asyncio.run(_async_call_service(domain, service, entity, None))
+
+    def test_missing_entity_explains(self):
+        # POST succeeded with an empty list; the verification GET 404s.
+        async def fake_api_json(method, path, timeout, payload=None):
+            if method == "POST":
+                return []
+            raise self._err(404, "message='Not Found'")
+        with patch.object(ha_tool, "_api_json", side_effect=fake_api_json):
+            result = asyncio.run(_async_call_service("light", "turn_on", "light.bedroom", None))
+        assert result["success"] is False
+        assert "does not exist" in result["error"]
+        assert "ha_list_entities" in result["error"]
+
+    def test_wrong_domain_suggests_correct_one(self):
+        # Entity exists but is in the switch domain, not light.
+        result = self._call(
+            post_result=[],
+            get_state_result={"entity_id": "switch.bedroom", "state": "off"},
+            domain="light", service="turn_on", entity="switch.bedroom",
+        )
+        assert result["success"] is False
+        assert "'switch'" in result["error"]
+        assert "switch.turn_on" in result["error"]
+
+    def test_already_in_requested_state_is_success_with_note(self):
+        # Entity exists in the right domain and nothing changed: it was already on.
+        result = self._call(
+            post_result=[],
+            get_state_result={"entity_id": "light.bedroom", "state": "on"},
+            domain="light", service="turn_on", entity="light.bedroom",
+        )
+        assert result["success"] is True
+        assert "already in state" in result["note"]
+        assert "error" not in result
+
+    def test_requires_responses_retries_with_return_response(self):
+        calls = []
+        async def fake_api_json(method, path, timeout, payload=None):
+            calls.append(path)
+            if "return_response" not in path:
+                raise self._err(400, "message='Service call requires responses but caller did not ask for responses. Add ?return_response to query parameters.'")
+            return {"changed_states": [], "service_response": {"forecast": []}}
+        with patch.object(ha_tool, "_api_json", side_effect=fake_api_json):
+            result = asyncio.run(_async_call_service("weather", "get_forecasts", None, None))
+        assert result["success"] is True
+        assert result["service_response"] == {"forecast": []}
+        assert len(calls) == 2 and "return_response" in calls[1]
 
 
 

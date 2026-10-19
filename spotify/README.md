@@ -51,7 +51,9 @@ a shared public client). `hermes spotify login` walks you through it the first t
    `https://127.0.0.1:43827/spotify/callback` instead and set that URI with
    `HERMES_SPOTIFY_REDIRECT_URI`: the listener then serves **https with a self-signed
    certificate**, so the browser shows the usual "not private" warning once — accept it and
-   continue, the connection never leaves your machine.
+   continue, the connection never leaves your machine. Paste the URI into the dashboard without
+   a trailing space: the field rejects that with "This redirect URI is not secure", which reads
+   like a policy problem rather than a stray character.
 2. Paste the app's **Client ID** at the prompt. It is saved as `HERMES_SPOTIFY_CLIENT_ID` in the
    profile's `.env`, so later logins skip this step.
 3. Approve access in the browser. Tokens are stored under `providers.spotify` in the profile's

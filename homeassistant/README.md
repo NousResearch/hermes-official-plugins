@@ -12,8 +12,9 @@ Official [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin for
    The agent's replies show up as Home Assistant persistent notifications titled "Hermes Agent".
    Cron jobs can deliver to `deliver=homeassistant[:target]` through the target's own notify service
    (`notify.mobile_app_my_phone` for `target=mobile_app_my_phone`), without a running gateway.
-2. **Toolset `homeassistant`**: four tools the model can call to query and control devices over the
-   REST API: `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_service`.
+2. **Toolset `homeassistant`**: six tools the model can call to query and control Home Assistant:
+   `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_service`,
+   `ha_list_statistics`, `ha_get_statistics`.
 
 This used to be built into Hermes core. It now ships as a standalone plugin with the same platform
 name, toolset, tool names and schemas, env vars and config keys. **If you already used Home
@@ -67,7 +68,7 @@ HASS_HOME_CHANNEL=mobile_app_my_phone
 
 ### 3. Tools
 
-The four tools only appear when `HASS_TOKEN` is set. Turn the `homeassistant` toolset on or off per
+The six tools only appear when `HASS_TOKEN` is set. Turn the `homeassistant` toolset on or off per
 platform with `hermes tools`.
 
 `ha_list_entities` keeps responses small on large installs. Besides `domain`, it takes `area`
@@ -76,6 +77,16 @@ mention the room; falls back to friendly-name matching if the registry is unreac
 substring of friendly names and entity IDs), `entity_ids` (an exact list that supersedes the other
 filters) and `max` (a per-call cap). Each entity includes its area and device when known. A result
 cut by a cap is marked `truncated` with a note on how to narrow the query or get the rest.
+
+`ha_list_statistics` lists the long-term statistic IDs available from Home Assistant Recorder and
+accepts an optional case-insensitive `search` filter. Use it to discover the IDs accepted by
+`ha_get_statistics`.
+
+`ha_get_statistics` queries Recorder long-term statistics for one or more statistic IDs. It
+requires a timezone-aware ISO-8601 `start_time`; `end_time` is optional. Aggregation periods are
+`5minute`, `hour`, `day`, `week`, `month` and `year` (default: `day`). Requested values
+can be `mean`, `min`, `max`, `state`, `sum` and `change`. The tools use Home Assistant's
+Recorder WebSocket API; they do not access the Home Assistant database directly.
 
 #### Operator entity filters (optional)
 

@@ -5,20 +5,23 @@ version: 2.0.1
 author: NousResearch
 homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/homeassistant
 description: >
-  Home Assistant for Hermes Agent: a gateway platform adapter plus four
+  Home Assistant for Hermes Agent: a gateway platform adapter plus six
   smart-home tools. The adapter subscribes to HA's WebSocket event bus and
   forwards state-change events (with per-entity cooldowns and domain/entity
   filtering) to the agent; replies are delivered as HA persistent
   notifications, and cron deliver=homeassistant goes through the
   target's notify service (notify.<target>). The homeassistant toolset (ha_list_entities,
-  ha_get_state, ha_list_services, ha_call_service) queries and controls
-  devices over the REST API. Formerly built into Hermes core.
+  ha_get_state, ha_list_services, ha_call_service, ha_list_statistics,
+  ha_get_statistics) queries and controls devices over the REST API and
+  queries Recorder long-term statistics over the WebSocket API. Formerly built into Hermes core.
 requires_hermes: ">=0.21.5"
 provides_tools:
   - ha_list_entities
   - ha_get_state
   - ha_list_services
   - ha_call_service
+  - ha_list_statistics
+  - ha_get_statistics
 provides_hooks: []
 requires_env:
   - name: HASS_TOKEN

@@ -11,7 +11,7 @@ import homeassistant_plugin
 from homeassistant_plugin import adapter as ha_adapter
 from homeassistant_plugin import tools as ha_tools
 
-TOOL_NAMES = ["ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service"]
+TOOL_NAMES = ["ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service", "ha_list_statistics", "ha_get_statistics"]
 NEW_ENTRY_KWARGS = {
     "trusted_inbound", "display_tier", "shared_env_prefixes", "parse_target_ref_fn",
 }
@@ -145,7 +145,7 @@ class TestCoreStillBundlesHomeAssistant:
 
 
 class TestToolRegistration:
-    def test_four_tools_in_homeassistant_toolset(self, ctx):
+    def test_six_tools_in_homeassistant_toolset(self, ctx):
         assert [t["name"] for t in ctx.tools] == TOOL_NAMES
         for t in ctx.tools:
             assert t["toolset"] == "homeassistant"
@@ -175,7 +175,8 @@ class TestToolRegistration:
         """While core still ships the old module, the moved schemas must match it byte-for-byte."""
         import tools.homeassistant_tool as core
 
-        ours = {t["name"]: t["schema"] for t in ctx.tools}
+        legacy_names = {"ha_list_entities", "ha_get_state", "ha_list_services", "ha_call_service"}
+        ours = {t["name"]: t["schema"] for t in ctx.tools if t["name"] in legacy_names}
         assert ours == {
             s["name"]: s for s in (
                 core.HA_LIST_ENTITIES_SCHEMA, core.HA_GET_STATE_SCHEMA,

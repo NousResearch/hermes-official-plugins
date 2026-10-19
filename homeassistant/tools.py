@@ -1,6 +1,7 @@
 """Home Assistant tools for controlling smart home devices via the REST API.
 
-Provides ``ha_list_entities``, ``ha_get_state``, ``ha_list_services``, ``ha_call_service`` in the
+Provides ``ha_list_entities``, ``ha_get_state``, ``ha_list_services``, ``ha_call_service``,
+``ha_list_statistics`` and ``ha_get_statistics`` in the
 ``homeassistant`` toolset. Auth is a Long-Lived Access Token (``HASS_TOKEN``); the instance URL comes
 from ``HASS_URL`` (default http://homeassistant.local:8123).
 
@@ -703,6 +704,223 @@ def _check_ha_available() -> bool:
 
 
 # ── tool schemas ─────────────────────────────────────────────────────────────
+_ALLOWED_STAT_PERIODS = {'5minute', 'hour', 'day', 'week', 'month', 'year'}
+_ALLOWED_STAT_TYPES = {'mean', 'min', 'max', 'state', 'sum', 'change'}
+
+
+def _parse_iso_datetime(value: str, parameter: str):
+    from datetime import datetime
+
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f'Missing required parameter: {parameter}')
+
+    try:
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        raise ValueError(
+            f'Invalid {parameter}: expected an ISO-8601 datetime'
+        )
+
+    if parsed.tzinfo is None:
+        raise ValueError(
+            f'Invalid {parameter}: timezone offset is required'
+        )
+
+    return parsed
+
+
+async def _ws_command(message: dict, timeout: int = 30):
+    import aiohttp
+
+    base_url, token = _get_config()
+
+    if base_url.startswith('https://'):
+        ws_url = 'wss://' + base_url[len('https://'):]
+    elif base_url.startswith('http://'):
+        ws_url = 'ws://' + base_url[len('http://'):]
+    else:
+        raise RuntimeError('HASS_URL must start with http:// or https://')
+
+    ws_url = ws_url.rstrip('/') + '/api/websocket'
+    client_timeout = aiohttp.ClientTimeout(total=timeout)
+
+    async with aiohttp.ClientSession(timeout=client_timeout) as session:
+        async with session.ws_connect(ws_url) as ws:
+            hello = await ws.receive_json()
+            if hello.get('type') != 'auth_required':
+                raise RuntimeError(
+                    'Unexpected Home Assistant WebSocket greeting: '
+                    + str(hello.get('type'))
+                )
+
+            await ws.send_json({
+                'type': 'auth',
+                'access_token': token,
+            })
+
+            auth = await ws.receive_json()
+            if auth.get('type') != 'auth_ok':
+                raise RuntimeError(
+                    'Home Assistant WebSocket authentication failed: '
+                    + str(auth.get('type'))
+                )
+
+            command = dict(message)
+            command['id'] = 1
+            await ws.send_json(command)
+
+            response = await ws.receive_json()
+
+            if response.get('id') != 1:
+                raise RuntimeError(
+                    'Unexpected Home Assistant WebSocket response id'
+                )
+
+            if response.get('type') != 'result':
+                raise RuntimeError(
+                    'Unexpected Home Assistant WebSocket response: '
+                    + str(response.get('type'))
+                )
+
+            if not response.get('success'):
+                error = response.get('error') or {}
+                detail = (
+                    error.get('message')
+                    or error.get('code')
+                    or 'unknown error'
+                )
+                raise RuntimeError(
+                    'Home Assistant WebSocket command failed: ' + detail
+                )
+
+            return response.get('result')
+
+
+async def _async_list_statistics(search=None):
+    result = await _ws_command({
+        'type': 'recorder/list_statistic_ids',
+    })
+
+    statistics = result or []
+
+    if search:
+        needle = str(search).strip().lower()
+        statistics = [
+            item for item in statistics
+            if needle in str(item.get('statistic_id', '')).lower()
+        ]
+
+    return {
+        'count': len(statistics),
+        'statistics': statistics,
+    }
+
+
+def _handle_list_statistics(args: dict, **kw) -> str:
+    search = args.get('search')
+    return _dispatch(
+        _async_list_statistics(search),
+        'ha_list_statistics',
+        'Failed to list Home Assistant statistics',
+    )
+
+
+async def _async_get_statistics(
+    statistic_ids,
+    start_time,
+    end_time,
+    period,
+    types,
+):
+    message = {
+        'type': 'recorder/statistics_during_period',
+        'start_time': start_time,
+        'statistic_ids': statistic_ids,
+        'period': period,
+        'types': types,
+    }
+
+    if end_time:
+        message['end_time'] = end_time
+
+    return await _ws_command(message)
+
+
+def _handle_get_statistics(args: dict, **kw) -> str:
+    statistic_ids = args.get('statistic_ids')
+
+    if not isinstance(statistic_ids, list) or not statistic_ids:
+        return tool_error(
+            'Missing or invalid required parameter: '
+            'statistic_ids must be a non-empty list'
+        )
+
+    for statistic_id in statistic_ids:
+        if (
+            not isinstance(statistic_id, str)
+            or not statistic_id
+            or len(statistic_id) > 255
+            or any(char.isspace() or ord(char) < 32 for char in statistic_id)
+        ):
+            return tool_error(
+                f'Invalid statistic_id format: {statistic_id!r}'
+            )
+
+    start_time = args.get('start_time')
+    end_time = args.get('end_time')
+
+    try:
+        parsed_start = _parse_iso_datetime(start_time, 'start_time')
+        parsed_end = (
+            _parse_iso_datetime(end_time, 'end_time')
+            if end_time is not None
+            else None
+        )
+    except ValueError as exc:
+        return tool_error(str(exc))
+
+    if parsed_end is not None and parsed_end <= parsed_start:
+        return tool_error('end_time must be later than start_time')
+
+    period = args.get('period', 'day')
+    if period not in _ALLOWED_STAT_PERIODS:
+        return tool_error(
+            'Invalid period. Allowed values: '
+            + ', '.join(sorted(_ALLOWED_STAT_PERIODS))
+        )
+
+    types = args.get(
+        'types',
+        ['mean', 'min', 'max', 'state', 'sum', 'change'],
+    )
+
+    if not isinstance(types, list) or not types:
+        return tool_error('types must be a non-empty list')
+
+    invalid_types = [
+        value for value in types
+        if value not in _ALLOWED_STAT_TYPES
+    ]
+
+    if invalid_types:
+        return tool_error(
+            'Invalid statistics types: '
+            + ', '.join(map(str, invalid_types))
+        )
+
+    return _dispatch(
+        _async_get_statistics(
+            statistic_ids,
+            start_time,
+            end_time,
+            period,
+            types,
+        ),
+        'ha_get_statistics',
+        'Failed to get Home Assistant statistics',
+    )
+
+
 HA_LIST_ENTITIES_SCHEMA: Dict[str, Any] = {
     "name": "ha_list_entities",
     "description": (
@@ -872,16 +1090,74 @@ def _handle_list_services(args: dict, **kw) -> str:
         _async_list_services(domain=args.get("domain")), "ha_list_services", "Failed to list services")
 
 
+HA_LIST_STATISTICS_SCHEMA: Dict[str, Any] = {
+    "name": "ha_list_statistics",
+    "description": "List Home Assistant long-term statistics available from Recorder. Use this to discover statistic IDs before querying historical data.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "search": {
+                "type": "string",
+                "description": "Optional case-insensitive text used to filter statistic IDs.",
+            },
+        },
+        "required": [],
+    },
+}
+
+
+HA_GET_STATISTICS_SCHEMA: Dict[str, Any] = {
+    "name": "ha_get_statistics",
+    "description": "Get Home Assistant long-term historical statistics from Recorder for one or more statistic IDs.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "statistic_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "description": "Statistic IDs to query. Use ha_list_statistics to discover available IDs.",
+            },
+            "start_time": {
+                "type": "string",
+                "description": "ISO-8601 start timestamp including timezone.",
+            },
+            "end_time": {
+                "type": "string",
+                "description": "Optional ISO-8601 end timestamp including timezone.",
+            },
+            "period": {
+                "type": "string",
+                "enum": ["5minute", "hour", "day", "week", "month", "year"],
+                "description": "Aggregation period. Defaults to day.",
+            },
+            "types": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": ["mean", "min", "max", "state", "sum", "change"],
+                },
+                "minItems": 1,
+                "description": "Statistic values to return. For energy, change and sum are commonly useful.",
+            },
+        },
+        "required": ["statistic_ids", "start_time"],
+    },
+}
+
+
 TOOLS = (
     (HA_LIST_ENTITIES_SCHEMA, _handle_list_entities),
     (HA_GET_STATE_SCHEMA, _handle_get_state),
     (HA_LIST_SERVICES_SCHEMA, _handle_list_services),
     (HA_CALL_SERVICE_SCHEMA, _handle_call_service),
+    (HA_LIST_STATISTICS_SCHEMA, _handle_list_statistics),
+    (HA_GET_STATISTICS_SCHEMA, _handle_get_statistics),
 )
 
 
 def register_tools(ctx) -> None:
-    """Register the four Home Assistant tools in the ``homeassistant`` toolset via the plugin API."""
+    """Register the six Home Assistant tools in the ``homeassistant`` toolset via the plugin API."""
     for schema, handler in TOOLS:
         ctx.register_tool(
             name=schema["name"], toolset=TOOLSET, schema=schema, handler=handler,

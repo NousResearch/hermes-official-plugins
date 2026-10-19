@@ -25,10 +25,13 @@ logger = logging.getLogger(__name__)
 PROVIDER = "spotify"
 DEFAULT_ACCOUNTS_BASE_URL = "https://accounts.spotify.com"
 DEFAULT_API_BASE_URL = "https://api.spotify.com/v1"
-# Spotify rejects non-HTTPS redirect URIs since November 2025, except for loopback IP
-# literals — and the dashboard rejects the http form in practice, so the default is https
-# on 127.0.0.1 and the local listener serves TLS with a self-signed certificate.
-DEFAULT_REDIRECT_URI = "https://127.0.0.1:43827/spotify/callback"
+# Spotify's redirect-URI rules allow plain http on a loopback IP literal
+# (https://developer.spotify.com/documentation/web-api/concepts/redirect_uri): "Use HTTPS for
+# your redirect URI, unless you are using a loopback address, when HTTP is permitted." So the
+# default stays http, which is also what existing app registrations use. An https URI is
+# supported when the user configures one — the listener then serves TLS with a self-signed
+# certificate — for dashboards that only accept the https form.
+DEFAULT_REDIRECT_URI = "http://127.0.0.1:43827/spotify/callback"
 DOCS_URL = "https://hermes-agent.nousresearch.com/docs/user-guide/features/spotify"
 DASHBOARD_URL = "https://developer.spotify.com/dashboard"
 ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120
@@ -108,8 +111,8 @@ def _validate_redirect_uri(redirect_uri: str) -> tuple[str, int, str]:
     parsed = urlparse(redirect_uri)
     host = parsed.hostname or ""
     problem = (
-        # https is what Spotify's dashboard accepts (the HTTP loopback exception is no
-        # longer honoured there); http stays supported for apps that already run with it.
+        # Both schemes are valid on a loopback IP literal: http is what Spotify documents and
+        # what the default uses, https is honoured when the app was registered that way.
         "must use http:// or https:// on 127.0.0.1/localhost." if parsed.scheme not in {"http", "https"}
         else "must point to localhost or 127.0.0.1." if host not in {"127.0.0.1", "localhost"}
         else "must include an explicit localhost port." if not parsed.port

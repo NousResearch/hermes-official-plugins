@@ -44,10 +44,14 @@ Spotify requires every user to register their own lightweight developer app (Spo
 a shared public client). `hermes spotify login` walks you through it the first time:
 
 1. It opens <https://developer.spotify.com/dashboard>. Click **Create app** and use
-   `https://127.0.0.1:43827/spotify/callback` as the **Redirect URI**, with **Web API** checked.
-   Spotify rejects `http://` redirect URIs since November 2025, so the loopback listener serves
-   **https with a self-signed certificate**: your browser shows the usual "not private" warning
-   once — accept it and continue, the connection never leaves your machine.
+   `http://127.0.0.1:43827/spotify/callback` as the **Redirect URI**, with **Web API** checked.
+   HTTP is permitted on a loopback IP literal (Spotify's [redirect URI
+   rules](https://developer.spotify.com/documentation/web-api/concepts/redirect_uri) only require
+   HTTPS for everything else). If your dashboard refuses the `http://` form, register
+   `https://127.0.0.1:43827/spotify/callback` instead and set that URI with
+   `HERMES_SPOTIFY_REDIRECT_URI`: the listener then serves **https with a self-signed
+   certificate**, so the browser shows the usual "not private" warning once — accept it and
+   continue, the connection never leaves your machine.
 2. Paste the app's **Client ID** at the prompt. It is saved as `HERMES_SPOTIFY_CLIENT_ID` in the
    profile's `.env`, so later logins skip this step.
 3. Approve access in the browser. Tokens are stored under `providers.spotify` in the profile's

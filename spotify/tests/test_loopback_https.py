@@ -1,7 +1,9 @@
-"""The loopback callback over https: Spotify only accepts https redirect URIs now.
+"""The loopback callback over https: an optional scheme, when the app is registered that way.
 
-The listener terminates TLS itself with a self-signed certificate for 127.0.0.1, because the
-loopback flow still requires an IP literal (RFC 8252) while the dashboard rejects ``http://``.
+Spotify permits plain http on a loopback IP literal and that is the default; an https URI is
+supported for dashboards that refuse the http form. In that case the listener terminates TLS
+itself with a self-signed certificate for 127.0.0.1, because the loopback flow still requires an
+IP literal (RFC 8252).
 """
 
 from __future__ import annotations
@@ -80,3 +82,12 @@ def test_tls_context_ignores_a_tls_verifying_sslcontext_shim(monkeypatch):
     truststore = pytest.importorskip("truststore")
     truststore.inject_into_ssl()
     assert spotify_auth._server_ssl_context_class().__module__ == "ssl"
+
+
+def test_default_redirect_uri_stays_http_on_the_loopback_literal():
+    """http is what Spotify documents for a loopback IP literal, and what existing apps registered.
+
+    Changing the default would send https to an app that only allow-listed the http URI and end
+    in "Invalid redirect URI" for anyone logging in on a new machine.
+    """
+    assert spotify_auth.DEFAULT_REDIRECT_URI == "http://127.0.0.1:43827/spotify/callback"

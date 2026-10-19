@@ -26,6 +26,6 @@ optional_env:
     prompt: "Spotify Client ID"
     password: false
   - name: HERMES_SPOTIFY_REDIRECT_URI
-    description: "Redirect URI allow-listed in your Spotify app (default: https://127.0.0.1:43827/spotify/callback)"
+    description: "Redirect URI allow-listed in your Spotify app (default: http://127.0.0.1:43827/spotify/callback; set an https:// URI if your dashboard refuses the http form)"
     prompt: "Spotify redirect URI"
     password: false

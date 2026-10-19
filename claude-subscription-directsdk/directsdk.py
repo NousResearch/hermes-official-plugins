@@ -212,6 +212,33 @@ def normalize_input_schema(schema):
     return normalized
 
 
+# Native structured output (`output_config.format`) 400s on these keywords: per-type constraints on
+# integer/number/array, and an `enum` beside a `type` list (a nullable enum, whose members are
+# checked against the whole list). The reply is validated against the caller's full schema by
+# Hermes (agent/plugin_llm.py), so dropping them from the wire keeps them enforced, and the enum
+# or the remaining keywords still steer the model. Without this, core retries the request
+# without a schema and every structured call is paid twice.
+_UNSUPPORTED_FORMAT_KEYS = {
+    'integer': ('minimum', 'maximum'),
+    'number': ('minimum', 'maximum'),
+    'array': ('maxItems', 'uniqueItems'),
+}
+
+
+def native_format_schema(node):
+    """A copy of a JSON Schema without the keywords native structured output rejects."""
+    if isinstance(node, list):
+        return [native_format_schema(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    declared = node.get('type')
+    kinds = declared if isinstance(declared, list) else [declared]
+    dropped = {key for kind in kinds if isinstance(kind, str) for key in _UNSUPPORTED_FORMAT_KEYS.get(kind, ())}
+    if isinstance(declared, list) and 'enum' in node:
+        dropped.add('type')
+    return {key: native_format_schema(value) for key, value in node.items() if key not in dropped}
+
+
 def request_body(kwargs):
     allowed = {'model', 'messages', 'tools', 'stream', 'stream_options', 'max_tokens', 'max_completion_tokens',
                'temperature', 'top_p', 'stop', 'extra_body', 'extra_headers', 'timeout', 'tool_choice', 'parallel_tool_calls', 'n', 'response_format',
@@ -270,7 +297,7 @@ def request_body(kwargs):
         schema = response_format.get('json_schema', {}).get('schema')
         if not isinstance(schema, dict):
             raise ValueError('response_format requires a JSON Schema object')
-        body.setdefault('output_config', {})['format'] = {'type': 'json_schema', 'schema': schema}
+        body.setdefault('output_config', {})['format'] = {'type': 'json_schema', 'schema': native_format_schema(schema)}
     for key in ('max_tokens', 'temperature', 'top_p'):
         if kwargs.get(key) is not None:
             body[key] = kwargs[key]

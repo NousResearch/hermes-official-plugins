@@ -9,6 +9,8 @@ LLM calls and tool invocations to [Langfuse](https://langfuse.com), the open-sou
 platform. One span per turn, one generation per API call, one observation per tool call and subagent.
 Usage totals, per-type token counts and cost estimates come from Hermes' own pricing, so Langfuse sees
 the same breakdown (input / output / cache read / cache write / reasoning tokens) as `hermes logs`.
+Reasoning is reported as `output_reasoning_tokens` and left out of `output`, so the per-type counts
+add up to the total.
 
 The plugin fails open: no SDK, no credentials or a transient Langfuse error all turn into a no-op in
 the hook (a missing SDK or missing/placeholder keys log one warning). The agent loop is never affected.

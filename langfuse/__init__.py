@@ -20,7 +20,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
@@ -93,8 +93,21 @@ _USAGE_FIELDS = (
     ("output", "output_tokens", "output_cost_per_million"),
     ("cache_read_input_tokens", "cache_read_tokens", "cache_read_cost_per_million"),
     ("cache_creation_input_tokens", "cache_write_tokens", "cache_write_cost_per_million"),
-    ("reasoning_tokens", "reasoning_tokens", None),
+    ("output_reasoning_tokens", "reasoning_tokens", "output_cost_per_million"),
 )
+
+
+def _usage_buckets(read: Callable[[str], Any]) -> dict[str, int]:
+    """Langfuse token buckets (every key) from canonical counts, ``read(attr)``.
+
+    Langfuse sums every usage key, but Hermes' ``output_tokens`` already includes reasoning.
+    Reasoning moves out of ``output`` into ``output_reasoning_tokens`` (billed at the output
+    rate), the split Langfuse itself makes when it ingests OpenAI usage, so the buckets add
+    up to ``CanonicalUsage.total_tokens``."""
+    tokens = {key: max(int(read(attr) or 0), 0) for key, attr, _ in _USAGE_FIELDS}
+    reasoning = min(tokens["output_reasoning_tokens"], tokens["output"])
+    tokens["output_reasoning_tokens"], tokens["output"] = reasoning, tokens["output"] - reasoning
+    return tokens
 
 
 def _env(name: str, default: str = "") -> str:
@@ -556,10 +569,8 @@ def _serialize_assistant_message(message: Any) -> dict[str, Any]:
 def _canonical_usage_and_cost(canonical: Any, *, provider: str, model: str,
                               base_url: str) -> tuple[dict[str, int], dict[str, float]]:
     """Translate canonical Hermes usage into Langfuse usage and cost maps."""
-    usage_details: dict[str, int] = {
-        key: tokens for key, attr, _ in _USAGE_FIELDS
-        if (tokens := getattr(canonical, attr)) or key in ("input", "output")
-    }
+    buckets = _usage_buckets(lambda attr: getattr(canonical, attr))
+    usage_details: dict[str, int] = {key: tokens for key, tokens in buckets.items() if tokens or key in ("input", "output")}
     cost_details: dict[str, float] = {}
     try:
         from agent.usage_pricing import estimate_usage_cost, resolve_billing_route
@@ -595,10 +606,10 @@ def _canonical_usage_and_cost(canonical: Any, *, provider: str, model: str,
         # Above the context tier, estimate_usage_cost bills the WHOLE request at the
         # *_above rates; use them here too or the breakdown disagrees with "total".
         above = bool(entry) and entry.tier_threshold_tokens is not None and canonical.prompt_tokens > entry.tier_threshold_tokens
-        for key, attr, rate_attr in _USAGE_FIELDS if entry else ():
-            rate_above = getattr(entry, f"{rate_attr}_above", None) if above and rate_attr else None
-            rate = rate_above if rate_above is not None else getattr(entry, rate_attr, None) if rate_attr else None
-            tokens = getattr(canonical, attr)
+        for key, _attr, rate_attr in _USAGE_FIELDS if entry else ():
+            rate_above = getattr(entry, f"{rate_attr}_above", None) if above else None
+            rate = rate_above if rate_above is not None else getattr(entry, rate_attr, None)
+            tokens = buckets[key]
             if rate is not None and tokens:
                 cost_details[key] = float(Decimal(tokens) * rate / Decimal(1000000))
     except Exception:  # pragma: no cover - canonical total remains usable
@@ -877,7 +888,8 @@ def _emit_moa_reference_generations(state: TraceState, *, client: Langfuse, refe
         if not isinstance(ref, dict):
             continue
         usage = ref.get("usage") or {}
-        usage_details = {key: usage[attr] for key, attr, _ in _USAGE_FIELDS if usage.get(attr)} if isinstance(usage, dict) else {}
+        usage_details = {key: tokens for key, tokens in _usage_buckets(usage.get).items() if tokens} \
+            if isinstance(usage, dict) else {}
         cost_usd = ref.get("cost_usd")
         cost_details = {"total": float(cost_usd)} if isinstance(cost_usd, (int, float)) else {}
 

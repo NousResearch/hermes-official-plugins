@@ -283,6 +283,11 @@ def request_body(kwargs):
                 body['thinking'] = {'type': 'disabled'}
                 # Native clear-thinking context edits are invalid when thinking is disabled.
                 body['context_management'] = {'edits': []}
+            else:
+                # The disable is impossible here, and with no effort native thinks at its default
+                # (hundreds to ~1k reasoning tokens on a short structured answer, 2x the latency).
+                # The lowest effort is the nearest "off": it reaches --effort below.
+                body['output_config'] = {'effort': 'low'}
         else:
             # Routes without adaptive thinking (Haiku 4.5) 400 on the block; their own
             # default thinking plus the effort signal below stand in for it.

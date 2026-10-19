@@ -9,6 +9,7 @@
 ### Fixed
 
 - Restore gzip compression for large direct Anthropic requests, with a process-wide latch and one uncompressed resend when request encoding is rejected.
+- A reasoning-off request (`reasoning.enabled: false` or effort `none`) on a route that cannot disable thinking (Haiku 5.5, Sonnet 5.5, Opus 5.5, Fable) now asks for `effort: low` instead of sending no effort, where native thought at its default effort. Routes that accept the disable still receive it.
 - Structured output no longer 400s upstream on schema keywords native rejects: `minimum`/`maximum` on integer and number, `maxItems`/`uniqueItems` on array, and `type` beside `enum` (a nullable enum) are dropped from the wire schema only. Hermes still validates the reply against the full schema, so the constraints hold, and core no longer retries without a schema (a doubled call).
 - Keep one native session per conversation (`--session-id` from the system prompt and first frame): with feature flags on, native names a per-session scratchpad directory in the environment message after the first user turn, so a new session per spawn changed it on every request and each round re-wrote the conversation to the prompt cache.
 - Short model names such as `sonnet-5-5`, `sonnet-5.5`, `opus-4.8` and `haiku-4-5` resolve to their pinned routes (and thinking policy) instead of reaching Claude Code verbatim and 404ing into the fallback chain (#103).

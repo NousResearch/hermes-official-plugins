@@ -11,13 +11,13 @@ CONTEXT_WINDOWS = {
 }
 # Families that 400 on ``thinking: {"type": "disabled"}`` (the same contract Hermes core keeps
 # in agent/anthropic_adapter.py). A caller's disable is omitted for them, which beats a dead
-# request. That does not turn thinking down: a reasoning-off request on these routes carries no
-# `thinking` and no effort (neither `output_config.effort` nor `--effort`), so the model thinks
-# at native's default effort. Opus 5.5 joined Fable: the docs say thinking cannot be turned off
-# there and the API answers the disable with the same 400 (#22). Plain Opus 5 still accepts it,
-# so the entry is the full `claude-opus-5-5` prefix. Sonnet 5.5 rejects the disable too (its lowest
-# setting is `between_tools`); plain Sonnet 5 still accepts it. The docs say thinking cannot be
-# turned off on Haiku 5.5 either; Haiku 4.5 still accepts the disable.
+# request. That does not turn thinking off, so request_body asks for the lowest effort instead
+# (`output_config.effort: low`, then `--effort low`): without it a reasoning-off request carries no
+# effort and the model thinks at native's default. Opus 5.5 joined Fable: the docs say thinking
+# cannot be turned off there and the API answers the disable with the same 400 (#22). Plain Opus 5
+# still accepts it, so the entry is the full `claude-opus-5-5` prefix. Sonnet 5.5 rejects the
+# disable too (its lowest setting is `between_tools`); plain Sonnet 5 still accepts it. The docs
+# say thinking cannot be turned off on Haiku 5.5 either; Haiku 4.5 still accepts the disable.
 MANDATORY_THINKING = ('claude-fable', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5')
 ALIASES = {
     'sonnet': 'claude-sonnet-5-5',

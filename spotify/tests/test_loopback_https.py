@@ -24,14 +24,40 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-def _wait_until_listening(port: int, timeout: float = 5.0) -> None:
+def _thread_failure(thread: threading.Thread | None, error: dict | None) -> BaseException | None:
+    """The exception the callback thread died with, if it died before answering."""
+    return (error or {}).get("erro")
+
+
+def _wait_until_listening(
+    port: int, thread: threading.Thread | None = None, error: dict | None = None, timeout: float = 5.0
+) -> None:
+    """Wait for the callback listener, and say why it never came up.
+
+    A failure inside the callback thread is invisible from this side: the socket never binds, so
+    the test can only say "never came up", which cannot tell a slow start from a certificate that
+    was never generated (``load_cert_chain`` raising, for instance) or a bind that failed outright.
+    Surfacing that thread's exception turns the failure into the real cause on every CI runner.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         with socket.socket() as sock:
             sock.settimeout(0.2)
             if sock.connect_ex(("127.0.0.1", port)) == 0:
                 return
+        if _thread_failure(thread, error) is not None or (thread is not None and not thread.is_alive()):
+            break
         time.sleep(0.05)
+    cause = _thread_failure(thread, error)
+    if cause is not None:
+        raise AssertionError(
+            f"loopback listener never came up on 127.0.0.1:{port}: "
+            f"callback thread raised {type(cause).__name__}: {cause}"
+        ) from cause
+    if thread is not None and not thread.is_alive():
+        raise AssertionError(
+            f"loopback listener never came up on 127.0.0.1:{port}: callback thread exited without binding"
+        )
     raise AssertionError(f"loopback listener never came up on 127.0.0.1:{port}")
 
 
@@ -60,16 +86,30 @@ def test_https_loopback_receives_the_authorization_code():
     resultado: dict = {}
 
     def corre():
-        resultado["valor"] = spotify_auth._wait_for_callback(uri, timeout_seconds=15)
+        try:
+            resultado["valor"] = spotify_auth._wait_for_callback(uri, timeout_seconds=15)
+        except BaseException as exc:  # noqa: BLE001 - re-raised with context by the helper
+            resultado["erro"] = exc
 
     thread = threading.Thread(target=corre, daemon=True)
     thread.start()
-    _wait_until_listening(port)
+    _wait_until_listening(port, thread, error=resultado)
 
     # verify=False is the point of this test: the listener serves a self-signed certificate
     # generated on the spot, exactly as the real login does, so there is no CA to trust. The
     # request never leaves 127.0.0.1, so nothing can be intercepted.
-    response = httpx.get(f"{uri}?code=abc123&state=xyz", verify=False, timeout=10)  # noqa: S501
+    try:
+        response = httpx.get(f"{uri}?code=abc123&state=xyz", verify=False, timeout=10)  # noqa: S501
+    except httpx.HTTPError as exc:
+        # The socket can bind and still be unusable (the TLS wrap runs after the bind), so the
+        # request itself has to carry the callback thread's exception into the failure message.
+        causa = _thread_failure(thread, resultado)
+        if causa is not None:
+            raise AssertionError(
+                f"https callback request failed with {type(exc).__name__}: {exc}; "
+                f"callback thread raised {type(causa).__name__}: {causa}"
+            ) from causa
+        raise
     thread.join(timeout=15)
 
     assert response.status_code == 200

@@ -37,6 +37,8 @@ class TraceState:
     trace_id: str
     root_span: Any
     generations: dict[str, Any] = field(default_factory=dict)
+    # Model each open generation was started with (the request-body model), same keys.
+    generation_models: dict[str, str] = field(default_factory=dict)
     tools: dict[str, Any] = field(default_factory=dict)
     pending_tools_by_name: dict[str, list] = field(default_factory=dict)
     turn_tool_calls: list[dict[str, Any]] = field(default_factory=list)
@@ -820,11 +822,18 @@ def _duration_meta(api_duration: Any) -> dict[str, Any]:
     return {"api_duration_s": round(api_duration, 3)} if api_duration and api_duration > 0 else {}
 
 
-def _pop_generation(task_key: str, api_call_count: Any) -> tuple[Optional[TraceState], Any]:
-    """Detach the open generation for one API call. Returns (state, generation); either may be None."""
+def _pop_generation(task_key: str, api_call_count: Any) -> tuple[Optional[TraceState], Any, Optional[str]]:
+    """Detach the open generation for one API call.
+
+    Returns (state, generation, start_model); any may be None. ``start_model`` is the
+    model the generation was started with in ``on_pre_llm_request``.
+    """
     with _STATE_LOCK:
         state = _TRACE_STATE.get(task_key)
-        return state, state.generations.pop(_request_key(api_call_count), None) if state else None
+        if state is None:
+            return None, None, None
+        req_key = _request_key(api_call_count)
+        return state, state.generations.pop(req_key, None), state.generation_models.pop(req_key, None)
 
 
 def _get_or_start_state_locked(task_key: str, **root_kwargs: Any) -> TraceState:
@@ -936,6 +945,7 @@ def on_pre_llm_request(*, task_id: str = "", session_id: str = "", platform: str
             input_value=langfuse_input, metadata=gen_metadata, model=model,
             model_parameters={"api_mode": api_mode, "provider": provider},
         )
+        state.generation_models[req_key] = model  # overwrites a retried attempt's entry
 
 
 def on_post_llm_call(*, task_id: str = "", session_id: str = "", provider: str = "", base_url: str = "",
@@ -949,14 +959,15 @@ def on_post_llm_call(*, task_id: str = "", session_id: str = "", provider: str =
         return
 
     # The response echoes the model that actually served the request.
-    requested_model = model
     served_model = response_model if isinstance(response_model, str) and response_model else None
-    if served_model:
-        model = served_model
 
-    state, generation = _pop_generation(task_key, api_call_count)
+    state, generation, start_model = _pop_generation(task_key, api_call_count)
     if state is None or generation is None:
         return
+    # Compare against what the generation was started with (the dispatched request-body
+    # model), not the hook's ``model`` (agent.model): the two differ without any reroute,
+    # e.g. native Anthropic name normalization or a MoA preset name.
+    requested_model = start_model or model
 
     if moa_references:
         _emit_moa_reference_generations(state, client=client, references=moa_references)
@@ -977,16 +988,18 @@ def on_post_llm_call(*, task_id: str = "", session_id: str = "", provider: str =
     # post_api_request's ``response`` is a sanitized dict with no ``.usage``;
     # gate on the attribute so the usage-dict fallback is actually reached.
     if getattr(response, "usage", None) is not None:
-        usage_details, cost_details = _usage_and_cost(response, provider=provider, api_mode=api_mode, model=model, base_url=base_url)
+        usage_details, cost_details = _usage_and_cost(response, provider=provider, api_mode=api_mode, model=served_model or model,
+                                                     base_url=base_url)
     elif isinstance(usage, dict) and usage:
-        usage_details, cost_details = _usage_and_cost(None, provider=provider, model=model, base_url=base_url, usage=usage)
+        usage_details, cost_details = _usage_and_cost(None, provider=provider, model=served_model or model, base_url=base_url,
+                                                     usage=usage)
     else:
         usage_details, cost_details = {}, {}
 
     gen_metadata = {"tool_call_count": len(output.get("tool_calls", [])) or assistant_tool_call_count,
                     **_duration_meta(api_duration), **({"finish_reason": finish_reason} if finish_reason else {})}
-    # The generation was started with the requested model; record the served one on it,
-    # keeping the request in metadata when the two differ (routers, aliases, fallbacks).
+    # Record the served model on the generation, keeping the started one in metadata
+    # when the two differ (routers, aliases, fallbacks).
     if served_model and requested_model and served_model != requested_model:
         gen_metadata["requested_model"] = requested_model
     _end_observation(generation, output=output, usage_details=usage_details, cost_details=cost_details,
@@ -1065,7 +1078,7 @@ def on_api_request_error(*, task_id: str = "", session_id: str = "", api_call_co
     client, task_key = _client_and_key(task_id, session_id, turn_id, api_request_id)
     if client is None:
         return
-    state, generation = _pop_generation(task_key, api_call_count)
+    state, generation, _start_model = _pop_generation(task_key, api_call_count)
     if state is None:
         return
 

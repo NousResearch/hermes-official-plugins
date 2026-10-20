@@ -1062,48 +1062,10 @@ class TestModelAttribution:
         )
         assert gens[0]["model"] == "attr-model"
 
-    def test_post_api_request_uses_response_model_for_cost(self, monkeypatch):
-        """Cost estimation must key off the model that actually served."""
-        mod = self._fresh_plugin()
+    def _post_with(self, mod, monkeypatch, *, start_model=None, usage_and_cost=None, **kw):
         monkeypatch.setattr(mod, "_get_langfuse", lambda: object())
-        mod._TRACE_STATE.clear()
-
-        seen = {}
-        def fake_usage_and_cost(response, *, provider, api_mode, model, base_url):
-            seen["model"] = model
-            return {"input": 1, "output": 1}, {}
-        monkeypatch.setattr(mod, "_usage_and_cost", fake_usage_and_cost)
-
-        class _Gen:
-            def update(self, **kw): pass
-            def end(self, **kw): pass
-
-        class _Root:
-            def update(self, **kw): pass
-            def end(self, **kw): pass
-            def set_trace_io(self, **kw): pass
-
-        turn_id = "s:t:turn3"
-        key = mod._trace_key("t", "s", turn_id=turn_id)
-        state = mod.TraceState(trace_id="x", root_span=_Root())
-        state.generations["1"] = _Gen()
-        mod._TRACE_STATE[key] = state
-
-        class _Resp:
-            usage = {"prompt_tokens": 1, "completion_tokens": 1}
-
-        mod.on_post_llm_call(
-            task_id="t", session_id="s", turn_id=turn_id, api_call_count=1,
-            model="stale-attr-model",
-            response_model="actual/served-model",
-            response=_Resp(),
-            assistant_content_chars=2,
-        )
-        assert seen["model"] == "actual/served-model"
-
-    def _post_with(self, mod, monkeypatch, **kw):
-        monkeypatch.setattr(mod, "_get_langfuse", lambda: object())
-        monkeypatch.setattr(mod, "_usage_and_cost", lambda *a, **k: ({"input": 1, "output": 1}, {}))
+        monkeypatch.setattr(mod, "_usage_and_cost",
+                            usage_and_cost or (lambda *a, **k: ({"input": 1, "output": 1}, {})))
         mod._TRACE_STATE.clear()
 
         class _Gen:
@@ -1120,6 +1082,8 @@ class TestModelAttribution:
         key = mod._trace_key("t", "s", turn_id=turn_id)
         state = mod.TraceState(trace_id="x", root_span=_Root())
         gen = state.generations["1"] = _Gen()
+        if start_model:
+            state.generation_models["1"] = start_model
         mod._TRACE_STATE[key] = state
 
         class _Resp:
@@ -1127,30 +1091,99 @@ class TestModelAttribution:
 
         mod.on_post_llm_call(task_id="t", session_id="s", turn_id=turn_id, api_call_count=1,
                              response=_Resp(), assistant_content_chars=2, **kw)
-        return [u for u in gen.updates]
+        return gen.updates
+
+    def test_post_api_request_uses_response_model_for_cost(self, monkeypatch):
+        """Cost estimation must key off the model that actually served."""
+        mod = self._fresh_plugin()
+        seen = {}
+        def fake_usage_and_cost(response, *, provider, api_mode, model, base_url):
+            seen["model"] = model
+            return {"input": 1, "output": 1}, {}
+        self._post_with(mod, monkeypatch, usage_and_cost=fake_usage_and_cost,
+                        model="stale-attr-model", response_model="actual/served-model")
+        assert seen["model"] == "actual/served-model"
 
     def test_post_api_request_records_served_model_on_generation(self, monkeypatch):
         """The generation starts with the requested model; the served one must replace it."""
         mod = self._fresh_plugin()
-        updates = self._post_with(mod, monkeypatch, model="requested/alias",
-                                  response_model="actual/served-model")
-        assert any(u.get("model") == "actual/served-model" for u in updates)
-        meta = next(u["metadata"] for u in updates if "metadata" in u)
-        assert meta["requested_model"] == "requested/alias"
+        (u,) = self._post_with(mod, monkeypatch, model="requested/alias",
+                               response_model="actual/served-model")
+        assert u["model"] == "actual/served-model"
+        assert u["metadata"]["requested_model"] == "requested/alias"
 
     def test_post_api_request_without_response_model_keeps_requested(self, monkeypatch):
         mod = self._fresh_plugin()
-        updates = self._post_with(mod, monkeypatch, model="requested/alias", response_model=None)
-        assert not any("model" in u for u in updates)
-        meta = next(u["metadata"] for u in updates if "metadata" in u)
-        assert "requested_model" not in meta
+        (u,) = self._post_with(mod, monkeypatch, model="requested/alias", response_model=None)
+        assert "model" not in u
+        assert "requested_model" not in u["metadata"]
 
     def test_post_api_request_same_model_adds_no_requested_meta(self, monkeypatch):
         mod = self._fresh_plugin()
-        updates = self._post_with(mod, monkeypatch, model="m", response_model="m")
-        assert any(u.get("model") == "m" for u in updates)
-        meta = next(u["metadata"] for u in updates if "metadata" in u)
-        assert "requested_model" not in meta
+        (u,) = self._post_with(mod, monkeypatch, model="m", response_model="m")
+        assert u["model"] == "m"
+        assert "requested_model" not in u["metadata"]
+
+    def test_served_as_dispatched_is_not_flagged_when_hook_model_differs(self, monkeypatch):
+        """Body model and response agree; only agent.model (the hook model) differs."""
+        mod = self._fresh_plugin()
+        (u,) = self._post_with(mod, monkeypatch, start_model="fallback/model",
+                               model="agent/model", response_model="fallback/model")
+        assert u["model"] == "fallback/model"
+        assert "requested_model" not in u["metadata"]
+
+    def test_reroute_is_reported_against_the_dispatched_model(self, monkeypatch):
+        mod = self._fresh_plugin()
+        (u,) = self._post_with(mod, monkeypatch, start_model="fallback/model",
+                               model="agent/model", response_model="served/other")
+        assert u["model"] == "served/other"
+        assert u["metadata"]["requested_model"] == "fallback/model"
+
+    def test_pre_then_post_uses_the_request_body_model_end_to_end(self, monkeypatch):
+        """Through both hooks: pre records the body model, post compares against it."""
+        mod = self._fresh_plugin()
+        updates: list = []
+
+        class _Gen:
+            def update(self, **u): updates.append(u)
+            def end(self, **u): pass
+
+        class _Span:
+            def update(self, **kw): pass
+            def end(self, **kw): pass
+            def set_trace_io(self, **kw): pass
+            def start_observation(self, **kw): return _Gen()
+
+        class _RootCM:
+            def __enter__(self): return _Span()
+            def __exit__(self, *exc): return False
+
+        class _Client:
+            def create_trace_id(self, seed=None): return "t"
+            def start_as_current_observation(self, **kw): return _RootCM()
+            def start_observation(self, **kw): return _RootCM().__enter__()
+            def flush(self): pass
+
+        client = _Client()
+        monkeypatch.setattr(mod, "_get_langfuse", lambda: client)
+        monkeypatch.setattr(mod, "_usage_and_cost", lambda *a, **k: ({"input": 1, "output": 1}, {}))
+        mod._TRACE_STATE.clear()
+        turn_id = "s:t:turn5"
+        mod.on_pre_llm_request(task_id="t", session_id="s", turn_id=turn_id, api_call_count=1,
+                               model="agent/model", request_messages=[{"role": "user", "content": "hi"}],
+                               request={"body": {"model": "fallback/model"}})
+
+        class _Resp:
+            usage = {"prompt_tokens": 1, "completion_tokens": 1}
+
+        mod.on_post_llm_call(task_id="t", session_id="s", turn_id=turn_id, api_call_count=1,
+                             model="agent/model", response_model="fallback/model",
+                             response=_Resp(), assistant_content_chars=2)
+        (u,) = [x for x in updates if "metadata" in x]
+        assert u["model"] == "fallback/model"
+        assert "requested_model" not in u["metadata"]
+        state = mod._TRACE_STATE.get(mod._trace_key("t", "s", turn_id=turn_id))
+        assert state is None or not state.generation_models
 
 
 # ---------------------------------------------------------------------------

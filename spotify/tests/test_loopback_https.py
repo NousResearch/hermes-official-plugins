@@ -9,8 +9,10 @@ IP literal (RFC 8252).
 from __future__ import annotations
 
 import socket
+import sys
 import threading
 import time
+import traceback
 
 import httpx
 import pytest
@@ -30,7 +32,7 @@ def _thread_failure(thread: threading.Thread | None, error: dict | None) -> Base
 
 
 def _wait_until_listening(
-    port: int, thread: threading.Thread | None = None, error: dict | None = None, timeout: float = 30.0
+    port: int, thread: threading.Thread | None = None, error: dict | None = None, timeout: float = 10.0
 ) -> None:
     """Wait for the callback listener, and say why it never came up.
 
@@ -38,9 +40,6 @@ def _wait_until_listening(
     the test can only say "never came up", which cannot tell a slow start from a certificate that
     was never generated (``load_cert_chain`` raising, for instance) or a bind that failed outright.
     Surfacing that thread's exception turns the failure into the real cause on every CI runner.
-
-    The timeout is generous because ``HTTPServer.server_bind`` calls ``socket.getfqdn`` before
-    ``listen()``, and a reverse lookup of 127.0.0.1 can take several seconds on macOS runners.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -61,7 +60,10 @@ def _wait_until_listening(
         raise AssertionError(
             f"loopback listener never came up on 127.0.0.1:{port}: callback thread exited without binding"
         )
-    raise AssertionError(f"loopback listener never came up on 127.0.0.1:{port}")
+    stack = ""
+    if thread is not None and thread.ident in sys._current_frames():
+        stack = "".join(traceback.format_stack(sys._current_frames()[thread.ident]))
+    raise AssertionError(f"loopback listener never came up on 127.0.0.1:{port}; callback thread is at:\n{stack}")
 
 
 @pytest.mark.parametrize("uri, expected", [
@@ -83,7 +85,11 @@ def test_validate_redirect_uri_rejects_everything_but_loopback_with_a_port(uri):
         spotify_auth._validate_redirect_uri(uri)
 
 
-def test_https_loopback_receives_the_authorization_code():
+def test_https_loopback_receives_the_authorization_code(monkeypatch):
+    # HTTPServer.server_bind calls socket.getfqdn(host) before listen(); on macOS CI runners that
+    # reverse lookup of 127.0.0.1 stalls past 30 s, so the listener never comes up in time. It only
+    # sets server_name, which the callback never reads.
+    monkeypatch.setattr(socket, "getfqdn", lambda name="": name)
     port = _free_port()
     uri = f"https://127.0.0.1:{port}/spotify/callback"
     resultado: dict = {}

@@ -745,7 +745,8 @@ async def _ws_command(message: dict, timeout: int = 30):
     client_timeout = aiohttp.ClientTimeout(total=timeout)
 
     async with aiohttp.ClientSession(timeout=client_timeout) as session:
-        async with session.ws_connect(ws_url) as ws:
+        # recorder/list_statistic_ids on a big install exceeds aiohttp's 4 MiB default frame.
+        async with session.ws_connect(ws_url, max_msg_size=_REGISTRY_MAX_MSG) as ws:
             hello = await ws.receive_json()
             if hello.get('type') != 'auth_required':
                 raise RuntimeError(
@@ -796,12 +797,30 @@ async def _ws_command(message: dict, timeout: int = 30):
             return response.get('result')
 
 
+def _statistic_filter_violation(statistic_id: str) -> Optional[str]:
+    """Why the operator allow/deny lists hide this statistic, or ``None``.
+
+    Recorder statistics of an entity use the entity id (``sensor.house_energy``), so they get the
+    same check as ha_get_state. External statistics (``domain:name``) are matched as plain ids:
+    the denylist can veto them, and with an allowlist they must be listed explicitly.
+    """
+    return _operator_filter_violation(statistic_id.lower())
+
+
 async def _async_list_statistics(search=None):
     result = await _ws_command({
         'type': 'recorder/list_statistic_ids',
     })
 
     statistics = result or []
+
+    # Operator allow/deny lists govern statistics too: an entity's long-term statistics share its id.
+    allow, deny = _get_entity_filter_config()
+    if allow or deny:
+        statistics = [
+            item for item in statistics
+            if _statistic_filter_violation(str(item.get('statistic_id', ''))) is None
+        ]
 
     if search:
         needle = str(search).strip().lower()
@@ -864,6 +883,12 @@ def _handle_get_statistics(args: dict, **kw) -> str:
         ):
             return tool_error(
                 f'Invalid statistic_id format: {statistic_id!r}'
+            )
+        violation = _statistic_filter_violation(statistic_id)
+        if violation:
+            return tool_error(
+                f'{statistic_id} is excluded by operator config ({violation}). '
+                'Use ha_list_statistics to find statistics the operator permits.'
             )
 
     start_time = args.get('start_time')

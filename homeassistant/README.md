@@ -86,7 +86,9 @@ accepts an optional case-insensitive `search` filter. Use it to discover the IDs
 requires a timezone-aware ISO-8601 `start_time`; `end_time` is optional. Aggregation periods are
 `5minute`, `hour`, `day`, `week`, `month` and `year` (default: `day`). Requested values
 can be `mean`, `min`, `max`, `state`, `sum` and `change`. The tools use Home Assistant's
-Recorder WebSocket API; they do not access the Home Assistant database directly.
+Recorder WebSocket API; they do not access the Home Assistant database directly. The operator
+entity filters below apply to statistic IDs too: a statistic the lists exclude is hidden from
+`ha_list_statistics` and refused by `ha_get_statistics`.
 
 #### Operator entity filters (optional)
 

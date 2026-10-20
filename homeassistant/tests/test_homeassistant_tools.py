@@ -1236,7 +1236,8 @@ class TestWebSocketCommand:
         ]
 
         session.ws_connect.assert_called_once_with(
-            'wss://ha.example.test/api/websocket'
+            'wss://ha.example.test/api/websocket',
+            max_msg_size=ha_tool._REGISTRY_MAX_MSG,
         )
 
         assert ws.send_json.await_args_list[0].args[0] == {
@@ -1332,3 +1333,45 @@ class TestWebSocketCommand:
                 await _ws_command({
                     'type': 'recorder/list_statistic_ids',
                 })
+
+
+class TestStatisticsOperatorFilters:
+    """The entity allow/deny lists also govern Recorder statistics (same ids as the entities)."""
+
+    @pytest.fixture
+    def filters(self, monkeypatch):
+        def _set(allow="", deny=""):
+            monkeypatch.setattr(ha_tool, "_HASS_ENTITY_ALLOWLIST", allow)
+            monkeypatch.setattr(ha_tool, "_HASS_ENTITY_DENYLIST", deny)
+        return _set
+
+    @patch("homeassistant_plugin.tools._ws_command", new_callable=AsyncMock)
+    def test_list_hides_denied_and_unlisted_statistics(self, mock_ws, filters):
+        filters(allow="sensor.*", deny="sensor.secret*")
+        mock_ws.return_value = [
+            {"statistic_id": "sensor.house_energy"},
+            {"statistic_id": "sensor.secret_meter"},
+            {"statistic_id": "lock.front_door"},
+        ]
+        result = json.loads(_handle_list_statistics({}))
+        assert [s["statistic_id"] for s in result["result"]["statistics"]] == ["sensor.house_energy"]
+
+    @patch("homeassistant_plugin.tools._ws_command", new_callable=AsyncMock)
+    def test_get_refuses_a_denied_statistic_before_any_request(self, mock_ws, filters):
+        filters(deny="sensor.secret*")
+        result = json.loads(_handle_get_statistics({
+            "statistic_ids": ["sensor.house_energy", "sensor.secret_meter"],
+            "start_time": "2026-10-01T00:00:00+00:00",
+        }))
+        assert "HASS_ENTITY_DENYLIST" in result["error"]
+        mock_ws.assert_not_awaited()
+
+    @patch("homeassistant_plugin.tools._ws_command", new_callable=AsyncMock)
+    def test_get_refuses_a_statistic_outside_the_allowlist(self, mock_ws, filters):
+        filters(allow="sensor.house_*")
+        result = json.loads(_handle_get_statistics({
+            "statistic_ids": ["sensor.garage_energy"],
+            "start_time": "2026-10-01T00:00:00+00:00",
+        }))
+        assert "HASS_ENTITY_ALLOWLIST" in result["error"]
+        mock_ws.assert_not_awaited()

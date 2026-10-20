@@ -30,7 +30,7 @@ def _thread_failure(thread: threading.Thread | None, error: dict | None) -> Base
 
 
 def _wait_until_listening(
-    port: int, thread: threading.Thread | None = None, error: dict | None = None, timeout: float = 5.0
+    port: int, thread: threading.Thread | None = None, error: dict | None = None, timeout: float = 30.0
 ) -> None:
     """Wait for the callback listener, and say why it never came up.
 
@@ -38,6 +38,9 @@ def _wait_until_listening(
     the test can only say "never came up", which cannot tell a slow start from a certificate that
     was never generated (``load_cert_chain`` raising, for instance) or a bind that failed outright.
     Surfacing that thread's exception turns the failure into the real cause on every CI runner.
+
+    The timeout is generous because ``HTTPServer.server_bind`` calls ``socket.getfqdn`` before
+    ``listen()``, and a reverse lookup of 127.0.0.1 can take several seconds on macOS runners.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -87,7 +90,7 @@ def test_https_loopback_receives_the_authorization_code():
 
     def corre():
         try:
-            resultado["valor"] = spotify_auth._wait_for_callback(uri, timeout_seconds=15)
+            resultado["valor"] = spotify_auth._wait_for_callback(uri, timeout_seconds=45)
         except BaseException as exc:  # noqa: BLE001 - re-raised with context by the helper
             resultado["erro"] = exc
 
@@ -110,7 +113,7 @@ def test_https_loopback_receives_the_authorization_code():
                 f"callback thread raised {type(causa).__name__}: {causa}"
             ) from causa
         raise
-    thread.join(timeout=15)
+    thread.join(timeout=45)
 
     assert response.status_code == 200
     assert resultado["valor"]["code"] == "abc123"

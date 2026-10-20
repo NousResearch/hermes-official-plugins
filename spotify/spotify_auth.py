@@ -144,8 +144,9 @@ def _server_ssl_context_class():
 def _loopback_tls_context() -> ssl.SSLContext:
     """TLS context for the loopback listener, with a self-signed certificate for 127.0.0.1.
 
-    Spotify only accepts an https redirect URI, while the loopback flow still requires an IP
-    literal, so the CLI terminates TLS itself. The certificate is generated once and cached
+    Used when the configured redirect URI is https (the default stays http, which Spotify permits
+    on a loopback IP literal). The loopback flow still requires an IP literal, so the CLI
+    terminates TLS itself. The certificate is generated once and cached
     under ``$HERMES_HOME/cache/spotify-loopback/`` (key mode 0600); it carries
     ``SAN IP:127.0.0.1, DNS:localhost`` so the browser offers the usual "proceed" warning
     instead of refusing outright.

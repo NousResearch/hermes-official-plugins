@@ -212,16 +212,19 @@ def normalize_input_schema(schema):
     return normalized
 
 
-# Native structured output (`output_config.format`) 400s on these keywords: per-type constraints on
-# integer/number/array, and an `enum` beside a `type` list (a nullable enum, whose members are
-# checked against the whole list). The reply is validated against the caller's full schema by
-# Hermes (agent/plugin_llm.py), so dropping them from the wire keeps them enforced, and the enum
-# or the remaining keywords still steer the model. Without this, core retries the request
-# without a schema and every structured call is paid twice.
+# Native structured output (`output_config.format`) 400s on these keywords (live-probed): numeric
+# bounds on integer/number, size bounds on object, array bounds other than `minItems` 0/1, and an
+# `enum` beside a `type` list (a nullable enum, whose members are checked against the whole list).
+# The reply is validated against the caller's full schema by Hermes (agent/plugin_llm.py), so
+# dropping them from the wire keeps them enforced, and the enum or the remaining keywords still
+# steer the model. Without this, core retries the request without a schema and every structured
+# call is paid twice.
+_NUMERIC_BOUNDS = ('minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf')
 _UNSUPPORTED_FORMAT_KEYS = {
-    'integer': ('minimum', 'maximum'),
-    'number': ('minimum', 'maximum'),
+    'integer': _NUMERIC_BOUNDS,
+    'number': _NUMERIC_BOUNDS,
     'array': ('maxItems', 'uniqueItems'),
+    'object': ('minProperties', 'maxProperties'),
 }
 
 
@@ -236,7 +239,11 @@ def native_format_schema(node):
     dropped = {key for kind in kinds if isinstance(kind, str) for key in _UNSUPPORTED_FORMAT_KEYS.get(kind, ())}
     if isinstance(declared, list) and 'enum' in node:
         dropped.add('type')
-    return {key: native_format_schema(value) for key, value in node.items() if key not in dropped}
+    out = {key: native_format_schema(value) for key, value in node.items() if key not in dropped}
+    # Native takes `minItems` 0 or 1 only; 1 is the nearest constraint it accepts (validation keeps the real one).
+    if 'array' in kinds and isinstance(out.get('minItems'), int) and out['minItems'] > 1:
+        out['minItems'] = 1
+    return out
 
 
 def request_body(kwargs):

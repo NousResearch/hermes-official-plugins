@@ -80,3 +80,19 @@ def test_the_callers_schema_is_not_mutated():
     before = copy.deepcopy(schema)
     wire(schema)
     assert schema == before
+
+
+def test_other_bounds_native_rejects_are_not_sent():
+    # Live 400s: "For 'number' type, properties exclusiveMaximum, multipleOf are not supported",
+    # "For 'object' type, property 'maxProperties' is not supported", "'minItems' values other
+    # than 0 or 1 are not supported".
+    schema = {'type': 'object', 'minProperties': 1, 'maxProperties': 3, 'properties': {
+        'step': {'type': 'number', 'exclusiveMinimum': 0, 'exclusiveMaximum': 5, 'multipleOf': 0.5},
+        'n': {'type': 'integer', 'multipleOf': 2},
+        'pair': {'type': 'array', 'items': {'type': 'string'}, 'minItems': 2},
+        'one': {'type': 'array', 'items': {'type': 'string'}, 'minItems': 1}}}
+    assert wire(schema) == {'type': 'object', 'properties': {
+        'step': {'type': 'number'},
+        'n': {'type': 'integer'},
+        'pair': {'type': 'array', 'items': {'type': 'string'}, 'minItems': 1},
+        'one': {'type': 'array', 'items': {'type': 'string'}, 'minItems': 1}}}

@@ -28,7 +28,11 @@ from pathlib import Path
 from typing import Any
 
 try:  # Normal package import (Hermes plugin loader, tests via conftest alias)
-    from .manager import BusinessModeManager, CALLBACK_PREFIX
+    from .manager import (
+        BusinessDeliveryNotAttempted,
+        BusinessModeManager,
+        CALLBACK_PREFIX,
+    )
     from .state import BusinessStateDB
 except ImportError:  # pragma: no cover - loaded as a bare module (no package)
     import importlib.util as _ilu
@@ -45,6 +49,7 @@ except ImportError:  # pragma: no cover - loaded as a bare module (no package)
     _manager_mod = _load("manager")
     _state_mod = _load("state")
     BusinessModeManager = _manager_mod.BusinessModeManager
+    BusinessDeliveryNotAttempted = _manager_mod.BusinessDeliveryNotAttempted
     CALLBACK_PREFIX = _manager_mod.CALLBACK_PREFIX
     BusinessStateDB = _state_mod.BusinessStateDB
 
@@ -107,14 +112,13 @@ def register(ctx: Any) -> None:
             return _state["manager"]
 
         db = BusinessStateDB(_hermes_home() / "telegram-business" / "state.db")
-        _state["db"] = db
 
         async def _send(**kwargs):
             kwargs.setdefault("parse_mode", None)
             kwargs.setdefault("disable_web_page_preview", True)
             bot = getattr(adapter, "_bot", None) or getattr(adapter, "bot", None)
             if bot is None:
-                raise RuntimeError("Telegram bot is not connected")
+                raise BusinessDeliveryNotAttempted("Telegram bot is not connected")
             return await bot.send_message(**kwargs)
 
         system_prompt = (
@@ -141,15 +145,25 @@ def register(ctx: Any) -> None:
             )
             return (result.text or "").strip()
 
-        _state["manager"] = BusinessModeManager(
-            session_db=db,
-            send_message=_send,
-            draft_generator=_draft,
-            debounce_seconds=debounce,
-            draft_ttl_hours=ttl_hours,
-            max_customer_text_chars=max_chars,
-        )
-        return _state["manager"]
+        try:
+            manager = BusinessModeManager(
+                session_db=db,
+                send_message=_send,
+                draft_generator=_draft,
+                debounce_seconds=debounce,
+                draft_ttl_hours=ttl_hours,
+                max_customer_text_chars=max_chars,
+            )
+        except BaseException:
+            try:
+                db.close()
+            except BaseException:
+                pass
+            raise
+
+        _state["db"] = db
+        _state["manager"] = manager
+        return manager
 
     # ------------------------------------------------------------------
     # The handler factory the Telegram adapter invokes at connect() time.

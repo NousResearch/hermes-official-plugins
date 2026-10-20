@@ -30,6 +30,10 @@ Discard → dropped, the customer sees nothing
 - **No auto-send exists.** Every reply requires an owner button tap, even when `can_reply` is granted.
 - **Owner-only buttons.** Callbacks are authorized against the connection's `owner_user_id`; anyone else gets `⛔`.
 - **Drafts expire after 24h** (configurable). Stale buttons no-op.
+- **Approval is claimed atomically.** Concurrent Send/Edit callbacks cannot deliver the same draft twice.
+- **Ambiguous send failures stay closed.** A draft is retryable only when delivery is known not to have been attempted.
+- **Ownership is revision-bound.** Every draft records an immutable owner user/chat/revision snapshot, so reassignment — including A→B→A — invalidates old work.
+- **Delivery is serialized with connection updates.** Within the single gateway/plugin manager, final ownership/enable/reply validation, customer delivery, and the terminal draft transition share a per-connection async critical section.
 - **Without `can_reply`, the Send button is hidden** — you're told to copy/paste manually instead of getting a button that silently fails.
 - **Typing bursts coalesce** — new messages within the debounce window supersede the prior draft, one draft per coherent thought.
 
@@ -82,13 +86,15 @@ Drafting uses your active Hermes model through the host-owned plugin LLM surface
 
 ## State
 
-Plugin-owned SQLite at `~/.hermes/telegram-business/state.db` (two tables: connections + drafts). Hermes' core state is never touched. Delete the file to reset.
+Plugin-owned SQLite at `~/.hermes/telegram-business/state.db` (two tables: connections + drafts). Hermes' core state is never touched. Schema upgrades are automatic and preserve connection preferences and terminal draft history; legacy unresolved drafts without trustworthy ownership revisions are closed fail-safe. Delete the file to reset.
 
 ## v1 limits
 
 - **Text only** — customer media (photos, voice, documents) is skipped; captions do trigger drafts.
 - **No conversation history** — each customer message is drafted in isolation. The Edit button absorbs the gap.
 - **No persona learning from edits** — your overrides go to the customer but don't train future drafts.
+- **Edit capture is in-memory** — restarting the manager terminally invalidates unrecoverable `awaiting_edit` rows instead of leaving them actionable-looking until a TTL; a fresh draft is required after restart.
+- **Dispatch serialization is process-local** — Hermes runs one gateway/plugin manager process; the per-connection async lock does not claim cross-process network-send serialization. Durable SQLite claims and guarded retry release remain safe across independent database connections.
 
 ## Tests
 
@@ -96,7 +102,7 @@ Plugin-owned SQLite at `~/.hermes/telegram-business/state.db` (two tables: conne
 python3 -m pytest
 ```
 
-37 tests covering connection lifecycle, draft supersession, debounce coalescing, all three button paths, edit capture, owner-scoped callback authorization, and `/biz` subcommands. No network, no live Telegram.
+97 tests covering connection lifecycle, ownership revisions and legacy migration, stale debounce/generator races, per-connection delivery serialization, A→B→A retry release, draft supersession, atomic approval claims across independent SQLite connections, expiration, edit-capture restart/replacement, delivery-failure semantics, all three button paths, owner-scoped callback authorization, and `/biz` subcommands. No network, no live Telegram.
 
 ## Credits
 

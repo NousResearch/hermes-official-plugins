@@ -335,12 +335,12 @@ async def _api_json(method: str, path: str, timeout: float, payload: Any = None)
                 # responses. Add ?return_response to query parameters.") are what the
                 # caller needs to react, and aiohttp's default str() drops them.
                 try:
-                    text = await resp.text()
+                    text = (await resp.text())[:500]
                 except Exception:
                     text = ""
                 raise aiohttp.ClientResponseError(
                     resp.request_info, resp.history, status=resp.status,
-                    message=f"message={text!r}")
+                    message=text or (resp.reason or ""))
             return await resp.json()
 
 
@@ -626,16 +626,25 @@ async def _async_call_service(
         # HA returns only states that actually changed: an empty result can mean the target
         # is missing from this domain, OR the entity already had the requested state. Check
         # which, so the agent gets an actionable answer instead of a guess.
+        import aiohttp
         try:
             state = await _api_json("GET", f"/api/states/{entity_id}", 10)
-        except Exception:
-            out["error"] = (
-                f"{domain}.{service} affected no entities: {entity_id} does not exist in "
-                f"Home Assistant. Check the exact entity_id with ha_list_entities."
-            )
+        except aiohttp.ClientResponseError as e:
+            if e.status == 404:
+                out["error"] = (
+                    f"{domain}.{service} affected no entities: {entity_id} does not exist in "
+                    f"Home Assistant. Check the exact entity_id with ha_list_entities."
+                )
+            else:
+                out["error"] += f" (could not verify {entity_id}: HTTP {e.status})"
+            return out
+        except Exception as e:
+            out["error"] += f" (could not verify {entity_id}: {e})"
             return out
         actual_domain = state["entity_id"].split(".", 1)[0]
-        if actual_domain != domain:
+        # The homeassistant.* services (turn_on, toggle, update_entity, ...) act on entities of
+        # any domain, so a domain mismatch there is not a mistake.
+        if actual_domain != domain and domain != "homeassistant":
             out["error"] = (
                 f"{domain}.{service} affected no entities: {entity_id} exists but is in the "
                 f"'{actual_domain}' domain, not '{domain}'. Service calls only affect entities "

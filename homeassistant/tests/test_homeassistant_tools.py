@@ -196,6 +196,28 @@ class TestCallServiceVerification:
         assert "already in state" in result["note"]
         assert "error" not in result
 
+    def test_verification_failure_other_than_404_is_not_reported_as_missing(self):
+        # A 401/500/timeout on the verification GET says nothing about whether the entity exists.
+        async def fake_api_json(method, path, timeout, payload=None):
+            if method == "POST":
+                return []
+            raise self._err(500, "boom")
+        with patch.object(ha_tool, "_api_json", side_effect=fake_api_json):
+            result = asyncio.run(_async_call_service("light", "turn_on", "light.bedroom", None))
+        assert result["success"] is False
+        assert "does not exist" not in result["error"]
+        assert "could not verify light.bedroom: HTTP 500" in result["error"]
+
+    def test_homeassistant_domain_services_accept_any_entity_domain(self):
+        # homeassistant.turn_on on an already-on light is a no-op, not a wrong-domain call.
+        result = self._call(
+            post_result=[],
+            get_state_result={"entity_id": "light.bedroom", "state": "on"},
+            domain="homeassistant", service="turn_on", entity="light.bedroom",
+        )
+        assert result["success"] is True
+        assert "already in state" in result["note"]
+
     def test_requires_responses_retries_with_return_response(self):
         calls = []
         async def fake_api_json(method, path, timeout, payload=None):

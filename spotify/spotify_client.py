@@ -47,16 +47,27 @@ class SpotifyClient:
     def request(
         self, method: str, path: str, *, params: Optional[dict[str, Any]] = None, json_body: Optional[dict[str, Any]] = None,
         allow_retry_on_401: bool = True, empty_response: Optional[dict[str, Any]] = None,
+        content: Optional[str] = None, content_type: str = "application/json",
     ) -> Any:
+        """Call the Spotify Web API.
+
+        ``content`` sends a raw body with ``content_type`` instead of a JSON
+        body (the playlist-cover endpoint takes base64 JPEG data, not JSON).
+        The 401 retry repeats the same body, so a raw upload survives the
+        token refresh.
+        """
+        body = {"content": content} if content is not None else {
+            "json": _strip_none(json_body) if json_body is not None else None}
         response = httpx.request(
             method, f"{self.base_url}{path}",
-            headers={"Authorization": f"Bearer {self._runtime['access_token']}", "Content-Type": "application/json"},
-            params=_strip_none(params), json=_strip_none(json_body) if json_body is not None else None, timeout=30.0,
+            headers={"Authorization": f"Bearer {self._runtime['access_token']}", "Content-Type": content_type},
+            params=_strip_none(params), timeout=30.0, **body,
         )
         if response.status_code == 401 and allow_retry_on_401:
             # One forced token refresh, then retry exactly once.
             self._runtime = self._resolve_runtime(force_refresh=True, refresh_if_expiring=True)
-            return self.request(method, path, params=params, json_body=json_body, allow_retry_on_401=False)
+            return self.request(method, path, params=params, json_body=json_body, allow_retry_on_401=False,
+                                content=content, content_type=content_type)
         if response.status_code >= 400:
             detail = response.text.strip()
             message = _friendly_spotify_error_message(

@@ -122,3 +122,69 @@ def test_authenticated_connect_tunnels_to_the_upstream_host(clean_proxy_env):
     finally:
         gate.close()
         proxy.shutdown(); thread.join(); proxy.server_close()
+
+
+def _ca_pem(tmp_path):
+    """A throwaway self-signed CA, standing in for a TLS-inspecting egress broker's root."""
+    x509 = pytest.importorskip('cryptography.x509')
+    from datetime import datetime, timedelta, timezone
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'relay-test-broker-ca')])
+    now = datetime.now(timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(x509.random_serial_number()).not_valid_before(now - timedelta(minutes=1))
+            .not_valid_after(now + timedelta(days=1))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .sign(key, hashes.SHA256()))
+    path = tmp_path / 'broker-ca.pem'
+    path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    return path
+
+
+def _subjects(context):
+    return {value for cert in context.get_ca_certs() for rdn in cert['subject'] for key, value in rdn if key == 'commonName'}
+
+
+def test_extra_ca_file_adds_trust_without_disabling_verification(clean_proxy_env, tmp_path):
+    import ssl
+    clean_proxy_env.setenv('CLAUDE_SUBSCRIPTION_DIRECTSDK_CA_FILE', str(_ca_pem(tmp_path)))
+    gate = Admission('https://api.example.com', 1)
+    try:
+        assert 'relay-test-broker-ca' in _subjects(gate.context)
+        assert gate.context.verify_mode == ssl.CERT_REQUIRED and gate.context.check_hostname
+    finally:
+        gate.close()
+
+
+def test_no_extra_ca_file_keeps_the_default_context(clean_proxy_env):
+    gate = Admission('https://api.example.com', 1)
+    try:
+        assert 'relay-test-broker-ca' not in _subjects(gate.context)
+    finally:
+        gate.close()
+
+
+def test_unreadable_ca_file_fails_instead_of_connecting_unverified(clean_proxy_env, tmp_path):
+    clean_proxy_env.setenv('CLAUDE_SUBSCRIPTION_DIRECTSDK_CA_FILE', str(tmp_path / 'missing.pem'))
+    with pytest.raises(OSError):
+        Admission('https://api.example.com', 1)
+
+
+def test_relay_settings_follow_the_active_profile_scope(clean_proxy_env, tmp_path):
+    """A multiplexed gateway keeps a profile's .env out of os.environ; the relay reads it via the scope."""
+    secret_scope = pytest.importorskip('agent.secret_scope')
+    clean_proxy_env.setenv('CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY', 'http://process.test:1')
+    token = secret_scope.set_secret_scope({'CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY': 'http://user:pw@profile.test:14322',
+                                           'CLAUDE_SUBSCRIPTION_DIRECTSDK_CA_FILE': str(_ca_pem(tmp_path))})
+    try:
+        gate = Admission('https://api.example.com', 1)
+        try:
+            assert gate.proxy[:2] == ('profile.test', 14322)
+            assert 'relay-test-broker-ca' in _subjects(gate.context)
+        finally:
+            gate.close()
+    finally:
+        secret_scope.reset_secret_scope(token)

@@ -559,6 +559,35 @@ class Capture:
         self.complete = bool(self.message and self.message.get('stop_reason') and not self.arguments)
 
 
+def relay_env(name):
+    """One relay setting from the active profile's scope (its ``.env``), else the process env.
+
+    A multiplexed gateway keeps each profile's ``.env`` out of ``os.environ``; ``get_secret`` reads the
+    profile the request runs for. The relay's ``Admission`` is built on that request's thread, so the
+    scope is the right one. Outside Hermes (tests, evals) there is no core to ask.
+    """
+    try:
+        from agent.secret_scope import get_secret
+        value = get_secret(name)
+    except Exception:  # no Hermes core, or no scope bound for this caller
+        value = os.environ.get(name)
+    return (value or '').strip() or None
+
+
+def upstream_context():
+    """TLS context for the upstream host: system roots, plus ``CLAUDE_SUBSCRIPTION_DIRECTSDK_CA_FILE``.
+
+    The extra bundle is for a TLS-inspecting egress proxy (a credential broker that injects the
+    subscription bearer upstream, so the agent host never holds it). It adds trust; it never turns
+    verification off. An unreadable file fails the request rather than silently connecting.
+    """
+    context = ssl.create_default_context()
+    ca_file = relay_env('CLAUDE_SUBSCRIPTION_DIRECTSDK_CA_FILE')
+    if ca_file:
+        context.load_verify_locations(cafile=os.path.expanduser(ca_file))
+    return context
+
+
 def upstream_proxy(upstream):
     """``(host, port, tunnel_headers)`` of the HTTP CONNECT proxy for ``upstream``, or ``None``.
 
@@ -574,11 +603,7 @@ def upstream_proxy(upstream):
         proxies['no'] = proxies['no'].replace(' ', ',')  # native also accepts space-separated entries
     if urllib.request.proxy_bypass_environment(f'{upstream.hostname}:{upstream.port or 443}', proxies):
         return None
-    raw = (
-        os.environ.get('CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY')
-        or proxies.get('https')
-        or proxies.get('http')
-    )
+    raw = relay_env('CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY') or proxies.get('https') or proxies.get('http')
     if not raw:
         return None
     proxy = urlsplit(raw if '://' in raw else 'http://' + raw)
@@ -590,7 +615,7 @@ def upstream_proxy(upstream):
     # than breaking a setup that worked. The message never quotes the URL: it may carry credentials.
     if proxy.scheme != 'http' or not proxy.hostname or port is None:
         logging.getLogger(__name__).warning(
-            'ignoring HTTPS_PROXY for the relay: only an http://host[:port] CONNECT proxy is supported '
+            'ignoring the relay proxy: only an http://host[:port] CONNECT proxy is supported '
             '(SOCKS and TLS-to-proxy are not); connecting directly')
         return None
     headers = None
@@ -632,6 +657,7 @@ class Admission:
             raise ValueError('Native upstream must be HTTPS or a loopback HTTP fixture')
         self.timeout = timeout
         self.proxy = upstream_proxy(self.upstream)
+        self.context = upstream_context() if self.upstream.scheme == 'https' else None
         self.lock = threading.Lock()
         self.sockets = set()
         self.cancelled = False
@@ -714,10 +740,10 @@ class Handler(BaseHTTPRequestHandler):
         if target.scheme == 'https':
             if gate.proxy:
                 proxy_host, proxy_port, tunnel_headers = gate.proxy
-                conn = http.client.HTTPSConnection(proxy_host, proxy_port, timeout=gate.timeout, context=ssl.create_default_context())
+                conn = http.client.HTTPSConnection(proxy_host, proxy_port, timeout=gate.timeout, context=gate.context)
                 conn.set_tunnel(target.hostname, target.port or 443, headers=tunnel_headers)
             else:
-                conn = http.client.HTTPSConnection(target.hostname, target.port, timeout=gate.timeout, context=ssl.create_default_context())
+                conn = http.client.HTTPSConnection(target.hostname, target.port, timeout=gate.timeout, context=gate.context)
         else:
             conn = http.client.HTTPConnection(target.hostname, target.port, timeout=gate.timeout)
         try:

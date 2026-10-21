@@ -4,6 +4,7 @@
 
 ### Added
 
+- `CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY` routes only the relay's upstream hop through a dedicated CONNECT proxy, and `CLAUDE_SUBSCRIPTION_DIRECTSDK_CA_FILE` adds a TLS-inspecting broker's root CA to the relay's trust. Both resolve from the active profile's `.env` under a multiplexed gateway. Together they let a credential broker inject the subscription bearer so the agent host keeps only a placeholder token.
 - Per-profile `claude_config_dir` setting selects the Claude login for every native spawn in a multiplexed gateway (#34).
 
 ### Fixed

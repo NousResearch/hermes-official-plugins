@@ -144,9 +144,16 @@ platforms:
 | `watch_all` | `false` | Receive **all** state changes (not recommended for most setups) |
 | `ignore_entities` | *(none)* | Always ignore these entities (applied before domain/entity filters) |
 | `cooldown_seconds` | `30` | Minimum seconds between events for the same entity |
+| `ws_heartbeat_seconds` | `30` | WebSocket ping interval. Raise it if your instance does not answer a ping in time (the adapter then reconnects in a loop); `0` turns the ping off |
 
 Events come from the instance the adapter authenticated to with `HASS_TOKEN`, so they are not
 subject to a user allowlist. The adapter reconnects automatically with 5s → 10s → 30s → 60s backoff.
+
+Some Home Assistant installs do not answer the adapter's WebSocket ping within half the
+interval, so the socket is closed and reopened roughly once a minute. Raise
+`ws_heartbeat_seconds` on those instances, or set it to `0` to turn the ping off entirely. The
+close code and the socket error are logged when a connection drops, so the reason is visible
+in the gateway log.
 
 ## Security
 

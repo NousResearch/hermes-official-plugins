@@ -39,6 +39,8 @@ DEFAULT_SCOPE = " ".join((
     "user-modify-playback-state", "user-read-playback-state", "user-read-currently-playing",
     "user-read-recently-played", "playlist-read-private", "playlist-read-collaborative",
     "playlist-modify-public", "playlist-modify-private", "user-library-read", "user-library-modify",
+    # Playlist cover uploads need it on top of the playlist-modify scopes.
+    "ugc-image-upload",
 ))
 
 

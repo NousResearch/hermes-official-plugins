@@ -1,0 +1,13 @@
+[project]
+name = "hermes-delegation-profiles"
+version = "1.0.0"
+description = "Run each delegate_task subagent as one of your Hermes profiles (official Hermes Agent plugin)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nous Research" }]
+requires-python = ">=3.11"
+# Standard library and Hermes core only.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/delegation-profiles"

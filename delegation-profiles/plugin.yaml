@@ -1,0 +1,15 @@
+name: delegation-profiles
+label: Delegation Profiles
+kind: standalone
+version: 1.0.0
+author: NousResearch
+homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/delegation-profiles
+description: >
+  Run each delegate_task subagent as one of your Hermes profiles. You list the
+  profiles the agent may use (delegation.profiles), each with a one-line
+  description; delegate_task gains a per-task `profile` choice, and a subagent
+  given one runs with that profile's own model, credentials, skills and
+  SOUL.md. Selected with `delegation.backend: profiles`. Needs a Hermes core
+  with pluggable delegation providers.
+provides_tools: []
+provides_hooks: []

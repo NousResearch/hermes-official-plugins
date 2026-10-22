@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("agent.delegation_provider", reason="Hermes core without pluggable delegation providers")
 
-from delegation_profiles_plugin.provider import ProfilesDelegationProvider, _warned  # noqa: E402
+from advanced_delegation_plugin.profile_routes import ProfilesDelegationProvider, _warned  # noqa: E402
 
 PROFILES = [
     {"name": "coder", "description": "Writes and refactors code; runs tests."},
@@ -113,17 +113,3 @@ def test_default_outside_the_list_is_ignored_with_a_warning_naming_the_new_path(
         assert provider.route_task({"goal": "g", "index": 0}, config) == config
     assert ("delegation.backends.profile_routes.default 'admin' is not in "
             "delegation.backends.profile_routes.profiles") in caplog.text
-
-
-def test_register_hands_core_the_provider():
-    import delegation_profiles_plugin
-
-    registered = []
-
-    class Ctx:
-        def register_delegation_provider(self, provider):
-            registered.append(provider)
-
-    delegation_profiles_plugin.register(Ctx())
-    (only,) = registered
-    assert isinstance(only, ProfilesDelegationProvider)

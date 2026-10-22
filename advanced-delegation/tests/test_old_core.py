@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import sys
 
-import delegation_model_map_plugin
+import advanced_delegation_plugin
 
 
 class OldCoreContext:
@@ -18,7 +18,8 @@ class OldCoreContext:
 
 def test_register_is_a_logged_no_op_without_the_core_seam(monkeypatch, caplog):
     monkeypatch.setitem(sys.modules, "agent.delegation_provider", None)
-    monkeypatch.delitem(sys.modules, "delegation_model_map_plugin.provider", raising=False)
+    monkeypatch.delitem(sys.modules, "advanced_delegation_plugin.model_map", raising=False)
+    monkeypatch.delitem(sys.modules, "advanced_delegation_plugin.profile_routes", raising=False)
     with caplog.at_level(logging.WARNING):
-        delegation_model_map_plugin.register(OldCoreContext())
+        advanced_delegation_plugin.register(OldCoreContext())
     assert "needs a Hermes core with pluggable delegation providers" in caplog.text

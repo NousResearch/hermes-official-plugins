@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("agent.delegation_provider", reason="Hermes core without pluggable delegation providers")
 
-from delegation_model_map_plugin.provider import ModelMapDelegationProvider, _warned  # noqa: E402
+from advanced_delegation_plugin.model_map import ModelMapDelegationProvider, _warned  # noqa: E402
 
 OPTIONS = [
     {"name": "fast", "description": "Cheap and quick.", "provider": "openrouter",
@@ -140,17 +140,3 @@ def test_default_outside_the_options_is_ignored_with_a_warning_naming_the_new_pa
         assert provider.route_task({"goal": "g", "index": 0}, config) == config
     assert ("delegation.backends.model_map.default 'huge' is not an option in "
             "delegation.backends.model_map.options") in caplog.text
-
-
-def test_register_hands_core_the_provider():
-    import delegation_model_map_plugin
-
-    registered = []
-
-    class Ctx:
-        def register_delegation_provider(self, provider):
-            registered.append(provider)
-
-    delegation_model_map_plugin.register(Ctx())
-    (only,) = registered
-    assert isinstance(only, ModelMapDelegationProvider)

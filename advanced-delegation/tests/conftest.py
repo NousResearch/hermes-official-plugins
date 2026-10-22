@@ -1,4 +1,4 @@
-"""Test bootstrap: make the plugin directory importable as the package ``delegation_model_map_plugin``.
+"""Test bootstrap: make the plugin directory importable as the package ``advanced_delegation_plugin``.
 
 The Hermes plugin loader imports a directory plugin as a package (``hermes_plugins.<slug>``) so the
 relative import in ``__init__.py`` resolves; tests mirror that under a stable alias. Hermes core
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-PACKAGE = "delegation_model_map_plugin"
+PACKAGE = "advanced_delegation_plugin"
 _ROOT = Path(__file__).resolve().parents[1]
 
 # ``python -m pytest`` from the plugin root puts the root on sys.path, where the plugin's modules could
@@ -65,5 +65,5 @@ class _RepoRootIsNotATestPackage:
 
 
 def pytest_configure(config):
-    if not config.pluginmanager.has_plugin("delegation-model-map-repo-root"):
-        config.pluginmanager.register(_RepoRootIsNotATestPackage(), "delegation-model-map-repo-root")
+    if not config.pluginmanager.has_plugin("advanced-delegation-repo-root"):
+        config.pluginmanager.register(_RepoRootIsNotATestPackage(), "advanced-delegation-repo-root")

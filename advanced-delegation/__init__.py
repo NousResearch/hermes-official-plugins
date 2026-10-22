@@ -1,0 +1,30 @@
+"""Advanced Delegation: two extra ``delegation.backend`` modes for ``delegate_task``.
+
+* ``model_map`` (``model_map.py``): the agent picks a named model route for each subagent.
+* ``profile_routes`` (``profile_routes.py``): the agent runs each subagent as one of your Hermes profiles.
+
+The bundled ``default`` backend stays in Hermes core. This module only registers; on a Hermes core
+that predates pluggable delegation providers it logs one warning and registers nothing, so
+installing it there changes nothing.
+"""
+
+from __future__ import annotations
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def register(ctx) -> None:
+    try:
+        from .model_map import ModelMapDelegationProvider
+        from .profile_routes import ProfilesDelegationProvider
+    except ModuleNotFoundError as exc:
+        if exc.name != "agent.delegation_provider":
+            raise
+        logger.warning(
+            "advanced-delegation needs a Hermes core with pluggable delegation providers "
+            "(agent.delegation_provider); update Hermes. The plugin is inactive until then.")
+        return
+    ctx.register_delegation_provider(ModelMapDelegationProvider())
+    ctx.register_delegation_provider(ProfilesDelegationProvider())

@@ -17,7 +17,7 @@ pytest.importorskip("agent.delegation_provider", reason="Hermes core without plu
 
 import hermes_yaml as yaml  # noqa: E402
 
-PLUGIN = "delegation-profiles"
+PLUGIN = "advanced-delegation"
 PROFILES = [
     {"name": "coder", "description": "Writes and refactors code."},
     {"name": "ghost", "description": "Listed, but no such profile exists."},

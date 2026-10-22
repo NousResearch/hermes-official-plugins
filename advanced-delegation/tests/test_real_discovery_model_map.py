@@ -17,7 +17,7 @@ pytest.importorskip("agent.delegation_provider", reason="Hermes core without plu
 
 import hermes_yaml as yaml  # noqa: E402
 
-PLUGIN = "delegation-model-map"
+PLUGIN = "advanced-delegation"
 OPTIONS = [
     {"name": "local", "description": "Runs on this machine.", "base_url": "http://localhost:9/v1",
      "model": "local-model", "api_key": "local-key"},

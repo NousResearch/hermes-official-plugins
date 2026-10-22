@@ -97,6 +97,7 @@ def terminal(monkeypatch):
         return t.lines.pop(0)
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(curses, "wrapper", wrapper)
     monkeypatch.setattr(curses, "curs_set", lambda _v: None)
     monkeypatch.setattr(curses, "has_colors", lambda: False)

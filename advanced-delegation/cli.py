@@ -42,7 +42,8 @@ def handle(args) -> int:
     if getattr(args, "show", False):
         print(store.describe(store.delegation_section()))
         return 0
-    if not sys.stdin.isatty():
+    # Both ends: Windows reports the NUL device as a tty, so stdin alone lets a piped run into curses.
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
         print(_NO_TTY, file=sys.stderr)
         return 1
     try:

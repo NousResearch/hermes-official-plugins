@@ -70,9 +70,11 @@ def test_hermes_delegation_config_show_runs_through_the_real_cli(tmp_path, plugi
             {"name": "coder", "description": "Writes code."}]}}}}), encoding="utf-8")
     env = {**os.environ, "HOME": str(tmp_path / "os-home"), "HERMES_HOME": str(home)}
     show = subprocess.run([sys.executable, "-m", "hermes_cli.main", "delegation", "config", "--show"],
-                          env=env, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+                          env=env, capture_output=True, text=True, encoding="utf-8", timeout=120,
+                          stdin=subprocess.DEVNULL)
     assert show.returncode == 0, show.stderr
     assert "Profile routes" in show.stdout and "coder" in show.stdout and "Writes code." in show.stdout
     edit = subprocess.run([sys.executable, "-m", "hermes_cli.main", "delegation", "config"],
-                          env=env, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+                          env=env, capture_output=True, text=True, encoding="utf-8", timeout=120,
+                          stdin=subprocess.DEVNULL)
     assert edit.returncode == 1 and "interactive terminal" in edit.stderr

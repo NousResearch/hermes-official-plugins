@@ -142,10 +142,10 @@ def _session_note(mode: str, saved: str, section: Mapping[str, Any]) -> str:
     if mode == saved or mode == "default":
         return ""
     default = _mode_default(mode, section)
-    target = f"'{default}'" if default else "the parent's model"
-    return (f" This chat's tool list was built for {store.mode_label(saved)}, so here every subagent takes "
-            f"{store.mode_label(mode)}'s default ({target}); the agent picks routes itself in new sessions "
-            "once the mode is saved (--global).")
+    noun = "route" if mode == "model_map" else "profile"
+    target = f"the default {noun} '{default}'" if default else "the parent's model"
+    return (f" This chat keeps the tool list it started with, so its subagents run on {target}; "
+            "with --global, new sessions let the agent pick.")
 
 
 def handle(raw_args: str = "", session_key: str = "", ask_choice: Optional[AskChoice] = None) -> str:

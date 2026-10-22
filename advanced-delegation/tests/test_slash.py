@@ -126,7 +126,7 @@ def test_bare_command_asks_with_the_surfaces_picker_and_switches_the_session(hom
     assert [c["value"] for c in choices] == ["default", "model_map"]
     assert choices[0]["label"] == "Default (current)" and "deep (default)" in choices[1]["description"]
     assert session_api == {"chat-7": "model_map"} and _saved(home)["backend"] == "default"
-    assert "this session" in reply and "'deep'" in reply  # tasks here take the mode's default route
+    assert "this session" in reply and "default route 'deep'" in reply  # tasks here take the mode's default
 
 
 def test_a_cancelled_picker_falls_back_to_the_text_listing(home, session_api):

@@ -35,8 +35,7 @@ def _write_profile(home, *, model, key):
     (home / ".env").write_text(f"PROFILE_KEY={key}\n", encoding="utf-8")
 
 
-@pytest.fixture
-def loaded(tmp_path, monkeypatch, plugin_root):
+def _load(tmp_path, monkeypatch, plugin_root, delegation):
     """Launch profile + a ``coder`` profile, the plugin installed and enabled, discovery run."""
     from hermes_cli import plugins as plugins_mod
     from hermes_cli.plugins import PluginManager
@@ -46,15 +45,20 @@ def loaded(tmp_path, monkeypatch, plugin_root):
     shutil.copytree(plugin_root, launch / "plugins" / PLUGIN,
                     ignore=shutil.ignore_patterns("tests", "__pycache__", ".pytest_cache"))
     (launch / "config.yaml").write_text(yaml.safe_dump({
-        "plugins": {"enabled": [PLUGIN]},
-        "delegation": {"backend": "profiles", "profiles": PROFILES},
-    }), encoding="utf-8")
+        "plugins": {"enabled": [PLUGIN]}, "delegation": delegation}), encoding="utf-8")
     monkeypatch.setenv("PROFILE_KEY", "launch-key")  # the launch profile's secret, as after a dotenv load
     empty_bundled = tmp_path / "bundled"
     empty_bundled.mkdir()
     monkeypatch.setattr(plugins_mod, "get_bundled_plugins_dir", lambda: empty_bundled)
     manager = PluginManager()
     manager.discover_and_load()
+    return launch, manager
+
+
+@pytest.fixture
+def loaded(tmp_path, monkeypatch, plugin_root):
+    launch, manager = _load(tmp_path, monkeypatch, plugin_root,
+                            {"backend": "profile_routes", "backends": {"profile_routes": {"profiles": PROFILES}}})
     try:
         yield launch
     finally:
@@ -95,7 +99,7 @@ def test_discovered_plugin_is_the_active_backend_and_extends_the_schema(loaded):
     from agent.delegation_registry import get_active_provider
     from tools.delegate_tool_config import _load_config
 
-    assert get_active_provider(_load_config()).name == "profiles"
+    assert get_active_provider(_load_config()).name == "profile_routes"
     definition = _definition()
     profile = definition["parameters"]["properties"]["tasks"]["items"]["properties"]["profile"]
     assert profile["enum"] == ["coder", "ghost"]
@@ -118,10 +122,11 @@ def test_profile_task_is_built_as_that_profile_and_plain_task_inherits(loaded, c
         "coder-model", "https://coder-model.invalid/v1", "coder-key")
     # The target profile's own reasoning, resolved by core to a final value (never the parent's level).
     assert coder["override_reasoning_effort"].config == {"enabled": True, "effort": "low"}
-    assert coder_child._delegate_route_label == "coder"
-    # No profile and no profiles_default: today's delegation route (inherit the parent).
+    # Core reports it as backend-routed (the result's `route` starts from this label).
+    assert coder_child._delegate_route == {"label": "coder"}
+    # No profile and no default: today's delegation route (inherit the parent).
     assert plain["profile_home"] is None and plain["model"] is None and plain["override_provider"] is None
-    assert not hasattr(plain_child, "_delegate_route_label")
+    assert not hasattr(plain_child, "_delegate_route")  # unlabelled route: no route report
 
 
 def test_out_of_list_or_missing_profiles_are_refused_before_any_child_is_built(loaded, children):
@@ -134,3 +139,33 @@ def test_out_of_list_or_missing_profiles_are_refused_before_any_child_is_built(l
                                              "profile": "ghost"}], parent_agent=_parent()))
     assert "hermes profile list" in ghost["error"]
     assert not children
+
+
+def test_configured_default_runs_tasks_without_a_profile_as_that_profile(tmp_path, monkeypatch, plugin_root,
+                                                                       children):
+    from tools.delegate_tool import delegate_task
+
+    launch, manager = _load(tmp_path, monkeypatch, plugin_root, {
+        "backend": "profile_routes", "backends": {"profile_routes": {"profiles": PROFILES, "default": "coder"}}})
+    try:
+        delegate_task(tasks=[{"goal": "a task with no profile set"}], parent_agent=_parent())
+    finally:
+        manager.unload()
+    ((built, child),) = children
+    assert os.path.samefile(built["profile_home"], launch / "profiles" / "coder")
+    assert child._delegate_route == {"label": "coder"}
+
+
+def test_settings_at_the_old_location_are_not_read(tmp_path, monkeypatch, plugin_root, children):
+    from tools.delegate_tool import delegate_task
+
+    _, manager = _load(tmp_path, monkeypatch, plugin_root,
+                       {"backend": "profile_routes", "profiles": PROFILES, "profiles_default": "coder"})
+    try:
+        task_props = _definition()["parameters"]["properties"]["tasks"]["items"]["properties"]
+        delegate_task(tasks=[{"goal": "a task with no profile set"}], parent_agent=_parent())
+    finally:
+        manager.unload()
+    assert "profile" not in task_props
+    ((plain, _),) = children
+    assert plain["profile_home"] is None and plain["model"] is None  # today's route, not the old default

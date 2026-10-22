@@ -25,13 +25,16 @@ isolation, depth and concurrency limits, background runs, results), and the prov
 "which route does this task take".
 
 - **Schema.** `delegate_task`'s task items gain a `profile` property: an `enum` of the names in
-  `delegation.profiles`, in config order, whose description lists `name: description` for each.
-  Hermes refuses any other value before a subagent starts. With no profiles listed there is no
-  parameter at all.
-- **A task with `profile` set** runs as that profile (`route: <name>` appears on its result). A
-  listed name with no matching profile on disk is refused with a pointer to `hermes profile list`.
-- **A task without `profile`** runs as `delegation.profiles_default` when you set one, otherwise on
-  the normal `delegation.*` route (`delegation.model` / `delegation.provider`, else the parent's).
+  `delegation.backends.profile_routes.profiles`, in config order, whose description lists
+  `name: description` for each. Hermes refuses any other value before a subagent starts. With no
+  profiles listed there is no parameter at all.
+- **A task with `profile` set** runs as that profile. A listed name with no matching profile on disk
+  is refused with a pointer to `hermes profile list`.
+- **A task without `profile`** runs as `delegation.backends.profile_routes.default` when you set
+  one, otherwise on the normal `delegation.*` route (`delegation.model` / `delegation.provider`,
+  else the parent's).
+- **Each result reports its route.** A routed task's result carries `route`: the profile name
+  (`label`) plus the provider, model, reasoning effort and speed tier the subagent actually ran on.
 - The list is also the allowlist: profiles you do not list can never be picked.
 
 The schema is built when a session starts, so changes to the list apply to new sessions (the
@@ -49,30 +52,38 @@ working model.
 
 ## Configure
 
+The plugin's settings live under `delegation.backends.profile_routes`; `delegation.backend` selects
+it.
+
 ```yaml
 # config.yaml of the profile that delegates
 delegation:
-  backend: profiles
-  profiles:                     # allowlist AND what the agent reads about each profile
-    - name: coder
-      description: Writes and refactors code; runs tests.
-    - name: researcher
-      description: Web research and long-form summaries.
-  profiles_default: coder       # optional: profile for tasks that set none
+  backend: profile_routes
+  backends:
+    profile_routes:
+      profiles:                 # allowlist AND what the agent reads about each profile
+        - name: coder
+          description: Writes and refactors code; runs tests.
+        - name: researcher
+          description: Web research and long-form summaries.
+      default: coder            # optional: profile for tasks that set none
 ```
+
+> [!WARNING]
+> Listing a profile in `delegation.backends.profile_routes` lets this profile's subagents use that
+> profile's credentials, credential pool, `SOUL.md` and terminal policy. Only list profiles whose
+> keys and terminal access you are happy for this profile's agent to use.
 
 The same from the command line:
 
 ```bash
-hermes config set delegation.backend profiles
-hermes config set delegation.profiles '[{name: coder, description: "Writes and refactors code; runs tests."}, {name: researcher, description: "Web research and long-form summaries."}]'
-hermes config set delegation.profiles_default coder   # optional
+hermes config set delegation.backend profile_routes
+hermes config set delegation.backends.profile_routes.profiles '[{name: coder, description: "Writes and refactors code; runs tests."}, {name: researcher, description: "Web research and long-form summaries."}]'
+hermes config set delegation.backends.profile_routes.default coder   # optional
 ```
 
-`hermes config set` notes that `delegation.profiles` and `delegation.profiles_default` are not
-built-in keys; that is expected, the plugin reads them. Entries without a `name`, and repeated
-names, are skipped with a warning in `hermes logs`. Switch back to the built-in behaviour with
-`hermes config set delegation.backend default`.
+Entries without a `name`, and repeated names, are skipped with a warning in `hermes logs`. Switch
+back to the built-in behaviour with `hermes config set delegation.backend default`.
 
 ## Development
 

@@ -1,19 +1,21 @@
-"""The ``profiles`` delegation provider.
+"""The ``profile_routes`` delegation provider.
 
-Config (the ``delegation`` section of config.yaml)::
+Settings live in ``delegation.backends.profile_routes`` of config.yaml::
 
     delegation:
-      backend: profiles
-      profiles:                       # allowlist AND what the model reads about each profile
-        - name: coder
-          description: Writes and refactors code; runs tests.
-        - name: researcher
-          description: Web research and long-form summaries.
-      profiles_default: coder         # optional: profile for tasks that set none
+      backend: profile_routes
+      backends:
+        profile_routes:
+          profiles:                   # allowlist AND what the model reads about each profile
+            - name: coder
+              description: Writes and refactors code; runs tests.
+            - name: researcher
+              description: Web research and long-form summaries.
+          default: coder              # optional: profile for tasks that set none
 
 ``delegate_task`` gains a per-task ``profile`` enum of those names. A task that sets one runs as that
 Hermes profile (core binds the profile's own config, model, credentials, skills and SOUL.md); a task
-without one runs as ``profiles_default`` when set, else on today's ``delegation.*`` route.
+without one runs as ``default`` when set, else on today's ``delegation.*`` route.
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ from agent.delegation_provider import DelegationProvider
 
 logger = logging.getLogger(__name__)
 
+BACKEND = "profile_routes"
+SETTINGS_PATH = f"delegation.backends.{BACKEND}"
 PARAMETER = "profile"
 _warned: set[str] = set()
 
@@ -37,25 +41,25 @@ def _warn_once(message: str, *args: Any) -> None:
         logger.warning(text)
 
 
-def configured_profiles(config: Mapping[str, Any]) -> list[tuple[str, str]]:
-    """``[(name, description), ...]`` from ``delegation.profiles`` in config order, skipping entries
-    without a name and repeated names (each skipped entry is warned once)."""
-    raw = config.get("profiles") if isinstance(config, Mapping) else None
+def configured_profiles(settings: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """``[(name, description), ...]`` from the backend settings' ``profiles`` in config order, skipping
+    entries without a name and repeated names (each skipped entry is warned once)."""
+    raw = settings.get("profiles")
     if raw is None:
         return []
     if not isinstance(raw, list):
-        _warn_once("delegation.profiles must be a list of {name, description} entries; ignoring it.")
+        _warn_once("%s.profiles must be a list of {name, description} entries; ignoring it.", SETTINGS_PATH)
         return []
     entries: list[tuple[str, str]] = []
     seen: set[str] = set()
     for i, entry in enumerate(raw):
         name = entry.get("name") if isinstance(entry, Mapping) else None
         if not isinstance(name, str) or not name.strip():
-            _warn_once("delegation.profiles[%d] has no name; skipped.", i)
+            _warn_once("%s.profiles[%d] has no name; skipped.", SETTINGS_PATH, i)
             continue
         name = name.strip()
         if name in seen:
-            _warn_once("delegation.profiles[%d] repeats profile %r; skipped.", i, name)
+            _warn_once("%s.profiles[%d] repeats profile %r; skipped.", SETTINGS_PATH, i, name)
             continue
         seen.add(name)
         description = entry.get("description")
@@ -64,14 +68,15 @@ def configured_profiles(config: Mapping[str, Any]) -> list[tuple[str, str]]:
 
 
 class ProfilesDelegationProvider(DelegationProvider):
-    """``delegation.backend: profiles``: the model picks a listed Hermes profile per subagent."""
+    """``delegation.backend: profile_routes``: the model picks a Hermes profile per subagent, from the
+    profiles listed in ``delegation.backends.profile_routes``."""
 
     @property
     def name(self) -> str:
-        return "profiles"
+        return BACKEND
 
     def task_parameters(self, config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-        profiles = configured_profiles(config)
+        profiles = configured_profiles(self.settings(config))
         if not profiles:
             return {}
         lines = [
@@ -83,7 +88,7 @@ class ProfilesDelegationProvider(DelegationProvider):
                             "description": "\n".join(lines)}}
 
     def description(self, config: Mapping[str, Any]) -> str:
-        if not configured_profiles(config):
+        if not configured_profiles(self.settings(config)):
             return ""
         return "Each task may set `profile` to run that subagent as one of the listed Hermes profiles."
 
@@ -92,11 +97,12 @@ class ProfilesDelegationProvider(DelegationProvider):
         if chosen:
             # Core already refused anything outside the enum before calling us.
             return {"profile": chosen, "label": chosen}
-        default = config.get("profiles_default")
+        settings = self.settings(config)
+        default = settings.get("default")
         if isinstance(default, str) and default.strip():
             default = default.strip()
-            if default in {name for name, _ in configured_profiles(config)}:
+            if default in {name for name, _ in configured_profiles(settings)}:
                 return {"profile": default, "label": default}
-            _warn_once("delegation.profiles_default %r is not in delegation.profiles; "
-                       "tasks without a profile use the default route.", default)
+            _warn_once("%s.default %r is not in %s.profiles; tasks without a profile use the default route.",
+                       SETTINGS_PATH, default, SETTINGS_PATH)
         return dict(config)

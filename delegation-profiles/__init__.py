@@ -1,6 +1,7 @@
 """Delegation Profiles: run each ``delegate_task`` subagent as one of your Hermes profiles.
 
-A delegation provider (``delegation.backend: profiles``). The provider itself lives in
+A delegation provider (``delegation.backend: profile_routes``, settings in
+``delegation.backends.profile_routes``). The provider itself lives in
 ``provider.py``; this module only registers it, and stays inert on a Hermes core that predates
 pluggable delegation providers, so installing it there changes nothing.
 """

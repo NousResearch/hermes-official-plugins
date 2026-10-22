@@ -72,7 +72,12 @@ def profile_default(section: Mapping[str, Any]) -> str:
 # --- writes -----------------------------------------------------------------------------------
 
 def _write(mutate: Callable[[dict[str, Any]], None]) -> None:
-    from hermes_cli.config import atomic_config_write, get_config_path, require_readable_config_before_write
+    """Raises RuntimeError (with the user-facing reason) when the config must not be written: a
+    package-manager-managed install, or an unreadable / would-lose-settings file."""
+    from hermes_cli.config import (atomic_config_write, format_managed_message, get_config_path, is_managed,
+                                   require_readable_config_before_write)
+    if is_managed():
+        raise RuntimeError(format_managed_message("change delegation settings"))
     path = get_config_path()
     data = require_readable_config_before_write(path)
     section = data.get("delegation")

@@ -128,3 +128,12 @@ def test_a_configured_backend_that_is_not_registered_is_flagged_as_the_thing_to_
     _write(home, {"backend": "something_uninstalled"})
     text = str(_run(""))
     assert "something_uninstalled" in text and "not available" in text
+
+
+def test_a_refused_write_is_reported_not_raised(home, no_session_api, monkeypatch):
+    _write(home, {"backends": {"model_map": {"options": ROUTES}}})
+    slash.store.delegation_section()  # create the home layout first: a managed install never creates it
+    monkeypatch.setattr("hermes_cli.config.is_managed", lambda: True)
+    monkeypatch.setattr("hermes_cli.config.get_managed_system", lambda: "nix")
+    reply = str(_run("model_map --global"))
+    assert "not saved" in reply.lower() and "backend" not in _saved(home)

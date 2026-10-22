@@ -113,10 +113,13 @@ def handle(raw_args: str = "", session_key: str = "", **_: Any) -> str:
     if not is_global and not (api and session_key):
         return (f"This Hermes can't switch delegation for one session yet. Use `/delegation {mode} --global` "
                 "to save it for this profile.")
+    if is_global:
+        try:
+            store.set_mode(mode)
+        except RuntimeError as exc:  # managed install or an unreadable config: nothing changed
+            return f"Not saved: {exc}"
     if api and session_key:
         api[1](session_key, mode)
-    if is_global:
-        store.set_mode(mode)
     scope = "saved for this profile" if is_global else "for this session (add --global to save it)"
     note = (" delegation.model / delegation.provider apply again." if mode == "default"
             else f" {_detail(mode, section).capitalize()}.")

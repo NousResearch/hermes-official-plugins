@@ -270,3 +270,13 @@ def test_profile_routes_without_other_profiles_says_how_to_make_one(terminal, ca
     _run("config")
     assert "hermes profile create" in capsys.readouterr().out
     assert "backend" not in _config(home).get("delegation", {})
+
+
+def test_a_refused_write_ends_with_the_reason_and_exit_1(terminal, capsys, home, monkeypatch):
+    cli.store.delegation_section()  # create the home layout first: a managed install never creates it
+    monkeypatch.setattr("hermes_cli.config.is_managed", lambda: True)
+    monkeypatch.setattr("hermes_cli.config.get_managed_system", lambda: "nix")
+    terminal.menu(ENTER)                       # Default
+    assert _run("config") == 1
+    assert "nix" in capsys.readouterr().err.lower()
+    assert not (home / "config.yaml").exists()

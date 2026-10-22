@@ -136,3 +136,12 @@ def test_describe_profile_routes_lists_profiles():
     text = store.describe({"backend": "profile_routes", "backends": {"profile_routes": {
         "profiles": [{"name": "coder", "description": "Writes code."}], "default": "coder"}}})
     assert "Profile routes" in text and "coder" in text and "Writes code." in text
+
+
+def test_a_package_manager_managed_install_refuses_the_write(home, monkeypatch):
+    store.delegation_section()  # create the home layout first: a managed install never creates it
+    monkeypatch.setattr("hermes_cli.config.is_managed", lambda: True)
+    monkeypatch.setattr("hermes_cli.config.get_managed_system", lambda: "nix")
+    with pytest.raises(RuntimeError, match="(?i)nix"):
+        store.set_mode("model_map")
+    assert not (home / "config.yaml").exists()

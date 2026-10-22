@@ -45,7 +45,11 @@ def handle(args) -> int:
     if not sys.stdin.isatty():
         print(_NO_TTY, file=sys.stderr)
         return 1
-    run()
+    try:
+        run()
+    except RuntimeError as exc:  # store refused the write (managed install, unreadable config)
+        print(f"✗ {exc}", file=sys.stderr)
+        return 1
     return 0
 
 

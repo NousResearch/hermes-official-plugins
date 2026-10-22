@@ -116,7 +116,8 @@ def test_profile_task_is_built_as_that_profile_and_plain_task_inherits(loaded, c
     assert os.path.samefile(coder["profile_home"], loaded / "profiles" / "coder")
     assert (coder["model"], coder["override_base_url"], coder["override_api_key"]) == (
         "coder-model", "https://coder-model.invalid/v1", "coder-key")
-    assert coder["override_reasoning_effort"] == "low"
+    # The target profile's own reasoning, resolved by core to a final value (never the parent's level).
+    assert coder["override_reasoning_effort"].config == {"enabled": True, "effort": "low"}
     assert coder_child._delegate_route_label == "coder"
     # No profile and no profiles_default: today's delegation route (inherit the parent).
     assert plain["profile_home"] is None and plain["model"] is None and plain["override_provider"] is None

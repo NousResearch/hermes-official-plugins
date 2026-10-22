@@ -11,6 +11,10 @@ Official [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin tha
 | **Model routes** | `model_map` | A per-task `option` choice: a named model route from a list you define (e.g. `fast`, `deep`, `local`). |
 | **Profile routes** | `profile_routes` | A per-task `profile` choice: the subagent runs as one of your Hermes profiles, with that profile's own model, credentials, skills and `SOUL.md`. |
 
+One mode is active at a time: you pick Default, Model routes or Profile routes, never two at once.
+Model routes and Profile routes stay separate backends with their own config blocks, so switching
+modes keeps the other mode's settings for when you switch back.
+
 Only the names and the one-line descriptions you write reach the model. The raw provider, model
 id, endpoint and key never become tool parameters, so the agent cannot invent a route.
 

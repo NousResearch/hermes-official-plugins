@@ -91,6 +91,28 @@ def test_tools_mode_passes_web_urls_and_drops_output_path(real_tools):
     ]
 
 
+def test_tools_mode_offers_tool_search_deferred_tools(monkeypatch, require_mcp_2_sdk):
+    """With core's tool_search active, deferred tools are collapsed into its bridge unless the raw
+    catalog is requested; --tools must still offer them (image_generate is in the default deferred set)."""
+    import model_tools
+
+    params = {"type": "object", "properties": {"prompt": {"type": "string"}}, "required": ["prompt"]}
+
+    def fn(name):
+        return {"type": "function", "function": {"name": name, "description": f"{name} desc", "parameters": params}}
+
+    def get_tool_definitions(skip_tool_search_assembly=False, **_):
+        if skip_tool_search_assembly:
+            return [fn("web_search"), fn("image_generate")]
+        return [fn("web_search"), fn("tool_search"), fn("tool_describe"), fn("tool_call")]
+
+    monkeypatch.setattr(model_tools, "get_tool_definitions", get_tool_definitions)
+    server = bridge.create_mcp_server(event_bridge=bridge.EventBridge(), include_tools=True)
+    listed = _listed(server)
+    assert "image_generate" in listed and "web_search" in listed
+    assert not set(listed) & {"tool_search", "tool_describe", "tool_call"}
+
+
 def test_tools_mode_follows_the_profiles_cli_toolsets(tmp_path, monkeypatch, require_mcp_2_sdk):
     """Real registry: a profile that enabled only the skills toolset for the CLI exposes no web tools."""
     (tmp_path / "hermes" / "config.yaml").write_text("platform_toolsets:\n  cli: [skills]\n", encoding="utf-8")

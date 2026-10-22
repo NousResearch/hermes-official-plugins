@@ -123,9 +123,12 @@ def available_tool_specs() -> dict[str, dict]:
     from model_tools import get_tool_definitions
 
     toolsets = sorted(_get_platform_tools(load_config(), "cli", include_default_mcp_servers=False))
+    # Raw schemas: with tool_search active, deferred tools (e.g. image_generate) would otherwise be
+    # collapsed into the tool_search/tool_describe/tool_call bridge and never reach the MCP wire.
     defs = {
         td["function"]["name"]: td["function"]
-        for td in (get_tool_definitions(enabled_toolsets=toolsets, quiet_mode=True) or [])
+        for td in (get_tool_definitions(enabled_toolsets=toolsets, quiet_mode=True,
+                                        skip_tool_search_assembly=True) or [])
         if isinstance(td, dict) and td.get("type") == "function"
     }
     specs = {}

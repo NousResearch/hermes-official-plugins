@@ -96,8 +96,8 @@ def terminal(monkeypatch):
             raise AssertionError(f"unexpected prompt: {prompt!r}")
         return t.lines.pop(0)
 
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)  # core's curses menus check stdin
+    monkeypatch.setattr(cli, "_has_terminal", lambda: True)
     monkeypatch.setattr(curses, "wrapper", wrapper)
     monkeypatch.setattr(curses, "curs_set", lambda _v: None)
     monkeypatch.setattr(curses, "has_colors", lambda: False)
@@ -127,7 +127,7 @@ def _write(home, data):
 
 
 def test_interactive_editing_without_a_terminal_is_refused_with_the_way_out(monkeypatch, capsys, home):
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(cli, "_has_terminal", lambda: False)
     assert _run("config") == 1
     err = capsys.readouterr().err
     assert "interactive terminal" in err and "--show" in err
@@ -135,7 +135,7 @@ def test_interactive_editing_without_a_terminal_is_refused_with_the_way_out(monk
 
 
 def test_show_prints_the_mode_and_routes_without_a_terminal(monkeypatch, capsys, home):
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(cli, "_has_terminal", lambda: False)
     _write(home, {"delegation": {"backend": "model_map", "backends": {"model_map": {"options": [
         {"name": "fast", "description": "Quick lookups.", "provider": "openrouter", "model": "m1"}],
         "default": "fast"}}}})

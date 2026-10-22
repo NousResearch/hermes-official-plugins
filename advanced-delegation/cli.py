@@ -25,6 +25,11 @@ _NO_TTY = ("`hermes delegation config` needs an interactive terminal to edit rou
 _TIERS = (("fast", "priority"), ("ultrafast", "ultrafast"))  # word users write -> tier core checks
 
 
+def _has_terminal() -> bool:
+    # Both ends: Windows reports the NUL device as a tty, so stdin alone lets a piped run into curses.
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
 def setup_parser(parser) -> None:
     sub = parser.add_subparsers(dest="delegation_command", metavar="<command>")
     config = sub.add_parser(
@@ -42,8 +47,7 @@ def handle(args) -> int:
     if getattr(args, "show", False):
         print(store.describe(store.delegation_section()))
         return 0
-    # Both ends: Windows reports the NUL device as a tty, so stdin alone lets a piped run into curses.
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+    if not _has_terminal():
         print(_NO_TTY, file=sys.stderr)
         return 1
     try:

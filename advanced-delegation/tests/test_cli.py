@@ -317,6 +317,22 @@ def test_only_newly_checked_profiles_are_asked_for_a_description(terminal, home)
         {"name": "coder", "description": "Writes code."}, {"name": "researcher", "description": "Web research."}]
 
 
+def test_unchecking_every_profile_clears_the_list_after_confirming(terminal, capsys, home):
+    _profile(home, "coder")
+    _write(home, {"delegation": {"backend": "profile_routes", "backends": {"profile_routes": {
+        "profiles": [{"name": "coder", "description": "Writes code."}], "default": "coder"}}}})
+    terminal.menu(ENTER)                       # mode picker opens on the current mode, Profile routes
+    terminal.menu(SPACE, ENTER)                # uncheck coder, the only one
+    terminal.menu(ENTER)                       # confirm -> "Clear the list"
+    _run("config")
+    assert "Clear" in terminal.shown(2)
+    delegation = _config(home)["delegation"]
+    assert delegation["backends"]["profile_routes"]["profiles"] == []
+    assert not delegation["backends"]["profile_routes"].get("default")
+    assert delegation["backend"] == "default"  # a mode with nothing to pick is never left active
+    assert "nothing changed" not in capsys.readouterr().out
+
+
 def test_profile_routes_without_other_profiles_says_how_to_make_one(terminal, capsys, home):
     terminal.menu(DOWN, DOWN, ENTER)           # Profile routes
     _run("config")

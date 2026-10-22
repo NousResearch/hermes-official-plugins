@@ -318,7 +318,7 @@ def _profile_routes() -> None:
         return
     picked = [n for i, n in enumerate(names) if i in chosen]
     if not picked:
-        print("No profiles picked; nothing changed.")
+        _clear_profiles(section, bool(listed))
         return
     entries = []
     for name in picked:  # profiles already listed keep their line; only newly checked ones are asked
@@ -334,3 +334,23 @@ def _profile_routes() -> None:
     store.set_mode("profile_routes")
     print(f"Delegation mode: Profile routes ({', '.join(n + (' (default)' if n == default else '') for n in picked)}). "
           "New sessions pick this up; switch modes in a chat with /delegation.")
+
+
+def _clear_profiles(section: Mapping[str, Any], had_profiles: bool) -> None:
+    """Every profile unchecked: empty the list after a confirmation. Profile routes with nothing to pick is
+    never left active (``/delegation`` refuses it too), so that mode goes back to Default."""
+    if not had_profiles:
+        print("No profiles picked; nothing changed.")
+        return
+    from hermes_cli.curses_ui import curses_single_select
+    active = store.current_mode(section) == "profile_routes"
+    title = "Clear the profile list? The agent will have no profiles to pick" + (
+        "; the mode goes back to Default." if active else ".")
+    if curses_single_select(title, ["Clear the list"], cancel_label="Back") != 0:
+        print("No change.")
+        return
+    store.save_profiles([], "")
+    if active:
+        store.set_mode("default")
+    print("Profile list cleared." + (" Delegation mode: Default; delegation.model / delegation.provider apply "
+                                     "again. New sessions pick this up." if active else ""))

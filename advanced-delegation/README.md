@@ -75,6 +75,20 @@ hermes delegation config --show   # print the current mode and routes (no termin
 Everything is written to the profile's `config.yaml` with Hermes's own config writer (comments and
 other settings are kept). Changes apply to new sessions.
 
+## Switch modes in a chat: `/delegation`
+
+```
+/delegation                          # current mode, what each mode routes to, how to switch
+/delegation model_map                # this session only (like /model)
+/delegation profiles --global        # also save it as this profile's delegation.backend
+/delegation default                  # back to the built-in behaviour
+```
+
+Mode words: `default`, `model_map` (or `models`, `2`), `profile_routes` (or `profiles`, `3`). A mode
+with nothing set up is refused with a pointer to `hermes delegation config`. When the configured
+delegation backend fails (for example the plugin was disabled), Hermes's error names `/delegation`:
+the listing flags the broken backend, and switching to another mode is the fix.
+
 ## Configure by hand
 
 Each mode's settings live under `delegation.backends.<mode>`; `delegation.backend` picks the mode.

@@ -341,18 +341,53 @@ class XChatApi:
         return media_hash_key
 
     async def media_download(self, conversation_id: str, media_hash_key: str) -> bytes:
-        """GET /2/chat/media/{conversation_id}/{media_hash_key} — encrypted blob."""
+        """GET /2/chat/media/{conversation_id}/{media_hash_key} — encrypted blob.
+
+        The body is read under the gateway's inbound-media cap rather than
+        buffered whole: a lying (or absent) ``Content-Length`` must not be able
+        to hold an oversized attachment in the gateway's memory. The same
+        streaming read core's own platform plugins use.
+        """
+        from gateway.platforms.base import get_inbound_media_max_bytes, validate_inbound_media_size
+
+        max_bytes = get_inbound_media_max_bytes()
         await self.ensure_token()
-        resp = await self._http().get(
-            f"{self._base_url}/2/chat/media/{self._conv_path_id(conversation_id)}/{media_hash_key}",
-            headers={"Authorization": f"Bearer {self._access_token}"},
-        )
-        if resp.status_code == 401 and self.can_refresh:
-            await self._refresh_access_token()
-            resp = await self._http().get(
-                f"{self._base_url}/2/chat/media/{self._conv_path_id(conversation_id)}/{media_hash_key}",
-                headers={"Authorization": f"Bearer {self._access_token}"},
-            )
-        if resp.status_code >= 300:
-            raise XChatApiError(resp.status_code, resp.text[:300])
-        return resp.content
+        url = f"{self._base_url}/2/chat/media/{self._conv_path_id(conversation_id)}/{media_hash_key}"
+        headers = {"Authorization": f"Bearer {self._access_token}"}
+        async with self._http().stream("GET", url, headers=headers) as resp:
+            if resp.status_code == 401 and self.can_refresh:
+                await self._refresh_access_token()
+                headers = {"Authorization": f"Bearer {self._access_token}"}
+                async with self._http().stream("GET", url, headers=headers) as retry:
+                    if retry.status_code >= 300:
+                        raise XChatApiError(retry.status_code, (await retry.aread()).decode("utf-8", "replace")[:300])
+                    return await self._read_body_with_limit(retry, max_bytes)
+            if resp.status_code >= 300:
+                raise XChatApiError(resp.status_code, (await resp.aread()).decode("utf-8", "replace")[:300])
+            return await self._read_body_with_limit(resp, max_bytes)
+
+    @staticmethod
+    async def _read_body_with_limit(response: Any, max_bytes: int) -> bytes:
+        """Read a response body under the inbound-media cap, refusing it while reading.
+
+        The declared ``Content-Length`` is checked first, then the running
+        total on every chunk, so a lying (or absent) header cannot smuggle more
+        than the cap past the check.
+        """
+        from gateway.platforms.base import validate_inbound_media_size
+
+        content_length = response.headers.get("content-length")
+        if content_length:
+            try:
+                declared_size = int(content_length)
+            except ValueError:
+                logger.debug("[xchat] ignoring invalid Content-Length for inbound media: %r", content_length)
+            else:
+                validate_inbound_media_size(declared_size, media_type="attachment", max_bytes=max_bytes)
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            validate_inbound_media_size(total, media_type="attachment", max_bytes=max_bytes)
+            chunks.append(chunk)
+        return b"".join(chunks)

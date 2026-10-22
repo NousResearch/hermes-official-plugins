@@ -76,6 +76,14 @@ class ProfilesDelegationProvider(DelegationProvider):
     def name(self) -> str:
         return BACKEND
 
+    @property
+    def display_name(self) -> str:
+        return "Profile routes"
+
+    @property
+    def summary(self) -> str:
+        return "The agent runs a subagent as one of your Hermes profiles."
+
     def task_parameters(self, config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
         profiles = configured_profiles(self.settings(config))
         if not profiles:

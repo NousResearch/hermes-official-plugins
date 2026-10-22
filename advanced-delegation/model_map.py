@@ -108,6 +108,14 @@ class ModelMapDelegationProvider(DelegationProvider):
     def name(self) -> str:
         return BACKEND
 
+    @property
+    def display_name(self) -> str:
+        return "Model routes"
+
+    @property
+    def summary(self) -> str:
+        return "The agent picks a named model route for each subagent."
+
     def task_parameters(self, config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
         options = configured_options(self.settings(config))
         if not options:

@@ -84,10 +84,21 @@ other settings are kept). Changes apply to new sessions.
 /delegation default                  # back to the built-in behaviour
 ```
 
-Mode words: `default`, `model_map` (or `models`, `2`), `profile_routes` (or `profiles`, `3`). A mode
-with nothing set up is refused with a pointer to `hermes delegation config`. When the configured
-delegation backend fails (for example the plugin was disabled), Hermes's error names `/delegation`:
-the listing flags the broken backend, and switching to another mode is the fix.
+Bare `/delegation` opens a picker with the modes that have something set up, using the surface's own
+choice prompt: buttons on Telegram, Discord and Slack (like approvals), a numbered list on other
+chats, the clarify picker in the CLI, TUI and Desktop. Where nothing can ask, it answers with a
+numbered text listing instead. Mode words: `default`, `model_map` (or `models`, `2`),
+`profile_routes` (or `profiles`, `3`). A mode with nothing set up is refused with a pointer to
+`hermes delegation config`.
+
+A session switch changes where this chat's subagents go from its next `delegate_task`. The tool list
+of a running chat is part of its prompt cache and keeps the mode it started with, so until a new
+session the agent cannot pick routes itself: every task takes the new mode's default route (or the
+parent's model). `--global` saves the mode, and sessions started after it give the agent the picks.
+
+When the configured delegation backend cannot run (for example the plugin was disabled), Hermes
+refuses the subagent with an error naming `/delegation`: the listing flags the broken backend, and
+switching to another mode is the fix.
 
 ## Configure by hand
 

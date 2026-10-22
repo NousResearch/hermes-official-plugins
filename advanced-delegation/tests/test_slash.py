@@ -1,8 +1,8 @@
 """``/delegation``: show the current mode and switch it, session-scoped by default, ``--global`` saves.
 
 The handler is called the way core's ``invoke_plugin_command`` calls it on every surface (raw args
-plus ``session_key`` / ``platform``). Core's per-session API is feature-detected on
-``agent.delegation_registry``; here it is installed on that module for the duration of a test.
+plus ``session_key`` / ``platform``). Core's per-session API (``agent.delegation_backends``) is
+feature-detected; tests install a recording stand-in for it, or hide it to act as an older core.
 """
 
 from __future__ import annotations
@@ -10,6 +10,9 @@ from __future__ import annotations
 import pytest
 
 pytest.importorskip("agent.delegation_provider", reason="Hermes core without pluggable delegation providers")
+
+import sys  # noqa: E402
+import types  # noqa: E402
 
 import hermes_yaml as yaml  # noqa: E402
 
@@ -32,28 +35,44 @@ def _saved(home):
     return yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))["delegation"]
 
 
-def _run(args="", **context):
+class Ctx:
+    """The plugin context ``make_handler`` reads ``ask_choice`` from (absent on an older core)."""
+
+    def __init__(self, answer=None, ask=True):
+        self.asked = []
+        if ask:
+            def ask_choice(question, choices):
+                self.asked.append((question, choices))
+                return answer
+            self.ask_choice = ask_choice
+
+
+def _run(args="", ctx=None, **context):
     from hermes_cli.plugin_command_dispatch import invoke_plugin_command
     context = {"source": None, "session_id": "s1", "session_key": "key-1", "platform": "cli", **context}
-    return invoke_plugin_command(slash.handle, args, **context)
+    return invoke_plugin_command(slash.make_handler(ctx or Ctx(ask=False)), args, **context)
 
 
 @pytest.fixture
 def session_api(monkeypatch):
-    """Core's per-session backend API, recorded."""
-    import agent.delegation_registry as registry
+    """Core's ``agent.delegation_backends``, recorded: the per-session overrides."""
     sessions: dict[str, str | None] = {}
-    monkeypatch.setattr(registry, "get_session_backend", lambda key: sessions.get(key), raising=False)
-    monkeypatch.setattr(registry, "set_session_backend",
-                        lambda key, name: sessions.__setitem__(key, name), raising=False)
+    api = types.ModuleType("agent.delegation_backends")
+    api.get_session_backend = lambda key: sessions.get(key)
+
+    def set_session_backend(key, name):
+        if name is None:
+            sessions.pop(key, None)
+        else:
+            sessions[key] = name
+    api.set_session_backend = set_session_backend
+    monkeypatch.setitem(sys.modules, "agent.delegation_backends", api)
     return sessions
 
 
 @pytest.fixture
 def no_session_api(monkeypatch):
-    import agent.delegation_registry as registry
-    monkeypatch.delattr(registry, "get_session_backend", raising=False)
-    monkeypatch.delattr(registry, "set_session_backend", raising=False)
+    monkeypatch.setitem(sys.modules, "agent.delegation_backends", None)  # an older core: import fails
 
 
 def test_bare_command_lists_the_modes_marks_the_current_one_and_says_how_to_switch(home, no_session_api):
@@ -89,10 +108,31 @@ def test_switch_is_session_scoped_by_default_and_leaves_the_config_alone(home, s
     assert "Model routes" in str(_run("", session_key="chat-7")).split("\n")[0]  # the session's mode leads
 
 
-def test_global_also_switches_the_current_session(home, session_api):
+def test_global_saves_and_the_session_follows_the_saved_mode(home, session_api):
     _write(home, {"backends": {"profile_routes": {"profiles": [{"name": "coder"}]}}})
+    session_api["chat-7"] = "default"
     _run("profile_routes --global", session_key="chat-7")
-    assert session_api == {"chat-7": "profile_routes"} and _saved(home)["backend"] == "profile_routes"
+    assert _saved(home)["backend"] == "profile_routes" and "chat-7" not in session_api
+    assert str(_run("", session_key="chat-7")).startswith("Delegation mode: Profile routes")
+
+
+def test_bare_command_asks_with_the_surfaces_picker_and_switches_the_session(home, session_api):
+    _write(home, {"backend": "default", "backends": {"model_map": {"options": ROUTES, "default": "deep"}}})
+    ctx = Ctx(answer="model_map")
+    reply = str(_run("", ctx=ctx, session_key="chat-7"))
+    ((question, choices),) = ctx.asked
+    assert "Default" in question
+    # Only modes with something set up are offered; each carries what it routes to.
+    assert [c["value"] for c in choices] == ["default", "model_map"]
+    assert choices[0]["label"] == "Default (current)" and "deep (default)" in choices[1]["description"]
+    assert session_api == {"chat-7": "model_map"} and _saved(home)["backend"] == "default"
+    assert "this session" in reply and "'deep'" in reply  # tasks here take the mode's default route
+
+
+def test_a_cancelled_picker_falls_back_to_the_text_listing(home, session_api):
+    _write(home, {"backend": "default"})
+    reply = str(_run("", ctx=Ctx(answer=None), session_key="chat-7"))
+    assert "1. Default" in reply and session_api == {}
 
 
 def test_without_core_session_support_a_plain_switch_points_to_global(home, no_session_api):
@@ -136,4 +176,4 @@ def test_a_refused_write_is_reported_not_raised(home, no_session_api, monkeypatc
     monkeypatch.setattr("hermes_cli.config.is_managed", lambda: True)
     monkeypatch.setattr("hermes_cli.config.get_managed_system", lambda: "nix")
     reply = str(_run("model_map --global"))
-    assert "not saved" in reply.lower() and "backend" not in _saved(home)
+    assert "not switched" in reply.lower() and "nix" in reply.lower() and "backend" not in _saved(home)

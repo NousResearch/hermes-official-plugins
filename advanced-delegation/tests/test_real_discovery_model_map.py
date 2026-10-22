@@ -122,10 +122,10 @@ def test_each_option_reaches_child_construction_on_its_route(loaded, children):
         "deep-model", "openrouter", "openrouter-key")
     assert deep["override_reasoning_effort"] == "high"
     # Core reports these as backend-routed (the result's `route` starts from this label).
-    assert (local_child._delegate_route, deep_child._delegate_route) == ({"label": "local"}, {"label": "deep"})
+    assert (local_child._delegate_route["label"], deep_child._delegate_route["label"]) == ("local", "deep")
     # No option and no default: today's delegation route (inherit the parent).
     assert plain["model"] is None and plain["override_provider"] is None and plain["override_base_url"] is None
-    assert plain["override_service_tier"] is None and not hasattr(plain_child, "_delegate_route")
+    assert plain["override_service_tier"] is None and "label" not in getattr(plain_child, "_delegate_route", {})
 
 
 def test_unknown_option_is_refused_before_any_child_is_built(loaded, children):
@@ -150,8 +150,8 @@ def test_configured_default_routes_tasks_without_an_option(tmp_path, monkeypatch
     _delegate_with(tmp_path, monkeypatch, plugin_root, _delegation(options=OPTIONS, default="local"),
                    [{"goal": "a task with no option set"}])
     ((built, child),) = children
-    assert (built["model"], built["override_base_url"], child._delegate_route) == (
-        "local-model", "http://localhost:9/v1", {"label": "local"})
+    assert (built["model"], built["override_base_url"], child._delegate_route["label"]) == (
+        "local-model", "http://localhost:9/v1", "local")
 
 
 def test_an_options_service_tier_reaches_the_child_after_cores_tier_check(tmp_path, monkeypatch, plugin_root,

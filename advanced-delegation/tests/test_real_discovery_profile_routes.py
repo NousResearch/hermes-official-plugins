@@ -123,10 +123,10 @@ def test_profile_task_is_built_as_that_profile_and_plain_task_inherits(loaded, c
     # The target profile's own reasoning, resolved by core to a final value (never the parent's level).
     assert coder["override_reasoning_effort"].config == {"enabled": True, "effort": "low"}
     # Core reports it as backend-routed (the result's `route` starts from this label).
-    assert coder_child._delegate_route == {"label": "coder"}
+    assert coder_child._delegate_route["label"] == "coder"
     # No profile and no default: today's delegation route (inherit the parent).
     assert plain["profile_home"] is None and plain["model"] is None and plain["override_provider"] is None
-    assert not hasattr(plain_child, "_delegate_route")  # unlabelled route: no route report
+    assert "label" not in getattr(plain_child, "_delegate_route", {})  # unlabelled route: no route label
 
 
 def test_out_of_list_or_missing_profiles_are_refused_before_any_child_is_built(loaded, children):
@@ -153,7 +153,7 @@ def test_configured_default_runs_tasks_without_a_profile_as_that_profile(tmp_pat
         manager.unload()
     ((built, child),) = children
     assert os.path.samefile(built["profile_home"], launch / "profiles" / "coder")
-    assert child._delegate_route == {"label": "coder"}
+    assert child._delegate_route["label"] == "coder"
 
 
 def test_settings_at_the_old_location_are_not_read(tmp_path, monkeypatch, plugin_root, children):

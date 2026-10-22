@@ -113,3 +113,9 @@ def test_default_outside_the_list_is_ignored_with_a_warning_naming_the_new_path(
         assert provider.route_task({"goal": "g", "index": 0}, config) == {}
     assert ("delegation.backends.profile_routes.default 'admin' is not in "
             "delegation.backends.profile_routes.profiles") in caplog.text
+
+
+def test_pickers_show_the_user_facing_name_and_one_line_summary(provider):
+    # /delegation and core's backend list read these; the model never sees them.
+    assert provider.display_name == "Profile routes"
+    assert provider.summary and "\n" not in provider.summary

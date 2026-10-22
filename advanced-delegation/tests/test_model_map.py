@@ -151,3 +151,9 @@ def test_default_outside_the_options_is_ignored_with_a_warning_naming_the_new_pa
         assert provider.route_task({"goal": "g", "index": 0}, config) == {}
     assert ("delegation.backends.model_map.default 'huge' is not an option in "
             "delegation.backends.model_map.options") in caplog.text
+
+
+def test_pickers_show_the_user_facing_name_and_one_line_summary(provider):
+    # /delegation and core's backend list read these; the model never sees them.
+    assert provider.display_name == "Model routes"
+    assert provider.summary and "\n" not in provider.summary

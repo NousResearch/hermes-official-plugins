@@ -32,7 +32,7 @@ def register(ctx) -> None:
     ctx.register_delegation_provider(ModelMapDelegationProvider())
     ctx.register_delegation_provider(ProfilesDelegationProvider())
     from . import cli, slash
-    ctx.register_command("delegation", slash.handle, description="Show or switch the delegation mode",
+    ctx.register_command("delegation", slash.make_handler(ctx), description="Show or switch the delegation mode",
                          args_hint="[default|model_map|profile_routes] [--global]")
     ctx.register_cli_command(
         name="delegation", help="Delegation modes: default, model routes, profile routes",

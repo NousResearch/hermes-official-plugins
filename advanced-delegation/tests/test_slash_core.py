@@ -1,9 +1,9 @@
-"""``/delegation`` against core's real per-session API and real choice picker.
+"""``/delegation`` against core's real ``ctx.delegation_backends`` and real choice picker.
 
-Skips on a core without them (``agent.delegation_backends``, ``hermes_cli.plugin_choices``). The
-plugin is installed into a temp ``HERMES_HOME``, loaded by core's ``PluginManager``, and its
-registered handler is called through ``invoke_plugin_command`` with a real asker bound, the way a
-surface does.
+Skips on a core without them (``agent.delegation_backends.DelegationBackends``,
+``hermes_cli.plugin_choices``). The plugin is installed into a temp ``HERMES_HOME``, loaded by core's
+``PluginManager``, and its registered handler is called through ``invoke_plugin_command`` with a real
+asker bound (or none, as on a surface that cannot ask), the way a surface does.
 """
 
 from __future__ import annotations
@@ -14,6 +14,8 @@ import pytest
 
 backends = pytest.importorskip("agent.delegation_backends", reason="core without per-session delegation backends")
 plugin_choices = pytest.importorskip("hermes_cli.plugin_choices", reason="core without ctx.ask_choice")
+if not hasattr(backends, "DelegationBackends"):
+    pytest.skip("core without ctx.delegation_backends", allow_module_level=True)
 
 import hermes_yaml as yaml  # noqa: E402
 
@@ -82,3 +84,19 @@ def test_the_listing_names_cores_reason_for_a_backend_that_cannot_run(handler):
     (home / "config.yaml").write_text(yaml.safe_dump(data), encoding="utf-8")
     reply = _run(fn, "")
     assert "ghost" in reply and "⚠" in reply
+
+
+def test_with_no_asker_bound_the_command_answers_with_the_text_listing(handler):
+    fn, _home = handler  # a hook, cron or event-loop caller: ctx.ask_choice returns None
+    reply = _run(fn, "")
+    assert reply.startswith("Delegation mode: Default") and "2. Model routes" in reply
+    assert backends.get_session_backend(KEY) is None
+
+
+def test_global_on_a_managed_install_reports_cores_refusal(handler, monkeypatch):
+    fn, home = handler
+    monkeypatch.setattr("hermes_cli.config.is_managed", lambda: True)
+    monkeypatch.setattr("hermes_cli.config.get_managed_system", lambda: "nix")
+    reply = _run(fn, "model_map --global")
+    assert reply.startswith("Not switched:") and "nix" in reply.lower()
+    assert yaml.safe_load((home / "config.yaml").read_text())["delegation"]["backend"] == "default"

@@ -2,22 +2,22 @@
 
 ``/delegation``                 the current mode and a picker to switch this session (a clarify card
                                 with buttons where the surface has them, a numbered list elsewhere);
-                                plain text when nothing can ask (core without ``ctx.ask_choice``)
+                                plain text when nothing can ask (``ctx.ask_choice`` absent or None)
 ``/delegation <mode>``          switch this session (``default``, ``model_map``/``models``,
                                 ``profile_routes``/``profiles``, or the number shown)
 ``/delegation <mode> --global`` save it as this profile's ``delegation.backend``
 
-Session scoping follows ``/model``. Core keeps the per-session choice and the global write
-(``agent.delegation_backends``: ``get_session_backend`` / ``set_session_backend`` /
-``list_backends``), feature-detected: on a core without it a plain switch says to use ``--global``.
-``--global`` writes ``delegation.backend`` through ``store`` and clears the session's override. When the configured backend
-fails, core's error names this command, so the listing flags a backend that cannot run and
-switching away from it is the fix.
+Session scoping follows ``/model``. Core keeps the per-session choice and the global write behind
+``ctx.delegation_backends`` (``list_backends`` / ``get_session_backend`` / ``set_session_backend`` /
+``set_global_backend``). It is a host remote facade, so under ``plugins.isolation: host`` the switch
+lands in the Hermes process ``delegate_task`` runs in, not in the plugin host's copy. Feature-detected:
+on a core without it a plain switch says to use ``--global``, which then writes ``delegation.backend``
+through ``store``. When the configured backend fails, core's error names this command, so the listing
+flags a backend that cannot run and switching away from it is the fix.
 """
 
 from __future__ import annotations
 
-import importlib
 import re
 from typing import Any, Callable, Mapping, Optional
 
@@ -35,33 +35,22 @@ AskChoice = Callable[[str, list], Optional[str]]
 
 
 def make_handler(ctx) -> Callable[..., str]:
-    """The registered handler: ``handle`` with the plugin context's ``ask_choice`` (when core has it)."""
-    ask = getattr(ctx, "ask_choice", None)
-
+    """The registered handler: ``handle`` with the context's ``ask_choice`` and ``delegation_backends``
+    (each None on a core without it)."""
     def delegation_command(raw_args: str = "", session_key: str = "", **_: Any) -> str:
-        return handle(raw_args, session_key=session_key, ask_choice=ask)
+        return handle(raw_args, session_key=session_key, ask_choice=getattr(ctx, "ask_choice", None),
+                      api=getattr(ctx, "delegation_backends", None))
     return delegation_command
 
 
-def _backends():
-    """Core's ``agent.delegation_backends`` (per-session backend API), or None on an older core."""
-    try:
-        return importlib.import_module("agent.delegation_backends")
-    except ImportError:
-        return None
-
-
 def _problem(mode: str, api) -> str:
-    """Why backend ``mode`` cannot run here ("" when it can)."""
-    if api is not None and hasattr(api, "list_backends"):
-        info = next((b for b in api.list_backends() if b.name == mode), None)
-        if info is None:
-            return f"Delegation backend '{mode}' is not available: no enabled plugin provides it."
-        return "" if info.available else (info.reason or f"Delegation backend '{mode}' is not available.")
-    from agent import delegation_registry as registry
-    if mode == "default" or registry.get_provider(mode) is not None:
+    """Why backend ``mode`` cannot run here ("" when it can, or when this core cannot tell)."""
+    if api is None:
         return ""
-    return f"Delegation backend '{mode}' is not available: no enabled plugin provides it."
+    info = next((b for b in api.list_backends() if b.get("name") == mode), None)
+    if info is None:
+        return f"Delegation backend '{mode}' is not available: no enabled plugin provides it."
+    return "" if info.get("available") else (info.get("reason") or f"Delegation backend '{mode}' is not available.")
 
 
 def _settings(section: Mapping[str, Any], mode: str) -> Mapping[str, Any]:
@@ -148,10 +137,11 @@ def _session_note(mode: str, saved: str, section: Mapping[str, Any]) -> str:
             "with --global, new sessions let the agent pick.")
 
 
-def handle(raw_args: str = "", session_key: str = "", ask_choice: Optional[AskChoice] = None) -> str:
+def handle(raw_args: str = "", session_key: str = "", ask_choice: Optional[AskChoice] = None, api=None) -> str:
+    """``api``: ``ctx.delegation_backends`` (None on a core without it); ``ask_choice``: ``ctx.ask_choice``,
+    which itself returns None where the surface cannot ask (a hook, cron, an event-loop handler)."""
     section = store.delegation_section()
     saved = store.current_mode(section)
-    api = _backends()
     scoped = api is not None and bool(session_key)
     effective = (api.get_session_backend(session_key) if scoped else None) or saved
     mode, is_global, unknown = _parse(raw_args or "")
@@ -172,14 +162,15 @@ def _switch(mode: str, is_global: bool, section: Mapping[str, Any], saved: str, 
         return (f"This Hermes can't switch delegation for one session yet. Use `/delegation {mode} --global` "
                 "to save it for this profile.")
     try:
-        if is_global:
-            # store's writer, not core's set_global_backend: it also refuses a package-manager-managed install.
-            store.set_mode(mode)
-            if session_key:
-                api.set_session_backend(session_key, None)  # the session follows the saved mode again
+        if is_global and api is not None:
+            # Core writes delegation.backend and drops the session's override (the session follows the saved
+            # mode again); it refuses a package-manager-managed install with PermissionError.
+            api.set_global_backend(mode, session_key=session_key)
+        elif is_global:
+            store.set_mode(mode)  # a core without ctx.delegation_backends: there are no session overrides
         else:
             api.set_session_backend(session_key, mode)
-    except (ValueError, RuntimeError) as exc:  # backend cannot run here, managed install, unreadable config
+    except (ValueError, PermissionError, RuntimeError) as exc:  # cannot run here, managed install, bad config
         return f"Not switched: {exc}"
     scope = "saved for this profile" if is_global else "for this session (add --global to save it)"
     note = " delegation.model / delegation.provider apply again." if mode == "default" else (

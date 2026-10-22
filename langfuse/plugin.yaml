@@ -2,6 +2,7 @@ name: langfuse
 label: Langfuse
 kind: standalone
 version: 2.0.0
+manifest_version: 2
 author: NousResearch
 homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/langfuse
 description: >
@@ -37,3 +38,12 @@ optional_env:
     description: "Langfuse server URL for a self-hosted instance (default: https://cloud.langfuse.com)"
     prompt: "Langfuse server URL"
     password: false
+config_schema:
+  end_user_attribution:
+    type: bool
+    default: false
+    label: Attribute traces to the sender
+    description: >-
+      Set each gateway trace's Langfuse userId to the sender's platform ID (for example a Matrix,
+      Slack or Telegram user ID), so per-user views work. That ID is exported to your Langfuse
+      project. Turns with no sender, such as CLI and cron runs, never get a userId.

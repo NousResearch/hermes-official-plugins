@@ -60,6 +60,22 @@ Root traces carry `platform:<name>` and `trigger:cron|interactive` tags (cron ru
 runs and profiles sharing one project can be filtered apart. Kanban worker turns also carry
 `kanban_task_id` / `kanban_run_id`, so a trace joins back to its board card.
 
+### End-user attribution (opt-in)
+
+Langfuse can group traces by the person who sent the message (its **Users** view). That needs a
+third-party identifier, so it is off until you turn it on for a profile:
+
+```bash
+hermes config set plugins.entries.langfuse.settings.end_user_attribution true
+```
+
+In the Desktop app it is a switch on the plugin's page under **Settings → Plugins**. With it on, a
+gateway turn's trace gets the sender's platform ID as its `userId`, exactly as the platform reports it
+(for Matrix, the full `@user:server` ID), and subagents carry the user of the turn that spawned them.
+Turns with no sender, such as CLI and cron runs, stay without a `userId`. The setting is read every
+turn, so no restart is needed. The ID goes to your Langfuse project unhashed, even when
+`privacy.redact_pii` is on.
+
 ## How it works
 
 | Hook | Behaviour |

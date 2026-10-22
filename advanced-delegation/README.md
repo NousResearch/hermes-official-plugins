@@ -35,7 +35,8 @@ answers "which route does this task take".
   `base_url` + `model` targets an OpenAI-compatible endpoint. A profile route runs the subagent as
   that profile, exactly as if you had started `hermes -p <profile>` for that task.
 - **A task that picks none** runs on the mode's `default` when you set one, otherwise on the
-  normal `delegation.*` route.
+  parent's own model. In these two modes `delegation.model` / `delegation.provider` are not used;
+  switching back to Default makes them apply again.
 - **Each result reports its route.** A routed task's result carries `route`: the route name
   (`label`) plus the provider, model, reasoning effort and speed tier the subagent actually ran on.
 
@@ -82,8 +83,8 @@ delegation:
 ```
 
 Route keys: `name` and `description` (required), `model` (required), `provider` and/or `base_url`
-(at least one), and optionally `reasoning_effort`, `service_tier`, `api_key` and `api_mode`, each
-meaning the same as the matching `delegation.*` key. Prefer `provider:` over `api_key:`: provider
+(at least one), and optionally `reasoning_effort`, `service_tier`, `fallback_providers`, `api_key`
+and `api_mode`, each meaning the same as the matching `delegation.*` key. Prefer `provider:` over `api_key:`: provider
 credentials stay in `.env` / `auth.json`, while an `api_key` here is stored in `config.yaml` in plain
 text. Malformed routes and repeated names are skipped with a warning in `hermes logs`.
 

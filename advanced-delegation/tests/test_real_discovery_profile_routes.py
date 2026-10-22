@@ -169,3 +169,19 @@ def test_settings_at_the_old_location_are_not_read(tmp_path, monkeypatch, plugin
     assert "profile" not in task_props
     ((plain, _),) = children
     assert plain["profile_home"] is None and plain["model"] is None  # today's route, not the old default
+
+
+def test_in_this_mode_delegation_model_and_provider_do_not_route_a_task_without_profile(
+        tmp_path, monkeypatch, plugin_root, children):
+    from tools.delegate_tool import delegate_task
+
+    _, manager = _load(tmp_path, monkeypatch, plugin_root, {
+        "backend": "profile_routes", "backends": {"profile_routes": {"profiles": PROFILES}},
+        "model": "delegation-model", "provider": "openrouter"})
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    try:
+        delegate_task(tasks=[{"goal": "a task with no profile set"}], parent_agent=_parent())
+    finally:
+        manager.unload()
+    ((plain, _),) = children
+    assert plain["profile_home"] is None and plain["model"] is None and plain["override_provider"] is None

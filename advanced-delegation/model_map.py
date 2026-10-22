@@ -24,8 +24,9 @@ Settings live in ``delegation.backends.model_map`` of config.yaml::
           default: fast                     # optional: option for tasks that set none
 
 ``delegate_task`` gains a per-task ``option`` enum of those names. A task that sets one runs on that
-entry's route; a task without one runs on ``default`` when set, else on today's ``delegation.*`` route.
-The raw provider/model/endpoint/key never become model-facing parameters.
+entry's route; a task without one runs on ``default`` when set, else on the parent's own route
+(in this mode ``delegation.model`` / ``delegation.provider`` are inactive). The raw
+provider/model/endpoint/key never become model-facing parameters.
 """
 
 from __future__ import annotations
@@ -93,6 +94,8 @@ def configured_options(settings: Mapping[str, Any]) -> dict[str, dict[str, Any]]
             continue
         route = {key: entry[key].strip() for key in ROUTE_FIELDS
                  if isinstance(entry.get(key), str) and entry[key].strip()}
+        if isinstance(entry.get("fallback_providers"), list):
+            route["fallback_providers"] = list(entry["fallback_providers"])
         options[name] = {"description": _text(entry, "description"), "route": route}
     return options
 
@@ -132,6 +135,6 @@ class ModelMapDelegationProvider(DelegationProvider):
                            "default route.", SETTINGS_PATH, chosen, SETTINGS_PATH)
                 chosen = ""
         if not chosen:
-            return dict(config)
+            return {}  # the parent's route: delegation.model / delegation.provider are inactive in this mode
         # Core already refused a chosen value outside the enum before calling us.
         return {**options[chosen]["route"], "label": chosen}

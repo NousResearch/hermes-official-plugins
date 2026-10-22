@@ -70,7 +70,7 @@ def test_settings_at_the_old_location_beside_core_keys_are_not_read(provider):
               "default": "fast", "model": "m"}
     assert provider.task_parameters(config) == {}
     assert provider.description(config) == ""
-    assert provider.route_task({"goal": "g", "index": 0}, config) == config
+    assert provider.route_task({"goal": "g", "index": 0}, config) == {}
 
 
 def test_description_tells_the_model_it_may_set_option(provider):
@@ -117,6 +117,16 @@ def test_chosen_option_routes_with_only_its_non_empty_route_keys(provider):
                               "api_mode": "chat_completions", "label": "local"}
 
 
+def test_an_options_fallback_providers_are_routed_to_core(provider):
+    chain = [{"provider": "openrouter", "model": "google/gemini-3-flash-preview"}]
+    config = _config(options=[{"name": "deep", "description": "d", "provider": "anthropic", "model": "claude-opus-5",
+                               "fallback_providers": chain},
+                              {"name": "bad", "description": "d", "provider": "anthropic", "model": "m",
+                               "fallback_providers": "openrouter"}])
+    assert provider.route_task({"goal": "g", "index": 0, "option": "deep"}, config)["fallback_providers"] == chain
+    assert "fallback_providers" not in provider.route_task({"goal": "g", "index": 0, "option": "bad"}, config)
+
+
 def test_an_options_service_tier_is_routed_to_core(provider):
     config = _config(options=[{"name": "quick", "description": "d", "provider": "openai-codex", "model": "gpt-5.5",
                                "service_tier": " ultrafast "}])
@@ -124,9 +134,10 @@ def test_an_options_service_tier_is_routed_to_core(provider):
     assert route["service_tier"] == "ultrafast"
 
 
-def test_task_without_option_takes_todays_delegation_route(provider):
-    config = {**_config(options=OPTIONS), "model": "m", "provider": "openrouter"}
-    assert provider.route_task({"goal": "g", "context": None, "index": 1}, config) == config
+def test_task_without_option_runs_on_the_parent_route_not_delegation_model(provider):
+    # In this mode delegation.model / delegation.provider are inactive: an empty route inherits the parent.
+    config = {**_config(options=OPTIONS), "model": "m", "provider": "openrouter", "base_url": "http://x/v1"}
+    assert provider.route_task({"goal": "g", "context": None, "index": 1}, config) == {}
 
 
 def test_task_without_option_uses_the_configured_default(provider):
@@ -137,6 +148,6 @@ def test_task_without_option_uses_the_configured_default(provider):
 def test_default_outside_the_options_is_ignored_with_a_warning_naming_the_new_path(provider, caplog):
     config = {**_config(options=OPTIONS, default="huge"), "model": "m"}
     with caplog.at_level(logging.WARNING):
-        assert provider.route_task({"goal": "g", "index": 0}, config) == config
+        assert provider.route_task({"goal": "g", "index": 0}, config) == {}
     assert ("delegation.backends.model_map.default 'huge' is not an option in "
             "delegation.backends.model_map.options") in caplog.text

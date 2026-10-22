@@ -185,3 +185,12 @@ def test_settings_at_the_old_location_are_not_read(tmp_path, monkeypatch, plugin
     assert "option" not in task_props
     ((plain, _),) = children
     assert plain["model"] is None and plain["override_base_url"] is None  # today's route, not the old default
+
+
+def test_in_this_mode_delegation_model_and_provider_do_not_route_a_task_without_option(
+        tmp_path, monkeypatch, plugin_root, children):
+    _delegate_with(tmp_path, monkeypatch, plugin_root,
+                   {**_delegation(options=OPTIONS), "model": "delegation-model", "provider": "openrouter"},
+                   [{"goal": "a task with no option set"}])
+    ((plain, _),) = children
+    assert plain["model"] is None and plain["override_provider"] is None  # the parent's route

@@ -15,7 +15,8 @@ Settings live in ``delegation.backends.profile_routes`` of config.yaml::
 
 ``delegate_task`` gains a per-task ``profile`` enum of those names. A task that sets one runs as that
 Hermes profile (core binds the profile's own config, model, credentials, skills and SOUL.md); a task
-without one runs as ``default`` when set, else on today's ``delegation.*`` route.
+without one runs as ``default`` when set, else on the parent's own route (in this mode
+``delegation.model`` / ``delegation.provider`` are inactive).
 """
 
 from __future__ import annotations
@@ -105,4 +106,4 @@ class ProfilesDelegationProvider(DelegationProvider):
                 return {"profile": default, "label": default}
             _warn_once("%s.default %r is not in %s.profiles; tasks without a profile use the default route.",
                        SETTINGS_PATH, default, SETTINGS_PATH)
-        return dict(config)
+        return {}  # the parent's route: delegation.model / delegation.provider are inactive in this mode

@@ -63,7 +63,7 @@ def test_settings_at_the_old_location_beside_core_keys_are_not_read(provider):
               "model": "m"}
     assert provider.task_parameters(config) == {}
     assert provider.description(config) == ""
-    assert provider.route_task({"goal": "g", "index": 0}, config) == config
+    assert provider.route_task({"goal": "g", "index": 0}, config) == {}
 
 
 def test_description_tells_the_model_it_may_set_profile(provider):
@@ -97,9 +97,9 @@ def test_chosen_profile_routes_the_task_to_that_profile(provider):
     assert route == {"profile": "coder", "label": "coder"}
 
 
-def test_task_without_profile_takes_todays_delegation_route(provider):
+def test_task_without_profile_runs_on_the_parent_route_not_delegation_model(provider):
     config = {**_config(profiles=PROFILES), "model": "m", "provider": "openrouter"}
-    assert provider.route_task({"goal": "g", "context": None, "index": 1}, config) == config
+    assert provider.route_task({"goal": "g", "context": None, "index": 1}, config) == {}
 
 
 def test_task_without_profile_uses_the_configured_default(provider):
@@ -110,6 +110,6 @@ def test_task_without_profile_uses_the_configured_default(provider):
 def test_default_outside_the_list_is_ignored_with_a_warning_naming_the_new_path(provider, caplog):
     config = {**_config(profiles=PROFILES, default="admin"), "model": "m"}
     with caplog.at_level(logging.WARNING):
-        assert provider.route_task({"goal": "g", "index": 0}, config) == config
+        assert provider.route_task({"goal": "g", "index": 0}, config) == {}
     assert ("delegation.backends.profile_routes.default 'admin' is not in "
             "delegation.backends.profile_routes.profiles") in caplog.text

@@ -326,8 +326,8 @@ class Contract(unittest.TestCase):
         self.assertEqual(routed.command, ["/native/test"])
         from unittest.mock import patch
 
-        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "fake-conflicting-key"}):
-            with self.assertRaisesRegex(ValueError, "OAuth"):
+        with patch.dict(os.environ, {"ANTHROPIC_BASE_URL": "https://proxy.invalid"}):
+            with self.assertRaisesRegex(ValueError, "OAuth.*ANTHROPIC_BASE_URL"):
                 directsdk.Client(command="/does/not/exist").create(**self.request())
         client = directsdk.Client(command="/does/not/exist", env={})
         with self.assertRaises((FileNotFoundError, RuntimeError)):

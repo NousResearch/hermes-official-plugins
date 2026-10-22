@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- An Anthropic API key in Hermes' environment (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_FOUNDRY_API_KEY`), set for Hermes' own `anthropic` provider, no longer blocks this provider: it is dropped from every Claude Code child instead of failing the turn, so both providers work from the same Hermes and a subscription turn never bills API usage. Setup and model discovery no longer pass it to `claude auth status` either.
 - Long tool calls are no longer cancelled as stalls: the relay asks the API to stream each tool's arguments as they are written (`eager_input_streaming`). Native enables that only for a first-party base URL, so behind the relay a whole-file `write_file` argument arrived in one burst after minutes of silence (live: 89.8 s with no chunk on Opus 5.5) and Hermes' stall timer killed the healthy call.
 - Report `Claude request cancelled` when a request is cancelled while native acknowledges replayed history, and include native's exit code and stderr when native exits before that acknowledgment (#122, thanks @Eros-H).
 - Restore gzip compression for large direct Anthropic requests, with a process-wide latch and one uncompressed resend when request encoding is rejected.

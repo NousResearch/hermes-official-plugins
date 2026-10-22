@@ -28,3 +28,9 @@ def register(ctx) -> None:
         return
     ctx.register_delegation_provider(ModelMapDelegationProvider())
     ctx.register_delegation_provider(ProfilesDelegationProvider())
+    from . import cli
+    ctx.register_cli_command(
+        name="delegation", help="Delegation modes: default, model routes, profile routes",
+        setup_fn=cli.setup_parser, handler_fn=cli.handle,
+        description="Pick how delegate_task routes subagents and edit the routes: "
+                    "`hermes delegation config` (or `--show` to print the current setup).")

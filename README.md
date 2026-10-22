@@ -190,6 +190,12 @@ Catalog entries come in two tiers:
 </tr>
 <tr>
 <td width="50%" valign="top">
+<h3><a href="advanced-delegation/">Advanced Delegation</a> <sup>needs the next Hermes release</sup></h3>
+<code>hermes plugins install NousResearch/hermes-official-plugins#advanced-delegation</code>
+<p>Two more ways for <code>delegate_task</code> to route subagents. <b>Model routes</b>: the agent picks a named model route per subagent (fast, deep, local...) from a list you write. <b>Profile routes</b>: it runs a subagent as one of your Hermes profiles, with that profile's model, skills and credentials. Only the names and your one-line descriptions reach the model.</p>
+<p><code>hermes delegation config</code> · <code>/delegation</code> to switch modes in a chat</p>
+</td>
+<td width="50%" valign="top">
 <h3>More on the way</h3>
 <p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
 </td>

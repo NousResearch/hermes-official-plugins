@@ -170,9 +170,11 @@ def test_add_a_model_route_like_hermes_model_then_finish_in_model_routes_mode(te
     terminal.menu(ENTER)                       # hermes model's model picker -> first model
     terminal.menu(ENTER)                       # reasoning picker opens on "Inherit parent"
     terminal.menu(DOWN, DOWN, ENTER)           # routes list: fast, + Add a route, Done -> "Done"
+    terminal.menu(ENTER)                       # no default yet: default route -> fast
     _run("config")
     delegation = _config(home)["delegation"]
     assert delegation["backend"] == "model_map"
+    assert delegation["backends"]["model_map"]["default"] == "fast"
     assert delegation["backends"]["model_map"]["options"] == [{
         "name": "fast", "description": "Cheap and quick: lookups and summaries.", "provider": "openrouter",
         "model": "google/gemini-3-flash-preview"}]
@@ -243,6 +245,33 @@ def test_a_repeated_route_name_is_asked_again(terminal, capsys, home):
     options = _config(home)["delegation"]["backends"]["model_map"]["options"]
     assert [o["name"] for o in options] == ["fast", "deep"]
     assert (options[1]["reasoning_effort"], options[1]["service_tier"]) == ("high", "fast")
+
+
+def test_done_without_a_default_asks_for_one_with_no_default_as_an_explicit_choice(terminal, capsys, home):
+    _write(home, {"delegation": {"backends": {"model_map": {"options": [
+        {"name": "fast", "description": "Quick lookups.", "provider": "openrouter", "model": "m1"},
+        {"name": "deep", "description": "Careful work.", "provider": "anthropic", "model": "claude-opus-5"}]}}}})
+    terminal.menu(DOWN, ENTER)                 # Model routes
+    terminal.menu(*[DOWN] * 3, ENTER)          # routes list: fast, deep, + Add a route, Done -> "Done"
+    terminal.menu(DOWN, DOWN, ENTER)           # default route: fast, deep, No default -> "No default"
+    _run("config")
+    asked = terminal.shown(2)
+    assert "fast" in asked and "deep" in asked
+    assert "No default — unrouted tasks use the main agent's model" in asked
+    delegation = _config(home)["delegation"]
+    assert delegation["backend"] == "model_map" and not delegation["backends"]["model_map"].get("default")
+    assert "no default" in capsys.readouterr().out.lower()
+
+
+def test_cancelling_the_default_question_goes_back_to_the_routes_list(terminal, home):
+    _write(home, {"delegation": {"backends": {"model_map": {"options": [
+        {"name": "fast", "description": "Quick lookups.", "provider": "openrouter", "model": "m1"}]}}}})
+    terminal.menu(DOWN, ENTER)                 # Model routes
+    terminal.menu(DOWN, DOWN, ENTER)           # routes list -> "Done"
+    terminal.menu(QUIT)                        # default question cancelled -> back to the list
+    terminal.menu(QUIT)                        # leave the editor
+    _run("config")
+    assert "backend" not in _config(home)["delegation"]
 
 
 def test_finishing_with_no_routes_leaves_the_mode_alone(terminal, capsys, home):

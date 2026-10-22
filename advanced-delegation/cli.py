@@ -131,8 +131,9 @@ def _model_routes() -> None:
             print("Route changes are saved; the delegation mode is unchanged.")
             return
         if idx == len(options) + 1:
-            _finish_model_routes(options, default)
-            return
+            if _finish_model_routes(options, default):
+                return
+            continue
         if idx == len(options):
             route = _edit_route({}, options)
             if route is not None:
@@ -163,15 +164,28 @@ def _route_actions(options: list[dict[str, Any]], default: str, idx: int) -> Non
         print(f"Deleted route '{name}'.")
 
 
-def _finish_model_routes(options: list[dict[str, Any]], default: str) -> None:
+_NO_DEFAULT_ROUTE = "No default — unrouted tasks use the main agent's model"
+
+
+def _finish_model_routes(options: list[dict[str, Any]], default: str) -> bool:
+    """Switch to Model routes; False sends the user back to the routes list (default question cancelled)."""
     if not options:
         print("No routes yet, so Model routes would give the agent nothing to pick. The mode is unchanged.")
-        return
+        return True
+    names = [_text(o.get("name")) for o in options]
+    if default not in names:
+        # delegation.model is inactive in this mode, so make the fallback for unrouted tasks a visible choice.
+        idx = _radio("Default route for tasks that pick none:", [*names, _NO_DEFAULT_ROUTE])
+        if idx < 0:
+            return False
+        default = names[idx] if idx < len(names) else ""
+        store.save_routes(options, default)
     store.set_mode("model_map")
-    names = ", ".join(_text(o.get("name")) + (" (default)" if _text(o.get("name")) == default else "")
-                      for o in options)
-    print(f"Delegation mode: Model routes ({names}). delegation.model / delegation.provider are inactive "
-          "in this mode. New sessions pick this up; switch modes in a chat with /delegation.")
+    shown = ", ".join(n + (" (default)" if n == default else "") for n in names)
+    print(f"Delegation mode: Model routes ({shown}{'' if default else '; no default'}). delegation.model / "
+          "delegation.provider are inactive in this mode. New sessions pick this up; switch modes in a chat "
+          "with /delegation.")
+    return True
 
 
 def _ask_name(current: str, others: list[dict[str, Any]]) -> str:

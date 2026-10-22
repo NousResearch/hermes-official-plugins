@@ -303,6 +303,20 @@ def test_profile_routes_is_a_multi_select_of_existing_profiles_not_the_model_edi
         "default": "coder"}
 
 
+def test_only_newly_checked_profiles_are_asked_for_a_description(terminal, home):
+    _profile(home, "coder")
+    _profile(home, "researcher")
+    _write(home, {"delegation": {"backends": {"profile_routes": {
+        "profiles": [{"name": "coder", "description": "Writes code."}], "default": "coder"}}}})
+    terminal.menu(DOWN, DOWN, ENTER)           # Profile routes
+    terminal.menu(DOWN, SPACE, ENTER)          # coder stays checked, check researcher
+    terminal.type("Web research.")             # asked for researcher only; coder keeps its line
+    terminal.menu(ENTER)                       # default -> coder (current)
+    _run("config")
+    assert _config(home)["delegation"]["backends"]["profile_routes"]["profiles"] == [
+        {"name": "coder", "description": "Writes code."}, {"name": "researcher", "description": "Web research."}]
+
+
 def test_profile_routes_without_other_profiles_says_how_to_make_one(terminal, capsys, home):
     terminal.menu(DOWN, DOWN, ENTER)           # Profile routes
     _run("config")

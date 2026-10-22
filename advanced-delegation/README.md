@@ -74,8 +74,9 @@ hermes delegation config --show   # print the current mode and routes (no termin
    be known, the effort a real level, and the tier one the route offers. **Done** switches the mode;
    with no default set it first asks for one, with *No default — unrouted tasks use the main agent's
    model* as an explicit choice.
-3. **Profile routes** is just a checklist of your other profiles, an optional line about each, and
-   a default. Profiles keep their own models, so there is nothing else to pick.
+3. **Profile routes** is just a checklist of your other profiles, an optional line about each newly
+   checked one (listed profiles keep theirs), and a default. Profiles keep their own models, so there
+   is nothing else to pick.
 4. **Default** switches back; `delegation.model` / `delegation.provider` apply again.
 
 Everything is written to the profile's `config.yaml` with Hermes's own config writer (comments and

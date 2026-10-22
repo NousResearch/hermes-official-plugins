@@ -321,8 +321,9 @@ def _profile_routes() -> None:
         print("No profiles picked; nothing changed.")
         return
     entries = []
-    for name in picked:
-        description = _ask(f"One line the agent reads about '{name}' (optional)", listed.get(name, ""))
+    for name in picked:  # profiles already listed keep their line; only newly checked ones are asked
+        description = listed[name] if name in listed else _ask(
+            f"One line the agent reads about '{name}' (optional)")
         entries.append({"name": name, **({"description": description} if description else {})})
     current_default = store.profile_default(section)
     idx = _radio("Default profile for tasks that pick none:", [*picked, "No default (the parent's model)"],

@@ -106,9 +106,9 @@ def _use_default() -> None:
 
 # --- model routes -----------------------------------------------------------------------------
 
-def _route_row(route: Mapping[str, Any], default: str, width: int) -> list:
+def _route_row(route: Mapping[str, Any], default: str, width: int, desc_width: int) -> list:
     name = _text(route.get("name"))
-    return [(f"{name.ljust(width)}  ", None), (_text(route.get("description")), None),
+    return [(f"{name.ljust(width)}  ", None), (_text(route.get("description")).ljust(desc_width), None),
             (f"  {store.route_summary(route)}", "dim"), *([("  ★ default", "yellow")] if name == default else [])]
 
 
@@ -117,7 +117,9 @@ def _model_routes() -> None:
         section = store.delegation_section()
         options, default = store.routes(section), store.route_default(section)
         width = max((len(_text(o.get("name"))) for o in options), default=4)
-        rows = [_route_row(o, default, width) for o in options] + ["+ Add a route", "Done: use Model routes"]
+        desc_width = min(60, max((len(_text(o.get("description"))) for o in options), default=0))
+        rows = [_route_row(o, default, width, desc_width) for o in options] + [
+            "+ Add a route", "Done: use Model routes"]
         idx = _radio("Model routes: the agent picks one per subagent", rows, description=(
             "  Each route: a name and a one-line description the agent reads, plus the provider/model\n"
             "  it runs on. Enter on a route to edit, delete or make it the default.\n"))

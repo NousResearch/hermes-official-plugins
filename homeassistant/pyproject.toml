@@ -7,7 +7,11 @@ license = { text = "MIT" }
 authors = [{ name = "Nous Research" }]
 requires-python = ">=3.11"
 dependencies = [
-  "aiohttp>=3.9,<4",
+    "aiohttp>=3.9,<4",
+    # Windows Python ships no IANA time zone database, so ZoneInfo cannot resolve the
+    # instance's zone there and the local timestamp twins would fall back to the machine's
+    # own time. This is the same database the OS provides on Linux and macOS.
+    "tzdata; platform_system == 'Windows'",
 ]
 
 [project.urls]

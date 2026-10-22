@@ -23,7 +23,9 @@ import fnmatch
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from agent.secret_scope import get_secret
 
@@ -566,11 +568,95 @@ async def _async_list_entities(
         max_entities=max_entities, entity_area=entity_area, entity_device=entity_device)
 
 
+# ── Local-time twins for the timestamps Home Assistant answers in UTC (#155) ──────
+# HA reports every timestamp in UTC, so the agent has to convert it by hand - which is where the
+# wrong dates come from (a security device's last trigger read as the wrong evening). The instance's
+# own zone is the one its frontend shows, so the local twin is computed with that; HASS_TIMEZONE
+# overrides it, and an unknown zone falls back to the machine's local time.
+_HASS_TIMEZONE: str = ""
+_TZ_CACHE: Dict[str, Any] = {"ts": 0.0, "name": "", "url": ""}
+_TZ_TTL = 3600.0  # the instance's zone changes with its configuration, not with the minute
+
+
+def _get_timezone_config() -> str:
+    """The operator's timezone override (HASS_TIMEZONE), empty when unset."""
+    return (_HASS_TIMEZONE or (get_secret("HASS_TIMEZONE", "") or "")).strip()
+
+
+async def _instance_timezone() -> str:
+    """The instance's configured time_zone (``/api/config``), cached for an hour.
+
+    Empty when it cannot be read (the call failed, or the instance does not answer it): the
+    caller then falls back to the machine's local time.
+    """
+    import time as _time
+    override = _get_timezone_config()
+    if override:
+        return override
+    try:
+        hass_url, _token = _get_config()
+    except ValueError:
+        return ""
+    now = _time.time()
+    # Keyed by instance, like the registry cache above: two profiles pointing at different Home
+    # Assistants must not see each other's zone.
+    if _TZ_CACHE.get("url") == hass_url and now - _TZ_CACHE.get("ts", 0.0) < _TZ_TTL:
+        return _TZ_CACHE["name"]
+    try:
+        config = await _api_json("GET", "/api/config", 10)
+    except Exception:  # the zone is a nicety: a failed call must not fail the read
+        logger.debug("homeassistant: could not read the instance time zone", exc_info=True)
+        return ""
+    name = config.get("time_zone") if isinstance(config, dict) else ""
+    if not isinstance(name, str) or not name.strip():
+        _TZ_CACHE.update(name="", ts=now, url=hass_url)
+        return ""
+    _TZ_CACHE.update(name=name.strip(), ts=now, url=hass_url)
+    return _TZ_CACHE["name"]
+
+
+def _local_timestamp(value: Any, tz_name: str = "") -> Optional[str]:
+    """One HA timestamp as an ISO string in ``tz_name`` (the machine's local zone when empty).
+
+    None when the value is not a readable timestamp: the raw field then stays as it is.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    zone = None
+    if tz_name:
+        try:
+            zone = ZoneInfo(tz_name)
+        except (KeyError, ValueError):
+            zone = None
+    try:
+        return moment.astimezone(zone).isoformat()
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
 async def _async_get_state(entity_id: str) -> Dict[str, Any]:
     data = await _api_json("GET", f"/api/states/{entity_id}", 10)
-    return {
-        "entity_id": data["entity_id"], "state": data["state"], "attributes": data.get("attributes", {}),
+    tz_name = await _instance_timezone()
+    attributes = dict(data.get("attributes") or {})
+    local = _local_timestamp(attributes.get("last_triggered"), tz_name)
+    if local:
+        attributes["last_triggered_local"] = local
+    out = {
+        "entity_id": data["entity_id"], "state": data["state"], "attributes": attributes,
         "last_changed": data.get("last_changed"), "last_updated": data.get("last_updated")}
+    # The UTC values stay as they are; the local twin is what the agent can present without doing
+    # the conversion itself (and getting the date wrong).
+    for field in ("last_changed", "last_updated"):
+        local = _local_timestamp(out.get(field), tz_name)
+        if local:
+            out[f"{field}_local"] = local
+    return out
 
 
 def _build_service_payload(entity_id: Optional[str] = None, data: Optional[Dict[str, Any]] = None) -> Dict:
@@ -852,7 +938,11 @@ HA_GET_STATE_SCHEMA: Dict[str, Any] = {
     "name": "ha_get_state",
     "description": (
         "Get the detailed state of a single Home Assistant entity, including all "
-        "attributes (brightness, color, temperature setpoint, sensor readings, etc.)."
+        "attributes (brightness, color, temperature setpoint, sensor readings, etc.). "
+        "Home Assistant answers timestamps in UTC; the response also carries them in the "
+        "instance's local timezone (last_changed_local, last_updated_local, and "
+        "last_triggered_local for automations) - present those to the user instead of "
+        "converting the UTC values by hand."
     ),
     "parameters": {
         "type": "object",

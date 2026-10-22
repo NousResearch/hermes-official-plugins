@@ -185,3 +185,42 @@ def test_in_this_mode_delegation_model_and_provider_do_not_route_a_task_without_
         manager.unload()
     ((plain, _),) = children
     assert plain["profile_home"] is None and plain["model"] is None and plain["override_provider"] is None
+
+
+def test_a_session_switch_from_model_routes_refuses_a_task_still_sending_option(tmp_path, monkeypatch, plugin_root,
+                                                                                children):
+    """The review's lane: saved mode model_map, `/delegation profile_routes` for this session only. The
+    chat's schema still offers `option` (never rebuilt mid-session), routing is now profile routes, and core
+    refuses the task that sends `option` instead of running it on the default profile; the plain sibling runs
+    as the default profile. The switch reply says both up front."""
+    from tools import delegate_tool_routes
+    if not hasattr(delegate_tool_routes, "_undeclared_error"):
+        pytest.skip("core that drops a parameter the session's backend does not declare (before the refusal)")
+    from agent.delegation_backends import set_session_backend
+    from hermes_cli.plugin_command_dispatch import invoke_plugin_command
+    from tools.delegate_tool import delegate_task
+
+    monkeypatch.delenv("HERMES_SESSION_KEY", raising=False)  # the session is the parent's (session_id "root")
+    launch, manager = _load(tmp_path, monkeypatch, plugin_root, {"backend": "model_map", "backends": {
+        "model_map": {"options": [{"name": "fast", "description": "Quick.", "provider": "openrouter",
+                                   "model": "fast-model"}], "default": "fast"},
+        "profile_routes": {"profiles": PROFILES, "default": "coder"}}})
+    try:
+        assert "option" in _definition()["parameters"]["properties"]["tasks"]["items"]["properties"]
+        handler = manager._plugin_commands["delegation"]["handler"]
+        reply = invoke_plugin_command(handler, "profile_routes", source=None, session_id="root", session_key="root",
+                                      platform="cli")
+        assert "Routing changes now" in reply and "is refused" in reply
+        out = json.loads(delegate_task(tasks=[{"goal": "the quick thing", "option": "fast"},
+                                              {"goal": "a task with no choice"}], parent_agent=_parent()))
+        assert "option" in _definition()["parameters"]["properties"]["tasks"]["items"]["properties"]
+    finally:
+        set_session_backend("root", None)
+        manager.unload()
+    refused, plain = out["results"]
+    assert refused["status"] == "error"
+    assert "'profile_routes', which does not take 'option'" in refused["error"]
+    assert "not started" in refused["error"]
+    ((built, child),) = children  # only the plain task built a child, as the default profile
+    assert os.path.samefile(built["profile_home"], launch / "profiles" / "coder")
+    assert plain["status"] == "completed" and child._delegate_route["label"] == "coder"

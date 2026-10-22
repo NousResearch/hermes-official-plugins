@@ -1,6 +1,7 @@
 """Delegation Model Map: the agent picks a named model option for each ``delegate_task`` subagent.
 
-A delegation provider (``delegation.backend: model-map``). The provider itself lives in
+A delegation provider (``delegation.backend: model_map``, settings in
+``delegation.backends.model_map``). The provider itself lives in
 ``provider.py``; this module only registers it, and stays inert on a Hermes core that predates
 pluggable delegation providers, so installing it there changes nothing.
 """

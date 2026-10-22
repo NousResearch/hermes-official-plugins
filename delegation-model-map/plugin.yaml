@@ -6,11 +6,12 @@ author: NousResearch
 homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/delegation-model-map
 description: >
   Let the agent pick a model for each delegate_task subagent from a list you
-  define. Each entry in delegation.model_map has a name and a one-line
-  description the agent reads, plus the route it maps to (provider and/or
-  base_url, model, optional reasoning effort); delegate_task gains a per-task
-  `option` choice. The raw provider, model and key never become tool
-  parameters. Selected with `delegation.backend: model-map`. Needs a Hermes
-  core with pluggable delegation providers.
+  define. Each option in delegation.backends.model_map.options has a name and
+  a one-line description the agent reads, plus the route it maps to (provider
+  and/or base_url, model, optional reasoning effort and speed tier);
+  delegate_task gains a per-task `option` choice. The raw provider, model and
+  key never become tool parameters. Selected with
+  `delegation.backend: model_map`. Needs a Hermes core with pluggable
+  delegation providers.
 provides_tools: []
 provides_hooks: []

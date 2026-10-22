@@ -18,12 +18,21 @@ pytest.importorskip("agent.delegation_provider", reason="Hermes core without plu
 import hermes_yaml as yaml  # noqa: E402
 
 PLUGIN = "delegation-model-map"
-MODEL_MAP = [
+OPTIONS = [
     {"name": "local", "description": "Runs on this machine.", "base_url": "http://localhost:9/v1",
      "model": "local-model", "api_key": "local-key"},
     {"name": "deep", "description": "Slow and careful.", "provider": "openrouter", "model": "deep-model",
      "reasoning_effort": "high"},
 ]
+#: A route that offers a fast tier (the same gate as /fast), and one that does not.
+CODEX_FAST = {"name": "codex", "description": "Codex, priority tier.", "model": "gpt-6-astra",
+              "base_url": "https://chatgpt.com/backend-api/codex", "api_key": "codex-key", "service_tier": "fast"}
+LOCAL_FAST = {"name": "local-fast", "description": "Local, asking for a tier it lacks.",
+              "base_url": "http://localhost:9/v1", "model": "local-model", "api_key": "local-key", "service_tier": "fast"}
+
+
+def _delegation(**settings):
+    return {"backend": "model_map", "backends": {"model_map": settings}}
 
 
 def _load(tmp_path, monkeypatch, plugin_root, delegation):
@@ -46,7 +55,7 @@ def _load(tmp_path, monkeypatch, plugin_root, delegation):
 
 @pytest.fixture
 def loaded(tmp_path, monkeypatch, plugin_root):
-    manager = _load(tmp_path, monkeypatch, plugin_root, {"backend": "model-map", "model_map": MODEL_MAP})
+    manager = _load(tmp_path, monkeypatch, plugin_root, _delegation(options=OPTIONS))
     try:
         yield
     finally:
@@ -87,7 +96,7 @@ def test_discovered_plugin_is_the_active_backend_and_extends_the_schema(loaded):
     from agent.delegation_registry import get_active_provider
     from tools.delegate_tool_config import _load_config
 
-    assert get_active_provider(_load_config()).name == "model-map"
+    assert get_active_provider(_load_config()).name == "model_map"
     definition = _definition()
     task_props = definition["parameters"]["properties"]["tasks"]["items"]["properties"]
     assert task_props["option"]["enum"] == ["local", "deep"]
@@ -112,10 +121,11 @@ def test_each_option_reaches_child_construction_on_its_route(loaded, children):
     assert (deep["model"], deep["override_provider"], deep["override_api_key"]) == (
         "deep-model", "openrouter", "openrouter-key")
     assert deep["override_reasoning_effort"] == "high"
-    assert (local_child._delegate_route_label, deep_child._delegate_route_label) == ("local", "deep")
-    # No option and no model_map_default: today's delegation route (inherit the parent).
+    # Core reports these as backend-routed (the result's `route` starts from this label).
+    assert (local_child._delegate_route, deep_child._delegate_route) == ({"label": "local"}, {"label": "deep"})
+    # No option and no default: today's delegation route (inherit the parent).
     assert plain["model"] is None and plain["override_provider"] is None and plain["override_base_url"] is None
-    assert not hasattr(plain_child, "_delegate_route_label")
+    assert plain["override_service_tier"] is None and not hasattr(plain_child, "_delegate_route")
 
 
 def test_unknown_option_is_refused_before_any_child_is_built(loaded, children):
@@ -126,15 +136,52 @@ def test_unknown_option_is_refused_before_any_child_is_built(loaded, children):
     assert "must be one of local, deep" in out["error"] and not children
 
 
-def test_model_map_default_routes_tasks_without_an_option(tmp_path, monkeypatch, plugin_root, children):
+def _delegate_with(tmp_path, monkeypatch, plugin_root, delegation, tasks):
     from tools.delegate_tool import delegate_task
 
-    manager = _load(tmp_path, monkeypatch, plugin_root,
-                    {"backend": "model-map", "model_map": MODEL_MAP, "model_map_default": "local"})
+    manager = _load(tmp_path, monkeypatch, plugin_root, delegation)
     try:
+        return json.loads(delegate_task(tasks=tasks, parent_agent=_parent()))
+    finally:
+        manager.unload()
+
+
+def test_configured_default_routes_tasks_without_an_option(tmp_path, monkeypatch, plugin_root, children):
+    _delegate_with(tmp_path, monkeypatch, plugin_root, _delegation(options=OPTIONS, default="local"),
+                   [{"goal": "a task with no option set"}])
+    ((built, child),) = children
+    assert (built["model"], built["override_base_url"], child._delegate_route) == (
+        "local-model", "http://localhost:9/v1", {"label": "local"})
+
+
+def test_an_options_service_tier_reaches_the_child_after_cores_tier_check(tmp_path, monkeypatch, plugin_root,
+                                                                         children):
+    out = _delegate_with(tmp_path, monkeypatch, plugin_root, _delegation(options=[*OPTIONS, CODEX_FAST]),
+                         [{"goal": "a task on the priority tier", "option": "codex"},
+                          {"goal": "a sibling on the normal tier", "option": "local"}])
+    assert [r["status"] for r in out["results"]] == ["completed", "completed"]
+    (codex, codex_child), (local, local_child) = children
+    assert codex["override_service_tier"] == "priority"
+    assert codex_child.request_overrides["service_tier"] == "priority"  # re-applied after the child is built
+    assert local["override_service_tier"] is None
+    assert "service_tier" not in (getattr(local_child, "request_overrides", None) or {})
+
+
+def test_a_tier_the_options_route_does_not_offer_refuses_the_spawn(tmp_path, monkeypatch, plugin_root, children):
+    out = _delegate_with(tmp_path, monkeypatch, plugin_root, _delegation(options=[*OPTIONS, LOCAL_FAST]),
+                         [{"goal": "a task asking for a tier its route lacks", "option": "local-fast"}])
+    assert "service_tier 'fast' is not available" in out["error"] and not children
+
+
+def test_settings_at_the_old_location_are_not_read(tmp_path, monkeypatch, plugin_root, children):
+    manager = _load(tmp_path, monkeypatch, plugin_root,
+                    {"backend": "model_map", "model_map": OPTIONS, "model_map_default": "local"})
+    try:
+        task_props = _definition()["parameters"]["properties"]["tasks"]["items"]["properties"]
+        from tools.delegate_tool import delegate_task
         delegate_task(tasks=[{"goal": "a task with no option set"}], parent_agent=_parent())
     finally:
         manager.unload()
-    ((built, child),) = children
-    assert (built["model"], built["override_base_url"], child._delegate_route_label) == (
-        "local-model", "http://localhost:9/v1", "local")
+    assert "option" not in task_props
+    ((plain, _),) = children
+    assert plain["model"] is None and plain["override_base_url"] is None  # today's route, not the old default

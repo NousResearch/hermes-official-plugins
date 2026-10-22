@@ -1,28 +1,31 @@
-"""The ``model-map`` delegation provider.
+"""The ``model_map`` delegation provider.
 
-Config (the ``delegation`` section of config.yaml)::
+Settings live in ``delegation.backends.model_map`` of config.yaml::
 
     delegation:
-      backend: model-map
-      model_map:
-        - name: fast                        # what the model picks
-          description: Cheap and quick; lookups, summaries, simple edits.
-          provider: openrouter              # provider and/or base_url, plus model
-          model: google/gemini-3-flash-preview
-        - name: deep
-          description: Slow and careful; hard debugging and design work.
-          provider: anthropic
-          model: claude-opus-5
-          reasoning_effort: high
-        - name: local
-          description: Private; runs on this machine.
-          base_url: http://localhost:8080/v1
-          model: qwen3-coder
-      model_map_default: fast               # optional: option for tasks that set none
+      backend: model_map
+      backends:
+        model_map:
+          options:
+            - name: fast                    # what the model picks
+              description: Cheap and quick; lookups, summaries, simple edits.
+              provider: openrouter          # provider and/or base_url, plus model
+              model: google/gemini-3-flash-preview
+            - name: deep
+              description: Slow and careful; hard debugging and design work.
+              provider: anthropic
+              model: claude-opus-5
+              reasoning_effort: high
+              service_tier: fast            # optional; core refuses the spawn if the route has no fast tier
+            - name: local
+              description: Private; runs on this machine.
+              base_url: http://localhost:8080/v1
+              model: qwen3-coder
+          default: fast                     # optional: option for tasks that set none
 
 ``delegate_task`` gains a per-task ``option`` enum of those names. A task that sets one runs on that
-entry's route; a task without one runs on ``model_map_default`` when set, else on today's
-``delegation.*`` route. The raw provider/model/endpoint/key never become model-facing parameters.
+entry's route; a task without one runs on ``default`` when set, else on today's ``delegation.*`` route.
+The raw provider/model/endpoint/key never become model-facing parameters.
 """
 
 from __future__ import annotations
@@ -34,9 +37,11 @@ from agent.delegation_provider import DelegationProvider
 
 logger = logging.getLogger(__name__)
 
+BACKEND = "model_map"
+SETTINGS_PATH = f"delegation.backends.{BACKEND}"
 PARAMETER = "option"
-#: Entry keys copied into the route (same meaning as the matching ``delegation.*`` keys).
-ROUTE_FIELDS = ("provider", "model", "base_url", "api_key", "api_mode", "reasoning_effort")
+#: Entry keys copied into the route (same meaning as the matching core route fields).
+ROUTE_FIELDS = ("provider", "model", "base_url", "api_key", "api_mode", "reasoning_effort", "service_tier")
 _warned: set[str] = set()
 
 
@@ -65,26 +70,26 @@ def _entry_problem(entry: Any) -> str:
     return ""
 
 
-def configured_options(config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    """``{name: entry}`` from ``delegation.model_map`` in config order, skipping malformed entries and
-    repeated names (each skipped entry is warned once). Each entry keeps its description plus the
-    non-empty route fields."""
-    raw = config.get("model_map") if isinstance(config, Mapping) else None
+def configured_options(settings: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """``{name: entry}`` from the backend settings' ``options`` in config order, skipping malformed
+    entries and repeated names (each skipped entry is warned once). Each entry keeps its description
+    plus the non-empty route fields."""
+    raw = settings.get("options")
     if raw is None:
         return {}
     if not isinstance(raw, list):
-        _warn_once("delegation.model_map must be a list of {name, description, provider/base_url, model} "
-                   "entries; ignoring it.")
+        _warn_once("%s.options must be a list of {name, description, provider/base_url, model} entries; "
+                   "ignoring it.", SETTINGS_PATH)
         return {}
     options: dict[str, dict[str, Any]] = {}
     for i, entry in enumerate(raw):
         problem = _entry_problem(entry)
         if problem:
-            _warn_once("delegation.model_map[%d] %s; skipped.", i, problem)
+            _warn_once("%s.options[%d] %s; skipped.", SETTINGS_PATH, i, problem)
             continue
         name = _text(entry, "name")
         if name in options:
-            _warn_once("delegation.model_map[%d] repeats option %r; skipped.", i, name)
+            _warn_once("%s.options[%d] repeats option %r; skipped.", SETTINGS_PATH, i, name)
             continue
         route = {key: entry[key].strip() for key in ROUTE_FIELDS
                  if isinstance(entry.get(key), str) and entry[key].strip()}
@@ -93,14 +98,15 @@ def configured_options(config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 class ModelMapDelegationProvider(DelegationProvider):
-    """``delegation.backend: model-map``: the model picks a named model option per subagent."""
+    """``delegation.backend: model_map``: the model picks a named model option per subagent, from the
+    options in ``delegation.backends.model_map``."""
 
     @property
     def name(self) -> str:
-        return "model-map"
+        return BACKEND
 
     def task_parameters(self, config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-        options = configured_options(config)
+        options = configured_options(self.settings(config))
         if not options:
             return {}
         lines = [
@@ -110,19 +116,20 @@ class ModelMapDelegationProvider(DelegationProvider):
         return {PARAMETER: {"type": "string", "enum": list(options), "description": "\n".join(lines)}}
 
     def description(self, config: Mapping[str, Any]) -> str:
-        if not configured_options(config):
+        if not configured_options(self.settings(config)):
             return ""
         return "Each task may set `option` to run that subagent on one of the listed models."
 
     def route_task(self, task: Mapping[str, Any], config: Mapping[str, Any]) -> dict[str, Any]:
-        options = configured_options(config)
+        settings = self.settings(config)
+        options = configured_options(settings)
         chosen = task.get(PARAMETER)
         if not chosen:
-            default = config.get("model_map_default")
+            default = settings.get("default")
             chosen = default.strip() if isinstance(default, str) else ""
             if chosen and chosen not in options:
-                _warn_once("delegation.model_map_default %r is not an option in delegation.model_map; "
-                           "tasks without an option use the default route.", chosen)
+                _warn_once("%s.default %r is not an option in %s.options; tasks without an option use the "
+                           "default route.", SETTINGS_PATH, chosen, SETTINGS_PATH)
                 chosen = ""
         if not chosen:
             return dict(config)

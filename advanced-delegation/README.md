@@ -95,10 +95,13 @@ numbered text listing instead. Mode words: `default`, `model_map` (or `models`, 
 `profile_routes` (or `profiles`, `3`). A mode with nothing set up is refused with a pointer to
 `hermes delegation config`.
 
-A session switch changes where this chat's subagents go from its next `delegate_task`. The tool list
-of a running chat is part of its prompt cache and keeps the mode it started with, so until a new
-session the agent cannot pick routes itself: every task takes the new mode's default route (or the
-parent's model). `--global` saves the mode, and sessions started after it give the agent the picks.
+A session switch changes **routing** from this chat's next `delegate_task`, but not the agent's
+**choices**: the tool schema is part of the running chat's prompt cache and is never rebuilt
+mid-session, so the per-task `option` / `profile` follow the mode the chat started with until
+`/new`. A task that sends a choice the new mode doesn't have is refused with a message (never
+silently dropped); a task that sends none runs on the new mode's default (or the parent's model).
+`--global` saves the mode, and `/new` then gives a session whose choices match (`/new` also clears a
+session-only switch).
 
 When the configured delegation backend cannot run (for example the plugin was disabled), Hermes
 refuses the subagent with an error naming `/delegation`: the listing flags the broken backend, and

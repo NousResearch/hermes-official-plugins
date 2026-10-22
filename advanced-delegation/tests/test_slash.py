@@ -151,6 +151,24 @@ def test_bare_command_asks_with_the_surfaces_picker_and_switches_the_session(hom
     assert choices[0]["label"] == "Default (current)" and "deep (default)" in choices[1]["description"]
     assert api.sessions == {"chat-7": "model_map"} and _saved(home)["backend"] == "default"
     assert "this session" in reply and "default route 'deep'" in reply  # tasks here take the mode's default
+    assert "/new" in question  # the picker says up front that the agent's own choices change only on /new
+
+
+@pytest.mark.parametrize(("target", "routes_to"), [("profile_routes", "the default profile 'coder'"),
+                                                   ("default", "delegation.model (sub-model)")])
+def test_a_session_switch_says_routing_changes_now_and_choices_follow_the_starting_mode(home, api, target,
+                                                                                         routes_to):
+    # Saved mode model_map: the chat's delegate_task offers `option`. Switching only this session changes
+    # where tasks go, not that schema, and core refuses a task sending a choice the new mode lacks.
+    _write(home, {"backend": "model_map", "model": "sub-model", "backends": {
+        "model_map": {"options": ROUTES, "default": "fast"},
+        "profile_routes": {"profiles": [{"name": "coder"}], "default": "coder"}}})
+    reply = str(_run(target, Ctx(ask=False, api=api), session_key="chat-7"))
+    assert api.sessions == {"chat-7": target}
+    assert "Routing changes now" in reply
+    assert "follow the mode this chat started with until /new" in reply
+    assert "is refused" in reply and routes_to in reply
+    assert "--global" in reply and "/new" in reply
 
 
 def test_a_picker_that_returns_none_falls_back_to_the_text_listing(home, api):

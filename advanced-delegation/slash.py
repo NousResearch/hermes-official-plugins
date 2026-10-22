@@ -7,6 +7,12 @@
                                 ``profile_routes``/``profiles``, or the number shown)
 ``/delegation <mode> --global`` save it as this profile's ``delegation.backend``
 
+A session switch changes routing at once, but not the agent's per-task choices: the ``delegate_task``
+schema is part of the prompt cache and is never rebuilt mid-session, so ``option`` / ``profile`` follow
+the mode the chat started with until ``/new``. Core refuses a task that sends a choice the active mode
+does not declare (it never drops one silently). ``--global`` saves the mode, and ``/new`` then starts a
+session whose choices match; ``/new`` also clears a session-only switch.
+
 Session scoping follows ``/model``. Core keeps the per-session choice and the global write behind
 ``ctx.delegation_backends`` (``list_backends`` / ``get_session_backend`` / ``set_session_backend`` /
 ``set_global_backend``). It is a host remote facade, so under ``plugins.isolation: host`` the switch
@@ -112,7 +118,8 @@ def _listing(section: Mapping[str, Any], effective: str, saved: str, api) -> str
     for i, mode in enumerate(store.MODES, 1):
         mark = "  ← current" if mode == effective else ""
         lines.append(f"  {i}. {store.MODES[mode]:<15} {_detail(mode, section)}{mark}")
-    lines.append(f"Switch: {USAGE}  (no flag = this session only)")
+    lines.append(f"Switch: {USAGE}  (no flag = this session's routing only; the agent's choices change "
+                 "with --global + /new)")
     return "\n".join(lines)
 
 
@@ -121,20 +128,30 @@ def _ask(ask_choice: AskChoice, section: Mapping[str, Any], effective: str, save
     choices = [{"value": mode, "label": store.MODES[mode] + (" (current)" if mode == effective else ""),
                 "description": _detail(mode, section)}
                for mode in store.MODES if _ready(mode, section)]
-    question = f"{_headline(effective, saved)}. Switch this session to:"
+    question = (f"{_headline(effective, saved)}. Switch this session's routing to (the agent's choices "
+                "change only with --global + /new):")
     return ask_choice(question, choices)
 
 
-def _session_note(mode: str, saved: str, section: Mapping[str, Any]) -> str:
-    """A session switch keeps the chat's cached tool list (built for the saved mode), so the agent cannot
-    pick this mode's routes until a new session; say where its tasks go meanwhile."""
-    if mode == saved or mode == "default":
-        return ""
+def _unrouted_target(mode: str, section: Mapping[str, Any]) -> str:
+    """Where a task that picks nothing runs in ``mode``."""
+    if mode == "default":
+        model = " ".join(str(section.get("model") or "").split())
+        return f"delegation.model ({model})" if model else "the parent's model"
     default = _mode_default(mode, section)
     noun = "route" if mode == "model_map" else "profile"
-    target = f"the default {noun} '{default}'" if default else "the parent's model"
-    return (f" This chat keeps the tool list it started with, so its subagents run on {target}; "
-            "with --global, new sessions let the agent pick.")
+    return f"the default {noun} '{default}'" if default else "the parent's model"
+
+
+def _session_note(mode: str, saved: str, section: Mapping[str, Any]) -> str:
+    """A session switch moves routing now, but the chat's ``delegate_task`` schema (prompt cache) keeps the
+    choices of the mode it started with (the saved one, as ``/new`` starts there) until ``/new``."""
+    if mode == saved:
+        return ""
+    return (" Routing changes now; the agent's per-task choices (option/profile) follow the mode this chat "
+            "started with until /new. A task that sends a choice this mode doesn't have is refused; one that "
+            f"sends none runs on {_unrouted_target(mode, section)}. --global saves it; /new then gives a session "
+            "whose choices match.")
 
 
 def handle(raw_args: str = "", session_key: str = "", ask_choice: Optional[AskChoice] = None, api=None) -> str:
@@ -175,4 +192,8 @@ def _switch(mode: str, is_global: bool, section: Mapping[str, Any], saved: str, 
     scope = "saved for this profile" if is_global else "for this session (add --global to save it)"
     note = " delegation.model / delegation.provider apply again." if mode == "default" else (
         f" {_detail(mode, section).capitalize()}.")
-    return f"Delegation mode: {store.mode_label(mode)}, {scope}.{note}{_session_note(mode, saved, section)}"
+    if is_global:
+        tail = " /new starts a session whose choices match." if mode != saved else ""
+    else:
+        tail = _session_note(mode, saved, section)
+    return f"Delegation mode: {store.mode_label(mode)}, {scope}.{note}{tail}"

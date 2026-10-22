@@ -64,6 +64,7 @@ HASS_HOME_CHANNEL=mobile_app_my_phone
 | `HASS_ENTITY_DENYLIST` | no | Comma-separated entity ID prefixes or globs that the tools always exclude (final veto): `ha_list_entities` hides them, `ha_get_state` refuses to read them and `ha_call_service` refuses to control them. |
 | `HASS_ENTITY_ALLOWLIST` | no | Comma-separated entity ID prefixes or globs the tools are limited to (whitelist; unset = unrestricted), for listing, reading and `ha_call_service` control alike. |
 | `HASS_MAX_ENTITIES` | no | Optional cap on `ha_list_entities` results (unset = no cap; a per-call `max` overrides it). |
+| `HASS_TIMEZONE` | no | Timezone the local timestamp twins are computed in (e.g. `Europe/Berlin`). Unset uses the instance's own configured `time_zone`; when that cannot be read either, the machine's local time. |
 
 ### 3. Tools
 

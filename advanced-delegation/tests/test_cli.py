@@ -19,6 +19,11 @@ import curses  # noqa: E402
 import hermes_yaml as yaml  # noqa: E402
 
 from advanced_delegation_plugin import cli  # noqa: E402
+from hermes_cli import auth_model_picker  # noqa: E402
+
+# The route editor opens core's public, titled model picker (the same core release as the delegation seam).
+needs_model_picker = pytest.mark.skipif(not hasattr(auth_model_picker, "prompt_model_selection"),
+                                        reason="core without hermes_cli.auth_model_picker.prompt_model_selection")
 
 DOWN, UP, ENTER, SPACE, QUIT = curses.KEY_DOWN, curses.KEY_UP, 10, ord(" "), ord("q")
 PROVIDER_ROWS = [
@@ -156,6 +161,7 @@ def test_cancelling_the_mode_picker_changes_nothing(terminal, home):
     assert _config(home) == {"delegation": {"backend": "profile_routes"}}
 
 
+@needs_model_picker
 def test_add_a_model_route_like_hermes_model_then_finish_in_model_routes_mode(terminal, home):
     terminal.menu(DOWN, ENTER)                 # mode picker -> Model routes
     terminal.menu(ENTER)                       # routes list (empty) -> "+ Add a route"
@@ -171,6 +177,7 @@ def test_add_a_model_route_like_hermes_model_then_finish_in_model_routes_mode(te
         "name": "fast", "description": "Cheap and quick: lookups and summaries.", "provider": "openrouter",
         "model": "google/gemini-3-flash-preview"}]
     assert "OpenRouter" in terminal.shown(2) and "Anthropic" in terminal.shown(2)  # the provider list
+    assert "Select the model for this route" in terminal.shown(3)  # core's model picker, titled for a route
 
 
 def test_routes_list_shows_name_description_and_route_and_sets_the_default(terminal, home):
@@ -192,6 +199,7 @@ def test_routes_list_shows_name_description_and_route_and_sets_the_default(termi
     assert _config(home)["delegation"]["backend"] == "model_map"
 
 
+@needs_model_picker
 def test_edit_keeps_unedited_keys_and_delete_removes_a_route(terminal, home):
     _write(home, {"delegation": {"backends": {"model_map": {"options": [
         {"name": "fast", "description": "Quick.", "provider": "openrouter", "model": "m1",
@@ -216,6 +224,7 @@ def test_edit_keeps_unedited_keys_and_delete_removes_a_route(terminal, home):
     assert "backend" not in delegation  # quitting the editor keeps the mode; route edits are saved
 
 
+@needs_model_picker
 def test_a_repeated_route_name_is_asked_again(terminal, capsys, home):
     _write(home, {"delegation": {"backends": {"model_map": {"options": [
         {"name": "fast", "description": "Quick.", "provider": "openrouter", "model": "m1"}]}}}})

@@ -248,14 +248,14 @@ def _pick_where(existing: Mapping[str, Any]) -> Optional[dict[str, str]]:
 def _pick_model(provider: str, models: list[str], current: str) -> str:
     if not models:
         return _ask(f"Model on {provider}", current)
-    from hermes_cli.auth_model_picker import _prompt_model_selection
+    from hermes_cli.auth_model_picker import prompt_model_selection
     from hermes_cli.models_pricing import get_pricing_for_provider
     try:
         pricing = get_pricing_for_provider(provider) or {}
     except Exception:  # prices are decoration; the picker works without them
         pricing = {}
-    return _prompt_model_selection(list(models), current_model=current, pricing=pricing,
-                                   confirm_provider=provider) or ""
+    return prompt_model_selection(list(models), current_model=current, pricing=pricing,
+                                  confirm_provider=provider, title="Select the model for this route:") or ""
 
 
 def _pick_effort(route: dict[str, Any], current: str) -> None:

@@ -47,6 +47,7 @@ hermes config set plugins.entries.bubblewrap.settings.cpu_seconds 600      # 0 d
 hermes config set plugins.entries.bubblewrap.settings.max_procs 256        # 0 disables
 hermes config set plugins.entries.bubblewrap.settings.binds '[{"src": "/data/models"}, {"src": "/srv/scratch", "readonly": false}]'
 hermes config set plugins.entries.bubblewrap.settings.home_allow '[".config/nvim"]'
+hermes config set plugins.entries.bubblewrap.settings.hide '["~/Documents/keys"]'
 ```
 
 Settings are read each time a sandbox environment is created, per profile. `terminal.cwd`,
@@ -114,7 +115,9 @@ Credential stores stay hidden whatever the allowlist says: `.ssh`, `.aws`, `.gnu
 `.config/gcloud`, the browser profiles, the desktop keyrings and the other paths that Hermes' own
 file tools refuse to write. A `home_allow` entry that names one is ignored with a warning. Below an
 allowed entry the same holds: `~/.cargo` is visible, `~/.cargo/credentials.toml` shows as an empty
-file, and so do `~/.gem/credentials`, `~/.m2/settings.xml` and `~/.config/npm/npmrc`.
+file, and so do `~/.gem/credentials`, `~/.m2/settings.xml` and `~/.config/npm/npmrc`. The `hide`
+setting hides more paths, absolute or relative to the home directory (a non-dot directory that holds
+keys, say). A `hide` entry that names the home directory or a parent of it is ignored with a warning.
 
 An allowed dot entry that is a symlink stays a symlink inside the sandbox, so it resolves only when
 its target is visible. A dotfiles repository in a dot directory (`~/.gitconfig` linked to

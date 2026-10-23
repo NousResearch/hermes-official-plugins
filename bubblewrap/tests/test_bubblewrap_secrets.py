@@ -544,6 +544,43 @@ class TestHermesHomeIntegration:
         assert (default_home / "auth.json").read_text() == f'{{"token": "{MARKER}"}}\n'
 
 
+@needs_bwrap
+class TestOtherEnvironmentStateIntegration:
+    """A sandbox dir outside HERMES_HOME holds the state dir of every
+    environment: the shell snapshot and the scripts of its execute_code
+    calls. No other environment may read them, also not through an
+    operator bind that shows the sandbox dir at a second path."""
+
+    def test_state_of_another_environment_is_not_visible_through_a_bind(self, host_dir, work_dir, monkeypatch):
+        stage = host_dir / "stage"
+        root = stage / "sandboxes"
+        root.mkdir(parents=True)
+        monkeypatch.setenv("TERMINAL_SANDBOX_DIR", str(root))
+        # The parent of the sandbox dir once more, read-only at another path.
+        mirror = work_dir / "mirror"
+        config = BubblewrapConfig(binds=(BindMount(str(stage), str(mirror), True),))
+        first = BubblewrapEnvironment(cwd=str(work_dir), timeout=30)
+        second = BubblewrapEnvironment(cwd=str(work_dir), timeout=30, config=config)
+        try:
+            assert second._config.binds, "the bind under test was dropped"
+            theirs = Path(first.get_temp_dir())
+            assert theirs.parent == root
+            _write(theirs / "note.txt")
+            assert first.execute(f"cat {theirs}/note.txt")["output"].strip() == MARKER
+            out = second.execute(
+                f"ls -A {root} {mirror}/sandboxes 2>&1; "
+                f"cat {theirs}/note.txt {root}/*/* {mirror}/sandboxes/*/* 2>&1"
+            )["output"]
+            assert MARKER not in out
+            assert theirs.name not in out.replace(f"{theirs}/note.txt: No such file", "")
+            # Its own state dir still works: the shell state survives.
+            assert second.execute("export KEPT=1")["returncode"] == 0
+            assert second.execute("echo $KEPT")["output"].strip() == "1"
+        finally:
+            first.cleanup()
+            second.cleanup()
+
+
 class TestHomeModeCarveOut:
     """HERMES_HOME/home is bound back over the overlay only under home_mode=profile."""
 

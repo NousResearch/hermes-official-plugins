@@ -587,6 +587,27 @@ class Capture:
         self.complete = bool(self.message and self.message.get('stop_reason') and not self.arguments)
 
 
+def is_title_request(payload: bytes) -> bool:
+    """Native's session-title side request: no tools, a ``{title}`` ``json_schema`` output (#39).
+
+    Claude Code sends it next to the first turn of a session. Whichever request takes the single
+    admission wins, and when the title wins Hermes surfaces ``{"title": ...}`` as the reply. It is
+    answered locally with 400 (native treats that as "no title"), so the real turn takes the gate.
+    """
+    try:
+        body = json.loads(payload)
+    except ValueError:
+        return False
+    if not isinstance(body, dict) or body.get('tools'):
+        return False
+    fmt = (body.get('output_config') or {}).get('format')
+    if not isinstance(fmt, dict) or fmt.get('type') != 'json_schema':
+        return False
+    schema = fmt.get('schema')
+    properties = schema.get('properties') if isinstance(schema, dict) else None
+    return isinstance(properties, dict) and set(properties) == {'title'}
+
+
 def upstream_proxy(upstream):
     """``(host, port, tunnel_headers)`` of the HTTP CONNECT proxy for ``upstream``, or ``None``.
 
@@ -765,6 +786,21 @@ class Handler(BaseHTTPRequestHandler):
         if path.path != gate.prefix + '/v1/messages' or self.headers.get('Origin'):
             self.send_error(404)
             return
+        self.connection.settimeout(gate.timeout)
+        try:
+            payload = self.rfile.read(int(self.headers.get('Content-Length') or 0))
+        except (OSError, ValueError):
+            self.send_error(400)
+            return
+        if is_title_request(payload):
+            # Answered before the gate: the side request must not consume the turn's one admission.
+            body = b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_MODEL_ADMISSION_TITLE"}}'
+            self.send_response(400)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         with gate.lock:
             if gate.cancelled or gate.used:
                 gate.denied += 1
@@ -779,8 +815,6 @@ class Handler(BaseHTTPRequestHandler):
         conn = None
         upstream_socket = None
         try:
-            self.connection.settimeout(gate.timeout)
-            payload = self.rfile.read(int(self.headers['Content-Length']))
             if getattr(gate, 'one_shot', False):
                 payload = drop_message_breakpoints(payload)
             try:

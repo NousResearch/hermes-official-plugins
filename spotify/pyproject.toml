@@ -10,6 +10,8 @@ dependencies = [
   "httpx>=0.27,<1",
   # Self-signed certificate for the optional https loopback listener.
   "cryptography>=41,<51",
+  # Playlist cover uploads are re-encoded as JPEG.
+  "Pillow>=10,<13",
 ]
 
 [project.urls]

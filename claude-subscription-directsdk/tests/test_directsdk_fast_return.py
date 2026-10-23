@@ -138,17 +138,33 @@ def native_case(tmp_path, monkeypatch):
                 self.send_response(config.get('status', 200))
                 self.send_header('Content-Type', 'text/event-stream')
                 self.end_headers()
-                block = ({'type': 'tool_use', 'id': 'toolu_1', 'name': 'mcp__hermes__lookup',
-                          'input': {'q': 'fixture'}} if config.get('tool') else
-                         {'type': 'text', 'text': 'FIRST'})
-                events = [
-                    {'type': 'message_start', 'message': {'id': 'captured', 'role': 'assistant',
-                        'content': [], 'usage': usage}},
-                    {'type': 'content_block_start', 'index': 0, 'content_block': block},
-                    {'type': 'content_block_stop', 'index': 0},
-                    {'type': 'message_delta', 'delta': {'stop_reason': config.get('stop_reason',
-                        'tool_use' if config.get('tool') else 'end_turn')}, 'usage': usage},
-                ]
+                if config.get('cut'):
+                    # A tool call whose only argument delta cannot be parsed: desktop keeps the block with an
+                    # unparsed-input marker and answers it locally; the relay drops it at message_stop (#164).
+                    events = [
+                        {'type': 'message_start', 'message': {'id': 'captured', 'role': 'assistant',
+                            'content': [], 'usage': usage}},
+                        {'type': 'content_block_start', 'index': 0,
+                         'content_block': {'type': 'text', 'text': 'FIRST'}},
+                        {'type': 'content_block_start', 'index': 1,
+                         'content_block': {'type': 'tool_use', 'id': 'toolu_1', 'name': 'mcp__hermes__lookup', 'input': {}}},
+                        {'type': 'content_block_delta', 'index': 1, 'delta': {'type': 'input_json_delta', 'partial_json': '{"path":'}},
+                        {'type': 'content_block_stop', 'index': 1},
+                        {'type': 'content_block_stop', 'index': 0},
+                        {'type': 'message_delta', 'delta': {'stop_reason': 'max_tokens'}, 'usage': usage},
+                    ]
+                else:
+                    block = ({'type': 'tool_use', 'id': 'toolu_1', 'name': 'mcp__hermes__lookup',
+                              'input': {'q': 'fixture'}} if config.get('tool') else
+                             {'type': 'text', 'text': 'FIRST'})
+                    events = [
+                        {'type': 'message_start', 'message': {'id': 'captured', 'role': 'assistant',
+                            'content': [], 'usage': usage}},
+                        {'type': 'content_block_start', 'index': 0, 'content_block': block},
+                        {'type': 'content_block_stop', 'index': 0},
+                        {'type': 'message_delta', 'delta': {'stop_reason': config.get('stop_reason',
+                            'tool_use' if config.get('tool') else 'end_turn')}, 'usage': usage},
+                    ]
                 if not config.get('incomplete'):
                     events.append({'type': 'message_stop'})
                 self.wfile.write(''.join('data: ' + json.dumps(e) + '\n\n' for e in events).encode())
@@ -211,6 +227,41 @@ def test_max_turns_tools_return_without_reading_exit_code(native_case):
         (state.root / 'release').touch()
         wait_for(lambda: state.process not in directsdk._draining)
         assert state.real.wait(timeout=1) == 1
+
+
+def test_a_tool_call_cut_at_max_tokens_returns_finish_length(native_case):
+    """#164: native keeps the unparsable call and answers it locally (error_max_turns, exit 1), but the
+    capture holds only the text: the answer reaches Hermes as finish length, not a failed turn."""
+    with native_case(cut=True, subtype='error_max_turns', is_error=True, exitcode=1,
+                     forbid_returncode=True) as state:
+        result = state.client.create(**REQUEST)
+        assert result.choices[0].finish_reason == 'length'
+        assert result.choices[0].message.content == 'FIRST'
+        assert result.choices[0].message.tool_calls is None
+        assert not state.returncode_reads
+        (state.root / 'release').touch()
+        wait_for(lambda: state.process not in directsdk._draining)
+        assert state.real.wait(timeout=1) == 1
+
+
+def test_a_cut_call_at_max_turns_returns_finish_length_after_native_exits(native_case):
+    """Same turn without fast eligibility (a native retry is denied): the exit code is read, the
+    boundary still behaves like a turn with calls, and the retry stays gated."""
+    with native_case(cut=True, subtype='error_max_turns', is_error=True, exitcode=1,
+                     denied=True) as state, ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(state.client.create, **REQUEST)
+        try:
+            wait_for(lambda: (state.root / 'result').exists())
+            time.sleep(.05)
+            assert not future.done()
+        finally:
+            (state.root / 'release').touch()
+        result = future.result(timeout=3)
+        assert result.choices[0].finish_reason == 'length'
+        assert result.choices[0].message.content == 'FIRST'
+        assert result.choices[0].message.tool_calls is None
+        assert state.real.poll() == 1
+        assert len(state.calls) == 1 and state.admission.denied == 1
 
 
 @pytest.mark.skipif(not hasattr(os, 'killpg'), reason='POSIX foreign-child reaper (waitpid(-1, WNOHANG), process groups)')

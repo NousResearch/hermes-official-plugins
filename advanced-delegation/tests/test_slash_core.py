@@ -4,15 +4,19 @@ Skips on a core without them (``agent.delegation_backends.DelegationBackends``,
 ``hermes_cli.plugin_choices``). The plugin is installed into a temp ``HERMES_HOME``, loaded by core's
 ``PluginManager``, and its registered handler is called through ``invoke_plugin_command`` with a real
 asker bound (or none, as on a surface that cannot ask), the way a surface does.
+
+``--now`` depends on the core: one with ``set_global_backend(..., apply_now=)`` applies the mode to the
+running session; an older one only saves, and the reply says so. Each case runs on the core it is for.
 """
 
 from __future__ import annotations
 
+import inspect
 import shutil
 
 import pytest
 
-backends = pytest.importorskip("agent.delegation_backends", reason="core without per-session delegation backends")
+backends = pytest.importorskip("agent.delegation_backends", reason="core without delegation backends API")
 plugin_choices = pytest.importorskip("hermes_cli.plugin_choices", reason="core without ctx.ask_choice")
 if not hasattr(backends, "DelegationBackends"):
     pytest.skip("core without ctx.delegation_backends", allow_module_level=True)
@@ -21,6 +25,9 @@ import hermes_yaml as yaml  # noqa: E402
 
 ROUTES = [{"name": "fast", "description": "Quick.", "provider": "openrouter", "model": "m1"}]
 KEY = "chat-core-1"
+APPLY_NOW = "apply_now" in inspect.signature(backends.set_global_backend).parameters
+needs_apply_now = pytest.mark.skipif(not APPLY_NOW, reason="core without set_global_backend(apply_now=)")
+before_apply_now = pytest.mark.skipif(APPLY_NOW, reason="core with set_global_backend(apply_now=)")
 
 
 @pytest.fixture
@@ -39,8 +46,11 @@ def handler(tmp_path, plugin_root):
     try:
         yield manager._plugin_commands["delegation"]["handler"], home
     finally:
-        backends.set_session_backend(KEY, None)
         manager.unload()
+
+
+def _saved(home):
+    return yaml.safe_load((home / "config.yaml").read_text())["delegation"]["backend"]
 
 
 def _run(handler, args, asker=None):
@@ -53,28 +63,25 @@ def _run(handler, args, asker=None):
         return call()
 
 
-def test_the_picker_switches_the_session_through_core(handler):
+def test_a_switch_saves_through_core_for_the_next_session(handler):
+    fn, home = handler
+    reply = _run(fn, "model_map")
+    assert _saved(home) == "model_map"
+    assert "next session" in reply and "--now" in reply
+
+
+def test_the_picker_asks_the_mode_then_when_and_saves_for_the_next_session(handler):
     fn, home = handler
     seen = []
 
     def asker(question, labels):  # the surface's clarify prompt: buttons on Telegram
         seen.append(labels)
-        return labels[1]
+        return labels[1] if len(seen) == 1 else labels[0]  # Model routes, then "Next session"
 
     reply = _run(fn, "", asker)
-    assert backends.get_session_backend(KEY) == "model_map"
-    assert seen and seen[0][0].startswith("Default (current)") and seen[0][1].startswith("Model routes")
-    assert "this session" in reply
-    assert yaml.safe_load((home / "config.yaml").read_text())["delegation"]["backend"] == "default"
-
-
-def test_global_saves_and_clears_the_sessions_override(handler):
-    fn, home = handler
-    _run(fn, "model_map")
-    assert backends.get_session_backend(KEY) == "model_map"
-    _run(fn, "default --global")
-    assert backends.get_session_backend(KEY) is None
-    assert yaml.safe_load((home / "config.yaml").read_text())["delegation"]["backend"] == "default"
+    assert seen[0][0].startswith("Default (current)") and seen[0][1].startswith("Model routes")
+    assert seen[1][0].startswith("Next session (recommended)") and seen[1][1].startswith("Now (rebuilds")
+    assert _saved(home) == "model_map" and "next session" in reply
 
 
 def test_the_listing_names_cores_reason_for_a_backend_that_cannot_run(handler):
@@ -87,16 +94,24 @@ def test_the_listing_names_cores_reason_for_a_backend_that_cannot_run(handler):
 
 
 def test_with_no_asker_bound_the_command_answers_with_the_text_listing(handler):
-    fn, _home = handler  # a hook, cron or event-loop caller: ctx.ask_choice returns None
+    fn, home = handler  # a hook, cron or event-loop caller: ctx.ask_choice returns None
     reply = _run(fn, "")
     assert reply.startswith("Delegation mode: Default") and "2. Model routes" in reply
-    assert backends.get_session_backend(KEY) is None
+    assert "/delegation <mode> --now" in reply and _saved(home) == "default"
 
 
-def test_global_on_a_managed_install_reports_cores_refusal(handler, monkeypatch):
+def test_a_managed_install_reports_cores_refusal(handler, monkeypatch):
     fn, home = handler
     monkeypatch.setattr("hermes_cli.config.is_managed", lambda: True)
     monkeypatch.setattr("hermes_cli.config.get_managed_system", lambda: "nix")
-    reply = _run(fn, "model_map --global")
+    reply = _run(fn, "model_map")
     assert reply.startswith("Not switched:") and "nix" in reply.lower()
-    assert yaml.safe_load((home / "config.yaml").read_text())["delegation"]["backend"] == "default"
+    assert _saved(home) == "default"
+
+
+@before_apply_now
+def test_now_on_a_core_before_apply_now_saves_and_says_it_needs_a_newer_hermes(handler):
+    fn, home = handler
+    reply = _run(fn, "model_map --now")
+    assert _saved(home) == "model_map"
+    assert "newer Hermes" in reply and "next session" in reply

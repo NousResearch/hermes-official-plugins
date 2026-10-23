@@ -1,25 +1,27 @@
-"""``/delegation``: show the delegation mode and switch it (CLI, TUI, Desktop, messaging).
+"""``/delegation``: show the delegation mode and save a new one (CLI, TUI, Desktop, messaging).
 
-``/delegation``                 the current mode and a picker to switch this session (a clarify card
-                                with buttons where the surface has them, a numbered list elsewhere);
-                                plain text when nothing can ask (``ctx.ask_choice`` absent or None)
-``/delegation <mode>``          switch this session (``default``, ``model_map``/``models``,
-                                ``profile_routes``/``profiles``, or the number shown)
-``/delegation <mode> --global`` save it as this profile's ``delegation.backend``
+``/delegation``               the saved mode and a picker to change it (a clarify card with buttons where
+                              the surface has them, a numbered list elsewhere), then a second question:
+                              next session (recommended) or now; plain text when nothing can ask
+                              (``ctx.ask_choice`` absent or None)
+``/delegation <mode>``        save it as this profile's ``delegation.backend``; it takes effect from the
+                              next session (``/new``). Modes: ``default``, ``model_map``/``models``,
+                              ``profile_routes``/``profiles``, or the number shown
+``/delegation <mode> --now``  save it AND apply it to this chat now
 
-A session switch changes routing at once, but not the agent's per-task choices: the ``delegate_task``
-schema is part of the prompt cache and is never rebuilt mid-session, so ``option`` / ``profile`` follow
-the mode the chat started with until ``/new``. Core refuses a task that sends a choice the active mode
-does not declare (it never drops one silently). ``--global`` saves the mode, and ``/new`` then starts a
-session whose choices match; ``/new`` also clears a session-only switch.
+Saving for the next session is the default because the mode is part of the chat's cached prompt: the
+``delegate_task`` schema carries the mode's per-task choices (``option`` / ``profile``), and swapping it
+mid-chat breaks the prompt cache. ``--now`` is the opt-in: core rebuilds this session's tool schema
+once (one cache break) so routing and the agent's choices both follow the new mode.
 
-Session scoping follows ``/model``. Core keeps the per-session choice and the global write behind
-``ctx.delegation_backends`` (``list_backends`` / ``get_session_backend`` / ``set_session_backend`` /
-``set_global_backend``). It is a host remote facade, so under ``plugins.isolation: host`` the switch
-lands in the Hermes process ``delegate_task`` runs in, not in the plugin host's copy. Feature-detected:
-on a core without it a plain switch says to use ``--global``, which then writes ``delegation.backend``
-through ``store``. When the configured backend fails, core's error names this command, so the listing
-flags a backend that cannot run and switching away from it is the fix.
+Core does both behind ``ctx.delegation_backends`` (``list_backends`` /
+``set_global_backend(name, session_key=, apply_now=)``). It is a host remote facade, so under
+``plugins.isolation: host`` the save and the rebuild land in the Hermes process the chat runs in, not
+in the plugin host. Feature-detected: on a core without the API the plugin writes
+``delegation.backend`` itself through ``store``; on a core whose ``set_global_backend`` has no
+``apply_now``, ``--now`` saves for the next session and says it needs a newer Hermes. When the
+configured backend fails, core's error names this command, so the listing flags a backend that cannot
+run and switching away from it is the fix.
 """
 
 from __future__ import annotations
@@ -36,8 +38,12 @@ _ALIASES = {
     "profile_routes": "profile_routes", "3": "profile_routes", "profiles": "profile_routes",
     "profile": "profile_routes",
 }
-USAGE = "/delegation [default | model_map | profile_routes] [--global]"
+USAGE = "/delegation [default | model_map | profile_routes] [--now]"
 AskChoice = Callable[[str, list], Optional[str]]
+_WHEN = [{"value": "next", "label": "Next session (recommended)",
+          "description": "Saved now; /new starts a chat that uses it. This chat keeps its prompt cache."},
+         {"value": "now", "label": "Now (rebuilds this chat's tools)",
+          "description": "Saved and applied to this chat; its tool list is rebuilt once (one prompt-cache break)."}]
 
 
 def make_handler(ctx) -> Callable[..., str]:
@@ -95,63 +101,39 @@ def _detail(mode: str, section: Mapping[str, Any]) -> str:
 
 
 def _parse(raw: str) -> tuple[Optional[str], bool, str]:
-    """``(mode or None, global?, unknown word)`` from the raw arguments."""
+    """``(mode or None, now?, what was not understood)`` from the raw arguments."""
     words = raw.split()
-    is_global = any(w in ("--global", "-g") for w in words)
-    rest = " ".join(w for w in words if w not in ("--global", "-g")).strip()
+    flags = [w for w in words if w.startswith("-")]
+    unknown_flag = next((f for f in flags if f != "--now"), "")
+    if unknown_flag:
+        return None, False, unknown_flag
+    now = "--now" in flags
+    rest = " ".join(w for w in words if w not in flags).strip()
     if not rest:
-        return None, is_global, ""
+        return None, now, ""
     key = re.sub(r"[\s-]+", "_", rest.lower())
-    return _ALIASES.get(key), is_global, ("" if key in _ALIASES else rest)
+    return _ALIASES.get(key), now, ("" if key in _ALIASES else rest)
 
 
-def _headline(effective: str, saved: str) -> str:
-    line = f"Delegation mode: {store.mode_label(effective)}"
-    return line + (f" (this session) · saved: {store.mode_label(saved)}" if effective != saved else "")
-
-
-def _listing(section: Mapping[str, Any], effective: str, saved: str, api) -> str:
-    lines = [_headline(effective, saved)]
-    problem = _problem(effective, api)
+def _listing(section: Mapping[str, Any], saved: str, api) -> str:
+    lines = [f"Delegation mode: {store.mode_label(saved)}"]
+    problem = _problem(saved, api)
     if problem:
         lines.append(f"⚠ {problem} Switch to a mode below to fix delegation.")
     for i, mode in enumerate(store.MODES, 1):
-        mark = "  ← current" if mode == effective else ""
+        mark = "  ← current" if mode == saved else ""
         lines.append(f"  {i}. {store.MODES[mode]:<15} {_detail(mode, section)}{mark}")
-    lines.append(f"Switch: {USAGE}  (no flag = this session's routing only; the agent's choices change "
-                 "with --global + /new)")
+    lines.append("Switch: /delegation <mode> saves it for the next session (/new); "
+                 "/delegation <mode> --now also applies it to this chat (rebuilds its tools once).")
     return "\n".join(lines)
 
 
-def _ask(ask_choice: AskChoice, section: Mapping[str, Any], effective: str, saved: str) -> Optional[str]:
+def _ask_mode(ask_choice: AskChoice, section: Mapping[str, Any], saved: str) -> Optional[str]:
     """The mode the user picked from the surface's own picker, or None (nothing can ask, cancelled)."""
-    choices = [{"value": mode, "label": store.MODES[mode] + (" (current)" if mode == effective else ""),
+    choices = [{"value": mode, "label": store.MODES[mode] + (" (current)" if mode == saved else ""),
                 "description": _detail(mode, section)}
                for mode in store.MODES if _ready(mode, section)]
-    question = (f"{_headline(effective, saved)}. Switch this session's routing to (the agent's choices "
-                "change only with --global + /new):")
-    return ask_choice(question, choices)
-
-
-def _unrouted_target(mode: str, section: Mapping[str, Any]) -> str:
-    """Where a task that picks nothing runs in ``mode``."""
-    if mode == "default":
-        model = " ".join(str(section.get("model") or "").split())
-        return f"delegation.model ({model})" if model else "the parent's model"
-    default = _mode_default(mode, section)
-    noun = "route" if mode == "model_map" else "profile"
-    return f"the default {noun} '{default}'" if default else "the parent's model"
-
-
-def _session_note(mode: str, saved: str, section: Mapping[str, Any]) -> str:
-    """A session switch moves routing now, but the chat's ``delegate_task`` schema (prompt cache) keeps the
-    choices of the mode it started with (the saved one, as ``/new`` starts there) until ``/new``."""
-    if mode == saved:
-        return ""
-    return (" Routing changes now; the agent's per-task choices (option/profile) follow the mode this chat "
-            "started with until /new. A task that sends a choice this mode doesn't have is refused; one that "
-            f"sends none runs on {_unrouted_target(mode, section)}. --global saves it; /new then gives a session "
-            "whose choices match.")
+    return ask_choice(f"Delegation mode: {store.mode_label(saved)}. Switch to:", choices)
 
 
 def handle(raw_args: str = "", session_key: str = "", ask_choice: Optional[AskChoice] = None, api=None) -> str:
@@ -159,41 +141,54 @@ def handle(raw_args: str = "", session_key: str = "", ask_choice: Optional[AskCh
     which itself returns None where the surface cannot ask (a hook, cron, an event-loop handler)."""
     section = store.delegation_section()
     saved = store.current_mode(section)
-    scoped = api is not None and bool(session_key)
-    effective = (api.get_session_backend(session_key) if scoped else None) or saved
-    mode, is_global, unknown = _parse(raw_args or "")
+    mode, now, unknown = _parse(raw_args or "")
+    if unknown.startswith("-"):
+        return f"Unknown option '{unknown}'. Usage: {USAGE}"
     if unknown:
         return f"Unknown delegation mode '{unknown}'. Usage: {USAGE}"
     if mode is None:
-        mode = _ask(ask_choice, section, effective, saved) if ask_choice and scoped else None
+        mode = _ask_mode(ask_choice, section, saved) if ask_choice else None
         if mode is None:
-            return _listing(section, effective, saved, api)
-    return _switch(mode, is_global, section, saved, api, session_key if scoped else "")
+            return _listing(section, saved, api)
+        if api is not None and not now:  # only core can apply a mode to the running chat
+            when = ask_choice(f"Use {store.mode_label(mode)} from:", _WHEN)
+            if when is None:
+                return f"Delegation mode unchanged: {store.mode_label(saved)}."
+            now = when == "now"
+    return _switch(mode, now, section, api, session_key)
 
 
-def _switch(mode: str, is_global: bool, section: Mapping[str, Any], saved: str, api, session_key: str) -> str:
+def _save(mode: str, now: bool, api, session_key: str) -> bool:
+    """Save ``mode`` (and apply it to this chat when ``now``); True when it was applied now."""
+    if api is None:
+        store.set_mode(mode)  # a core without ctx.delegation_backends
+        return False
+    if not now:
+        api.set_global_backend(mode, session_key=session_key)
+        return False
+    try:
+        api.set_global_backend(mode, session_key=session_key, apply_now=True)
+    except TypeError:  # a core from before apply_now refuses the keyword before writing anything
+        api.set_global_backend(mode, session_key=session_key)
+        return False
+    return True
+
+
+def _switch(mode: str, now: bool, section: Mapping[str, Any], api, session_key: str) -> str:
     if not _ready(mode, section):
         return (f"{store.mode_label(mode)} has nothing set up yet, so the agent would have nothing to pick. "
                 "Set it up with `hermes delegation config`, then switch.")
-    if not is_global and not session_key:
-        return (f"This Hermes can't switch delegation for one session yet. Use `/delegation {mode} --global` "
-                "to save it for this profile.")
     try:
-        if is_global and api is not None:
-            # Core writes delegation.backend and drops the session's override (the session follows the saved
-            # mode again); it refuses a package-manager-managed install with PermissionError.
-            api.set_global_backend(mode, session_key=session_key)
-        elif is_global:
-            store.set_mode(mode)  # a core without ctx.delegation_backends: there are no session overrides
-        else:
-            api.set_session_backend(session_key, mode)
+        applied = _save(mode, now, api, session_key)
     except (ValueError, PermissionError, RuntimeError) as exc:  # cannot run here, managed install, bad config
         return f"Not switched: {exc}"
-    scope = "saved for this profile" if is_global else "for this session (add --global to save it)"
     note = " delegation.model / delegation.provider apply again." if mode == "default" else (
         f" {_detail(mode, section).capitalize()}.")
-    if is_global:
-        tail = " /new starts a session whose choices match." if mode != saved else ""
-    else:
-        tail = _session_note(mode, saved, section)
-    return f"Delegation mode: {store.mode_label(mode)}, {scope}.{note}{tail}"
+    head = f"Delegation mode: {store.mode_label(mode)}"
+    if applied:
+        return f"{head}, saved and applied to this chat now (its tools were rebuilt).{note}"
+    if now:
+        return (f"{head}, saved for the next session (/new). Applying it to this chat now needs a newer Hermes; "
+                f"this chat keeps its current mode.{note}")
+    return (f"{head}, saved; it takes effect from the next session (/new). This chat keeps its current mode "
+            f"(add --now to apply it here, which rebuilds this chat's tools once).{note}")

@@ -94,26 +94,30 @@ other settings are kept). Changes apply to new sessions.
 ## Switch modes in a chat: `/delegation`
 
 ```
-/delegation                          # current mode, what each mode routes to, how to switch
-/delegation model_map                # this session only (like /model)
-/delegation profiles --global        # also save it as this profile's delegation.backend
-/delegation default                  # back to the built-in behaviour
+/delegation                          # current mode, what each mode routes to, a picker to switch
+/delegation model_map                # save it; it takes effect from the next session (/new)
+/delegation profiles --now           # save it AND apply it to this chat now
+/delegation default                  # back to the built-in behaviour (from the next session)
 ```
+
+Switching **saves** the mode as this profile's `delegation.backend`, and it takes effect from the
+next session (`/new`); the running chat keeps the mode it started with. That is the default because
+the mode is part of the chat's tool list (the per-task `option` / `profile` choice), and the tool list
+is part of the prompt cache: changing it mid-chat makes the next request re-read the whole
+conversation at full price.
+
+`--now` is the opt-in for when you want it in this chat anyway: Hermes saves the mode and rebuilds
+this chat's tools once, so routing and the agent's choices both follow the new mode from its next
+message (one prompt-cache break). It needs a Hermes that can rebuild a running chat's tools; on an
+older one the mode is saved for the next session and the reply says so.
 
 Bare `/delegation` opens a picker with the modes that have something set up, using the surface's own
 choice prompt: buttons on Telegram, Discord and Slack (like approvals), a numbered list on other
-chats, the clarify picker in the CLI, TUI and Desktop. Where nothing can ask, it answers with a
-numbered text listing instead. Mode words: `default`, `model_map` (or `models`, `2`),
-`profile_routes` (or `profiles`, `3`). A mode with nothing set up is refused with a pointer to
+chats, the clarify picker in the CLI, TUI and Desktop. A second question asks when: **Next session
+(recommended)** or **Now (rebuilds this chat's tools)**. Where nothing can ask, it answers with a
+numbered text listing and both commands instead. Mode words: `default`, `model_map` (or `models`,
+`2`), `profile_routes` (or `profiles`, `3`). A mode with nothing set up is refused with a pointer to
 `hermes delegation config`.
-
-A session switch changes **routing** from this chat's next `delegate_task`, but not the agent's
-**choices**: the tool schema is part of the running chat's prompt cache and is never rebuilt
-mid-session, so the per-task `option` / `profile` follow the mode the chat started with until
-`/new`. A task that sends a choice the new mode doesn't have is refused with a message (never
-silently dropped); a task that sends none runs on the new mode's default (or the parent's model).
-`--global` saves the mode, and `/new` then gives a session whose choices match (`/new` also clears a
-session-only switch).
 
 When the configured delegation backend cannot run (for example the plugin was disabled), Hermes
 refuses the subagent with an error naming `/delegation`: the listing flags the broken backend, and

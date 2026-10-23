@@ -43,7 +43,8 @@ AskChoice = Callable[[str, list], Optional[str]]
 _WHEN = [{"value": "next", "label": "Next session (recommended)",
           "description": "Saved now; /new starts a chat that uses it. This chat keeps its prompt cache."},
          {"value": "now", "label": "Now (rebuilds this chat's tools)",
-          "description": "Saved and applied to this chat; its tool list is rebuilt once (one prompt-cache break)."}]
+          "description": "Saved and applied to this chat: its tools are rebuilt at your next message "
+                         "(one prompt-cache break)."}]
 
 
 def make_handler(ctx) -> Callable[..., str]:

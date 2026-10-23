@@ -1,7 +1,7 @@
 name: spotify
 label: Spotify
 kind: standalone
-version: 2.0.0
+version: 2.1.0
 author: NousResearch
 homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/spotify
 description: >
@@ -26,6 +26,6 @@ optional_env:
     prompt: "Spotify Client ID"
     password: false
   - name: HERMES_SPOTIFY_REDIRECT_URI
-    description: "Redirect URI allow-listed in your Spotify app (default: http://127.0.0.1:43827/spotify/callback)"
+    description: "Redirect URI allow-listed in your Spotify app (default: http://127.0.0.1:43827/spotify/callback; set an https:// URI if your dashboard refuses the http form)"
     prompt: "Spotify redirect URI"
     password: false

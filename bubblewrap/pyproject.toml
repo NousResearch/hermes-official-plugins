@@ -1,0 +1,12 @@
+[project]
+name = "hermes-bubblewrap"
+version = "1.0.0"
+description = "Bubblewrap (bwrap) terminal backend for Hermes Agent on Linux (official plugin)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nous Research" }]
+requires-python = ">=3.11"
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/bubblewrap"

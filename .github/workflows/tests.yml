@@ -55,10 +55,16 @@ jobs:
           python-version: "3.14"
       - name: Install hermes-agent and the plugin's dependencies
         shell: bash
+        # Through uv with core's [tool.uv] override-dependencies, the way Hermes installs itself: core overrides
+        # vendor pins that would hold a dependency back (browser-harness's pillow==12.3.0 vs core's Pillow
+        # 13.0.0), which plain pip cannot resolve. Plugin dependencies get the same overrides, as in Hermes.
         run: |
-          python -m pip install -e ./hermes-agent pytest pytest-asyncio
+          python -m pip install uv
+          python -c 'import sys,tomllib; print("\n".join(tomllib.load(open(sys.argv[1], "rb")).get("tool", {}).get("uv", {}).get("override-dependencies", [])))' hermes-agent/pyproject.toml > "$RUNNER_TEMP/core-overrides.txt"
+          pyexe=$(python -c 'import sys; print(sys.executable)')
+          python -m uv pip install --python "$pyexe" --override "$RUNNER_TEMP/core-overrides.txt" -e ./hermes-agent pytest pytest-asyncio
           deps=$(python -c 'import pathlib,sys,tomllib; p=pathlib.Path(sys.argv[1]); print("\n".join(tomllib.loads(p.read_text())["project"].get("dependencies", [])) if p.is_file() else "")' "pantheon/${{ matrix.plugin }}/pyproject.toml")
-          if [ -n "$deps" ]; then printf '%s\n' "$deps" > "$RUNNER_TEMP/plugin-reqs.txt"; python -m pip install -r "$RUNNER_TEMP/plugin-reqs.txt"; fi
+          if [ -n "$deps" ]; then printf '%s\n' "$deps" > "$RUNNER_TEMP/plugin-reqs.txt"; python -m uv pip install --python "$pyexe" --override "$RUNNER_TEMP/core-overrides.txt" -r "$RUNNER_TEMP/plugin-reqs.txt"; fi
       - name: Validate the manifest against core
         shell: bash
         run: python -m hermes_cli.main plugins validate "pantheon/${{ matrix.plugin }}"

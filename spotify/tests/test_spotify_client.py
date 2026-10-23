@@ -156,6 +156,31 @@ def test_normalize_spotify_uri_accepts_urls():
     assert uri == "spotify:track:7ouMYWpwJ422jRcDASZB7P"
 
 
+def test_normalize_spotify_id_accepts_locale_prefixed_urls():
+    """Share links from a localized web player carry /intl-<locale>/ ahead of the type."""
+    localized = "https://open.spotify.com/intl-de/track/7ouMYWpwJ422jRcDASZB7P"
+    assert spotify_mod.normalize_spotify_id(localized, "track") == "7ouMYWpwJ422jRcDASZB7P"
+    # Subtags are not always two letters.
+    subtagged = "https://open.spotify.com/intl-pt-br/album/1DFixLWuPkv3KT3TnV35m3"
+    assert spotify_mod.normalize_spotify_id(subtagged, "album") == "1DFixLWuPkv3KT3TnV35m3"
+    # Untyped, the old code returned the type segment ("track") as the id instead of raising.
+    assert spotify_mod.normalize_spotify_id(localized) == "7ouMYWpwJ422jRcDASZB7P"
+    tracked = "https://open.spotify.com/intl-de/playlist/37i9dQZF1DXcBWIGoYBM5M?si=abc123"
+    assert spotify_mod.normalize_spotify_id(tracked, "playlist") == "37i9dQZF1DXcBWIGoYBM5M"
+    # A wrong type is still rejected once the locale is out of the way.
+    with pytest.raises(spotify_mod.SpotifyError):
+        spotify_mod.normalize_spotify_id(localized, "album")
+
+
+@pytest.mark.parametrize("url, item_type, expected", [
+    ("https://open.spotify.com/intl-de/track/7ouMYWpwJ422jRcDASZB7P", "track", "spotify:track:7ouMYWpwJ422jRcDASZB7P"),
+    ("https://open.spotify.com/intl-pt-br/album/1DFixLWuPkv3KT3TnV35m3", "album", "spotify:album:1DFixLWuPkv3KT3TnV35m3"),
+    ("https://open.spotify.com/intl-de/playlist/37i9dQZF1DXcBWIGoYBM5M?si=abc123", "playlist", "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"),
+])
+def test_normalize_spotify_uri_accepts_locale_prefixed_urls(url, item_type, expected):
+    assert spotify_mod.normalize_spotify_uri(url, item_type) == expected
+
+
 @pytest.mark.parametrize("value", [
     "spotify:album:album-1",
     "https://open.spotify.com/album/album-1",

@@ -35,7 +35,8 @@ hermes spotify login
 ```
 
 Plugins are installed per profile: use `hermes -p <profile> plugins install spotify` for another
-profile. The only Python dependency is `httpx`, which Hermes already ships.
+profile. The only Python dependencies are `httpx` and `cryptography`, both of which Hermes already
+ships.
 
 ## Logging in
 
@@ -44,6 +45,15 @@ a shared public client). `hermes spotify login` walks you through it the first t
 
 1. It opens <https://developer.spotify.com/dashboard>. Click **Create app** and use
    `http://127.0.0.1:43827/spotify/callback` as the **Redirect URI**, with **Web API** checked.
+   HTTP is permitted on a loopback IP literal (Spotify's [redirect URI
+   rules](https://developer.spotify.com/documentation/web-api/concepts/redirect_uri) only require
+   HTTPS for everything else). If your dashboard refuses the `http://` form, register
+   `https://127.0.0.1:43827/spotify/callback` instead and set that URI with
+   `HERMES_SPOTIFY_REDIRECT_URI`: the listener then serves **https with a self-signed
+   certificate**, so the browser shows the usual "not private" warning once — accept it and
+   continue, the connection never leaves your machine. Paste the URI into the dashboard without
+   a trailing space: the field rejects that with "This redirect URI is not secure", which reads
+   like a policy problem rather than a stray character.
 2. Paste the app's **Client ID** at the prompt. It is saved as `HERMES_SPOTIFY_CLIENT_ID` in the
    profile's `.env`, so later logins skip this step.
 3. Approve access in the browser. Tokens are stored under `providers.spotify` in the profile's

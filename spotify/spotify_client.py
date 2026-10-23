@@ -134,6 +134,11 @@ def normalize_spotify_id(value: str, expected_type: Optional[str] = None) -> str
     parts = cleaned.split(":")[1:] if cleaned.startswith("spotify:") else []
     if len(parts) < 2 and "open.spotify.com" in cleaned:
         parts = [part for part in urlparse(cleaned).path.split("/") if part]
+        # Localized web players share /intl-<locale>/<type>/<id> (intl-de, intl-pt-br). Spotify's
+        # router accepts any intl-* first segment, so drop it before the positional read; same rule
+        # as hermes-agent's desktop embed matcher (embeds/providers/spotify.ts).
+        if parts and parts[0].startswith("intl-"):
+            parts = parts[1:]
     if len(parts) >= 2:
         _check_type(parts[0], expected_type)
         return parts[1]

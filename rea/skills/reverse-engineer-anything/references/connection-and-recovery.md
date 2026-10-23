@@ -9,8 +9,8 @@ operation and the next useful step; after repair, continue the investigation.
 | Observation | Meaning and next step |
 | --- | --- |
 | `tool_search` finds no REA tools | The plugin is disabled or the server failed to start. Ask the user to run `hermes plugins list` (the `rea` row must say enabled), then start a new session; a `mcp_servers.rea` entry in `config.yaml` replaces the plugin's server. Inspect whether it is an accidental setup-generated duplicate or an intentional engine configuration before proposing changes; preserve deliberate user settings. Do not run `rea setup`. |
-| The server fails to start | REA runs through `npx -y rea-agents@6.4.0 mcp` and needs Node.js 22.19+, 24.11+ or 26+ (not 23 or 25) with `npx` on PATH. The first start downloads the package into npm's cache. Check `node --version` and `npx --version` in the shell Hermes uses. |
-| REA returns `provider_unavailable` or an unavailable tool entry | Read that operation's provider diagnostics or `binary_session.result.tool_availability`. Resolve only the prerequisite the task needs; a complete tool catalog does not mean every operation is available. |
+| The server fails to start | REA runs through `npx -y rea-agents@6.7.0 mcp` and needs Node.js 22.19+, 24.11+ or 26+ (not 23 or 25) with `npx` on PATH. The first start downloads the package into npm's cache. Check `node --version` and `npx --version` in the shell Hermes uses. |
+| REA returns `provider_unavailable` or an unavailable tool entry | Read that operation's provider diagnostics or `binary_session.result.tool_availability`. Expand each group's tool names and inherit the shared client requirements unless a group overrides them. Use the operation's availability, reason and remediation; resolve only the prerequisite the task needs. A complete tool catalog does not mean every operation is available. |
 | A call is refused by Hermes | Hermes policy (a disabled toolset, a cron run, a profile restriction) blocked it before REA ran. Report it; do not retry the same call. |
 
 Static JavaScript and ordinary ZIP inventory need neither Hopper nor Ghidra.
@@ -39,7 +39,7 @@ override, not the duplicate registration made by `rea setup`:
 mcp_servers:
   rea:
     command: npx
-    args: ["-y", "rea-agents@6.4.0", "mcp"]
+    args: ["-y", "rea-agents@6.7.0", "mcp"]
     timeout: 1000
     env:
       GHIDRA_INSTALL_DIR: /absolute/path/to/ghidra_12.1.4_PUBLIC
@@ -86,9 +86,9 @@ When MCP is unavailable but the shell works, the same workflows run as CLI
 commands at the same pinned version:
 
 ```bash
-npx -y rea-agents@6.4.0 analyze-javascript-application /absolute/path/to/app --json > app-evidence.json
+npx -y rea-agents@6.7.0 analyze-javascript-application /absolute/path/to/app --json > app-evidence.json
 jq -c '{source: {kind: "inline", evidence: .}, view: {kind: "summary"}}' app-evidence.json > app-view.json
-npx -y rea-agents@6.4.0 inspect-analysis-view app-view.json
+npx -y rea-agents@6.7.0 inspect-analysis-view app-view.json
 ```
 
 CLI JavaScript JSON is complete and can be very large; redirect it rather than

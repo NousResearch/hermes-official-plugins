@@ -1,0 +1,15 @@
+[project]
+name = "hermes-mcp-serve"
+version = "1.0.0"
+description = "Run Hermes Agent as an MCP server: messaging bridge plus optional Hermes tools (official plugin)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nous Research" }]
+requires-python = ">=3.11"
+dependencies = [
+  # mcp 2.x moved FastMCP to mcp.server.MCPServer, which the server is built on.
+  "mcp>=2.0,<3",
+]
+
+[project.urls]
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/mcp-serve"

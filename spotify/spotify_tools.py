@@ -239,12 +239,15 @@ def _handle_spotify_search(args: dict, **kw) -> str:
 
 # -- spotify_playlists ---------------------------------------------------------
 
+_page_params = lambda args: {"limit": _limit(args), "offset": _offset(args), "market": args.get("market")}
 _playlist_path = lambda args, suffix="": f"/playlists/{normalize_spotify_id(str(args.get('playlist_id') or ''), 'playlist')}{suffix}"
 
 
 _handle_spotify_playlists = _dispatcher("spotify_playlists", "list", {
     "list": lambda c, a, act: tool_result(c.request("GET", "/me/playlists", params={"limit": _limit(a), "offset": _offset(a)})),
     "get": lambda c, a, act: tool_result(c.request("GET", _playlist_path(a), params={"market": a.get("market")})),
+    # get embeds only the first 100 items and takes no paging params; items pages past that.
+    "items": lambda c, a, act: tool_result(c.request("GET", _playlist_path(a, "/items"), params=_page_params(a))),
     "create": lambda c, a, act: tool_result(c.request("POST", "/me/playlists", json_body={
         "name": _nonblank(a.get("name"), "name is required for action='create'"), "public": _coerce_bool(a.get("public")),
         "collaborative": _coerce_bool(a.get("collaborative")), "description": a.get("description")})),
@@ -259,7 +262,6 @@ _handle_spotify_playlists = _dispatcher("spotify_playlists", "list", {
 
 # -- spotify_albums ------------------------------------------------------------
 
-_page_params = lambda args: {"limit": _limit(args), "offset": _offset(args), "market": args.get("market")}
 _prepare_album = lambda args: {**args, "_path": f"/albums/{normalize_spotify_id(str(args.get('album_id') or args.get('id') or ''), 'album')}"}
 
 
@@ -324,8 +326,11 @@ SPOTIFY_SEARCH_SCHEMA = _schema(
     {"query": COMMON_STRING, "types": _STR_ARRAY, "type": COMMON_STRING, "limit": _INT, "offset": _INT, **_strs("market", "include_external")}, ("query",),
 )
 SPOTIFY_PLAYLISTS_SCHEMA = _schema("spotify_playlists", "List, inspect, create, update, and modify Spotify playlists.", {
-    "action": _enum("list", "get", "create", "add_items", "remove_items", "update_details"),
-    **_strs("playlist_id", "market"), "limit": _INT, "offset": _INT, **_strs("name", "description"),
+    "action": _enum("list", "get", "items", "create", "add_items", "remove_items", "update_details"),
+    **_strs("playlist_id", "market"),
+    "limit": _idesc("For list and items: page size (max 50). get always returns the first 100 items"),
+    "offset": _idesc("For list and items: index of the first entry. Use items to page past 100 tracks"),
+    **_strs("name", "description"),
     "public": _BOOL, "collaborative": _BOOL, "uris": _STR_ARRAY, "position": _INT, "snapshot_id": COMMON_STRING})
 SPOTIFY_ALBUMS_SCHEMA = _schema("spotify_albums", "Fetch Spotify album metadata or album tracks.",
                                 {"action": _enum("get", "tracks"), **_strs("album_id", "id", "market"), "limit": _INT, "offset": _INT})

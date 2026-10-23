@@ -809,6 +809,61 @@ class TestHomeAllowKey:
             env.cleanup()
 
 
+
+class TestHideKey:
+    """The hide setting narrows what shows, read once at construction."""
+
+    @pytest.fixture
+    def fake_home(self, tmp_path, monkeypatch):
+        home = tmp_path / "homes" / "home"
+        home.mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+        return home
+
+    def test_loader_reads_the_setting_as_a_list_or_a_json_list(self):
+        assert load_bubblewrap_config({"hide": ["~/Documents/keys"]}).hide == ("~/Documents/keys",)
+        assert load_bubblewrap_config({"hide": '["~/Documents/keys"]'}).hide == ("~/Documents/keys",)
+        assert load_bubblewrap_config({}).hide == ()
+        assert load_bubblewrap_config({"hide": "[]"}).hide == ()
+
+    @pytest.mark.parametrize("value", ["not json", '{"a": 1}', "[1, 2]", '"one string"', [1, 2], {"a": 1}])
+    def test_loader_rejects_a_malformed_value_and_names_the_setting(self, value):
+        with pytest.raises(ValueError, match="plugins.entries.bubblewrap.settings.hide"):
+            load_bubblewrap_config({"hide": value})
+
+    def test_hide_items_join_the_hidden_set(self, sandbox_root, work_dir, fake_home):
+        keys = fake_home / "Documents" / "keys"
+        keys.mkdir(parents=True)
+        secrets = fake_home / "Secrets"
+        secrets.mkdir()
+        config = BubblewrapConfig(hide=("~/Documents/keys", str(secrets)))
+        with _no_session():
+            env = BubblewrapEnvironment(cwd=str(work_dir), timeout=10, config=config)
+        try:
+            mounts = _mounts(env._wrap_popen_args(["bash"]))
+            assert ("--tmpfs", str(keys)) in mounts
+            assert str(secrets) not in {m[-1] for m in mounts}
+            assert ("--ro-bind-try", str(fake_home / "Documents"), str(fake_home / "Documents")) in mounts
+        finally:
+            env.cleanup()
+
+    @pytest.mark.parametrize("item", ["/", "~", "relative/../.."])
+    def test_hide_item_that_would_hide_home_or_more_is_ignored(self, sandbox_root, work_dir, fake_home, caplog, item):
+        with caplog.at_level(logging.WARNING), _no_session():
+            env = BubblewrapEnvironment(cwd=str(work_dir), timeout=10, config=BubblewrapConfig(hide=(item,)))
+        try:
+            assert len([r for r in caplog.records if "settings.hide" in r.getMessage()]) == 1
+            assert env._hidden_paths == bubblewrap.sensitive_paths(str(fake_home), env._hermes_home)
+        finally:
+            env.cleanup()
+
+    def test_cwd_under_a_hidden_item_is_refused(self, sandbox_root, fake_home):
+        keys = fake_home / "Documents" / "keys"
+        keys.mkdir(parents=True)
+        with _no_session(), pytest.raises(ValueError, match="terminal.cwd"):
+            BubblewrapEnvironment(cwd=str(keys), timeout=10, config=BubblewrapConfig(hide=(str(keys),)))
+
+
 class TestSandboxDirGuard:
     """A sandbox dir a sandbox could write to is refused at construction: the
     empty file bound over hidden files lives beside the state dir, and a

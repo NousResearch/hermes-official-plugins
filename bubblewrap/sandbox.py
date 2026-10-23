@@ -168,6 +168,7 @@ SETTING_MEMORY_MB = "memory_mb"
 SETTING_CPU_SECONDS = "cpu_seconds"
 SETTING_MAX_PROCS = "max_procs"
 SETTING_HOME_ALLOW = "home_allow"
+SETTING_HIDE = "hide"
 SETTINGS_PREFIX = "plugins.entries.bubblewrap.settings"
 # terminal.home_mode is a core setting; core bridges it to this env name and
 # hermes_constants.get_subprocess_home reads it. The spellings that
@@ -226,8 +227,10 @@ class BubblewrapConfig:
     # is the subprocess HOME and so must be bound back over the overlay.
     home_mode: str = DEFAULT_HOME_MODE
     # The home_allow setting: more allowlist units under HOME
-    # (bubblewrap_home.allow_unit), shown read-only.
+    # (bubblewrap_home.allow_unit), shown read-only. The hide setting: more
+    # paths to hide, absolute or relative to HOME.
     home_allow: tuple[str, ...] = ()
+    hide: tuple[str, ...] = ()
 
 
 def _setting_name(key: str) -> str:
@@ -314,6 +317,7 @@ def load_bubblewrap_config(settings: Mapping[str, object] | None = None, home_mo
         max_procs=_parse_limit(SETTING_MAX_PROCS, settings.get(SETTING_MAX_PROCS), DEFAULT_MAX_PROCS),
         home_mode=(home_mode or "").strip().lower() or DEFAULT_HOME_MODE,
         home_allow=_parse_string_list(SETTING_HOME_ALLOW, settings.get(SETTING_HOME_ALLOW)),
+        hide=_parse_string_list(SETTING_HIDE, settings.get(SETTING_HIDE)),
     )
 
 
@@ -322,14 +326,39 @@ def home_replaced_by_bind(home_root: str, binds: Iterable[BindMount]) -> bool:
     return any(_is_within(home_root, bind.dest) and not _same_host_path(bind.src, bind.dest) for bind in binds)
 
 
-def sensitive_paths(home: str, hermes_home: str) -> tuple[str, ...]:
+def operator_hidden_paths(home: str, items: Iterable[str]) -> tuple[str, ...]:
+    """Real host paths the operator hides through the hide setting.
+
+    An item is absolute, starts with ``~/``, or is relative to *home*. An
+    item that names HOME, a parent of it or the root would hide every
+    command's working set and is ignored with a warning.
+    """
+    home = os.path.realpath(os.path.abspath(os.path.expanduser(home)))
+    resolved: list[str] = []
+    for item in items:
+        text = item.strip()
+        if not text:
+            continue
+        if text == "~" or text.startswith("~/"):
+            text = os.path.join(home, text[2:])
+        real = os.path.realpath(text if os.path.isabs(text) else os.path.join(home, text))
+        if _is_within(home, real):
+            logger.warning("Ignoring %s entry %r: it covers the home directory", _setting_name(SETTING_HIDE), item)
+            continue
+        if real not in resolved:
+            resolved.append(real)
+    return tuple(resolved)
+
+
+def sensitive_paths(home: str, hermes_home: str, extra: Sequence[str] = ()) -> tuple[str, ...]:
     """Real host paths that must stay hidden: the HOME set, HERMES_HOME and HOME/.hermes.
 
     The default HOME/.hermes rides along with the resolved HERMES_HOME so a
     relocated HERMES_HOME (a profile at HOME/.hermes/profiles/<name>) does
     not leave the default home readable; when the two are the same
     directory it is listed once. A missing HOME/.hermes stays in the set
-    and emits no mount (sensitive_overlay_args skips absent paths).
+    and emits no mount (sensitive_overlay_args skips absent paths). *extra*
+    is the operator's own hidden paths (operator_hidden_paths).
 
     Each path goes through os.path.realpath, so an entry that is a symlink
     (a dotfiles repository linking HOME/.ssh to HOME/dotfiles/ssh) or that sits
@@ -343,15 +372,22 @@ def sensitive_paths(home: str, hermes_home: str) -> tuple[str, ...]:
 
     The HOME part is bubblewrap_home.denied_home_paths: the module list
     plus the HOME paths the file safety policy refuses. An entry under
-    another one is dropped as covered by it.
+    another one is dropped as covered by it, except an operator entry: a
+    directory under HERMES_HOME that is bound back on top of its overlay
+    (the profile home) would show it again, and _check_profile_home
+    refuses a hidden path inside the profile home.
     """
     home = os.path.abspath(os.path.expanduser(home))
     resolved = list(bubblewrap_home.denied_home_paths(home))
-    for path in (os.path.abspath(os.path.expanduser(hermes_home)), os.path.join(home, DEFAULT_HERMES_HOME_NAME)):
+    for path in (os.path.abspath(os.path.expanduser(hermes_home)), os.path.join(home, DEFAULT_HERMES_HOME_NAME), *extra):
         real = os.path.realpath(path)
         if real not in resolved:
             resolved.append(real)
-    return tuple(p for p in resolved if not any(p != other and _is_within(p, other) for other in resolved))
+    kept = {os.path.realpath(path) for path in extra}
+    return tuple(
+        p for p in resolved
+        if p in kept or not any(p != other and _is_within(p, other) for other in resolved)
+    )
 
 
 def empty_file_path(state_dir: str) -> str:
@@ -1263,7 +1299,8 @@ class BubblewrapEnvironment(LocalEnvironment):
         self._hermes_home = os.path.realpath(str(get_hermes_home()))
         # Resolved once and kept for the life of the environment: the set
         # never follows a symlink swapped in later.
-        self._hidden_paths = sensitive_paths(self._home, self._hermes_home)
+        self._operator_hidden = operator_hidden_paths(self._home, self._config.hide)
+        self._hidden_paths = sensitive_paths(self._home, self._hermes_home, self._operator_hidden)
         # HOME is default-deny for dot entries. What a sandbox may see is
         # fixed here too: a command cannot widen it by changing PATH.
         self._home_root = bubblewrap_home.resolve_home_root(self._home)

@@ -236,7 +236,8 @@ def _service_call_violation(domain: str, service: str, payload: Any) -> Optional
 
     With neither list set nothing is checked (behaviour unchanged). Otherwise:
 
-    1. Every entity the payload names must pass the same check as ha_get_state
+    1. Every entity the payload names, and the script selected by a custom
+       ``script.<name>`` service, must pass the same check as ha_get_state
        (deny is a final veto; with an allowlist, every entity must match it).
     2. Area/device/floor/label targets are refused: they select entities on the
        server, where the lists cannot be checked.
@@ -261,14 +262,14 @@ def _service_call_violation(domain: str, service: str, payload: Any) -> Optional
         return (f"{domain}.{service} with entity_id 'all' would act on every entity, which "
                 f"HASS_ENTITY_ALLOWLIST/HASS_ENTITY_DENYLIST do not permit. {hint}")
     entity_ids.discard("none")
+    # The service name selects this script even when its payload names other entities.
+    if domain == "script" and service not in _SCRIPT_BUILTIN_SERVICES:
+        entity_ids.add(f"script.{service}")
     if not entity_ids:
         if domain in _NON_ENTITY_DOMAINS:
             return None
-        if domain == "script" and service not in _SCRIPT_BUILTIN_SERVICES:
-            entity_ids = {f"script.{service}"}
-        else:
-            return (f"{domain}.{service} names no entity, so it could act on every {domain} "
-                    f"entity while HASS_ENTITY_ALLOWLIST/HASS_ENTITY_DENYLIST are set. {hint}")
+        return (f"{domain}.{service} names no entity, so it could act on every {domain} "
+                f"entity while HASS_ENTITY_ALLOWLIST/HASS_ENTITY_DENYLIST are set. {hint}")
     for eid in sorted(entity_ids):
         if deny:
             hit = next((p for p in deny if _entity_matches(eid, [p])), None)
@@ -736,10 +737,11 @@ def _handle_call_service(args: dict, **kw) -> str:
     service = args.get("service", "")
     if not domain or not service:
         return tool_error("Missing required parameters: domain and service")
-    # Format check BEFORE the blocklist: rejects "shell_command/../light" style bypasses.
-    if not _SERVICE_NAME_RE.match(domain):
+    # Validate the whole selector BEFORE the blocklist. Unlike match(), fullmatch()
+    # rejects a terminal LF, which a URL parser could otherwise remove after this check.
+    if not _SERVICE_NAME_RE.fullmatch(domain):
         return tool_error(f"Invalid domain format: {domain!r}")
-    if not _SERVICE_NAME_RE.match(service):
+    if not _SERVICE_NAME_RE.fullmatch(service):
         return tool_error(f"Invalid service format: {service!r}")
     if domain in _BLOCKED_DOMAINS:
         return tool_error(

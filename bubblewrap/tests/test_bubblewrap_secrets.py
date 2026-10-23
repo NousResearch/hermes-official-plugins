@@ -953,6 +953,16 @@ class TestHomeDefaultDenyIntegration:
             env.cleanup()
 
 
+    def test_hide_key_hides_a_non_dot_path(self, sandbox_root, deny_home):
+        _write(deny_home / "Documents" / "keys" / "id")
+        _write(deny_home / "Documents" / "notes.txt", VISIBLE)
+        env = self._env(deny_home / "proj", config=BubblewrapConfig(hide=("~/Documents/keys",)))
+        try:
+            assert MARKER not in env.execute(f"cat {deny_home}/Documents/keys/id 2>&1")["output"]
+            assert env.execute(f"cat {deny_home}/Documents/notes.txt")["output"].strip() == VISIBLE
+        finally:
+            env.cleanup()
+
 @needs_bwrap
 class TestCoveredDefaultDenyDirIntegration:
     """A bind on ~/.local covers the tmpfs of ~/.local/share below it: the
@@ -1002,3 +1012,28 @@ class TestCoveredDefaultDenyDirIntegration:
         assert (local / "share" / "app" / "new").read_text() == "ok"
 
 
+@needs_bwrap
+class TestHideUnderHermesHomeIntegration:
+    """A hide entry under HERMES_HOME where the backend binds a directory back
+    on top of the HERMES_HOME overlay."""
+
+    def test_hide_entry_equal_to_the_scratch_dir_leaves_the_sandbox_its_own_scratch(self, work_dir, hermes_home):
+        scratch = hermes_home / "cache" / "scratch"
+        _write(scratch / "secret.txt")
+        env = BubblewrapEnvironment(cwd=str(work_dir), timeout=30, config=BubblewrapConfig(hide=(str(scratch),)))
+        try:
+            assert MARKER not in env.execute(f"cat {scratch}/secret.txt 2>&1")["output"]
+            assert env.execute(f"printf kept > {scratch}/probe")["returncode"] == 0
+            assert env.execute(f"cat {scratch}/probe")["output"].strip() == "kept"
+        finally:
+            env.cleanup()
+        assert not (scratch / "probe").exists()
+
+    def test_hide_entry_inside_the_profile_home_is_refused(self, work_dir, hermes_home):
+        # The profile home is bound read-write on top of the overlay, so a
+        # hidden path inside it would show again: the backend does not start.
+        keys = hermes_home / "home" / "a" / "keys"
+        _write(keys / "id")
+        config = BubblewrapConfig(home_mode="profile", hide=(str(keys),))
+        with pytest.raises(ValueError, match="terminal.home_mode"):
+            BubblewrapEnvironment(cwd=str(work_dir), timeout=30, config=config)

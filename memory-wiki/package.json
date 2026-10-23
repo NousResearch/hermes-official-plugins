@@ -5,9 +5,13 @@
   "description": "Build tooling for the Memory Wiki dashboard plugin bundle (dashboard/dist/index.js). React comes from the host SDK at runtime; nothing is bundled but this plugin's own code.",
   "scripts": {
     "build": "esbuild dashboard/src/index.jsx --bundle --format=iife --target=es2020 --jsx-factory=React.createElement --jsx-fragment=React.Fragment --banner:js=\"/* hermes-memory-wiki dashboard bundle — built from dashboard/src/index.jsx with esbuild; edit the source, run npm run build. MIT, (c) 2026 Nous Research; original by @Araja119 (hermes-agent #31244). */\" --outfile=dashboard/dist/index.js",
-    "check": "node --check dashboard/dist/index.js"
+    "check": "node --check dashboard/dist/index.js",
+    "test:ui": "npm run build && node --test tests/search-ui.test.cjs"
   },
   "devDependencies": {
-    "esbuild": "0.28.1"
+    "esbuild": "0.28.1",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "jsdom": "29.1.1"
   }
 }

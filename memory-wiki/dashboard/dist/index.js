@@ -131,40 +131,58 @@
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     useEffect(() => {
-      SDK.fetchJSON(`${API}/overview`).then(setOverview).catch((err) => setError(err instanceof Error ? err.message : "Failed to load memory wiki")).finally(() => setLoading(false));
+      let cancelled = false;
+      const controller = new AbortController();
+      SDK.fetchJSON(`${API}/overview`, { signal: controller.signal }).then((resp) => {
+        if (!cancelled) setOverview(resp);
+      }).catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load memory wiki");
+      }).finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+      return () => {
+        cancelled = true;
+        controller.abort();
+      };
     }, []);
     useEffect(() => {
       const trimmed = search.trim();
-      if (!trimmed) {
-        setSearchResults(null);
-        return void 0;
-      }
+      if (!trimmed) return void 0;
       let cancelled = false;
+      const controller = new AbortController();
       const timer = window.setTimeout(() => {
         const qs = new URLSearchParams({ q: trimmed, limit: "100" });
-        SDK.fetchJSON(`${API}/subjects?${qs.toString()}`).then((resp) => {
-          if (!cancelled) setSearchResults(resp.subjects);
+        SDK.fetchJSON(`${API}/subjects?${qs.toString()}`, { signal: controller.signal }).then((resp) => {
+          if (!cancelled) setSearchResults({ query: search, subjects: resp.subjects });
         }).catch(() => {
-          if (!cancelled) setSearchResults([]);
+          if (!cancelled) setSearchResults({ query: search, error: true });
         });
       }, 250);
       return () => {
         cancelled = true;
+        controller.abort();
         window.clearTimeout(timer);
       };
     }, [search]);
     if (loading) return /* @__PURE__ */ React.createElement(LoadingState, null);
     if (error || !overview) return /* @__PURE__ */ React.createElement(ErrorState, { message: error ?? "Memory wiki unavailable" });
-    const visibleSubjects = searchResults ?? overview.subjects ?? [];
+    const searching = Boolean(search.trim());
+    const currentResult = searchResults?.query === search ? searchResults : null;
+    const searchPending = searching && !currentResult;
+    const searchFailed = searching && currentResult?.error;
+    const visibleSubjects = searching ? currentResult?.subjects ?? [] : overview.subjects ?? [];
     return /* @__PURE__ */ React.createElement(PageShell, null, /* @__PURE__ */ React.createElement("div", { className: "flex flex-col gap-2" }, /* @__PURE__ */ React.createElement("div", { className: "text-sm text-muted-foreground" }, "Local session history"), /* @__PURE__ */ React.createElement("h1", { className: "text-3xl font-semibold tracking-tight" }, "Memory Wiki"), /* @__PURE__ */ React.createElement("p", { className: "max-w-3xl text-sm text-muted-foreground" }, "Browse deterministic subjects and daily logs generated from this Hermes profile's local session database.")), /* @__PURE__ */ React.createElement("div", { className: "grid gap-3 sm:grid-cols-3" }, /* @__PURE__ */ React.createElement(StatCard, { label: "Subjects", value: overview.subjects.length }), /* @__PURE__ */ React.createElement(StatCard, { label: "Daily logs", value: overview.daily_logs.length }), /* @__PURE__ */ React.createElement(StatCard, { label: "Recent sessions", value: overview.recent_sessions.length })), /* @__PURE__ */ React.createElement("div", { className: "max-w-xl" }, /* @__PURE__ */ React.createElement(
       Input,
       {
         value: search,
-        onChange: (event) => setSearch(event.target.value),
+        onChange: (event) => {
+          setSearchResults(null);
+          setSearch(event.target.value);
+        },
         placeholder: "Search subjects\u2026",
         "aria-label": "Search subjects"
       }
-    )), /* @__PURE__ */ React.createElement("section", { className: "space-y-3" }, /* @__PURE__ */ React.createElement("h2", { className: "text-xl font-semibold" }, "Subjects"), /* @__PURE__ */ React.createElement("div", { className: "grid gap-3 md:grid-cols-2 xl:grid-cols-3" }, visibleSubjects.map((subject) => /* @__PURE__ */ React.createElement(SubjectCard, { key: subject.slug, subject, go }))), visibleSubjects.length === 0 && /* @__PURE__ */ React.createElement("p", { className: "text-sm text-muted-foreground" }, search.trim() ? "No subjects match your search." : "No subjects yet \u2014 run a few sessions first.")), /* @__PURE__ */ React.createElement("section", { className: "grid gap-6 xl:grid-cols-[2fr_1fr]" }, /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, /* @__PURE__ */ React.createElement("h2", { className: "text-xl font-semibold" }, "Daily Logs"), /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, overview.daily_logs.map((day) => /* @__PURE__ */ React.createElement(DayCard, { key: day.date, day, go })), overview.daily_logs.length === 0 && /* @__PURE__ */ React.createElement("p", { className: "text-sm text-muted-foreground" }, "No daily logs yet."))), /* @__PURE__ */ React.createElement("div", { className: "space-y-6" }, /* @__PURE__ */ React.createElement(Card, null, /* @__PURE__ */ React.createElement(CardHeader, null, /* @__PURE__ */ React.createElement(CardTitle, { className: "text-base" }, "Recent Activity")), /* @__PURE__ */ React.createElement(CardContent, null, /* @__PURE__ */ React.createElement(SessionList, { sessions: overview.recent_sessions }))), /* @__PURE__ */ React.createElement(PersistentMemoryCard, { notes: overview.notes }))));
+    )), /* @__PURE__ */ React.createElement("section", { className: "space-y-3" }, /* @__PURE__ */ React.createElement("h2", { className: "text-xl font-semibold" }, "Subjects"), /* @__PURE__ */ React.createElement("p", { role: "status", "aria-live": "polite", className: "text-sm text-muted-foreground" }, searchPending ? "Searching subjects\u2026" : ""), searchFailed && /* @__PURE__ */ React.createElement("p", { role: "alert", className: "text-sm text-destructive" }, "Could not search subjects. Change your search or clear it to try again."), /* @__PURE__ */ React.createElement("div", { className: "grid gap-3 md:grid-cols-2 xl:grid-cols-3", "aria-busy": searchPending }, visibleSubjects.map((subject) => /* @__PURE__ */ React.createElement(SubjectCard, { key: subject.slug, subject, go }))), !searchPending && !searchFailed && visibleSubjects.length === 0 && /* @__PURE__ */ React.createElement("p", { className: "text-sm text-muted-foreground" }, search.trim() ? "No subjects match your search." : "No subjects yet \u2014 run a few sessions first.")), /* @__PURE__ */ React.createElement("section", { className: "grid gap-6 xl:grid-cols-[2fr_1fr]" }, /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, /* @__PURE__ */ React.createElement("h2", { className: "text-xl font-semibold" }, "Daily Logs"), /* @__PURE__ */ React.createElement("div", { className: "space-y-3" }, overview.daily_logs.map((day) => /* @__PURE__ */ React.createElement(DayCard, { key: day.date, day, go })), overview.daily_logs.length === 0 && /* @__PURE__ */ React.createElement("p", { className: "text-sm text-muted-foreground" }, "No daily logs yet."))), /* @__PURE__ */ React.createElement("div", { className: "space-y-6" }, /* @__PURE__ */ React.createElement(Card, null, /* @__PURE__ */ React.createElement(CardHeader, null, /* @__PURE__ */ React.createElement(CardTitle, { className: "text-base" }, "Recent Activity")), /* @__PURE__ */ React.createElement(CardContent, null, /* @__PURE__ */ React.createElement(SessionList, { sessions: overview.recent_sessions }))), /* @__PURE__ */ React.createElement(PersistentMemoryCard, { notes: overview.notes }))));
   }
   function SubjectView({ slug, go }) {
     const [subject, setSubject] = useState(null);

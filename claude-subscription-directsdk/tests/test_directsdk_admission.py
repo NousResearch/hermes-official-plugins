@@ -69,7 +69,136 @@ def test_first_response_owns_usage_and_stops_recovery(tmp_path, stop):
         client.close(); peer.shutdown(); thread.join(); peer.server_close()
 
 
+# Native retries a 401: Claude Code refreshes the shared login and re-issues the whole request (#162).
+# AUTH_ATTEMPTS bounds the loop; a 400 admission denial is a plain HTTPError that ends it.
+NATIVE_AUTH_RETRY = r'''
+import json, os, sys, urllib.request, urllib.error
+for line in sys.stdin:
+    frame=json.loads(line)
+    if frame.get('shouldQuery') is False:
+        print(json.dumps({'type':'result','num_turns':0}),flush=True)
+        continue
+    break
+url=os.environ['ANTHROPIC_BASE_URL']+'/v1/messages'
+for _ in range(int(os.environ['AUTH_ATTEMPTS'])):
+    code = None
+    try:
+        urllib.request.urlopen(urllib.request.Request(url, data=b'{}', headers={'Content-Type':'application/json'}), timeout=5).read()
+        code = 200
+    except urllib.error.HTTPError as e:
+        code = e.code
+    if code != 401:
+        break
+print(json.dumps({'type':'assistant','message':{'id':'first','role':'assistant','content':[{'type':'text','text':'FIRST'}]}}))
+print(json.dumps({'type':'stream_event','event':{'type':'message_stop'}}))
+print(json.dumps({'type':'result','subtype':'success','usage':{'input_tokens':0,'output_tokens':0}}))
+'''
 
+
+def _auth_answer(status, err_type='authentication_error', message='OAuth access token has been revoked.'):
+    return (status, json.dumps({'type':'error','error':{'type':err_type,'message':message}}).encode())
+
+
+def _sse_answer():
+    events = [
+        {'type':'message_start','message':{'id':'first','role':'assistant','model':'sonnet','content':[], 'usage':{'input_tokens':0,'output_tokens':0}}},
+        {'type':'content_block_start','index':0,'content_block':{'type':'text','text':''}},
+        {'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':'FIRST'}},
+        {'type':'content_block_stop','index':0},
+        {'type':'message_delta','delta':{'stop_reason':'end_turn'},'usage':{'input_tokens':0,'output_tokens':0}},
+        {'type':'message_stop'},
+    ]
+    return (200, ''.join('data: '+json.dumps(e)+'\n\n' for e in events).encode())
+
+
+def _auth_client(tmp_path, peer, attempts):
+    env = {'PATH':os.defpath,'HOME':str(tmp_path),'ANTHROPIC_BASE_URL':f'http://127.0.0.1:{peer.server_port}',
+           'AUTH_ATTEMPTS': str(attempts)}
+    native=tmp_path/'native_auth.py'; native.write_text(NATIVE_AUTH_RETRY)
+    return directsdk.Client(command=[sys.executable,str(native)],env=env)
+
+
+class ScriptedPeer(ThreadingHTTPServer):
+    """Answers the relay forwards in upstream-turn order; a request the gate denies never arrives."""
+
+    def __init__(self, answers):
+        self.answers = list(answers)
+        super().__init__(('127.0.0.1',0), PeerHandler)
+
+
+class PeerHandler(BaseHTTPRequestHandler):
+    def log_message(self, *args): pass
+    def do_POST(self):
+        self.rfile.read(int(self.headers['Content-Length']))
+        if not self.server.answers:
+            self.send_response(500); self.end_headers(); return
+        status, body = self.server.answers.pop(0)
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def test_a_revoked_oauth_login_gets_one_refresh_retry_upstream(tmp_path):
+    """#162: after an upstream 401 authentication error, native's refresh re-issue reaches upstream
+    and the refreshed login serves the turn, instead of the refreshed token never being used."""
+    answers = [_auth_answer(401), _sse_answer()]
+    peer = ScriptedPeer(answers)
+    thread = threading.Thread(target=peer.serve_forever, daemon=True); thread.start()
+    try:
+        client = _auth_client(tmp_path, peer, attempts=2)
+        try:
+            result = client.create(model='sonnet', messages=[{'role':'user','content':'fixture'}])
+            assert result.choices[0].message.content == 'FIRST'
+            assert result.choices[0].finish_reason == 'stop'
+            assert result.usage.native_admission.upstream_requests == 1
+            assert result.usage.native_admission.blocked_requests == 0
+        finally:
+            client.close()
+        assert not peer.answers  # both upstream attempts reached the peer
+    finally:
+        peer.shutdown(); thread.join(timeout=3); peer.server_close()
+
+
+def test_a_second_401_keeps_the_gate_closed(tmp_path):
+    """A login Anthropic still rejects cannot be refreshed away: one retry is allowed, then the
+    gate denies again and Hermes gets the real 401 with the revocation text, exit code and all."""
+    peer = ScriptedPeer([_auth_answer(401), _auth_answer(401)])
+    thread = threading.Thread(target=peer.serve_forever, daemon=True); thread.start()
+    try:
+        client = _auth_client(tmp_path, peer, attempts=3)
+        try:
+            with pytest.raises(directsdk.ClaudeAPIError) as exc_info:
+                client.create(model='sonnet', messages=[{'role':'user','content':'fixture'}])
+            assert exc_info.value.status_code == 401
+            assert 'OAuth access token has been revoked.' in str(exc_info.value)
+            assert 'native retries denied: 1' in str(exc_info.value)  # only the third attempt was denied
+        finally:
+            client.close()
+        assert not peer.answers
+    finally:
+        peer.shutdown(); thread.join(timeout=3); peer.server_close()
+
+
+def test_a_401_that_is_not_an_auth_error_stays_denied(tmp_path):
+    """Only an authentication_error body buys the retry: any other shape (rate limit, invalid
+    request) keeps the old denial, so a retried failure of that kind still ends the call."""
+    peer = ScriptedPeer([_auth_answer(401, err_type='invalid_request_error', message='custom'),
+                        _sse_answer()])
+    thread = threading.Thread(target=peer.serve_forever, daemon=True); thread.start()
+    try:
+        client = _auth_client(tmp_path, peer, attempts=3)
+        try:
+            with pytest.raises(directsdk.ClaudeAPIError) as exc_info:
+                client.create(model='sonnet', messages=[{'role':'user','content':'fixture'}])
+            assert exc_info.value.status_code == 401
+            assert 'native retries denied: 1' in str(exc_info.value)
+        finally:
+            client.close()
+        assert peer.answers  # the retry was denied locally and never reached the peer
+    finally:
+        peer.shutdown(); thread.join(timeout=3); peer.server_close()
 @pytest.mark.parametrize('details, refusal', [
     ({'category': 'cyber', 'explanation': 'The request was declined.'}, 'The request was declined.'),
     ({'category': 'cyber', 'explanation': None}, 'provider refusal category: cyber'),

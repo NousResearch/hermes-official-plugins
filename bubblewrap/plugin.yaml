@@ -45,7 +45,7 @@ config_schema:
     type: int
     default: 256
     label: Process limit
-    description: "Processes and threads a command may add on top of what your user already runs (RLIMIT_NPROC). 0 disables it."
+    description: "Processes and threads one command may run (RLIMIT_NPROC, counted per sandbox; needs Linux 5.14 or later, else it is not applied). 0 disables it."
   home_allow:
     type: list
     default: []

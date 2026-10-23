@@ -70,8 +70,8 @@ Each command gets:
   The docker socket, if present, is replaced by an empty file.
 - **Your home directory with its dot entries hidden** unless they are on an allowlist, and credential
   stores hidden always (below).
-- **Resource limits** per command (memory, CPU time, processes), applied by `prlimit` before `bwrap`
-  starts, so nothing runs in between.
+- **Resource limits** per command (memory, CPU time, processes), applied by `prlimit`: memory and CPU
+  before `bwrap` starts, the process limit inside the sandbox. Nothing runs in between.
 - **`--die-with-parent` and `--new-session`**: a sandbox dies with Hermes and cannot inject input into
   the controlling terminal.
 
@@ -278,14 +278,16 @@ refuses to start.
 |---------|---------|-------|
 | `memory_mb` | `256` | Virtual memory per process (`RLIMIT_AS`) |
 | `cpu_seconds` | `30` | CPU time per process (`RLIMIT_CPU`) |
-| `max_procs` | `256` | Processes and threads the command may add (`RLIMIT_NPROC`) |
+| `max_procs` | `256` | Processes and threads one command may run (`RLIMIT_NPROC`, counted for that sandbox alone) |
 
 A value of `0` disables that limit. The defaults are deliberately tight and some everyday tools exceed
 them: `pip`, `node`, `cargo` and most compilers need more than 256 MB of address space (the command
 fails with `MemoryError` or a similar message: raise `memory_mb` to 1024 or 2048), and a long compile
 or test run uses more than 30 seconds of CPU (killed, exit 137: raise `cpu_seconds`). `max_procs` is
-applied on top of the threads your user already runs, because the kernel counts `RLIMIT_NPROC` per
-user across the machine, so a fork bomb stops at about 256 processes without touching your desktop.
+set inside the sandbox, where the kernel counts only the processes of that sandbox: a fork bomb stops
+at 256 processes whatever else your user runs, and a command cannot raise the limit. This needs Linux
+5.14 or later. On an older kernel the backend sets no process limit, logs one warning and keeps the
+memory and CPU limits.
 
 ## Approval
 

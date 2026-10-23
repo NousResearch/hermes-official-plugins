@@ -11,7 +11,10 @@ tests (which load no sandbox code) are collected.
 from __future__ import annotations
 
 import importlib.util
+import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -37,6 +40,18 @@ def _load_plugin_package():
 
 
 _load_plugin_package()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_hermes_home(tmp_path, monkeypatch):
+    """Point HERMES_HOME at a per-test directory, as core's test suite does, so no test reads or
+    writes the real ~/.hermes (the sandbox makes its scratch and state dirs under it)."""
+    home = tmp_path / "hermes_test"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    import hermes_constants
+
+    monkeypatch.setattr(hermes_constants, "_PINNED_PROCESS_HERMES_HOME", None, raising=False)
 
 
 @pytest.fixture
@@ -73,5 +88,18 @@ class _RepoRootIsNotATestPackage:
 
 
 def pytest_configure(config):
+    # Every sandbox mounts a fresh /tmp, so a test directory under /tmp does not exist inside it and the
+    # integration tests that cd or write there fail. Without an explicit --basetemp, put pytest's
+    # directories under /var/tmp instead, removed when the session ends.
+    if sys.platform.startswith("linux") and config.option.basetemp is None:
+        temp = os.path.realpath(tempfile.gettempdir())
+        if (temp == "/tmp" or temp.startswith("/tmp/")) and os.path.isdir("/var/tmp"):
+            config.option.basetemp = config._plugin_basetemp = tempfile.mkdtemp(prefix="pytest-plugin-", dir="/var/tmp")
     if not config.pluginmanager.has_plugin("bubblewrap-repo-root"):
         config.pluginmanager.register(_RepoRootIsNotATestPackage(), "bubblewrap-repo-root")
+
+
+def pytest_unconfigure(config):
+    basetemp = getattr(config, "_plugin_basetemp", None)
+    if basetemp:
+        shutil.rmtree(basetemp, ignore_errors=True)

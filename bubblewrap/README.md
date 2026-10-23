@@ -46,6 +46,7 @@ hermes config set plugins.entries.bubblewrap.settings.memory_mb 2048       # 0 d
 hermes config set plugins.entries.bubblewrap.settings.cpu_seconds 600      # 0 disables
 hermes config set plugins.entries.bubblewrap.settings.max_procs 256        # 0 disables
 hermes config set plugins.entries.bubblewrap.settings.binds '[{"src": "/data/models"}, {"src": "/srv/scratch", "readonly": false}]'
+hermes config set plugins.entries.bubblewrap.settings.home_allow '[".config/nvim"]'
 ```
 
 Settings are read each time a sandbox environment is created, per profile. `terminal.cwd`,
@@ -66,7 +67,8 @@ Each command gets:
   keyring and D-Bus sockets there are unreachable, and `SSH_AUTH_SOCK`, `GPG_AGENT_INFO` and
   `DBUS_SESSION_BUS_ADDRESS` are removed from the environment (again after your shell rc files run).
   The docker socket, if present, is replaced by an empty file.
-- **Hidden credentials** (below): directories show as empty, files as zero-length.
+- **Your home directory with its dot entries hidden** unless they are on an allowlist, and credential
+  stores hidden always (below).
 - **Resource limits** per command (memory, CPU time, processes), applied by `prlimit` before `bwrap`
   starts, so nothing runs in between.
 - **`--die-with-parent` and `--new-session`**: a sandbox dies with Hermes and cannot inject input into
@@ -76,28 +78,70 @@ Each command gets:
 environment is the one the `local` backend builds (`env_passthrough` applies, provider API keys stay
 out, `HOME` follows `terminal.home_mode`).
 
-### Hidden paths
+### Your home directory
 
-These entries in your home directory are hidden inside every sandbox:
+Credentials live in dot entries of the home directory, and no list of them is complete: every tool
+that stores a token picks its own name. So the sandbox hides every dot entry of your home directory
+and shows only what is on an allowlist.
 
+- **Non-dot entries** (`~/projects`, `~/Documents`, `~/bin`) are visible, read-only unless the working
+  directory or a read-write bind covers them.
+- **Dot entries** (`~/.pgpass`, `~/.mozilla`, `~/.zz-some-tool`) do not exist inside the sandbox unless
+  they are allowed. An allowed dot entry is read-only always, so a command cannot edit `~/.bashrc` or
+  `~/.gitconfig`, which would run code in your own shells later.
+- **`~/.config`, `~/.local` and `~/.local/share`** follow the same rule one level down: only an allowed
+  child is visible.
+- **Nothing new can be made** at the top of the home directory or of those three directories.
+
+The allowlist has three sources: a shipped list (the shell startup files, `.gitconfig`, `.cache`, the
+common toolchain directories such as `.cargo`, `.rustup`, `.nvm` and `.pyenv`, and the common children
+of `.config`, `.local` and `.local/share`), every directory on `PATH` that lies under the home
+directory, and the `home_allow` setting for anything else:
+
+```yaml
+plugins:
+  entries:
+    bubblewrap:
+      settings:
+        home_allow:
+          - .zz-tool       # a dot entry at the top of the home directory
+          - .config/nvim   # or one child of .config, .local or .local/share
 ```
-.ssh  .aws  .gnupg  .gpg  .config/gcloud  .azure  .docker  .kube  .npmrc  .pypirc  .netrc  .env
-```
+
+Credential stores stay hidden whatever the allowlist says: `.ssh`, `.aws`, `.gnupg`, `.kube`,
+`.docker`, `.netrc`, `.npmrc`, `.pypirc`, `.pgpass`, `.git-credentials`, `.config/gh`,
+`.config/gcloud`, the browser profiles, the desktop keyrings and the other paths that Hermes' own
+file tools refuse to write. A `home_allow` entry that names one is ignored with a warning. Below an
+allowed entry the same holds: `~/.cargo` is visible, `~/.cargo/credentials.toml` shows as an empty
+file, and so do `~/.gem/credentials`, `~/.m2/settings.xml` and `~/.config/npm/npmrc`.
+
+An allowed dot entry that is a symlink stays a symlink inside the sandbox, so it resolves only when
+its target is visible. A dotfiles repository in a dot directory (`~/.gitconfig` linked to
+`~/.dotfiles/git/gitconfig`) and a CA bundle kept in one (`SSL_CERT_FILE=~/.certs/corp.pem`) need that
+directory in `home_allow` (`[".dotfiles"]`, `[".certs"]`): it then shows read-only, with the credential
+stores below it still hidden. A repository in a non-dot directory (`~/dotfiles`) needs nothing.
+
+The allowlist and the hidden set are fixed when the backend starts, so a command cannot widen them by
+changing `PATH`. The listing of the home directory is read at every command, so a directory you create
+on the host shows up in the next command.
+
+### The Hermes home
 
 The Hermes home (`HERMES_HOME`, normally `.hermes` in your home directory) is hidden as well. Two
 directories under it stay reachable at their own paths: the backend's own state directory
 (`HERMES_HOME/sandboxes/bwrap-*`) and the Hermes scratch directory (`HERMES_HOME/cache/scratch`, which
 is `TMPDIR` for every command, writable whenever the working directory is). With
 `terminal.home_mode: profile`, `HERMES_HOME/home` is the subprocess `HOME` and stays readable and
-writable; the rest of `HERMES_HOME` stays hidden. When `HERMES_HOME` points elsewhere (a profile under
+writable; the rest of `HERMES_HOME` stays hidden, the files other sessions staged there (attachments,
+cached documents, images, pastes) included. When `HERMES_HOME` points elsewhere (a profile under
 `.hermes/profiles/<name>`), the default `.hermes` is hidden too, so a profile's sandbox cannot read the
 default home's `.env` or `auth.json`.
 
-A path that does not exist on the host is skipped. An entry that is a symlink (a dotfiles repository
-linking `.ssh` to `dotfiles/ssh`) is hidden at its target, resolved when the backend starts, and the
-parents of hidden paths inside a writable directory are pinned so a command cannot rename them out
-from under the overlay. Writes into a hidden directory land in the sandbox's copy and never reach the
-host.
+A hidden path that does not exist on the host is skipped. An entry that is a symlink (a dotfiles
+repository linking `.ssh` to `dotfiles/ssh`) is hidden at its target, resolved when the backend
+starts, and the parents of hidden paths inside a writable directory are pinned so a command cannot
+rename them out from under the overlay. Writes into a hidden directory land in the sandbox's copy and
+never reach the host.
 
 One exception: a CA bundle named by `SSL_CERT_FILE`, `SSL_CERT_DIR`, `HERMES_CA_BUNDLE`,
 `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `GIT_SSL_CAINFO` or `PIP_CERT` that sits
@@ -136,9 +180,9 @@ backend) is the writable set: everything under it can be changed, everything els
 it at a project or scratch directory. Only that setting decides what is writable: a `cd` (the model's,
 or a Desktop/TUI workspace outside it) moves where commands start, and they run read-only there, also
 after Hermes recreates the environment. A `terminal.cwd` that does not exist runs commands read-only in
-its nearest existing parent. With your home directory as the working directory every dotfile
-outside the hidden set (`.bashrc`, `.profile`, `.config/autostart`, `.local/bin`, ...) is writable,
-which is a path back into your own shells; Hermes logs a warning in that case. A working directory of
+its nearest existing parent. With your home directory as the working directory, the existing non-dot
+entries of it are writable and nothing else is: the dot entries are read-only or hidden, and no new
+file or directory can be made at the top of the home directory. Hermes logs a warning in that case. A working directory of
 `/` is refused, and so is one under the Hermes home or a hidden path, since no command could run there.
 When Hermes was started from such a place (a gateway launched from its checkout under `.hermes`), the
 backend starts in your home directory instead, as the gateway does for the `local` backend.

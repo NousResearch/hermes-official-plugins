@@ -157,8 +157,9 @@ default home's `.env` or `auth.json`.
 
 Each sandbox sees only its own state directory: when `terminal.sandbox_dir` lies outside the hidden
 set, it is an empty read-only directory inside the sandbox with that one entry, so no sandbox reads
-another one's shell snapshot or `execute_code` files. Such a sandbox directory must not hold the
-working directory, the home directory or a bind destination, or the backend refuses to start.
+another one's shell snapshot or `execute_code` files. The same holds where a bind of a parent
+directory shows the sandbox directory again at another path. Such a sandbox directory must not hold
+the working directory, the home directory or a bind destination, or the backend refuses to start.
 
 A hidden path that does not exist on the host is skipped. An entry that is a symlink (a dotfiles
 repository linking `.ssh` to `dotfiles/ssh`) is hidden at its target, resolved when the backend

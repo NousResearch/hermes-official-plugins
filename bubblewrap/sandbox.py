@@ -38,8 +38,9 @@ Layout of the argv (later mounts overlay earlier ones):
    when HERMES_HOME points elsewhere (a profile under
    HOME/.hermes/profiles, or any other directory), so a profile's sandbox
    cannot read the default home's credentials
-8. a tmpfs over the sandbox dir when no hidden path covers it, so a
-   sandbox sees no other environment's state (read-only after step 10);
+8. a tmpfs over the sandbox dir when no hidden path covers it, and over
+   each second view of it through an operator bind, so a sandbox sees no
+   other environment's state (read-only after step 10);
    the trust-anchor files the overlays hide (CA_BUNDLE_VARS), read-only
    from the paths they resolved to; this environment's own scratch dir
    mounted at the Hermes scratch dir, which every Hermes process and
@@ -761,6 +762,22 @@ def ancestor_pin_args(
     return argv
 
 
+def sandbox_dir_views(sandbox_root: str, binds: Iterable[BindMount]) -> tuple[str, ...]:
+    """The paths where an operator bind shows *sandbox_root* a second time.
+
+    A bind of a parent of the sandbox dir to another destination shows the
+    sandbox dir below that destination, with the state dir of every
+    environment in it. Hiding the sandbox dir at its own path leaves that
+    view open, so each view gets the same tmpfs.
+    """
+    views: list[str] = []
+    for bind in binds:
+        src = os.path.realpath(bind.src)
+        if src != bind.dest and _is_within(sandbox_root, src):
+            views.append(os.path.normpath(os.path.join(bind.dest, os.path.relpath(sandbox_root, src))))
+    return tuple(dict.fromkeys(views))
+
+
 def _late_mounts(
     profile: Profile,
     state_dir: str,
@@ -770,6 +787,7 @@ def _late_mounts(
     ca_bundles: Sequence[tuple[str, str]],
     profile_home: tuple[str, str] | None,
     sandbox_root: str | None,
+    sandbox_views: Sequence[str] = (),
 ) -> list[tuple[str, ...]]:
     """The mounts that go on top of every overlay, in order: the sandbox dir, trust anchors, scratch, the profile home, the state dir."""
     late: list[tuple[str, ...]] = []
@@ -779,6 +797,8 @@ def _late_mounts(
     # (below), so a sandbox sees its own state and nothing of another's.
     if sandbox_root:
         late.append(("--tmpfs", sandbox_root))
+    # The same holds where an operator bind shows the sandbox dir again.
+    late += [("--tmpfs", view) for view in sandbox_views]
     # Trust anchors the overlays hid come back read-only, from the path
     # they resolved to at construction (see ca_bundle_binds); -try, so a
     # bundle removed from the host between spawns fails in the tool that
@@ -806,6 +826,7 @@ def _late_mounts(
     late.append(("--bind", state_dir, state_dir))
     if sandbox_root:
         late.append(("--remount-ro", sandbox_root))
+    late += [("--remount-ro", view) for view in sandbox_views]
     return late
 
 
@@ -842,7 +863,7 @@ def build_bwrap_args(
     (private_scratch_path), mounted at *scratch_dir*; without it nothing of
     the scratch dir is bound. *sandbox_root*, when given, is hidden but for
     the state dir (the environment passes it when no hidden path covers
-    it). The listing of the top of HOME is the one input read from the host
+    it), and so is each second view of it through an operator bind. The listing of the top of HOME is the one input read from the host
     at each call, so a directory made on the host later shows in the next
     spawn.
     """
@@ -925,6 +946,7 @@ def build_bwrap_args(
         scratch_dir=scratch_dir, scratch_private=scratch_private, ca_bundles=ca_bundles,
         profile_home=profile_home,  # type: ignore[arg-type]
         sandbox_root=sandbox_root,
+        sandbox_views=sandbox_dir_views(sandbox_root, binds) if sandbox_root else (),
     )
 
     if home_root is None:

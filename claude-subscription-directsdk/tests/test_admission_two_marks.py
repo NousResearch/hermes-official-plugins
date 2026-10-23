@@ -17,6 +17,11 @@ import pytest
 from admission import Admission, pin_message_breakpoint
 
 MARKER = {'type': 'ephemeral'}
+
+
+def tools_as_native(body):
+    return [{k: v for k, v in t.items() if k != 'eager_input_streaming'} for t in body['tools']]
+
 # Native's own system/tools marks: with two message marks the request is at Anthropic's limit of four.
 SYSTEM = [{'type': 'text', 'text': 'x-anthropic-billing-header: cc'},
           {'type': 'text', 'text': 'You are Claude Code. Hermes system prompt.', 'cache_control': MARKER}]
@@ -123,7 +128,8 @@ def test_two_native_marks_keep_one_breakpoint_the_next_request_reads(reminder):
     assert message_marks(sent_n) == [(1, 4), (2, 3)]
     assert message_marks(sent_n1) == [(3, 4), (4, 3)]
     # Only a marker moved: same content, same system/tools marks, never more than native's four.
-    assert sent_n['system'] == native_n['system'] and sent_n['tools'] == native_n['tools']
+    # (The relay also asks for streamed tool input on every tool; see test_admission_tool_streaming.)
+    assert sent_n['system'] == native_n['system'] and tools_as_native(sent_n) == native_n['tools']
     assert plain(sent_n['messages'][3]) == plain(native_n['messages'][3])
     assert mark_count(sent_n) == mark_count(native_n) == 4
 

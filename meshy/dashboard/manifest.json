@@ -1,0 +1,13 @@
+{
+  "name": "meshy",
+  "label": "Meshy",
+  "description": "Backend for the Meshy Desktop viewer: credit balance, recent generations, and local .glb reads.",
+  "icon": "Box",
+  "version": "0.2.0",
+  "tab": {
+    "path": "/meshy",
+    "hidden": true
+  },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}

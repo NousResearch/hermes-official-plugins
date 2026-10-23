@@ -1,0 +1,22 @@
+{
+  "name": "hermes-meshy-desktop",
+  "version": "0.4.0",
+  "private": true,
+  "description": "Meshy 3D viewer for Hermes Desktop: inline transcript cards, a gallery tab and a credit chip, rendered with three.js.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test:gallery": "node --experimental-strip-types --test tests/gallery.test.mjs",
+    "build": "esbuild src/plugin.tsx --bundle --format=esm --platform=browser --jsx=automatic --minify --legal-comments=none --external:@hermes/plugin-sdk --external:react --external:react/jsx-runtime --outfile=desktop/plugin.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.12",
+    "@types/three": "0.180.0",
+    "esbuild": "0.28.1",
+    "typescript": "5.9.2"
+  }
+}

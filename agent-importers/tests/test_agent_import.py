@@ -811,6 +811,22 @@ class TestCliWiring:
         assert "npm run build" not in config_text
         assert "github" not in config_text
 
+    def test_import_run_by_setup_never_sends_the_user_back_to_setup(
+            self, claude_tree, hermes_home, capsys):
+        """`hermes setup` runs this import itself (passing --from-setup): its credential hints must not
+        say "run 'hermes setup'"."""
+        import argparse
+        from agent_importers_plugin.cli import handle_cli, setup_cli
+
+        parser = argparse.ArgumentParser()
+        setup_cli(parser.add_subparsers(dest="command").add_parser("import-agent"))
+        handle_cli(parser.parse_args(
+            ["import-agent", "claude-code", "--source", str(claude_tree), "--from-setup", "--yes"]))
+
+        out = capsys.readouterr().out
+        assert "Import complete" in out and "Secrets stripped" in out
+        assert "hermes setup" not in out
+
 
 # ---------------------------------------------------------------------------
 # Sync mode (--sync): keep previously imported sources current

@@ -3,6 +3,7 @@ flow. OpenClaw runs through :mod:`.openclaw`, imported only when an OpenClaw com
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import sys
@@ -85,6 +86,8 @@ def setup_cli(parser) -> None:
         help="Re-import every previously imported source whose files changed since the last "
              "import (registered in HERMES_HOME/import-sync.json). Runs without prompts; "
              "combine with --dry-run to preview.")
+    # `hermes setup` runs the import itself: no pointers back to setup or to flags it already chose.
+    parser.add_argument("--from-setup", action="store_true", help=argparse.SUPPRESS)
     add_openclaw_migrate_flags(parser, defaults=False)
 
 
@@ -173,6 +176,7 @@ def import_agent_command(args) -> None:
         print_info(f"Use them with: hermes import-agent openclaw {' '.join(passed)} ...")
         return
     explicit_source, overwrite = args.source, args.overwrite
+    from_setup = getattr(args, "from_setup", False)
     source_dir = Path(explicit_source or Path.home() / AGENT_DEFAULT_DIRS[agent])
 
     print()
@@ -191,7 +195,7 @@ def import_agent_command(args) -> None:
     print_info(f"Source:      {source_dir}")
     print_info(f"Target:      {hermes_home}")
     print_info(f"Overwrite:   {'yes' if overwrite else 'no (skip conflicts)'}")
-    print_info("Secrets:     never imported — run 'hermes setup' for credentials")
+    print_info("Secrets:     never imported" + ("" if from_setup else " — run 'hermes setup' for credentials"))
     # Ensure config.yaml exists before the import tries to merge into it
     if not get_config_path().exists():
         save_config(load_config())
@@ -215,12 +219,12 @@ def import_agent_command(args) -> None:
     if summary.get("imported", 0) == 0 and summary.get("conflict", 0) == 0:
         print()
         print_info(f"Nothing to import from {agent}.")
-        print_import_report(preview, dry_run=True)
+        print_import_report(preview, dry_run=True, from_setup=from_setup)
         return
     print()
     print_header(f"Import Preview — {summary.get('imported', 0)} item(s) would be imported")
     print_info("No changes have been made yet. Review the list below:")
-    print_import_report(preview, dry_run=True)
+    print_import_report(preview, dry_run=True, from_setup=from_setup)
     if args.dry_run:
         return
 
@@ -237,7 +241,7 @@ def import_agent_command(args) -> None:
     report = run_import(True, "")
     if report is None:
         return
-    print_import_report(report, dry_run=False)
+    print_import_report(report, dry_run=False, from_setup=from_setup)
     from .sync import update_sync_manifest
     try:
         update_sync_manifest(agent, source_dir.resolve(), hermes_home.resolve(), overwrite, report)
@@ -247,13 +251,17 @@ def import_agent_command(args) -> None:
         logger.warning("Could not update import sync manifest: %s", exc)
     print()
     print_success("Import complete.")
-    print_info("API keys and credentials were NOT imported — run 'hermes setup' "
-               f"to configure providers, or add them to {display_hermes_home()}/.env.")
+    if from_setup:
+        print_info("API keys and credentials were NOT imported.")
+    else:
+        print_info("API keys and credentials were NOT imported — run 'hermes setup' "
+                   f"to configure providers, or add them to {display_hermes_home()}/.env.")
 
 
-def print_import_report(report: dict[str, Any], dry_run: bool) -> None:
+def print_import_report(report: dict[str, Any], dry_run: bool, from_setup: bool = False) -> None:
     """Print a formatted per-item import report."""
     from hermes_cli.cli_output import print_header, print_info
+    from hermes_constants import display_hermes_home
 
     print()
     print_header("Dry Run Results" if dry_run else "Import Results")
@@ -281,7 +289,8 @@ def print_import_report(report: dict[str, Any], dry_run: bool) -> None:
         print(_color("  ⚷ Secrets stripped (never imported):", "yellow"))
         for name in stripped:
             print(f"      {name}")
-        print_info("Re-add credentials deliberately via 'hermes setup' or the profile's .env.")
+        print_info(f"Re-add them deliberately in {display_hermes_home()}/.env." if from_setup
+                   else "Re-add credentials deliberately via 'hermes setup' or the profile's .env.")
         print()
     summary = report.get("summary", {})
     parts = [f"{summary[k]} {label}" for k, _, _, label in groups if summary.get(k)]

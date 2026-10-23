@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Claude's reasoning reaches Hermes again: adaptive-thinking requests ask for `thinking.display: "summarized"`, as core's Anthropic adapter does. Claude 4.7 and later default the display to omitted, which returned signed but empty thinking blocks and left the reasoning panel blank (#45, thanks @mister-ideas). A turn of thinking alone, with no text and no tool call, still reaches Hermes without reasoning, so Hermes nudges the model on instead of taking the thinking as the final answer and ending the tool loop (thanks @100yenadmin, @shaggy2626).
+- Long tool calls are no longer cancelled as stalls: the relay asks the API to stream each tool's arguments as they are written (`eager_input_streaming`). Native enables that only for a first-party base URL, so behind the relay a whole-file `write_file` argument arrived in one burst after minutes of silence (live: 89.8 s with no chunk on Opus 5.5) and Hermes' stall timer killed the healthy call.
 - Report `Claude request cancelled` when a request is cancelled while native acknowledges replayed history, and include native's exit code and stderr when native exits before that acknowledgment (#122, thanks @Eros-H).
 - Restore gzip compression for large direct Anthropic requests, with a process-wide latch and one uncompressed resend when request encoding is rejected.
 - A reasoning-off request (`reasoning.enabled: false` or effort `none`) on a route that cannot disable thinking (Haiku 5.5, Sonnet 5.5, Opus 5.5, Fable) now asks for `effort: low` instead of sending no effort, where native thought at its default effort. Routes that accept the disable still receive it.

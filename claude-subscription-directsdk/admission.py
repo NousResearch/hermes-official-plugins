@@ -377,6 +377,25 @@ def drop_message_breakpoints(payload):
         return payload
 
 
+def stream_tool_input(payload):
+    """Ask the API to stream every tool's arguments as the model writes them (``eager_input_streaming``).
+
+    Native turns fine-grained tool streaming on only for a first-party base URL, so behind this relay its
+    tools go out without the flag and the API holds a large argument (a whole file in one ``write_file``)
+    until it is complete. Hermes' stall detector then sees minutes of silence and cancels a healthy call.
+    A value native already set wins, and a payload with no tools or that does not parse forwards as is."""
+    try:
+        body = json.loads(payload)
+        tools = [t for t in body.get('tools') or () if isinstance(t, dict) and 'eager_input_streaming' not in t]
+        if not tools:
+            return payload
+        for tool in tools:
+            tool['eager_input_streaming'] = True
+        return json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    except (ValueError, TypeError, AttributeError):
+        return payload
+
+
 def restore_queried_turn(payload, queried):
     """Restore a uniquely anchored tool-result frame without dropping protected content.
 
@@ -505,6 +524,7 @@ class Capture:
         self.pending = ''
         self.decoder = codecs.getincrementaldecoder('utf-8')()
         self.arguments = {}
+        self.unparsed = []
 
     def feed(self, chunk):
         self.pending += self.decoder.decode(chunk)
@@ -549,13 +569,21 @@ class Capture:
         if index in self.arguments:
             # A no-argument tool call streams one input_json_delta with an empty partial_json.
             raw = self.arguments.pop(index)
-            self.message['content'][index]['input'] = json.loads(raw) if raw.strip() else {}
+            try:
+                self.message['content'][index]['input'] = json.loads(raw) if raw.strip() else {}
+            except ValueError:
+                # Streamed tool input is not validated (``eager_input_streaming``): a reply cut off at
+                # max_tokens ends mid-argument. The call is dropped at message_stop, never run with guessed
+                # arguments, and the stop reason (finish ``length``) tells Hermes the reply was cut short.
+                self.unparsed.append(index)
 
     def _delta(self, event):
         self.message.update(event.get('delta', {}))
         self.message['usage'].update(event.get('usage', {}))
 
     def _stop(self, event):
+        for index in sorted(self.unparsed, reverse=True):
+            del self.message['content'][index]
         self.complete = bool(self.message and self.message.get('stop_reason') and not self.arguments)
 
 
@@ -764,6 +792,7 @@ class Handler(BaseHTTPRequestHandler):
                 gate.unrestored = str(exc)
             payload = stable_request_context(payload, gate.queried)
             payload = pin_message_breakpoint(payload, gate.queried)
+            payload = stream_tool_input(payload)
             target = gate.upstream
             conn, upstream_socket = self._connect_upstream()
             if conn is None:

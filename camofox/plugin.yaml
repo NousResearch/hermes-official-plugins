@@ -1,0 +1,38 @@
+name: camofox
+label: Camofox
+kind: standalone
+version: 1.0.0
+author: NousResearch
+homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/camofox
+description: >
+  Camofox for Hermes Agent: drives a self-hosted camofox-browser server (Camoufox, a
+  Firefox fork with fingerprint spoofing) over its REST API. Provides the browser_navigate,
+  browser_snapshot, browser_click, browser_type, browser_scroll, browser_back, browser_press,
+  browser_get_images, browser_vision and browser_console tools (toolset camofox), cookie import
+  from a cookies.txt file (browser_import_cookies, with CAMOFOX_API_KEY), plus
+  `hermes camofox setup|status`. Hermes does not install or start the server; set
+  CAMOFOX_URL. Formerly built into Hermes core.
+provides_tools:
+  - browser_navigate
+  - browser_snapshot
+  - browser_click
+  - browser_type
+  - browser_scroll
+  - browser_back
+  - browser_press
+  - browser_get_images
+  - browser_vision
+  - browser_console
+  - browser_import_cookies
+provides_hooks:
+  - on_session_end
+  - on_session_finalize
+requires_env:
+  - name: CAMOFOX_URL
+    description: "URL of your camofox-browser server (e.g. http://localhost:9377). The camofox tools appear once it is set."
+    url: "https://github.com/jo-inc/camofox-browser"
+optional_env:
+  - name: CAMOFOX_API_KEY
+    description: "Bearer token for a Camofox server started with CAMOFOX_API_KEY"
+    prompt: "Camofox API key"
+    password: true

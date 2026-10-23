@@ -317,6 +317,18 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def is_hermes_seeded_soul(text: str) -> bool:
+    """Hermes writes its default SOUL.md into every new home, so a fresh install always has one. Still
+    holding that default (or an older seed), it carries nothing the user wrote and OpenClaw's persona
+    can replace it. Outside Hermes (the script run on its own) nothing counts as seeded."""
+    try:
+        from hermes_cli.default_soul import DEFAULT_SOUL_MD, is_legacy_template_soul
+    except ImportError:
+        return False
+    normalized = text.replace("\r\n", "\n").lstrip("\ufeff").strip()
+    return normalized == DEFAULT_SOUL_MD.strip() or is_legacy_template_soul(text)
+
+
 def normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip())
 
@@ -1251,7 +1263,9 @@ class Migrator:
         return path
 
     def copy_file(self, source: Path, destination: Path, kind: str,
-                  transform: Optional[Any] = None) -> None:
+                  transform: Optional[Any] = None, replaceable: bool = False) -> None:
+        """*replaceable*: the existing target holds nothing the user wrote, so it is replaced (with a
+        backup) without --overwrite."""
         if not source or not source.exists():
             return
 
@@ -1259,7 +1273,7 @@ class Migrator:
             if not transform and sha256_file(source) == sha256_file(destination):
                 self.record(kind, source, destination, "skipped", "Target already matches source")
                 return
-            if not self.overwrite:
+            if not self.overwrite and not replaceable:
                 self.record(kind, source, destination, "conflict", "Target exists and overwrite is disabled")
                 return
 
@@ -1282,7 +1296,9 @@ class Migrator:
         if not source:
             self.record("soul", None, self.target_root / "SOUL.md", "skipped", "No OpenClaw SOUL.md found")
             return
-        self.copy_file(source, self.target_root / "SOUL.md", kind="soul", transform=rebrand_text)
+        destination = self.target_root / "SOUL.md"
+        self.copy_file(source, destination, kind="soul", transform=rebrand_text,
+                       replaceable=destination.is_file() and is_hermes_seeded_soul(read_text(destination)))
 
     def migrate_workspace_agents(self) -> None:
         source = self.source_candidate(
@@ -1477,19 +1493,6 @@ class Migrator:
             .get("defaults", {})
             .get("workspace")
         )
-        if isinstance(workspace, str) and workspace.strip():
-            ws_path = workspace.strip()
-            # Skip if the workspace points inside the OpenClaw source directory —
-            # that path will be stale after migration and would cause the Hermes
-            # gateway to use the old OpenClaw workspace as its cwd, picking up
-            # OpenClaw's AGENTS.md, MEMORY.md, etc.
-            try:
-                inside_source = Path(ws_path).resolve().is_relative_to(self.source_root.resolve())
-            except (ValueError, OSError):
-                inside_source = False
-            if not inside_source:
-                additions["MESSAGING_CWD"] = ws_path
-
         allowlist_path = self.source_root / "credentials" / "telegram-default-allowFrom.json"
         if allowlist_path.exists():
             try:
@@ -1509,6 +1512,50 @@ class Migrator:
             self.merge_env_values(additions, "messaging-settings", self.source_root / "openclaw.json")
         else:
             self.record("messaging-settings", self.source_root / "openclaw.json", self.target_root / ".env", "skipped", "No Hermes-compatible messaging settings found")
+        # Last: it reads config.yaml, and an unreadable one must not cost the .env settings above.
+        if isinstance(workspace, str) and workspace.strip():
+            self.migrate_working_directory(workspace.strip())
+
+    def migrate_working_directory(self, ws_path: str) -> None:
+        """OpenClaw's agent workspace becomes Hermes' ``terminal.cwd`` in config.yaml (Hermes removed
+        the old ``MESSAGING_CWD`` .env setting; ``terminal.cwd`` is canonical)."""
+        source = self.source_root / "openclaw.json"
+        destination = self.target_root / "config.yaml"
+        # A workspace inside the OpenClaw dir would be stale after migration, and Hermes would run in
+        # it and pick up OpenClaw's AGENTS.md, MEMORY.md, etc. ``~`` is expanded first: OpenClaw's own
+        # default is ``~/.openclaw/workspace``.
+        try:
+            inside_source = Path(ws_path).expanduser().resolve().is_relative_to(self.source_root.resolve())
+        except (ValueError, OSError):
+            inside_source = False
+        if inside_source:
+            self.record("working-directory", source, destination, "skipped",
+                        "OpenClaw's workspace is inside the OpenClaw directory; not used as Hermes' terminal.cwd")
+            return
+        if yaml is None:
+            self.record("working-directory", source, destination, "error", "ruamel.yaml is not available")
+            return
+        hermes_config = load_yaml_file(destination)
+        terminal_cfg = hermes_config.get("terminal")
+        terminal_cfg = terminal_cfg if isinstance(terminal_cfg, dict) else {}
+        current = str(terminal_cfg.get("cwd") or "").strip()
+        if current == ws_path:
+            self.record("working-directory", source, destination, "skipped", "terminal.cwd already set to the same value")
+            return
+        # ".", "auto" and "cwd" are Hermes' placeholders for "no folder chosen" (the default config holds ".").
+        if current and current not in {".", "auto", "cwd"} and not self.overwrite:
+            self.record("working-directory", source, destination, "conflict",
+                        "terminal.cwd already set and overwrite is disabled", current=current, incoming=ws_path)
+            return
+        if self.execute:
+            backup_path = self.maybe_backup(destination)
+            terminal_cfg["cwd"] = ws_path
+            hermes_config["terminal"] = terminal_cfg
+            dump_yaml_file(destination, hermes_config)
+            self.record("working-directory", source, destination, "migrated",
+                        backup=str(backup_path) if backup_path else "", cwd=ws_path)
+        else:
+            self.record("working-directory", source, destination, "migrated", "Would set terminal.cwd", cwd=ws_path)
 
     def handle_secret_settings(self, config: Optional[dict[str, Any]] = None) -> None:
         config = config or self.load_openclaw_config()
@@ -2032,12 +2079,12 @@ class Migrator:
                     self.record(kind_label, skill_dir, final_destination, "migrated", f"Would copy {desc} directory")
 
         desc_path = destination_root / "DESCRIPTION.md"
-        if self.execute:
-            desc_path.parent.mkdir(parents=True, exist_ok=True)
-            if not desc_path.exists():
+        if not desc_path.exists():  # reported on apply as well as in the preview
+            if self.execute:
+                desc_path.parent.mkdir(parents=True, exist_ok=True)
                 desc_path.write_text(SKILL_CATEGORY_DESCRIPTION + "\n", encoding="utf-8")
-        elif not desc_path.exists():
-            self.record("shared-skill-category", None, desc_path, "migrated", "Would create category description")
+            self.record("shared-skill-category", None, desc_path, "migrated",
+                        "" if self.execute else "Would create category description")
 
     def migrate_daily_memory(self) -> None:
         source_dir = self.source_candidate("workspace/memory")
@@ -2147,12 +2194,12 @@ class Migrator:
                     self.record("skill", skill_dir, final_destination, "migrated", "Would copy skill directory")
 
         desc_path = destination_root / "DESCRIPTION.md"
-        if self.execute:
-            desc_path.parent.mkdir(parents=True, exist_ok=True)
-            if not desc_path.exists():
+        if not desc_path.exists():  # reported on apply as well as in the preview
+            if self.execute:
+                desc_path.parent.mkdir(parents=True, exist_ok=True)
                 desc_path.write_text(SKILL_CATEGORY_DESCRIPTION + "\n", encoding="utf-8")
-        elif not desc_path.exists():
-            self.record("skill-category", None, desc_path, "migrated", "Would create category description")
+            self.record("skill-category", None, desc_path, "migrated",
+                        "" if self.execute else "Would create category description")
 
     def copy_tree_non_destructive(
         self,

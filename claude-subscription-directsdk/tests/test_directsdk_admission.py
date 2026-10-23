@@ -122,6 +122,46 @@ def test_contentless_refusal_is_a_terminal_content_filter(tmp_path, details, ref
         client.close(); peer.shutdown(); thread.join(); peer.server_close()
 
 
+@pytest.mark.parametrize('text', ['', 'done'])
+def test_a_thinking_only_turn_reaches_hermes_without_reasoning(tmp_path, text):
+    """With summarized display, a turn of thinking alone would reach Hermes as a reasoning-only `stop`, which Hermes
+    promotes to the final answer, ending the tool loop mid-task. It arrives with no reasoning, so Hermes' empty-response
+    recovery nudges the model on; the signed thinking still replays. A turn with text keeps its reasoning."""
+    usage = {'input_tokens':0, 'output_tokens':0, 'cache_read_input_tokens':0, 'cache_creation_input_tokens':0}
+    class Peer(BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            self.send_response(200); self.send_header('Content-Type','text/event-stream'); self.end_headers()
+            events = [
+                {'type':'message_start','message':{'id':'first','role':'assistant','model':'sonnet','content':[], 'usage':usage}},
+                {'type':'content_block_start','index':0,'content_block':{'type':'thinking','thinking':'','signature':''}},
+                {'type':'content_block_delta','index':0,'delta':{'type':'thinking_delta','thinking':'I will run the next command.'}},
+                {'type':'content_block_delta','index':0,'delta':{'type':'signature_delta','signature':'signed-test'}},
+                {'type':'content_block_stop','index':0},
+                *([{'type':'content_block_start','index':1,'content_block':{'type':'text','text':''}},
+                   {'type':'content_block_delta','index':1,'delta':{'type':'text_delta','text':text}},
+                   {'type':'content_block_stop','index':1}] if text else []),
+                {'type':'message_delta','delta':{'stop_reason':'end_turn'},'usage':usage},
+                {'type':'message_stop'},
+            ]
+            self.wfile.write(''.join('data: '+json.dumps(e)+'\n\n' for e in events).encode())
+    peer=ThreadingHTTPServer(('127.0.0.1',0),Peer)
+    thread=threading.Thread(target=peer.serve_forever,daemon=True); thread.start()
+    native=tmp_path/'native.py'; native.write_text(NATIVE)
+    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'ANTHROPIC_BASE_URL':f'http://127.0.0.1:{peer.server_port}'})
+    try:
+        result=client.create(model='sonnet',messages=[{'role':'user','content':'fixture'}])
+        message=result.choices[0].message
+        assert result.choices[0].finish_reason=='stop' and message.tool_calls is None
+        assert message.reasoning_content==('I will run the next command.' if text else None)
+        assert message.content==(text or None)
+        signed=message.reasoning_details[0]['messages'][0]['content'][0]
+        assert signed['type']=='thinking' and signed['signature']=='signed-test'  # the native turn still replays
+    finally:
+        client.close(); peer.shutdown(); thread.join(); peer.server_close()
+
+
 def _hermes_reply(response):
     """What Hermes shows the user for a content_filter response: core's own refusal handler, no fallback configured."""
     from types import SimpleNamespace

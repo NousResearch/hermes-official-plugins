@@ -13,7 +13,7 @@ This is a portable [Agent Plugins v1](https://agent-plugins.org) package. One in
 
 - `mcp.json`: Meshy's first-party MCP server
   ([meshy-dev/meshy-mcp-server](https://github.com/meshy-dev/meshy-mcp-server), MIT),
-  launched as `npx -y @meshy-ai/meshy-mcp-server@0.6.4` over stdio for every new session
+  launched as `npx -y @meshy-ai/meshy-mcp-server@0.6.5` over stdio for every new session
   while the plugin is enabled. No `mcp_servers` edit in config.yaml.
 - `skills/meshy-3d/`: a workflow skill. It carries the server's own routing rules (cost
   confirmation, never re-creating an uncertain task, choosing the output format first, the
@@ -59,7 +59,7 @@ replaces the plugin's, trust included, so keep the pinned command:
 mcp_servers:
   meshy:
     command: npx
-    args: ["-y", "@meshy-ai/meshy-mcp-server@0.6.4"]
+    args: ["-y", "@meshy-ai/meshy-mcp-server@0.6.5"]
     env:
       MESHY_API_KEY: ${MESHY_API_KEY}
 ```
@@ -192,7 +192,7 @@ slicer detection work.
 
 ## Version pinning
 
-`mcp.json` pins `@meshy-ai/meshy-mcp-server@0.6.4` (published 2026-10-13). Bumping it is a
+`mcp.json` pins `@meshy-ai/meshy-mcp-server@0.6.5` (published 2026-10-22). Bumping it is a
 commit here followed by a reviewed SHA bump in the
 [hermes-agent plugin catalog](https://github.com/NousResearch/hermes-agent/tree/main/plugin-catalog).
 `@latest` is deliberately not used.

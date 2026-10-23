@@ -299,7 +299,9 @@ def request_body(kwargs):
             # Routes without adaptive thinking (Haiku 4.5) 400 on the block; their own
             # default thinking plus the effort signal below stand in for it.
             if reasoning.get('enabled') is True and supports_adaptive_thinking(kwargs.get('model')):
-                body['thinking'] = {'type': 'adaptive'}
+                # 4.7+ defaults thinking.display to "omitted" (empty thinking + signature only),
+                # which leaves Hermes' reasoning panel blank. Mirror core's anthropic_adapter.
+                body['thinking'] = {'type': 'adaptive', 'display': 'summarized'}
             if effort:
                 body['output_config'] = {'effort': effort}
     response_format = kwargs.get('response_format', body.pop('response_format', None))
@@ -1010,8 +1012,12 @@ class Client:
                         yield self._chunk(kwargs['model'], {'content': text[len(emitted):]})
                     else:
                         raise RuntimeError('Native final text differs from incremental stream')
+                thinking = ''.join(b.get('thinking', '') for b in blocks if b.get('type') == 'thinking') or None
+                # A turn of thinking alone (no text, no tool call) is Claude stalling, not answering. Hermes promotes a
+                # reasoning-only `stop` to the final answer, which ends the tool loop; left empty, its empty-response
+                # recovery nudges the model on, as before summarized display. The signed thinking still replays.
                 message = {'role': 'assistant', 'content': text or None, 'tool_calls': calls or None,
-                           'reasoning_content': ''.join(b.get('thinking', '') for b in blocks if b.get('type') == 'thinking') or None}
+                           'reasoning_content': thinking if text or calls else None}
                 carrier = {'type': CARRIER, 'version': 1, 'messages': assistants, 'projection': projection(message)}
                 message['reasoning_details'] = [carrier]
                 # An upstream refusal is Hermes' content_filter, as core's Anthropic transport maps it (even with a tool

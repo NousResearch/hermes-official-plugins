@@ -234,6 +234,14 @@ file or directory can be made at the top of the home directory. Hermes logs a wa
 When Hermes was started from such a place (a gateway launched from its checkout under `.hermes`), the
 backend starts in your home directory instead, as the gateway does for the `local` backend.
 
+Set `terminal.cwd` for every profile that uses this backend, a gateway profile above all: without it
+the sandbox starts in your home directory, and your checkouts and `~/bin` are writable. Give each
+profile its own directory, so one profile's commands cannot change another's files:
+
+```sh
+hermes -p <profile> config set terminal.cwd "$HOME/work/<profile>"
+```
+
 If the working directory is deleted on the host (for example by the command's own `rm -rf`), later
 commands run in the nearest existing parent directory, read-only, until it exists again.
 

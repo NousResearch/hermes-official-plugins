@@ -2,10 +2,10 @@
 name: reverse-engineer-anything
 description: Reverse engineer native, managed, Electron/JavaScript, packaged, firmware, and browser targets with REA. Use shipped-artifact or requested runtime evidence to explain features, compare versions, decompile code, or guide a reconstruction. Skip REA for ordinary source-repository architecture analysis.
 metadata:
-  version: "37"
+  version: "42"
 ---
 
-<!-- Adapted for Hermes Agent from REA's bundled skill (rea-agents 6.4.0, https://github.com/morluto/rea, MIT, Copyright (c) 2026 morluto). Changes: Hermes connection section, confirm-before-execute list, Hermes recovery guide. -->
+<!-- Adapted for Hermes Agent from REA's bundled skill (rea-agents 6.7.0, https://github.com/morluto/rea, MIT, Copyright (c) 2026 morluto). Changes: Hermes connection section, confirm-before-execute list, Hermes recovery guide. -->
 
 # REA
 
@@ -18,12 +18,12 @@ readiness or provider commands.
 ## Connect only when needed
 
 In Hermes this skill ships inside the `rea` plugin, and the same plugin
-registers the REA MCP server (`rea-agents@6.4.0`, stdio over `npx`). Nothing
+registers the REA MCP server (`rea-agents@6.7.0`, stdio over `npx`). Nothing
 else needs registering: never run `rea-agents setup`, `rea setup` or
 `hermes mcp add rea`. Setup would add a second `mcp_servers.rea` entry to
 `config.yaml` that replaces the plugin's server and its pinned version.
 
-Hermes loads MCP tools on demand. REA's tools (about 170) are behind the
+Hermes loads MCP tools on demand. REA's tools (about 200) are behind the
 `tool_search` / `tool_describe` / `tool_call` bridge, not in the visible tool
 list. Search by capability (`rea open binary`, `rea javascript application`,
 `rea android package`), load the schema with `tool_describe`, then invoke it
@@ -58,17 +58,88 @@ explicit path or endpoint and do not need it.
   consult the NativeAOT workflow in `references/native-and-artifacts.md` for
   optional metadata recovery and its supported host/layout boundary.
 - User-owned browser page already open: `list_browser_targets`.
-- Retained HAR/native mitmproxy capture: `inspect_web_network_capture`. Select
+- Browser action the agent must perform (click, type, navigate):
+  `capture_browser_scenario` with declared actions. See
+  [runtime observation](references/runtime-observation.md) for connect/launch
+  and the focused follow-up browser tools.
+- Fiddler Everywhere traffic or a native `.saz` capture: read the
+  [Fiddler workflow](references/runtime-observation.md#fiddler-everywhere-traffic-debugging).
+  Inspect saved SAZ with `inspect_web_network_capture` and `format: "saz"`;
+  connect Everywhere's separate MCP server for live traffic.
+- Retained HAR/SAZ/native mitmproxy/aioquic qlog capture: `inspect_web_network_capture`. Select
   original record ordinals when useful; inspect producer fields and byte/number
   sidecars without fetching recorded URLs or claiming live attribution. See
   [historical captures](https://github.com/morluto/rea/blob/main/docs/web-network-captures.md) for the exact upstream
-  profile and credential exclusions.
-- User-owned Electron runtime already open: `list_electron_targets`.
+  profile and credential exclusions. Qlog support starts with aioquic 1.5.0
+  JSON 0.3; stream coverage and endpoint loss declarations do not recover bodies
+  or establish network loss. Prefer detail summary, then kind qlog trace/stream
+  pages; select one trace, stream ID and direction for contribution/range pages.
+  Facts retain all-recorded-events-before-selection scope. Other qlog layouts
+  and PCAP correlation are unsupported.
+- User-owned Electron runtime already open: `list_electron_targets`. Before an electron-main Inspector attempt, check packaged fuses with `inspect_electron_fuses`; disabled `EnableNodeCliInspectArguments` means the app ignores `--inspect`.
+- Packet-field discovery: `inspect_packet_fields` searches installed protocols
+  and field names/types before choosing fields for `inspect_packet_capture`.
+  Query/page the relevant records; registrations do not establish observed traffic.
+- Recorded packet captures: `inspect_packet_capture` with selected TShark fields,
+  display filters and decode-as rules. Requires Linux, util-linux prlimit and `REA_TSHARK_COMMAND`; see
+  [capture guide](https://github.com/morluto/rea/blob/main/docs/packet-captures.md).
+  Packet limits count input packets before filtering. Output defaults to 50 matching
+  frames; use `match_offset` / `match_limit` for later pages, or explicit null
+  limit for complete matching output. Preserve the source digest across pages.
+  This does not perform live capture.
+  For address/DNS/SNI/protocol summaries use `inspect_pcap_capture` with MCP
+  detail summary, then retained kind pcap pages. Requires Wireshark 4.x tshark
+  and capinfos, with Linux prlimit or Windows Job Objects; see
+  [packet summaries](https://github.com/morluto/rea/blob/main/docs/pcap-analysis.md).
+  Select an exact DNS question for address pages; page exhaustion does not prove
+  network completeness. This reads recordings and does not acquire traffic.
+- Decoder discovery: `inspect_signal_decoders` searches installed decoder IDs
+  or selected decoder help, including channels and options. Query and page the
+  relevant details before choosing settings; this does not scan hardware.
+- Recorded logic/signal traces: `decode_signal_recording` with explicit decoder,
+  channel and protocol settings. On Linux with util-linux prlimit, supply sigrok-cli 0.7.2 through
+  `REA_SIGROK_COMMAND`; see [recording guide](https://github.com/morluto/rea/blob/main/docs/signal-recordings.md).
+  Output defaults to 50 literal lines; select annotation classes and page with
+  `line_offset` / `line_limit`, or explicit null for all remaining output.
+  Window counts are display lines, not annotations or samples. Preserve source digests across pages.
+  This reads existing files; it does not acquire hardware signals.
+- Explicit local WebAssembly artifact: `inspect_wasm_artifact`. Supply WABT 1.0.42
+  through `REA_WABT_BIN_DIRECTORY`; retain exact byte/tool identity and decoded WAT.
+  Select JavaScript glue and candidate paths explicitly and preserve URL/path
+  ambiguity. No implicit fetch or target execution; WAT is not original source.
+  See the [WASM guide](https://github.com/morluto/rea/blob/main/docs/wasm-artifacts.md).
 - Explicit local EVM bytecode carrier: `inspect_evm_interface` with caller-selected
   `raw` or `hex` encoding. Preserve carrier/decoded digests and treat selectors,
   argument strings and mutability as inferred candidates; this performs no chain
-  lookup or target execution. See the
+  lookup or target execution. For the complete inferred interface without hex or
+  duplicate stdout, discover support and select `detail: "summary"`; complete
+  Evidence stays retained under its original identity. Use the returned
+  `parent_evidence_id` for exact function or `bytecode_hex`/stdout/stderr pages.
+  Candidate coverage does not establish interface completeness. See the
   [EVM bytecode guide](https://github.com/morluto/rea/blob/main/docs/evm-bytecode.md).
+- Embedded Go compiler, module or build-setting metadata: `inspect_go_binary`
+  with the explicit local file. This built-in target-free inspection requires no
+  Go installation or disassembler. Preserve raw module bytes and source ranges;
+  absent metadata does not prove a binary is not Go, and unparsed text records
+  remain explicit. See the
+  [Go binary guide](https://github.com/morluto/rea/blob/main/docs/go-binaries.md).
+- Embedded cargo-auditable Rust dependency metadata: `inspect_rust_binary`
+  with the explicit local ELF, PE, or thin Mach-O file. This built-in
+  target-free inspection requires no Rust installation or disassembler. Preserve
+  package order, dependency indices, and the section file range. A missing
+  `.dep-v0` section is null metadata, not proof the binary has no dependencies.
+  A rustc commit hash is an inference from a read-only `/rustc/<40-hex>/` path.
+  See the
+  [Rust binary guide](https://github.com/morluto/rea/blob/main/docs/rust-binaries.md).
+
+- Explicit local SQLite database snapshot: `inspect_sqlite_database`. Inspect
+  with Node.js 24.x >=24.15 or 26+ providing native SQLite limits. Read schema
+  first (compact inventory by default), or select an exact ordinary table
+  and `columns` when rows are needed. Defaults are selected-table schema and
+  20 rows; request `schema_scope: "database"` for the complete stored schema. Preserve both database and existing sibling WAL identity; row samples
+  report truncation and have unspecified order. Use a quiescent snapshot rather
+  than assuming a live database/WAL pair was copied atomically. See the
+  [SQLite guide](https://github.com/morluto/rea/blob/main/docs/sqlite-databases.md).
 - Explicit Linux ELF file for offline layout, symbols, relocations or static
   mitigation evidence: `inspect_binary_layout`. This target-free operation uses
   caller-supplied pwntools without opening a disassembler database. Preserve its
@@ -98,6 +169,20 @@ after opening; IDA does not supply `binary_overview`. Consult session availabili
 when composing broader workflows. Modern direct callers and unsupported dossier
 facets remain unknown; live IDA results are not replayed from snapshots.
 
+With `REA_KUNA_COMMAND` configured, `provider_id: "kuna"` answers procedure
+lists, lookups, pseudocode, assembly and `analyze_function` from Kuna's cached
+whole-program export. Callers/callees use a separate body-free graph shared by
+the session; `xrefs` returns exact-address incoming sites and filters forwarding
+aliases. These queries and inventory lookups do not trigger a C export. Indirect
+targets remain unknown and can make relationship coverage partial. Reference
+caches expire on close; a fresh CLI process repeats the native reference walk.
+Typed references, CFG, raw-memory tools and annotations remain unsupported. A cold first
+answer can come from a single-function run (its limitations say so); assembly
+waits for the export. For pseudocode and assembly, `raw_result.source` names the
+cached `.c`/`.asm` file and byte span, which you may search directly instead of
+calling per function. See the
+[Kuna provider guide](https://github.com/morluto/rea/blob/main/docs/kuna-provider.md).
+
 If the user says only "my app" without a name, path, or target already selected
 for this task, ask which app before searching for artifacts. Paths in unrelated
 saved reports and nearby test fixtures do not select the user's target. Resolve
@@ -107,16 +192,22 @@ ask when matches are ambiguous. Never choose an example app on the user's behalf
 In a target-free session, use `open_binary` to bind any archive/package or
 native target whose analysis tool operates on the active target. Do not call an
 unadvertised tool; inspect `binary_session` with `{}` and its
-`result.tool_availability` for availability reasons and remediation. The tool
-list stays complete; availability depends on the operation, target, and host.
+`result.tool_availability` for availability reasons and remediation. Expand each
+group's `names` into entries, inheriting the inventory-level client requirements
+unless the group overrides them. In its closed effect and annotation vocabularies,
+listed flags are true and omitted known flags are false. The grouped name union
+is the complete tool inventory; use `tools/list` for canonical tool schemas.
+Provider candidate facts describe possible providers, while top-level session
+capabilities describe the current route and `analysis_provider_binding` names the
+selected provider. Do not treat those scopes as interchangeable.
 
 ## Native startup and interpretation
 
 Before the first Ghidra-backed query, explain that importing and analyzing a
 large executable can take several minutes. `open_binary` validates the target;
 it does not mean native analysis has completed. This plugin allows 900 seconds
-for Ghidra startup and 1000 seconds for a Hermes MCP call. The user can still
-cancel. Do not invent progress percentages or promise a fixed completion time.
+for Ghidra startup; each Hermes MCP call uses Hermes' normal tool deadline (300
+seconds by default). The user can still cancel. Do not invent progress percentages or promise a fixed completion time.
 
 Keep the target open for related queries: the first native query does the
 expensive import, and later queries reuse that analysis. Do not reopen the
@@ -177,17 +268,32 @@ target and lifecycle; do not broaden the target or action beyond those fields.
 
 Within the user's requested investigation, call static analysis tools
 directly. Hermes does not prompt before REA tools run, so ask the user first,
-naming the exact command, app or device, before any call that executes or
-changes something outside REA's own session:
+naming the exact command, process, app or device, before any call that
+executes or changes something outside REA's own session:
 
-- `capture_process_scenario` (runs a command under a PTY);
+- `capture_process_scenario` (runs a command under a PTY) and
+  `observe_native_calls` (launches the active Mach-O under LLDB);
 - `capture_browser_scenario`, `capture_electron_scenario` and
   `capture_native_ui_scenario` (launch or drive an application);
 - `install_adb_package`, `uninstall_adb_package`, `push_adb_file`,
   `start_adb_app`, `start_adb_activity` and `stop_adb_app` (change a connected
   Android device);
+- `instrument_with_frida`, `start_frida_session`, `load_frida_script`,
+  `resume_frida_session`, `unload_frida_script` and `close_frida_session`
+  (attach to, spawn, inject into or resume a process; local or remote);
+- `start_gdb_session`, `gdb_console` and `close_gdb_session` (an unrestricted
+  GDB that can run the inferior; closing can detach and resume it);
+- `start_rizin_debug_session`, `rizin_debug_command` and
+  `close_rizin_debug_session` (an unrestricted Rizin debugger that runs the
+  target);
+- `execute_rizin_command` and `cutter_command` (one arbitrary Rizin command;
+  commands and plugins can execute code, write files or reach the network);
 - `export_evidence_bundle` or `close_binary` with an output path that already
   exists (overwrites a file).
+
+Ask once per target and action; the read-only status tools
+(`frida_session_status`, `gdb_session_status`, `rizin_debug_session_status`)
+and device/process listings need no approval.
 
 Never run an untrusted target outside an environment the user chose for it.
 In a scheduled or unattended run with nobody to ask, skip these calls and
@@ -236,7 +342,8 @@ as complete while required questions remain open.
   [references/javascript-applications.md](references/javascript-applications.md)
 - Android APK declarations, classes, methods, and static references:
   [references/android-applications.md](references/android-applications.md)
-- Passive browser/Electron observation and static/runtime reconciliation:
+- Browser/Electron observation (passive and scenario) and static/runtime
+  reconciliation:
   [references/runtime-observation.md](references/runtime-observation.md)
 - Evidence paging, comparisons, residual unknowns, and verification:
   [references/evidence-workflows.md](references/evidence-workflows.md)

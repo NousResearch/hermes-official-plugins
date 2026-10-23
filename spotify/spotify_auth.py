@@ -11,9 +11,12 @@ Hermes internals are imported lazily, inside the functions, from the modules tha
 from __future__ import annotations
 
 import logging
+import os
+import ssl
 import uuid
 import webbrowser
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlencode, urlparse
 
@@ -22,6 +25,12 @@ logger = logging.getLogger(__name__)
 PROVIDER = "spotify"
 DEFAULT_ACCOUNTS_BASE_URL = "https://accounts.spotify.com"
 DEFAULT_API_BASE_URL = "https://api.spotify.com/v1"
+# Spotify's redirect-URI rules allow plain http on a loopback IP literal
+# (https://developer.spotify.com/documentation/web-api/concepts/redirect_uri): "Use HTTPS for
+# your redirect URI, unless you are using a loopback address, when HTTP is permitted." So the
+# default stays http, which is also what existing app registrations use. An https URI is
+# supported when the user configures one — the listener then serves TLS with a self-signed
+# certificate — for dashboards that only accept the https form.
 DEFAULT_REDIRECT_URI = "http://127.0.0.1:43827/spotify/callback"
 DOCS_URL = "https://hermes-agent.nousresearch.com/docs/user-guide/features/spotify"
 DASHBOARD_URL = "https://developer.spotify.com/dashboard"
@@ -102,7 +111,9 @@ def _validate_redirect_uri(redirect_uri: str) -> tuple[str, int, str]:
     parsed = urlparse(redirect_uri)
     host = parsed.hostname or ""
     problem = (
-        "must use http://localhost or http://127.0.0.1." if parsed.scheme != "http"
+        # Both schemes are valid on a loopback IP literal: http is what Spotify documents and
+        # what the default uses, https is honoured when the app was registered that way.
+        "must use http:// or https:// on 127.0.0.1/localhost." if parsed.scheme not in {"http", "https"}
         else "must point to localhost or 127.0.0.1." if host not in {"127.0.0.1", "localhost"}
         else "must include an explicit localhost port." if not parsed.port
         else None
@@ -112,6 +123,80 @@ def _validate_redirect_uri(redirect_uri: str) -> tuple[str, int, str]:
     return host, parsed.port, parsed.path or "/"
 
 
+def _server_ssl_context_class():
+    """The stdlib ``SSLContext``, even when a TLS-verifying shim replaced ``ssl.SSLContext``.
+
+    Hermes calls ``truststore.inject_into_ssl()`` at startup, which swaps ``ssl.SSLContext``
+    for a subclass that verifies the *peer* certificate. That is right for client sockets and
+    wrong for a server one: there is no peer certificate yet, and the handshake dies with
+    ``AttributeError: 'NoneType' object has no attribute 'get_unverified_chain'``. Serving TLS
+    needs no trust decisions, so use the original class the shim keeps around.
+    """
+    cls = ssl.SSLContext
+    if getattr(cls, "__module__", "").startswith("truststore"):
+        try:
+            from truststore._ssl_constants import _original_SSLContext as cls
+        except Exception:  # pragma: no cover - defensive: shim without its saved class
+            cls = cls.__mro__[1]
+    return cls
+
+
+def _loopback_tls_context() -> ssl.SSLContext:
+    """TLS context for the loopback listener, with a self-signed certificate for 127.0.0.1.
+
+    Used when the configured redirect URI is https (the default stays http, which Spotify permits
+    on a loopback IP literal). The loopback flow still requires an IP literal, so the CLI
+    terminates TLS itself. The certificate is generated once and cached
+    under ``$HERMES_HOME/cache/spotify-loopback/`` (key mode 0600); it carries
+    ``SAN IP:127.0.0.1, DNS:localhost`` so the browser offers the usual "proceed" warning
+    instead of refusing outright.
+    """
+    from hermes_constants import get_hermes_home
+
+    cache_dir = Path(get_hermes_home()) / "cache" / "spotify-loopback"
+    cert_path, key_path = cache_dir / "cert.pem", cache_dir / "key.pem"
+    if not (cert_path.exists() and key_path.exists()):
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            import datetime as dt
+            import ipaddress
+
+            from cryptography import x509
+            from cryptography.hazmat.primitives import hashes, serialization
+            from cryptography.hazmat.primitives.asymmetric import rsa
+            from cryptography.x509.oid import NameOID
+
+            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+            now = dt.datetime.now(dt.timezone.utc)
+            certificate = (
+                x509.CertificateBuilder()
+                .subject_name(name).issuer_name(name)
+                .public_key(key.public_key())
+                .serial_number(x509.random_serial_number())
+                .not_valid_before(now - dt.timedelta(minutes=5))
+                .not_valid_after(now + dt.timedelta(days=397))
+                .add_extension(x509.SubjectAlternativeName([
+                    x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+                    x509.DNSName("localhost"),
+                ]), critical=False)
+                .sign(key, hashes.SHA256())
+            )
+            key_path.write_bytes(key.private_bytes(
+                serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+                serialization.NoEncryption()))
+            cert_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+            os.chmod(key_path, 0o600)
+        except ImportError as exc:  # pragma: no cover - cryptography ships with Hermes
+            raise _err(
+                "Serving the Spotify https callback needs the 'cryptography' package. "
+                "Install it, or register the http loopback URI if your app still allows it.",
+                "spotify_tls_unavailable") from exc
+    context = _server_ssl_context_class()(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+    return context
+
+
 def _wait_for_callback(redirect_uri: str, *, timeout_seconds: float = 180.0) -> dict[str, Any]:
     from hermes_cli.auth_device_flow import (
         _bind_loopback_callback_server, _make_loopback_callback_handler, _serve_loopback_callback)
@@ -119,6 +204,11 @@ def _wait_for_callback(redirect_uri: str, *, timeout_seconds: float = 180.0) -> 
     handler_cls, result = _make_loopback_callback_handler(path, display_name="Spotify")
     server = _bind_loopback_callback_server(
         host, port, handler_cls, err=_err, bind_failed_code="spotify_callback_bind_failed")
+    if urlparse(redirect_uri).scheme == "https":
+        # Wrap the already-bound socket: the handler and the core's serving loop stay as they
+        # are. Handshake noise from browser probes is dropped instead of printed as tracebacks.
+        server.socket = _loopback_tls_context().wrap_socket(server.socket, server_side=True)
+        server.handle_error = lambda request, client_address: None  # noqa: ARG005
     return _serve_loopback_callback(
         server, result, timeout_seconds=timeout_seconds, err=_err, timeout_code="spotify_callback_timeout")
 

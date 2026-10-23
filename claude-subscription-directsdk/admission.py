@@ -2,6 +2,7 @@
 import base64
 import codecs
 import copy
+import gzip
 import http.client
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import ipaddress
@@ -30,6 +31,53 @@ MAX_BREAKPOINTS = 4
 UPSTREAM_IDLE_SECONDS = 180
 # Probe a quiet upstream socket so a dead path fails in ~30 s instead of waiting on TCP retransmits.
 KEEPALIVE = (('TCP_KEEPIDLE', 15), ('TCP_KEEPALIVE', 15), ('TCP_KEEPINTVL', 5), ('TCP_KEEPCNT', 3))
+GZIP_HOSTS = ('api.anthropic.com',)
+_gzip_latched = None
+_GZIP_CA_ENV = ('SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE', 'NODE_EXTRA_CA_CERTS')
+# Claude Code 2.1.302's origin-400 test. JavaScript's `$` never matches before a trailing newline, hence `\Z`;
+# _JS_TRIM is what String.prototype.trimEnd removes (str.rstrip() keeps U+FEFF, strips U+001C-001F and U+0085).
+_GO_BAD_JSON = re.compile(r'^bad json: (?:invalid character |unexpected EOF\Z|unexpected end of JSON input\Z|EOF\Z)')
+_JS_TRIM = ' \t\n\v\f\r\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff'
+
+
+def _gzip_eligible(gate, payload, headers):
+    target = gate.upstream
+    return (target.hostname in GZIP_HOSTS and target.port in (None, 443) and not gate.proxy
+            and not any(name in os.environ for name in _GZIP_CA_ENV)
+            and os.environ.get('CLAUDE_CODE_GZIP_REQUEST_BODIES', '').lower() not in ('0', 'false', 'no', 'off')
+            and len(payload) >= 4096 and _gzip_latched is None and 'Content-Encoding' not in headers)
+
+
+def _rejection_kind(response, body):
+    if response.status not in (400, 403, 415):
+        return None
+    if not (response.getheader('request-id') or '').startswith('req_') and response.getheader('cf-ray') is None:
+        return 'non_anthropic_rejection'
+    if response.status == 415:
+        return 'unsupported_encoding'
+    if response.status != 400:
+        return None
+    text = body[:8192].decode('utf-8', errors='replace')
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return 'invalid_json_at_origin' if _GO_BAD_JSON.match(text.rstrip(_JS_TRIM)) else None
+    if not isinstance(value, dict):
+        return None
+    error = value.get('error')
+    if isinstance(error, dict):
+        details, message = error.get('details'), error.get('message')
+        if (isinstance(details, dict) and details.get('error_code') == 'request_body_encoding_unsupported') \
+                or (isinstance(message, str) and message.startswith('Unsupported Content-Encoding')):
+            return 'unsupported_encoding'
+        # The message prefix counts only in a full Anthropic error envelope; the bad_json string is matched untrimmed.
+        if value.get('type') == 'error' and isinstance(error.get('type'), str) and isinstance(message, str) \
+                and message.startswith(('The request body is not valid JSON',
+                                        'Failed to parse request: could not parse request body as JSON')):
+            return 'invalid_json_at_origin'
+    elif value.get('reason') == 'bad_json' and isinstance(error, str) and _GO_BAD_JSON.match(error):
+        return 'invalid_json_at_origin'
+    return None
 
 
 class UpstreamIdle(OSError):
@@ -329,6 +377,25 @@ def drop_message_breakpoints(payload):
         return payload
 
 
+def stream_tool_input(payload):
+    """Ask the API to stream every tool's arguments as the model writes them (``eager_input_streaming``).
+
+    Native turns fine-grained tool streaming on only for a first-party base URL, so behind this relay its
+    tools go out without the flag and the API holds a large argument (a whole file in one ``write_file``)
+    until it is complete. Hermes' stall detector then sees minutes of silence and cancels a healthy call.
+    A value native already set wins, and a payload with no tools or that does not parse forwards as is."""
+    try:
+        body = json.loads(payload)
+        tools = [t for t in body.get('tools') or () if isinstance(t, dict) and 'eager_input_streaming' not in t]
+        if not tools:
+            return payload
+        for tool in tools:
+            tool['eager_input_streaming'] = True
+        return json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    except (ValueError, TypeError, AttributeError):
+        return payload
+
+
 def restore_queried_turn(payload, queried):
     """Restore a uniquely anchored tool-result frame without dropping protected content.
 
@@ -457,6 +524,7 @@ class Capture:
         self.pending = ''
         self.decoder = codecs.getincrementaldecoder('utf-8')()
         self.arguments = {}
+        self.unparsed = []
 
     def feed(self, chunk):
         self.pending += self.decoder.decode(chunk)
@@ -501,13 +569,21 @@ class Capture:
         if index in self.arguments:
             # A no-argument tool call streams one input_json_delta with an empty partial_json.
             raw = self.arguments.pop(index)
-            self.message['content'][index]['input'] = json.loads(raw) if raw.strip() else {}
+            try:
+                self.message['content'][index]['input'] = json.loads(raw) if raw.strip() else {}
+            except ValueError:
+                # Streamed tool input is not validated (``eager_input_streaming``): a reply cut off at
+                # max_tokens ends mid-argument. The call is dropped at message_stop, never run with guessed
+                # arguments, and the stop reason (finish ``length``) tells Hermes the reply was cut short.
+                self.unparsed.append(index)
 
     def _delta(self, event):
         self.message.update(event.get('delta', {}))
         self.message['usage'].update(event.get('usage', {}))
 
     def _stop(self, event):
+        for index in sorted(self.unparsed, reverse=True):
+            del self.message['content'][index]
         self.complete = bool(self.message and self.message.get('stop_reason') and not self.arguments)
 
 
@@ -657,7 +733,33 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass  # Native authorization and the per-call route must never enter logs.
 
+    def _connect_upstream(self):
+        gate, target = self.server.admission, self.server.admission.upstream
+        if target.scheme == 'https':
+            if gate.proxy:
+                proxy_host, proxy_port, tunnel_headers = gate.proxy
+                conn = http.client.HTTPSConnection(proxy_host, proxy_port, timeout=gate.timeout, context=ssl.create_default_context())
+                conn.set_tunnel(target.hostname, target.port or 443, headers=tunnel_headers)
+            else:
+                conn = http.client.HTTPSConnection(target.hostname, target.port, timeout=gate.timeout, context=ssl.create_default_context())
+        else:
+            conn = http.client.HTTPConnection(target.hostname, target.port, timeout=gate.timeout)
+        try:
+            conn.connect()
+            sock = conn.sock
+            keepalive(sock)
+            with gate.lock:
+                if gate.cancelled:
+                    conn.close()
+                    return None, None
+                gate.sockets.add(sock)
+            return conn, sock
+        except BaseException:
+            conn.close()
+            raise
+
     def do_POST(self):
+        global _gzip_latched
         gate = self.server.admission
         path = urlsplit(self.path)
         if path.path != gate.prefix + '/v1/messages' or self.headers.get('Origin'):
@@ -690,30 +792,48 @@ class Handler(BaseHTTPRequestHandler):
                 gate.unrestored = str(exc)
             payload = stable_request_context(payload, gate.queried)
             payload = pin_message_breakpoint(payload, gate.queried)
+            payload = stream_tool_input(payload)
             target = gate.upstream
-            if target.scheme == 'https':
-                if gate.proxy:
-                    proxy_host, proxy_port, tunnel_headers = gate.proxy
-                    conn = http.client.HTTPSConnection(proxy_host, proxy_port, timeout=gate.timeout, context=ssl.create_default_context())
-                    conn.set_tunnel(target.hostname, target.port or 443, headers=tunnel_headers)
-                else:
-                    conn = http.client.HTTPSConnection(target.hostname, target.port, timeout=gate.timeout, context=ssl.create_default_context())
-            else:
-                conn = http.client.HTTPConnection(target.hostname, target.port, timeout=gate.timeout)
-            conn.connect()
-            upstream_socket = conn.sock
-            keepalive(upstream_socket)
-            with gate.lock:
-                if gate.cancelled:
-                    return
-                gate.sockets.add(upstream_socket)
+            conn, upstream_socket = self._connect_upstream()
+            if conn is None:
+                return
             # Request identity and payload remain native; only HTTP transfer encoding changes.
             headers = {k:v for k,v in self.headers.items() if k.lower() not in ('host','connection','content-length','transfer-encoding','proxy-authorization','proxy-connection','accept-encoding')}
             headers['Accept-Encoding'] = 'identity'
             route = target.path.rstrip('/') + '/v1/messages' + ('?' + path.query if path.query else '')
-            conn.request('POST', route, payload, headers)
-            del headers, payload
+            compressed = _gzip_eligible(gate, payload, self.headers)
+            wire = payload
+            if compressed:
+                pad = b'\n' + bytes(secrets.choice(b' \t') for _ in range(secrets.randbelow(257)))
+                wire = gzip.compress(payload + pad, compresslevel=3, mtime=0)
+            conn.request('POST', route, wire, {**headers, 'Content-Encoding': 'gzip'} if compressed else headers)
             response = conn.getresponse()
+            prefix = b''
+            if compressed and response.status in (400, 403, 415):
+                # Recorded before the body read, so a failed read still reports this answer as an identity send would.
+                gate.request_id = response.getheader('request-id') or response.getheader('x-request-id')
+                gate.status = response.status
+                prefix = response.read(65536)
+                reason = _rejection_kind(response, prefix)
+                if reason:
+                    gate.request_id = gate.status = None  # The resend reports its own answer, or none.
+                    if _gzip_latched is None:
+                        _gzip_latched = reason
+                        logging.getLogger(__name__).warning('request gzip disabled: %s status=%s', reason, response.status)
+                    with gate.lock:
+                        gate.sockets.discard(upstream_socket)
+                    response.close()
+                    conn.close()
+                    with gate.lock:
+                        if gate.cancelled:
+                            return
+                    conn, upstream_socket = self._connect_upstream()
+                    if conn is None:
+                        return
+                    conn.request('POST', route, payload, headers)
+                    response = conn.getresponse()
+                    prefix = b''
+            del headers, payload, wire
             gate.request_id = response.getheader('request-id') or response.getheader('x-request-id')
             gate.status = response.status
             self.send_response(response.status)
@@ -723,10 +843,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Connection', 'close')
             self.end_headers()
             idle = min(gate.timeout, UPSTREAM_IDLE_SECONDS)
-            upstream_socket.settimeout(idle)
+            if not response.isclosed():
+                upstream_socket.settimeout(idle)
             while True:
                 try:
-                    chunk = response.read1(65536)
+                    chunk = prefix or response.read1(65536)
+                    prefix = b''
                 except TimeoutError as exc:  # socket.timeout is TimeoutError since 3.10.
                     raise UpstreamIdle(f'no upstream bytes for {idle:g} s') from exc
                 if not chunk:

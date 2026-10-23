@@ -85,21 +85,14 @@ Catalog entries come in two tiers:
 <p>Pick it in <code>hermes model</code> → <b>Claude Subscription DirectSDK (Experimental)</b></p>
 </td>
 <td width="50%" valign="top">
-<a href="telegram-business/"><img src="assets/telegram-business.jpg" alt="Telegram Business Mode plugin"></a>
-<h3><a href="telegram-business/">Telegram Business Mode</a></h3>
-<code>hermes plugins install hermes-telegram-business</code>
-<p>Turns Hermes into an observe-with-approval secretary for your Telegram Business account. It drafts replies to your customers, and nothing is sent until you approve it.</p>
-<p>Gateway platform add-on · owner approval on every reply</p>
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
 <a href="memory-wiki/"><img src="assets/memory-wiki.jpg" alt="Memory Wiki plugin"></a>
 <h3><a href="memory-wiki/">Memory Wiki</a></h3>
 <code>hermes plugins install hermes-memory-wiki</code>
 <p>A dashboard and Desktop tab that turns your local session history into browsable subject pages and daily logs, plus a read-only audit panel for <code>MEMORY.md</code> and <code>USER.md</code>.</p>
 <p>Dashboard tab · reads local history, writes nothing</p>
 </td>
+</tr>
+<tr>
 <td width="50%" valign="top">
 <a href="blender/"><img src="assets/blender.jpg" alt="Blender plugin"></a>
 <h3><a href="blender/">Blender</a></h3>
@@ -107,8 +100,6 @@ Catalog entries come in two tiers:
 <p>The official Blender Lab MCP server over stdio, pinned to upstream, with a Blender workflow skill, so Hermes can read and change your Blender scene. Needs Blender 5.1+ with its MCP add-on, Git and uv. Its tools run Python inside Blender, so use trusted workflows.</p>
 <p>MCP server + skill · Windows, macOS, Linux</p>
 </td>
-</tr>
-<tr>
 <td width="50%" valign="top">
 <a href="snyk/"><img src="assets/snyk.jpg" alt="Snyk plugin"></a>
 <h3><a href="snyk/">Snyk</a></h3>
@@ -116,6 +107,8 @@ Catalog entries come in two tiers:
 <p>Scan code (SAST), dependencies, container images, IaC and SBOMs through Snyk's first-party MCP server, with the snyk-security-scan workflow skill. Needs Node.js/npm and a free Snyk account.</p>
 <p>MCP server + skill · browser login via <code>snyk_auth</code></p>
 </td>
+</tr>
+<tr>
 <td width="50%" valign="top">
 <a href="touchdesigner/"><img src="assets/touchdesigner.jpg" alt="TouchDesigner plugin"></a>
 <h3><a href="touchdesigner/">TouchDesigner</a></h3>
@@ -123,8 +116,6 @@ Catalog entries come in two tiers:
 <p>Drive a live TouchDesigner session through 404.zero's free twozero MCP server, which runs inside TouchDesigner itself, with the touchdesigner-mcp workflow skill and 20+ reference files (operators, GLSL, audio-reactive, instancing) bundled.</p>
 <p>MCP server + skill · TouchDesigner on macOS or Windows</p>
 </td>
-</tr>
-<tr>
 <td width="50%" valign="top">
 <a href="accent-picker/"><img src="assets/accent-picker.jpg" alt="Accent Picker plugin"></a>
 <h3><a href="accent-picker/">Accent Picker</a> <sup>desktop</sup></h3>
@@ -132,6 +123,8 @@ Catalog entries come in two tiers:
 <p>An OKLCH colour wheel in the Hermes Desktop status bar. Drag it and the whole theme retints live, so theme authors can try accents in place. The colour is scratch state and never persisted.</p>
 <p>Desktop plugin · status bar + palette commands</p>
 </td>
+</tr>
+<tr>
 <td width="50%" valign="top">
 <a href="langfuse/"><img src="assets/langfuse.jpg" alt="Langfuse plugin"></a>
 <h3><a href="langfuse/">Langfuse</a></h3>
@@ -139,8 +132,6 @@ Catalog entries come in two tiers:
 <p>Traces every Hermes turn to Langfuse: one span per turn, one generation per LLM call with usage and cost from Hermes' own pricing (cache and reasoning tokens included), one observation per tool call and subagent. Content capture is sanitized by default, with metadata-only and full modes.</p>
 <p>Observability hooks · Langfuse Cloud or self-hosted</p>
 </td>
-</tr>
-<tr>
 <td width="50%" valign="top">
 <a href="rea/"><img src="assets/rea.jpg" alt="REA plugin"></a>
 <h3><a href="rea/">REA</a></h3>
@@ -148,6 +139,8 @@ Catalog entries come in two tiers:
 <p>Reverse engineer programs with REA's MCP server: native binaries, .NET assemblies, Electron and JavaScript apps, Android packages, firmware and browser activity, with REA's reverse-engineer-anything workflow skill. Static JavaScript and archive inspection work out of the box; native decompilation needs your own Ghidra, Hopper or IDA. Needs Node.js 22.19+.</p>
 <p>MCP server + skill · about 170 tools, loaded on demand</p>
 </td>
+</tr>
+<tr>
 <td width="50%" valign="top">
 <a href="xchat/"><img src="assets/xchat.jpg" alt="X Chat plugin"></a>
 <h3><a href="xchat/">X Chat</a></h3>
@@ -155,11 +148,68 @@ Catalog entries come in two tiers:
 <p>Talk to Hermes in X's end-to-end encrypted DMs. Hermes runs as the X account you connect: chat with it in your own self-chat ("message yourself"), or give it a separate account and DM that. Messages are decrypted and encrypted locally with X's official Chat XDK, so X only routes ciphertext. Supports encrypted media, threaded replies, group chats with mention gating, and cron delivery. <code>hermes xchat setup</code> shows which account Hermes will run as and registers its keys. Needs an X developer app with chat API access.</p>
 <p>Gateway platform <code>xchat</code> · end-to-end encrypted</p>
 </td>
+<td width="50%" valign="top">
+<a href="singularity/"><img src="assets/singularity.jpg" alt="Singularity/Apptainer plugin"></a>
+<h3><a href="singularity/">Singularity/Apptainer</a></h3>
+<code>hermes plugins install singularity</code>
+<p>A terminal backend that runs Hermes's terminal, file and code tools inside a hardened, rootless Apptainer or Singularity container on this machine, with CPU/memory limits and an optional persistent overlay. Built for HPC clusters and shared machines where Docker isn't available. Formerly built into Hermes core.</p>
+<p>Terminal backend <code>terminal.backend: singularity</code> · Linux</p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<a href="agent-importers/"><img src="assets/agent-importers.jpg" alt="Agent Importers plugin"></a>
+<h3><a href="agent-importers/">Agent Importers</a></h3>
+<code>hermes plugins install agent-importers</code>
+<p><code>hermes import-agent</code> brings an OpenClaw, Claude Code, Codex CLI or Cursor setup into Hermes in one command: instructions, Cursor rules and memories become memory entries, Bash permission rules become allow/deny lists, MCP servers land in <code>config.yaml</code> and skills are copied. Always previews first and never imports API keys (OpenClaw's allowlisted secrets only with <code>--migrate-secrets</code>); <code>--sync</code> re-imports sources that changed. The old <code>hermes claw migrate</code> / <code>hermes claw cleanup</code> spelling and the openclaw-migration skill come along. Formerly built into Hermes core.</p>
+<p>CLI command · <code>hermes import-agent [openclaw|claude-code|codex|cursor]</code></p>
+</td>
+<td width="50%" valign="top">
+<a href="mcp-serve/"><img src="assets/mcp-serve.jpg" alt="MCP Serve plugin"></a>
+<h3><a href="mcp-serve/">MCP Serve</a></h3>
+<code>hermes plugins install mcp-serve</code>
+<p>Run Hermes as an MCP server: <code>hermes mcp-serve</code> gives Claude Code, Claude Desktop, Cursor, Codex or any MCP client your messaging conversations across every connected platform, live new-message events and sending. <code>--tools</code> (off by default) adds Hermes' web, browser, vision, image generation, skills and TTS tools; terminal, file and kanban tools are never exposed. Formerly <code>hermes mcp serve</code> in core.</p>
+<p>stdio MCP server · 10 conversation tools, +17 with <code>--tools</code></p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<a href="bubblewrap/"><img src="assets/bubblewrap.jpg" alt="Bubblewrap plugin"></a>
+<h3><a href="bubblewrap/">Bubblewrap</a></h3>
+<code>hermes plugins install bubblewrap</code>
+<p>A terminal backend that runs every <code>terminal</code> and <code>execute_code</code> command in its own bwrap sandbox on this machine, at the same paths: read-only root, writable working directory, SSH keys, cloud credentials and the Hermes home hidden, private <code>/tmp</code> and <code>/proc</code>, agent sockets masked, memory, CPU and process limits. No image, no daemon. File tools stay on the host.</p>
+<p>Terminal backend <code>terminal.backend: bubblewrap</code> · Linux</p>
+</td>
+<td width="50%" valign="top">
+<a href="meshy/"><img src="assets/meshy.jpg" alt="Meshy plugin"></a>
+<h3><a href="meshy/">Meshy</a></h3>
+<code>hermes plugins install meshy</code>
+<p>Make 3D models with Meshy's first-party MCP server: text or image to 3D, texturing, rigging and animation, format conversion, and 3D-print preparation (printability repair, multicolor 3MF, split into parts, slicer handoff), with a meshy-3d workflow skill. Hermes asks before every credit-spending call. Needs Node.js 18+ and a Meshy API key (Pro plan).</p>
+<p>MCP server + skill · 28 tools, loaded on demand</p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<a href="advanced-delegation/"><img src="assets/advanced-delegation.jpg" alt="Advanced Delegation plugin"></a>
+<h3><a href="advanced-delegation/">Advanced Delegation</a></h3>
+<code>hermes plugins install advanced-delegation</code>
+<p>Two more ways for <code>delegate_task</code> to route subagents. <b>Model routes</b>: the agent picks a named model route per subagent (fast, deep, local...) from a list you write. <b>Profile routes</b>: it runs a subagent as one of your Hermes profiles, with that profile's model, skills and credentials. Only the names and your one-line descriptions reach the model.</p>
+<p><code>hermes delegation config</code> · <code>/delegation</code> to switch modes in a chat · Hermes 0.22.5+</p>
+</td>
+<td width="50%" valign="top">
+<a href="camofox/"><img src="assets/camofox.jpg" alt="Camofox plugin"></a>
+<h3><a href="camofox/">Camofox</a></h3>
+<code>hermes plugins install camofox</code>
+<p>Browse with <a href="https://github.com/jo-inc/camofox-browser">Camofox</a>, a self-hosted anti-detection Firefox (Camoufox) behind a local REST server: navigate, accessibility snapshots with clickable refs, click, type, scroll, keys, screenshots analysed by your vision model, read-only JavaScript, and cookie import. Optional persistent profiles keep logins across restarts. Your existing <code>CAMOFOX_URL</code> and <code>browser.camofox</code> settings carry over. Formerly built into Hermes core.</p>
+<p>11 browser tools · toolset <code>camofox</code> · needs a running camofox-browser server</p>
+</td>
 </tr>
 <tr>
 <td width="50%" valign="top">
 <h3>More on the way</h3>
-<p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>.</p>
+<p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
+</td>
+<td width="50%" valign="top">
 </td>
 </tr>
 </table>
@@ -167,10 +217,13 @@ Catalog entries come in two tiers:
 
 ### Already used one of these?
 
-Most plugins here used to live somewhere else: Home Assistant and Spotify were built into Hermes core and then briefly had their own repos, Langfuse shipped bundled with core as `observability/langfuse`, and the rest each had a standalone `NousResearch/hermes-*` repo. **You don't need to do anything.**
+Most plugins here used to live somewhere else: Home Assistant and Spotify were built into Hermes core and then briefly had their own repos, Langfuse shipped bundled with core as `observability/langfuse`, the Singularity/Apptainer terminal backend and the Camofox browser backend were built into core, MCP Serve was core's `hermes mcp serve`, and the rest each had a standalone `NousResearch/hermes-*` repo. **Except for MCP Serve, you don't need to do anything.**
 
-- **You used the built-in Home Assistant, Spotify or Langfuse:** `hermes update`, or the first start after updating, installs the plugin from the catalog with your existing config, env vars and login.
+- **You used the built-in Home Assistant, Spotify, Langfuse, Singularity or Camofox backend:** `hermes update`, or the first start after updating, installs the plugin from the catalog with your existing config, env vars and login.
 - **You installed it from the catalog:** the catalog now points here, so `hermes plugins update <name>` moves your install to this repo and keeps your files.
+- **You used the built-in `hermes import-agent`:** profiles that registered an import for `--sync` get the `agent-importers` plugin on update; anywhere else, running `hermes import-agent` prints the one-line install (`hermes plugins install agent-importers`).
+- **You used `hermes claw migrate` (OpenClaw):** it now comes with the same plugin. After `hermes plugins install agent-importers`, both `hermes import-agent openclaw` and the old `hermes claw migrate` / `hermes claw cleanup` work with the same flags.
+- **You ran `hermes mcp serve`:** install with `hermes plugins install mcp-serve` and change your MCP client's args from `["mcp", "serve"]` to `["mcp-serve"]`. MCP clients are configured outside Hermes, so this one is not installed for you.
 - **You installed it by URL** (for example `hermes plugins install NousResearch/hermes-homeassistant`): reinstall once from the catalog with `hermes plugins install <name> --force` to follow future updates. The old repos are archived and get no new fixes.
 
 ## Repository layout

@@ -11,6 +11,19 @@ returned inline. When complete `inspect_binary_layout` or
 `inspect_analysis_view` for a summary, one section/symbol/module, or a stable
 page instead of repeating the producer.
 
+Completed `inspect_artifact` inventory also supports a summary and
+`view: {kind: "inventory", collection: "occurrences", logical_paths: ["package.json", "main.js"]}`.
+Omit `logical_paths` to page all available occurrences; `[]` selects none.
+Other inventory collections are `nodes`, `edges` and
+`integrity_contradictions`. Keep `source_complete` separate from page exhaustion:
+a missing match in partial source Evidence does not establish absence. Use the
+returned parent Evidence ID for subsequent views and export before closing the
+session when the source must survive it.
+When `tools/list` advertises `inspect_artifact.detail`, request `"summary"` to
+retain its complete source and receive that view immediately. Without that
+advertised choice, keep the existing complete call. CLI inspection returns
+portable complete Evidence; save it before projecting a selected inline view.
+
 Use `record_unknown` to track unresolved questions in the user's investigation
 and name the authority or environment still required. Supply supporting and
 contradicting evidence IDs. It updates the session registry directly.
@@ -46,3 +59,13 @@ observed exit signal stays in `exit.signal`, `exit.code` is null for every
 deadline exit, and the code of a finalizer that exited on its own is in
 `exit.finalization.exit_code` (null on a signal exit or when no exit was
 observed).
+
+Use `inspect_analysis_view` with `view: {kind: "api-surface"}` on retained
+`inspect_web_network_capture` HAR Evidence to group observed request lines by
+method, origin and path template. Format matches are inferences, not handler
+identity or schemas. Group pages cite parent record ordinals; consult record
+coverage and exclusions before claiming completeness. No requests are replayed.
+When the connected schema advertises `include_query_parameter_names`, select
+it in the view for distinct observed names with original record ordinals. Query
+values are omitted; the names establish neither required parameters nor a
+complete server schema. Keep the original parent Evidence for exact URLs.

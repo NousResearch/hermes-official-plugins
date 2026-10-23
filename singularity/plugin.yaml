@@ -1,0 +1,15 @@
+name: singularity
+label: Singularity/Apptainer
+kind: backend
+version: 1.0.0
+author: NousResearch
+homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/singularity
+description: >
+  Singularity/Apptainer terminal backend for Hermes Agent: the terminal, file
+  and code tools run inside a hardened, rootless container on this machine
+  (--containall, --no-home), with CPU/memory limits and an optional persistent
+  overlay. Select it with `terminal.backend: singularity`; the image comes from
+  `terminal.singularity_image`. Formerly built into Hermes core.
+requires_hermes: ">=0.21.6"
+provides_tools: []
+provides_hooks: []

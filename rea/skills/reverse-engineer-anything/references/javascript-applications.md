@@ -1,7 +1,30 @@
 # JavaScript and Electron application artifacts
 
+For captured or bundled JavaScript that needs readable source recovery, use
+`recover_javascript_sources` with an absolute `path` and absent
+`output_directory`. Supply related runtime/shared/lazy files in
+`additional_paths` when advertised, then analyze the returned `analysis_input`
+directory together. Each input retains its own snapshot, digest and byte-range
+provenance; inputs and recovered code are never executed. Recovery requires a
+caller-supplied Wakaru on Linux x64; see [the recovery guide](https://github.com/morluto/rea/blob/main/docs/javascript-recovery.md).
+
 Use `analyze_javascript_application` directly on the operator-supplied ASAR or
-extracted tree. When size is unknown or large and the connected schema advertises
+extracted tree. When the question concerns known source paths and the connected
+schema advertises `source_paths`, select exact inventoried paths such as
+`["package.json", "main.js", "preload.js"]`. Include supporting manifests or
+source maps explicitly; dependencies are not implicitly analyzed. REA retains
+the complete artifact inventory and identity but reads source text and analyzes
+only selected files. The result and summary record `source_selection`; files
+outside scope and their relationships remain unknown, so partial application
+coverage does not mean the selected source failed. Use repeated `--source-path`
+on either static application CLI route. Omit the selection when the question
+requires complete application analysis. `detail: "summary"` reduces delivery
+and does not by itself reduce analysis work.
+
+Exact `#alias` specifiers resolve through the importer's
+enclosing package `imports` map to package-local files; nested `node_modules`
+packages use their own map. Wildcard, recursive, and external-package import
+targets stay unresolved with that limitation. When size is unknown or large and the connected schema advertises
 `detail`, request `detail: "summary"`. This returns an `inspect_analysis_view`
 Evidence record with a distinct ID and a `normalized_result.parent_evidence_id`
 for the complete retained application analysis. Source-map contents are part of
@@ -12,7 +35,10 @@ the complete application Evidence inline when it fits.
 When the connected schema advertises `max_heap_mb` and `analysis_timeout_ms`,
 these select the isolated source analyzer's old-space heap and per-source
 deadline. Defaults are 1024 MiB and 300000 ms. They do not change the MCP
-process heap. Resource-limited analyses preserve completed static facts and
+process heap. A Bun-hosted REA does not enforce the heap choice; on Windows it
+instead limits the analyzer's committed memory to that choice plus a 512 MiB
+runtime reserve.
+Resource-limited analyses preserve completed static facts and
 report partial semantic coverage with specific unknown scopes; this does not
 mean the source is malformed. Inspect those limits before retrying a source.
 When expanded relationships exceed the parent's available memory, inspect the
@@ -67,6 +93,36 @@ select the matching node ID from the page or the error's candidates. Follow
 recorded observations, identity, hashes, exports and source ranges; it does not
 include every child syntax observation, related edge or original source file.
 An absent item fact is not evidence of absence from the whole application.
+
+For canonical identities and retained source-range counts, use a typed reference
+page instead of reading every full item:
+
+```json
+{
+  "source": {
+    "kind": "retained-evidence",
+    "evidence_id": "ev_ACTUAL_PARENT_ID"
+  },
+  "view": {
+    "kind": "javascript",
+    "collection": "modules",
+    "projection": "references",
+    "where": { "path": "main.js", "kind": "javascript-module" },
+    "offset": 0,
+    "limit": 16
+  }
+}
+```
+
+Filters match exact retained strings; omit a filter to include all values, use
+`path: null` for unavailable paths, and `path: ""` for a recorded empty path.
+Rows preserve canonical `identity` and distinct observation support states in
+`basis`. `retained_source_range_count` counts retained source-range observations,
+not runtime imports or unique reference sites. Use a row's `node_id` with the item
+view above for exact locations and full supporting observations. Follow
+`coverage.next_offset`; page exhaustion describes matching retained rows only.
+Check `source_coverage` for source selection, partial/unknown graph coverage and
+unknown counts before drawing a negative conclusion.
 
 ## Trace only the remaining question
 
@@ -139,7 +195,8 @@ accept complete inline Evidence or
 `{"kind":"retained-evidence","evidence_id":"ev_<64 lowercase hex characters>"}`
 for their application input (`application`, or `left`/`right`). `inspect_analysis_view`
 uses the same retained-reference form in `source`, or portable inline Evidence,
-to project a summary, module page, or one module with its recorded observations. This notation is
+to project a summary, module page, or one module with its recorded observations.
+This notation is
 a template: replace it with the actual returned ID. Versions before 4.1.0 accept only full
 inline Evidence. Use the exact ID
 returned by the producer on the same MCP connection. Resolution does not run
@@ -147,3 +204,15 @@ analysis or select a provider; findings remain inline. Native observation
 arrays still take full Evidence. `close_binary` clears retained references;
 export a bundle before closing, or supply portable inline Evidence in another
 connection. A missing reference includes its ID and recovery guidance.
+
+For exact file/native metadata or processing gaps, use
+`view: {kind: "javascript-facts", where: {paths: ["package.json"]}, property_keys: ["name", "operation", "analysis_status"], limit: 32}`.
+Rows retain canonical node/observation identity and original Evidence. Paths
+match Evidence artifact-path/source-range locations; missing properties remain
+omitted and source coverage stays separate from page exhaustion. Batch paths and
+select only needed property keys; complete Evidence remains accessible by export.
+If names are unknown, opt into `include_available_property_keys: true`; it lists
+the original keys per returned observation without unselected values. Keep each
+row's node/observation identity paired when composing facts.
+These rows select application-graph observations; semantic relationships and
+semantic unknown records remain in the complete parent Evidence and trace tools.

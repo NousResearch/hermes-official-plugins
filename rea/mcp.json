@@ -6,7 +6,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "rea-agents@6.4.0",
+        "rea-agents@6.7.0",
         "mcp"
       ],
       "env": {

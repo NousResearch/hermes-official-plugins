@@ -1,0 +1,13 @@
+[project]
+name = "hermes-singularity"
+version = "1.0.0"
+description = "Singularity/Apptainer terminal backend for Hermes Agent (official plugin)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nous Research" }]
+requires-python = ">=3.11"
+# No Python dependencies: the backend drives the `apptainer` (or `singularity`) CLI you install.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/singularity"

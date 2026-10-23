@@ -16,7 +16,7 @@ This is a portable [Agent Plugins v1](https://agent-plugins.org) package. One
 install ships:
 
 - `mcp.json`: the REA MCP server (`rea`), launched as
-  `npx -y rea-agents@6.4.0 mcp` over stdio for every new session while the
+  `npx -y rea-agents@6.7.0 mcp` over stdio for every new session while the
   plugin is enabled. No `mcp_servers` edit in config.yaml.
 - `skills/reverse-engineer-anything/`: REA's own workflow skill (target
   routing, summary-first evidence paging, investigation planning), adapted for
@@ -59,10 +59,26 @@ Requirements:
   `REA_PWNTOOLS_PYTHON=/path/to/venv/bin/python`. Hermes passes MCP servers only
   a small set of environment variables, so `mcp.json` forwards this one
   explicitly; a value exported only in your shell does not reach REA.
-- Bring your own engine for the rest: Ghidra plus a JDK, Hopper or IDA for
+- Nothing else for the newer built-in readers: Go build info
+  (`inspect_go_binary`), cargo-auditable Rust dependencies
+  (`inspect_rust_binary`), Electron fuses (`inspect_electron_fuses`), Flutter
+  and Dart AOT build facts, HarmonyOS package graphs. `inspect_sqlite_database`
+  needs Node.js 24.15+ or 26+.
+- Bring your own engine for the rest: Ghidra plus a JDK, Hopper, IDA or Kuna for
   native decompilation; JADX and Java for Android code; Binwalk/Unblob for
-  firmware extraction; TShark, sigrok or WABT for their formats. REA never
-  installs these, and the skill tells the agent not to either.
+  firmware extraction; TShark/capinfos, sigrok-cli, WABT, GNU objdump, GDB,
+  Rizin/Cutter or Frida for their formats and debuggers. REA never installs
+  these, and the skill tells the agent not to either.
+
+Engines found on `PATH` (objdump, gdb, rizin) work as is. Engines REA locates
+through an environment variable do not: Hermes passes MCP servers only a small
+set of environment variables, and this plugin forwards only
+`REA_PWNTOOLS_PYTHON`. To use Kuna (`REA_KUNA_COMMAND`), TShark
+(`REA_TSHARK_COMMAND`, `REA_CAPINFOS_COMMAND`), sigrok (`REA_SIGROK_COMMAND`),
+WABT (`REA_WABT_BIN_DIRECTORY`) or Ghidra/JDK locations, add them to a
+same-name `mcp_servers.rea` override as shown in the
+[recovery guide](skills/reverse-engineer-anything/references/connection-and-recovery.md)
+(keep the pinned launch command).
 
 Do not also run `npx rea-agents setup --client hermes`. It writes its own
 `mcp_servers.rea` entry to config.yaml, which replaces this plugin's pinned
@@ -99,10 +115,10 @@ label inferred names/types, and report missing symbols and analysis warnings.
 
 ## What you get
 
-About 170 tools from REA 6.4.0, registered as `mcp__rea__<tool>`
+207 tools from REA 6.7.0, registered as `mcp__rea__<tool>`
 (`mcp__rea__open_binary`, `mcp__rea__analyze_function`,
 `mcp__rea__analyze_javascript_application`, `mcp__rea__inspect_android_package`,
-...). Their schemas total roughly 460 KB, so Hermes keeps them behind its
+...). Their input schemas and descriptions total roughly 800 KB, so Hermes keeps them behind its
 on-demand tool search instead of the model's visible tool list: a session pays
 only for the tools it looks up. REA's six MCP prompts are available through
 the server's prompt tools.
@@ -119,6 +135,17 @@ change things, and Hermes does not prompt before them:
 - `install_adb_package`, `uninstall_adb_package`, `push_adb_file`,
   `start_adb_app`, `start_adb_activity` and `stop_adb_app` change a connected
   Android device.
+- `observe_native_calls` launches the active macOS binary under LLDB.
+- `instrument_with_frida` and the Frida session tools (`start_frida_session`,
+  `load_frida_script`, `resume_frida_session`, `unload_frida_script`,
+  `close_frida_session`) attach to, spawn or inject JavaScript into a process,
+  locally or on a remote Frida server.
+- `start_gdb_session`/`gdb_console`/`close_gdb_session` and
+  `start_rizin_debug_session`/`rizin_debug_command`/`close_rizin_debug_session`
+  drive an unrestricted debugger that can run the target.
+- `execute_rizin_command` and `cutter_command` run one arbitrary Rizin command,
+  which can execute code, write files or reach the network through Rizin
+  plugins.
 - `export_evidence_bundle` and `close_binary` can overwrite a file at a path
   you give them.
 
@@ -131,7 +158,7 @@ capture fetches.
 
 ## Version pinning
 
-`mcp.json` pins `rea-agents@6.4.0` (published 2026-10-11) and the skill is
+`mcp.json` pins `rea-agents@6.7.0` (published 2026-10-18) and the skill is
 REA's `reverse-engineer-anything` skill from the same release tag. Bumping
 either is a commit to this repo followed by a reviewed SHA bump in the
 [hermes-agent plugin catalog](https://github.com/NousResearch/hermes-agent/tree/main/plugin-catalog).

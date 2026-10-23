@@ -1,0 +1,149 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "meshy",
+  "version": "0.4.0",
+  "description": "Generate, texture, rig, animate and 3D-print models with Meshy AI through Meshy's first-party MCP server (pinned @meshy-ai/meshy-mcp-server@0.6.5 over npx stdio), with a meshy-3d workflow skill bundled. Credit-spending calls ask for approval first. In Hermes Desktop: inline three.js 3D cards, a model gallery and a credit chip.",
+  "author": {
+    "name": "Nous Research",
+    "url": "https://github.com/NousResearch"
+  },
+  "homepage": "https://github.com/NousResearch/hermes-official-plugins/tree/main/meshy",
+  "repository": "https://github.com/NousResearch/hermes-official-plugins/tree/main/meshy",
+  "license": "MIT",
+  "keywords": [
+    "meshy",
+    "3d",
+    "text-to-3d",
+    "image-to-3d",
+    "rigging",
+    "animation",
+    "3d-printing",
+    "game-assets",
+    "mcp"
+  ],
+  "extensions": {
+    "com.nousresearch.hermes": {
+      "servers": {
+        "meshy": {
+          "trust": "untrusted",
+          "costs": {
+            "meshy_text_to_3d": [
+              5,
+              25
+            ],
+            "meshy_image_to_3d": [
+              5,
+              40
+            ],
+            "meshy_multi_image_to_3d": [
+              5,
+              40
+            ],
+            "meshy_text_to_3d_refine": [
+              10,
+              15
+            ],
+            "meshy_retexture": [
+              10,
+              15
+            ],
+            "meshy_text_to_image": [
+              3,
+              9
+            ],
+            "meshy_image_to_image": [
+              3,
+              12
+            ],
+            "meshy_rig": 5,
+            "meshy_animate": {
+              "credits": [
+                3,
+                30
+              ],
+              "note": "3 per action"
+            },
+            "meshy_text_to_motion": [
+              3,
+              10
+            ],
+            "meshy_remesh": 5,
+            "meshy_uv_unwrap": 5,
+            "meshy_convert": 1,
+            "meshy_resize": 1,
+            "meshy_process_multicolor": 10,
+            "meshy_repair_printability": 10,
+            "meshy_auto_split": 10,
+            "meshy_creative_lab": [
+              6,
+              62
+            ]
+          },
+          "spend_limit": 200,
+          "cost_unit": "credits"
+        }
+      },
+      "config_schema": {
+        "api_key": {
+          "type": "secret",
+          "env": "MESHY_API_KEY",
+          "label": "Meshy API key",
+          "description": "From meshy.ai → API. Saving it restarts the Meshy tools with the new key."
+        },
+        "show_credits": {
+          "type": "bool",
+          "default": true,
+          "label": "Credit balance in the status bar",
+          "description": "Desktop: show remaining Meshy credits in the status bar."
+        },
+        "inline_viewer": {
+          "type": "bool",
+          "default": true,
+          "label": "Inline 3D cards in chat",
+          "description": "Desktop: render ::meshy-model replies as interactive 3D cards. Off shows them as text."
+        },
+        "auto_rotate": {
+          "type": "bool",
+          "default": true,
+          "label": "Auto-rotate in the gallery",
+          "description": "Desktop: slowly spin the model in the gallery viewer."
+        },
+        "gallery_limit": {
+          "type": "int",
+          "default": 24,
+          "label": "Recent generations shown",
+          "description": "How many recent Meshy generations the gallery lists (1-60)."
+        },
+        "blender_handoff": {
+          "type": "str",
+          "choices": [
+            "ask",
+            "always",
+            "never"
+          ],
+          "default": "ask",
+          "label": "Blender optimized copy",
+          "description": "When Blender is installed, offer an optimized copy for game testing after a download (packed textures, optional triangle budget, new .blend + GLB/FBX). Runs locally, no additional Meshy credits. Ask offers it once."
+        },
+        "default_detail": {
+          "type": "str",
+          "choices": [
+            "ask",
+            "game",
+            "mobile",
+            "detailed"
+          ],
+          "default": "ask",
+          "label": "Default detail level",
+          "description": "How the Meshy skill picks mesh detail when you do not say. Ask asks what the asset is and where it goes; game uses Smart Topology sized per asset (characters ~15k, weapons ~3k, props ~1.5k triangles); mobile halves those; detailed uses Standard full detail (renders, close-ups, printing)."
+        },
+        "blender_path": {
+          "type": "str",
+          "default": "",
+          "label": "Blender executable",
+          "description": "Full path to Blender 4.2 or newer. Empty finds it on PATH or in the usual install folders."
+        }
+      }
+    }
+  }
+}

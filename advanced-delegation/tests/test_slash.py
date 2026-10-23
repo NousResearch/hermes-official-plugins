@@ -119,7 +119,7 @@ def test_now_saves_and_asks_core_to_apply_it_to_this_chat(home, api):
     reply = str(_run("model_map --now", Ctx(ask=False, api=api), session_key="chat-7"))
     assert api.calls == [("model_map", "chat-7", True)]
     assert _saved(home)["backend"] == "model_map"
-    assert "applied to this chat now" in reply and "next session" not in reply
+    assert "applied to this chat" in reply and "next message" in reply and "next session" not in reply
     assert "deep (default)" in reply
 
 
@@ -180,7 +180,7 @@ def test_the_picker_offers_set_up_modes_then_when_and_saves_for_the_next_session
 def test_the_picker_now_choice_applies_to_this_chat(home, api):
     _write(home, {"backend": "default", "backends": {"model_map": {"options": ROUTES}}})
     reply = str(_run("", ctx=Ctx("model_map", "now", api=api), session_key="chat-7"))
-    assert api.calls == [("model_map", "chat-7", True)] and "applied to this chat now" in reply
+    assert api.calls == [("model_map", "chat-7", True)] and "applied to this chat" in reply
 
 
 def test_cancelling_the_when_question_changes_nothing(home, api):
@@ -220,6 +220,14 @@ def test_switching_back_to_default_always_works(home, api):
     reply = str(_run("default", Ctx(ask=False, api=api)))
     assert _saved(home)["backend"] == "default" and api.calls == [("default", "key-1", False)]
     assert "delegation.model" in reply
+
+
+def test_saving_the_mode_already_saved_writes_nothing_and_points_to_now(home, api):
+    _write(home, {"backend": "model_map", "backends": {"model_map": {"options": ROUTES}}})
+    reply = str(_run("model_map", Ctx(ask=False, api=api)))
+    assert "already saved" in reply and "--now" in reply and api.calls == []
+    reply = str(_run("model_map --now", Ctx(ask=False, api=api)))  # e.g. saved earlier without --now
+    assert api.calls == [("model_map", "key-1", True)] and "applied to this chat" in reply
 
 
 def test_an_unknown_word_shows_the_usage(home):

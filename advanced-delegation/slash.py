@@ -11,8 +11,8 @@
 
 Saving for the next session is the default because the mode is part of the chat's cached prompt: the
 ``delegate_task`` schema carries the mode's per-task choices (``option`` / ``profile``), and swapping it
-mid-chat breaks the prompt cache. ``--now`` is the opt-in: core rebuilds this session's tool schema
-once (one cache break) so routing and the agent's choices both follow the new mode.
+mid-chat breaks the prompt cache. ``--now`` is the opt-in: core rebuilds this session's tool schema at
+its next turn (one cache break) so the agent's choices follow the new mode in this chat too.
 
 Core does both behind ``ctx.delegation_backends`` (``list_backends`` /
 ``set_global_backend(name, session_key=, apply_now=)``). It is a host remote facade, so under
@@ -155,7 +155,7 @@ def handle(raw_args: str = "", session_key: str = "", ask_choice: Optional[AskCh
             if when is None:
                 return f"Delegation mode unchanged: {store.mode_label(saved)}."
             now = when == "now"
-    return _switch(mode, now, section, api, session_key)
+    return _switch(mode, now, section, saved, api, session_key)
 
 
 def _save(mode: str, now: bool, api, session_key: str) -> bool:
@@ -174,21 +174,23 @@ def _save(mode: str, now: bool, api, session_key: str) -> bool:
     return True
 
 
-def _switch(mode: str, now: bool, section: Mapping[str, Any], api, session_key: str) -> str:
+def _switch(mode: str, now: bool, section: Mapping[str, Any], saved: str, api, session_key: str) -> str:
     if not _ready(mode, section):
         return (f"{store.mode_label(mode)} has nothing set up yet, so the agent would have nothing to pick. "
                 "Set it up with `hermes delegation config`, then switch.")
+    head = f"Delegation mode: {store.mode_label(mode)}"
+    if mode == saved and not now:
+        return f"{head} is already saved. Add --now to apply it to this chat (rebuilds its tools once)."
     try:
         applied = _save(mode, now, api, session_key)
     except (ValueError, PermissionError, RuntimeError) as exc:  # cannot run here, managed install, bad config
         return f"Not switched: {exc}"
     note = " delegation.model / delegation.provider apply again." if mode == "default" else (
         f" {_detail(mode, section).capitalize()}.")
-    head = f"Delegation mode: {store.mode_label(mode)}"
     if applied:
-        return f"{head}, saved and applied to this chat now (its tools were rebuilt).{note}"
+        return (f"{head}, saved and applied to this chat: its tools are rebuilt for it at your next message "
+                f"(one prompt-cache break).{note}")
     if now:
-        return (f"{head}, saved for the next session (/new). Applying it to this chat now needs a newer Hermes; "
-                f"this chat keeps its current mode.{note}")
-    return (f"{head}, saved; it takes effect from the next session (/new). This chat keeps its current mode "
-            f"(add --now to apply it here, which rebuilds this chat's tools once).{note}")
+        return f"{head}, saved for the next session (/new). Applying it to this chat needs a newer Hermes.{note}"
+    return (f"{head}, saved. It takes effect from the next session (/new); this chat's tools keep the previous "
+            f"mode's choices until then (add --now to apply it here, which rebuilds this chat's tools once).{note}")

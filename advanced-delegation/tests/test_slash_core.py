@@ -115,3 +115,30 @@ def test_now_on_a_core_before_apply_now_saves_and_says_it_needs_a_newer_hermes(h
     reply = _run(fn, "model_map --now")
     assert _saved(home) == "model_map"
     assert "newer Hermes" in reply and "next session" in reply
+
+
+def _agent():
+    """This session's real agent, built on the saved mode (Default: delegate_task without ``option``)."""
+    from run_agent import AIAgent
+    return AIAgent(base_url="http://127.0.0.1:9/v1", api_key="test", model="test-model", quiet_mode=True,
+                   enabled_toolsets=["delegation"], session_id=KEY, skip_context_files=True, skip_memory=True)
+
+
+def _task_choices(agent):
+    tool = next(t for t in agent.tools if t["function"]["name"] == "delegate_task")
+    return set(tool["function"]["parameters"]["properties"]["tasks"]["items"]["properties"])
+
+
+@needs_apply_now
+def test_now_rebuilds_this_sessions_delegate_task_at_its_next_turn_and_a_plain_save_does_not(handler,
+                                                                                            monkeypatch):
+    from agent.delegation_backends import apply_requested_tool_rebuild  # what core runs at turn start
+    monkeypatch.delenv("HERMES_SESSION_KEY", raising=False)  # the session is the agent's (session_id KEY)
+    fn, home = handler
+    agent = _agent()
+    assert "option" not in _task_choices(agent)
+    assert "next session" in _run(fn, "model_map")
+    assert not apply_requested_tool_rebuild(agent) and "option" not in _task_choices(agent)
+    reply = _run(fn, "model_map --now")
+    assert "applied to this chat" in reply and _saved(home) == "model_map"
+    assert apply_requested_tool_rebuild(agent) and "option" in _task_choices(agent)

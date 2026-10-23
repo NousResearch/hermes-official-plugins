@@ -75,3 +75,16 @@ def test_hosted_now_on_a_core_before_apply_now_still_saves(hosted):
     fn, home = hosted
     reply = _run(fn, "model_map --now")
     assert "newer Hermes" in reply and _saved(home) == "model_map"
+
+
+@pytest.mark.skipif(not APPLY_NOW, reason="core without set_global_backend(apply_now=)")
+def test_hosted_now_rebuilds_the_tools_of_this_processs_session(hosted, monkeypatch):
+    from agent.delegation_backends import apply_requested_tool_rebuild  # what core runs at turn start
+    from run_agent import AIAgent
+    monkeypatch.delenv("HERMES_SESSION_KEY", raising=False)
+    fn, home = hosted
+    agent = AIAgent(base_url="http://127.0.0.1:9/v1", api_key="test", model="test-model", quiet_mode=True,
+                    enabled_toolsets=["delegation"], session_id=KEY, skip_context_files=True, skip_memory=True)
+    reply = _run(fn, "model_map --now")
+    assert "applied to this chat" in reply and _saved(home) == "model_map"
+    assert apply_requested_tool_rebuild(agent)  # the request landed here, not in the plugin host

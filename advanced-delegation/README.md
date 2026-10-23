@@ -101,15 +101,16 @@ other settings are kept). Changes apply to new sessions.
 ```
 
 Switching **saves** the mode as this profile's `delegation.backend`, and it takes effect from the
-next session (`/new`); the running chat keeps the mode it started with. That is the default because
-the mode is part of the chat's tool list (the per-task `option` / `profile` choice), and the tool list
-is part of the prompt cache: changing it mid-chat makes the next request re-read the whole
-conversation at full price.
+next session (`/new`). The running chat's tool list keeps the choices of the mode it started with
+(the per-task `option` / `profile`): the tool list is part of the prompt cache, and changing it
+mid-chat makes the next request re-read the whole conversation at full price. Until `/new`, a task in
+that chat that still picks a route or profile of the previous mode is refused with a message naming
+`--now` and `/new`, never run on the wrong route.
 
 `--now` is the opt-in for when you want it in this chat anyway: Hermes saves the mode and rebuilds
-this chat's tools once, so routing and the agent's choices both follow the new mode from its next
-message (one prompt-cache break). It needs a Hermes that can rebuild a running chat's tools; on an
-older one the mode is saved for the next session and the reply says so.
+this chat's tools at your next message, so the agent's choices follow the new mode right away (one
+prompt-cache break). It needs a Hermes that can rebuild a running chat's tools; on an older one the
+mode is saved for the next session and the reply says so.
 
 Bare `/delegation` opens a picker with the modes that have something set up, using the surface's own
 choice prompt: buttons on Telegram, Discord and Slack (like approvals), a numbered list on other

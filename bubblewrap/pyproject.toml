@@ -1,6 +1,6 @@
 [project]
 name = "hermes-bubblewrap"
-version = "1.0.0"
+version = "1.1.0"
 description = "Bubblewrap (bwrap) terminal backend for Hermes Agent on Linux (official plugin)"
 readme = "README.md"
 license = { text = "MIT" }

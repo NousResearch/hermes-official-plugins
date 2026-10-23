@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 BACKEND_NAME = "bubblewrap"
 PROMPT_SECTION_ID = "bubblewrap-sandbox"
-SETTING_KEYS = ("profile", "binds", "memory_mb", "cpu_seconds", "max_procs")
+SETTING_KEYS = ("profile", "binds", "memory_mb", "cpu_seconds", "max_procs", "home_allow")
 
 _PROFILE_CHOICES = (
     ("restricted", "restricted - read-only working directory, no network"),
@@ -167,7 +167,7 @@ class BubblewrapProvider(TerminalEnvironmentProvider):
     def prompt_note(self, _session_info: Any = None) -> str:
         """Confinement notice for a new session on this backend; empty on any other backend.
 
-        Without it a ``Read-only file system`` refusal or an empty SSH directory reads as a broken host,
+        Without it a ``Read-only file system`` refusal or a missing ``~/.ssh`` reads as a broken host,
         and the model detours (sudo, another path, another tool) instead of reporting the boundary.
         """
         if (_terminal_env("TERMINAL_ENV", "local") or "local").strip().lower() != BACKEND_NAME:
@@ -193,9 +193,9 @@ class BubblewrapProvider(TerminalEnvironmentProvider):
         return (
             f"Terminal sandbox: bubblewrap, profile `{profile.name}`. Every `terminal` and `execute_code` call runs "
             f"in its own bwrap sandbox on this host with the same paths: the filesystem is read-only except {writable}; "
-            "the .ssh, .aws, .gnupg and .hermes directories in the home directory and the other credential paths "
-            "appear empty; /tmp and /proc are private to "
-            f"each command; it has {network}. A `Read-only file system` error, an empty credential directory or a "
+            "dot entries of the home directory that are not on the allowlist do not exist, the Hermes home is hidden, "
+            "and credential paths below a visible entry appear empty; /tmp and /proc are private to "
+            f"each command; it has {network}. A `Read-only file system` error, a missing or empty credential path or a "
             "refused connection is that boundary, not a broken host: report it instead of working around it. "
             "Background processes are not available on this backend: each command's sandbox ends with it. "
             "`read_file`, `write_file`, `patch` and `search_files` run on the host itself and are not confined."

@@ -984,6 +984,184 @@ class TestSandboxDirGuard:
             env.cleanup()
 
 
+class TestWritableDotLinkGuard:
+    """A dot symlink of HOME that a command could redirect or rewrite stops
+    construction: the host reads what it leads to after the sandbox is gone."""
+
+    @pytest.fixture
+    def fake_home(self, tmp_path, monkeypatch):
+        home = tmp_path / "homes" / "home"
+        (home / "dotfiles").mkdir(parents=True)
+        (home / "dotfiles" / "rc").write_text("x")
+        (home / ".zz-real").mkdir()
+        (home / ".zz-link").symlink_to(".zz-real")
+        monkeypatch.setenv("HOME", str(home))
+        return home
+
+    @pytest.fixture
+    def outside(self, tmp_path):
+        """A directory outside HOME and outside every writable root."""
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "rc").write_text("x")
+        return outside
+
+    @staticmethod
+    def _construct(cwd, config=None):
+        with _no_session():
+            BubblewrapEnvironment(cwd=str(cwd), timeout=10, config=config).cleanup()
+
+    @pytest.mark.parametrize("name", [".bashrc", ".profile", ".gitconfig", ".zz-anything"])
+    def test_target_in_the_writable_cwd_is_refused_and_named(self, sandbox_root, fake_home, name):
+        (fake_home / name).symlink_to("dotfiles/rc")
+        with pytest.raises(ValueError, match="redirect or rewrite") as exc:
+            self._construct(fake_home)
+        assert name in str(exc.value)
+        # A link to a dot entry of HOME is not writable through a cwd at HOME.
+        assert ".zz-link" not in str(exc.value)
+        assert "terminal.cwd" in str(exc.value)
+
+    def test_target_in_a_project_cwd_is_refused(self, sandbox_root, fake_home, work_dir):
+        (work_dir / "rc").write_text("x")
+        (fake_home / ".bashrc").symlink_to(work_dir / "rc")
+        with pytest.raises(ValueError, match=r"\.bashrc"):
+            self._construct(work_dir)
+
+    def test_target_in_a_read_write_bind_is_refused(self, sandbox_root, work_dir, fake_home):
+        (fake_home / ".bashrc").symlink_to("dotfiles/rc")
+        dotfiles = fake_home / "dotfiles"
+        config = BubblewrapConfig(binds=(BindMount(src=str(dotfiles), dest=str(dotfiles), readonly=False),))
+        with pytest.raises(ValueError, match=r"\.bashrc"):
+            self._construct(work_dir, config)
+
+    def test_directory_link_that_ends_at_a_read_write_bind_is_refused(self, sandbox_root, work_dir, fake_home):
+        (fake_home / ".zz-conf").symlink_to("dotfiles")
+        dotfiles = fake_home / "dotfiles"
+        config = BubblewrapConfig(binds=(BindMount(src=str(dotfiles), dest=str(dotfiles), readonly=False),))
+        with pytest.raises(ValueError, match=r"\.zz-conf"):
+            self._construct(work_dir, config)
+
+    def test_middle_link_in_the_writable_cwd_is_refused(self, sandbox_root, fake_home, work_dir, outside):
+        # The final target is out of reach, but a command can point the
+        # middle link somewhere else.
+        (work_dir / "hop").symlink_to(outside / "rc")
+        (fake_home / ".bashrc").symlink_to(work_dir / "hop")
+        assert os.path.realpath(fake_home / ".bashrc") == str(outside / "rc")
+        with pytest.raises(ValueError, match=r"\.bashrc"):
+            self._construct(work_dir)
+
+    def test_directory_link_in_the_writable_cwd_is_refused(self, sandbox_root, fake_home, work_dir, outside):
+        # The chain passes through a directory symlink a command can replace.
+        (work_dir / "dir").symlink_to(outside)
+        (fake_home / ".bashrc").symlink_to(work_dir / "dir" / "rc")
+        assert os.path.realpath(fake_home / ".bashrc") == str(outside / "rc")
+        with pytest.raises(ValueError, match=r"\.bashrc"):
+            self._construct(work_dir)
+
+    def test_absent_target_in_the_writable_cwd_is_refused(self, sandbox_root, fake_home, work_dir):
+        # A command can make the missing file; the host then reads it.
+        (fake_home / ".bashrc").symlink_to(work_dir / "not-there-yet")
+        with pytest.raises(ValueError, match=r"\.bashrc"):
+            self._construct(work_dir)
+
+    def test_refusal_names_every_entry(self, sandbox_root, fake_home):
+        (fake_home / ".bashrc").symlink_to("dotfiles/rc")
+        (fake_home / ".zshrc").symlink_to("dotfiles/rc")
+        with pytest.raises(ValueError, match=r"\.bashrc, \.zshrc .* are symlinks"):
+            self._construct(fake_home)
+
+    def test_target_outside_every_writable_root_constructs(self, sandbox_root, fake_home, work_dir, outside):
+        (fake_home / ".bashrc").symlink_to(outside / "rc")
+        (fake_home / ".profile").symlink_to("dotfiles/rc")
+        self._construct(work_dir)
+
+    def test_target_under_a_hidden_path_constructs(self, sandbox_root, fake_home):
+        # The target is hidden in the sandbox, and the directories on the
+        # way to it are pinned, so a command cannot reach or move it.
+        keys = fake_home / ".aws"
+        keys.mkdir()
+        (keys / "rc").write_text("x")
+        (fake_home / ".bashrc").symlink_to(".aws/rc")
+        self._construct(fake_home)
+
+    def test_target_in_a_read_only_bind_constructs(self, sandbox_root, work_dir, fake_home):
+        (fake_home / ".bashrc").symlink_to("dotfiles/rc")
+        dotfiles = fake_home / "dotfiles"
+        config = BubblewrapConfig(binds=(BindMount(src=str(dotfiles), dest=str(dotfiles), readonly=True),))
+        self._construct(work_dir, config)
+
+    def test_restricted_profile_constructs(self, sandbox_root, fake_home):
+        (fake_home / ".bashrc").symlink_to("dotfiles/rc")
+        self._construct(fake_home, BubblewrapConfig(profile="restricted"))
+
+    def test_chain_inside_the_dot_entries_of_home_constructs_with_cwd_at_home(self, sandbox_root, fake_home):
+        (fake_home / ".zz-real" / "rc").write_text("x")
+        (fake_home / ".zz-hop").symlink_to(".zz-real/rc")
+        (fake_home / ".bashrc").symlink_to(".zz-hop")
+        self._construct(fake_home)
+
+    @pytest.fixture
+    def hermes_home(self, tmp_path, monkeypatch):
+        home = tmp_path / "hermes-home"
+        home.mkdir()
+        monkeypatch.setenv("HERMES_HOME", str(home))
+        return home
+
+    def test_profile_home_dot_link_into_a_plain_profile_home_is_refused(self, sandbox_root, work_dir, fake_home, hermes_home):
+        # HERMES_HOME is hidden, but the profile home is bound back read-write on top of it.
+        (hermes_home / "home").mkdir()
+        (hermes_home / "home" / ".bashrc").write_text("x")
+        (fake_home / ".bashrc").symlink_to(hermes_home / "home" / ".bashrc")
+        with pytest.raises(ValueError, match=r"\.bashrc"):
+            self._construct(work_dir, BubblewrapConfig(home_mode="profile"))
+
+    def test_profile_home_dot_link_into_a_symlinked_profile_home_is_refused(self, sandbox_root, work_dir, fake_home, hermes_home, tmp_path):
+        agent_home = tmp_path / "agent-home"
+        agent_home.mkdir()
+        (agent_home / ".gitconfig").write_text("x")
+        (hermes_home / "home").symlink_to(agent_home)
+        (fake_home / ".gitconfig").symlink_to(agent_home / ".gitconfig")
+        with pytest.raises(ValueError, match=r"\.gitconfig"):
+            self._construct(work_dir, BubblewrapConfig(home_mode="profile"))
+
+    def test_profile_home_dot_link_constructs_when_the_profile_home_is_not_bound(self, sandbox_root, work_dir, fake_home, hermes_home):
+        (hermes_home / "home").mkdir()
+        (hermes_home / "home" / ".bashrc").write_text("x")
+        (fake_home / ".bashrc").symlink_to(hermes_home / "home" / ".bashrc")
+        self._construct(work_dir, BubblewrapConfig(home_mode="real"))
+
+    def test_a_link_loop_constructs(self, sandbox_root, fake_home, outside):
+        (outside / "a").symlink_to(outside / "b")
+        (outside / "b").symlink_to(outside / "a")
+        (fake_home / ".bashrc").symlink_to(outside / "a")
+        self._construct(fake_home)
+
+
+class TestDotLinkEntries:
+    def test_walk_lists_every_entry_on_the_way(self, tmp_path):
+        home, far = tmp_path / "home", tmp_path / "far"
+        (home / "a").mkdir(parents=True)
+        far.mkdir()
+        (far / "rc").write_text("x")
+        (home / "a" / "dir").symlink_to(far)
+        (home / ".bashrc").symlink_to("a/../a/dir/rc")
+        entries = bubblewrap.dot_link_entries(str(home), ".bashrc")
+        assert str(home / "a") in entries and str(home / "a" / "dir") in entries
+        assert entries[-1] == str(far / "rc")
+        assert str(home / ".bashrc") not in entries
+
+    def test_walk_stops_at_the_first_absent_entry_and_at_a_loop(self, tmp_path):
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".absent").symlink_to("nowhere/deeper/rc")
+        assert bubblewrap.dot_link_entries(str(home), ".absent") == [str(home / "nowhere")]
+        (home / "x").symlink_to("y")
+        (home / "y").symlink_to("x")
+        (home / ".loop").symlink_to("x")
+        assert len(bubblewrap.dot_link_entries(str(home), ".loop")) <= bubblewrap.DOT_LINK_MAX_HOPS
+        assert bubblewrap.dot_link_entries(str(home), ".not-a-link") == []
+
+
 class TestProfileHomeGuard:
     """Under a profile home_mode the profile home is bound read-write on top
     of every overlay, so a HERMES_HOME/home that resolves to a tree holding

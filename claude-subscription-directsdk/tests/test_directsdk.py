@@ -280,7 +280,7 @@ class Contract(unittest.TestCase):
         adaptive = json.loads(
             directsdk.request_body({**self.request(), "extra_body": enabled})[0]
         )
-        self.assertEqual(adaptive["thinking"], {"type": "adaptive"})
+        self.assertEqual(adaptive["thinking"], {"type": "adaptive", "display": "summarized"})
         self.assertEqual(adaptive["output_config"], {"effort": "medium"})
         for route in ("claude-haiku-4-5", "claude-haiku-4-5-20251001"):
             # Haiku 4.5 answers `adaptive thinking is not supported on this model` with a 400.

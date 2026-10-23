@@ -39,7 +39,7 @@ _OPENCLAW_NODE_CMDLINE_RE = r"^(\S*/)?node(js)?\s.*(openclaw|clawd)"
 _MIGRATE_ARG_DEFAULTS = (
     ("source", None), ("dry_run", False), ("preset", "full"), ("overwrite", False),
     ("migrate_secrets", False), ("workspace_target", None), ("skill_conflict", "skip"),
-    ("no_backup", False), ("yes", False))
+    ("no_backup", False), ("yes", False), ("from_setup", False))
 
 # (status, heading, color, default reason) — printed in this order after migrated items.
 _REPORT_REASON_GROUPS = (
@@ -350,7 +350,10 @@ def _preview_migration(run_migrator: Callable[[bool], dict], opts: SimpleNamespa
                 else f"{conflicts} conflict(s), nothing would be imported")
         print_header(f"Migration Preview — {what}")
         print_info("No changes have been made yet. Review the list below:")
-    _print_migration_report(preview_report, dry_run=True)
+    _print_migration_report(preview_report, dry_run=True, compact_skipped=opts.from_setup)
+    if opts.dry_run:  # only a real --dry-run is told how to run for real; otherwise the question follows
+        _info("", "To execute the migration, run without --dry-run:",
+              f"  hermes import-agent openclaw --preset {preview_report.get('preset', 'full')}")
     if opts.dry_run or (count == 0 and conflicts == 0):
         return False
     # Modelled on OpenClaw's assertConflictFreePlan(): apply is a safe no-op on conflicts unless
@@ -401,7 +404,7 @@ def _apply_migration(run_migrator: Callable[[bool], dict], opts: SimpleNamespace
             _info(f"A pre-migration backup is available at: {backup_archive}",
                   f"Restore with: hermes import {backup_archive.name}")
         return
-    _print_migration_report(report, dry_run=False)
+    _print_migration_report(report, dry_run=False, compact_skipped=opts.from_setup)
 
 
 def cleanup_command(args):
@@ -487,8 +490,10 @@ def _print_rows(rows: list[str], shown: int) -> None:
         print(f"      ... and {len(rows) - shown} more")
 
 
-def _print_migration_report(report: dict, dry_run: bool):
-    """Print a formatted migration report."""
+def _print_migration_report(report: dict, dry_run: bool, *, compact_skipped: bool = False):
+    """Print a formatted migration report. ``compact_skipped`` (inside ``hermes setup``) folds the
+    skipped items, mostly things this OpenClaw setup does not have, into one line; the report file
+    written on apply still lists each one."""
     summary, items = report.get("summary", {}), report.get("items", [])
     migrated = summary.get("migrated", 0)
     print()
@@ -499,6 +504,9 @@ def _print_migration_report(report: dict, dry_run: bool):
     migrated_heading = f"  ✓ {'Would migrate' if dry_run else 'Migrated'}:"
     for status, heading, heading_color, default_reason in (
         ("migrated", migrated_heading, Colors.GREEN, None), *_REPORT_REASON_GROUPS):
+        if status == "skipped" and compact_skipped:
+            _print_skipped_count(sum(1 for i in items if i.get("status") == status), report)
+            continue
         rows = []
         for item in (i for i in items if i.get("status") == status):
             kind, dest = item.get("kind", "unknown"), item.get("destination", "")
@@ -517,24 +525,28 @@ def _print_migration_report(report: dict, dry_run: bool):
     print_info(f"Summary: {', '.join(parts)}" if parts else "Nothing to migrate.")
     if report.get("output_dir"):
         print_info(f"Full report saved to: {report['output_dir']}")
-    _print_next_steps(report, dry_run, migrated, items)
+    if not dry_run and migrated:
+        _print_next_steps(items)
 
 
-def _print_next_steps(report: dict, dry_run: bool, migrated: int, items: list) -> None:
-    """After the summary: how to apply a preview, or what still needs doing after an apply."""
-    if dry_run:
-        _info("", "To execute the migration, run without --dry-run:",
-              f"  hermes import-agent openclaw --preset {report.get('preset', 'full')}")
-    elif migrated:
+def _print_skipped_count(count: int, report: dict) -> None:
+    if count:
+        where = " (each is listed in the report)" if report.get("output_dir") else ""
+        print(color(f"  ─ Skipped: {count} item(s) with nothing to bring over{where}", Colors.DIM))
         print()
-        print_success("Migration complete!")
-        # Warn if API keys were skipped (migrate_secrets not enabled)
-        if any(i.get("kind") == "provider-keys" and i.get("status") == "skipped" for i in items):
-            print()
-            for line in (
-                "  ⚠ API keys were NOT migrated (secrets migration is disabled by default).",
-                "  Your OPENROUTER_API_KEY and other provider keys must be added manually."):
-                print(color(line, Colors.YELLOW))
-            _info("", "To migrate API keys, re-run with:",
-                  "  hermes import-agent openclaw --migrate-secrets", "", "Or add your key manually:",
-                  "  hermes config set OPENROUTER_API_KEY sk-or-v1-...")
+
+
+def _print_next_steps(items: list) -> None:
+    """After an apply that migrated something: what still needs doing."""
+    print()
+    print_success("Migration complete!")
+    # Warn if API keys were skipped (migrate_secrets not enabled)
+    if any(i.get("kind") == "provider-keys" and i.get("status") == "skipped" for i in items):
+        print()
+        for line in (
+            "  ⚠ API keys were NOT migrated (secrets migration is disabled by default).",
+            "  Your OPENROUTER_API_KEY and other provider keys must be added manually."):
+            print(color(line, Colors.YELLOW))
+        _info("", "To migrate API keys, re-run with:",
+              "  hermes import-agent openclaw --migrate-secrets", "", "Or add your key manually:",
+              "  hermes config set OPENROUTER_API_KEY sk-or-v1-...")

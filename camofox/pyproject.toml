@@ -1,0 +1,14 @@
+[project]
+name = "hermes-camofox"
+version = "1.0.0"
+description = "Camofox anti-detection browser (camofox-browser REST server) for Hermes Agent (official plugin)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nous Research" }]
+requires-python = ">=3.11"
+dependencies = [
+  "requests>=2.31,<3",
+]
+
+[project.urls]
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/camofox"

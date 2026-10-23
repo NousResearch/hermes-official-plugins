@@ -82,3 +82,31 @@ def test_fresh_home_takes_the_openclaw_persona_but_a_written_soul_is_kept(tmp_pa
 
     assert "Refusing to apply" in capsys.readouterr().out
     assert (hermes_home / "SOUL.md").read_text(encoding="utf-8") == "My own persona.\n"
+
+
+def test_run_from_setup_speaks_to_setup(tmp_path, capsys):
+    """Inside `hermes setup` (which passes --from-setup) the preview leads straight into the question:
+    no "run without --dry-run" line, and the many skipped items collapse into one line (the report
+    file keeps the detail)."""
+    _fixture_openclaw(tmp_path)
+
+    _run(["openclaw", "--from-setup", "--yes", "--no-backup"])
+
+    out = capsys.readouterr().out
+    assert "without --dry-run" not in out
+    skipped = [line for line in out.splitlines() if "Skipped" in line]
+    assert len(skipped) == 2 and all("nothing to bring over" in line for line in skipped)  # preview + result
+    assert "No Discord settings found" not in out
+    report_dirs = list((tmp_path / ".hermes" / "migration" / "openclaw").iterdir())
+    assert "No Discord settings found" in (report_dirs[0] / "report.json").read_text(encoding="utf-8")
+
+
+def test_a_plain_run_previews_without_the_dry_run_hint(tmp_path, capsys):
+    """Only an explicit --dry-run is told how to run for real; a normal run asks right after."""
+    _fixture_openclaw(tmp_path)
+
+    _run(["openclaw", "--yes", "--no-backup"])
+
+    out = capsys.readouterr().out
+    assert "Migration Results" in out and "without --dry-run" not in out
+    assert "No Discord settings found" in out  # outside setup every skipped item is still listed

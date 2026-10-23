@@ -23,28 +23,39 @@ Layout of the argv (later mounts overlay earlier ones):
    network profiles, a read-write operator bind) is bound over itself, so
    a command cannot rename the parent of a hidden path out from under its
    overlay
-6. the sensitive overlays: a tmpfs over each sensitive directory and an
-   empty file over each sensitive file that exists on the host, then the
-   same for HERMES_HOME and for the default HOME/.hermes when HERMES_HOME
-   points elsewhere (a profile under HOME/.hermes/profiles, or any other
-   directory), so a profile's sandbox cannot read the default home's
-   credentials
-7. under terminal.home_mode=profile, HERMES_HOME/home read-write on top of
+6. the HOME layout (bubblewrap_home.home_layout_args), which makes HOME
+   default-deny for dot entries: a tmpfs over HOME, the non-dot entries
+   and the allowed dot entries bound back, a tmpfs with the allowed
+   children for HOME/.config, HOME/.local and HOME/.local/share, an
+   overlay for each hidden path that is still visible, and at the very
+   end a read-only remount of each tmpfs. The cwd, the operator binds and
+   the pins of steps 3 to 5 that land under HOME, and the binds of steps
+   8 to 10 that do, are emitted inside the layout, before the remount: a
+   mount point under a sealed HOME could not be made
+7. the sensitive overlays for hidden paths outside HOME: a tmpfs over a
+   directory and an empty file over a file that exists on the host.
+   HERMES_HOME is hidden as a whole, and so is the default HOME/.hermes
+   when HERMES_HOME points elsewhere (a profile under
+   HOME/.hermes/profiles, or any other directory), so a profile's sandbox
+   cannot read the default home's credentials
+8. the trust-anchor files the overlays hide (CA_BUNDLE_VARS), read-only at
+   their own paths, and the Hermes scratch dir at its own path
+9. under terminal.home_mode=profile, HERMES_HOME/home read-write on top of
    that overlay (it is the subprocess HOME then)
-8. the per-environment state dir read-write at the same path; between
-   commands it holds the shell snapshot and the cwd file, and for the
-   duration of an execute_code call the hermes_exec_<id> dir with the
-   script, the tools module and the rpc files
-9. ``--chdir`` to the tracked cwd, then ``--`` so the caller can append the
-   shell argv
+10. the per-environment state dir read-write at the same path; between
+    commands it holds the shell snapshot and the cwd file, and for the
+    duration of an execute_code call the hermes_exec_<id> dir with the
+    script, the tools module and the rpc files
+11. ``--chdir`` to the tracked cwd, then ``--`` so the caller can append
+    the shell argv
 
-The paths in the argv are fixed at construction: the hidden set is
-resolved through realpath once, so a symlinked entry is hidden at its
-target, and the cwd, state dir and operator bind destinations use their
+The paths in the argv are fixed at construction: the hidden set and the
+HOME allowlist are resolved once, so a symlinked entry is hidden at its
+target and a command cannot widen the allowlist, and the cwd, state dir and operator bind destinations use their
 real paths (bwrap resolves a mount destination inside the sandbox root,
 where an absolute symlink points nowhere), so the pins are computed in
-the real tree of each bind. What varies per spawn is presence only: an
-overlay is emitted for a sensitive path that exists on the host at spawn
+the real tree of each bind. What varies per spawn is presence only: the
+listing of the top of HOME, an overlay is emitted for a sensitive path that exists on the host at spawn
 time and never for one that does not, a pin for an ancestor directory that
 exists inside a bind that is writable anyway, and nothing at all for a
 path that has become a symlink since construction. So host changes (or a
@@ -94,24 +105,13 @@ from tools.environments.local import (
     _resolve_shell_init_files,
 )
 
+from . import home as bubblewrap_home
+
 logger = logging.getLogger(__name__)
 
-# Paths under HOME whose contents must never be visible inside a sandbox
-# and that operator binds may not expose.
-SENSITIVE_HOME_PATHS: tuple[str, ...] = (
-    ".ssh",
-    ".aws",
-    ".gnupg",
-    ".gpg",
-    ".config/gcloud",
-    ".azure",
-    ".docker",
-    ".kube",
-    ".npmrc",
-    ".pypirc",
-    ".netrc",
-    ".env",
-)
+# Credential stores under HOME, relative to it. The set and the rule that
+# hides every other dot entry of HOME by default live in bubblewrap_home.
+SENSITIVE_HOME_PATHS: tuple[str, ...] = bubblewrap_home.DENIED_HOME_PATHS
 
 # The default Hermes home under the real HOME (the Linux default of
 # hermes_constants.get_hermes_home). It joins the hidden set beside the
@@ -148,6 +148,7 @@ SETTING_BINDS = "binds"
 SETTING_MEMORY_MB = "memory_mb"
 SETTING_CPU_SECONDS = "cpu_seconds"
 SETTING_MAX_PROCS = "max_procs"
+SETTING_HOME_ALLOW = "home_allow"
 SETTINGS_PREFIX = "plugins.entries.bubblewrap.settings"
 # terminal.home_mode is a core setting; core bridges it to this env name and
 # hermes_constants.get_subprocess_home reads it. The spellings that
@@ -195,7 +196,7 @@ class BindMount:
 
 @dataclass(frozen=True)
 class BubblewrapConfig:
-    """The terminal.bubblewrap_* settings, with the documented defaults."""
+    """The plugin settings and terminal.home_mode, with the documented defaults."""
 
     profile: str = DEFAULT_PROFILE
     binds: tuple[BindMount, ...] = ()
@@ -205,6 +206,9 @@ class BubblewrapConfig:
     # terminal.home_mode rides along because it decides whether HERMES_HOME/home
     # is the subprocess HOME and so must be bound back over the overlay.
     home_mode: str = DEFAULT_HOME_MODE
+    # The home_allow setting: more allowlist units under HOME
+    # (bubblewrap_home.allow_unit), shown read-only.
+    home_allow: tuple[str, ...] = ()
 
 
 def _setting_name(key: str) -> str:
@@ -234,6 +238,22 @@ def _parse_binds(raw: object) -> tuple[BindMount, ...]:
             raise ValueError(f"{name} 'dest' must be a string, got {dest!r}")
         binds.append(BindMount(src=src, dest=dest, readonly=bool(entry.get("readonly", True))))
     return tuple(binds)
+
+
+def _parse_string_list(key: str, raw: object) -> tuple[str, ...]:
+    """A list of strings, or that list as a JSON string; missing or blank gives the empty tuple."""
+    name = _setting_name(key)
+    if raw is None or raw == "" or raw == []:
+        return ()
+    entries = raw
+    if isinstance(raw, str):
+        try:
+            entries = json.loads(raw)
+        except ValueError:
+            raise ValueError(f"{name} must be a list of strings, got {raw!r}") from None
+    if not isinstance(entries, list) or not all(isinstance(item, str) for item in entries):
+        raise ValueError(f"{name} must be a list of strings, got {raw!r}")
+    return tuple(entries)
 
 
 def _parse_limit(key: str, raw: object, default: int) -> int:
@@ -274,7 +294,13 @@ def load_bubblewrap_config(settings: Mapping[str, object] | None = None, home_mo
         cpu_seconds=_parse_limit(SETTING_CPU_SECONDS, settings.get(SETTING_CPU_SECONDS), DEFAULT_CPU_SECONDS),
         max_procs=_parse_limit(SETTING_MAX_PROCS, settings.get(SETTING_MAX_PROCS), DEFAULT_MAX_PROCS),
         home_mode=(home_mode or "").strip().lower() or DEFAULT_HOME_MODE,
+        home_allow=_parse_string_list(SETTING_HOME_ALLOW, settings.get(SETTING_HOME_ALLOW)),
     )
+
+
+def home_replaced_by_bind(home_root: str, binds: Iterable[BindMount]) -> bool:
+    """True when an operator bind puts another directory over HOME or over a parent of it."""
+    return any(_is_within(home_root, bind.dest) and not _same_host_path(bind.src, bind.dest) for bind in binds)
 
 
 def sensitive_paths(home: str, hermes_home: str) -> tuple[str, ...]:
@@ -295,17 +321,18 @@ def sensitive_paths(home: str, hermes_home: str) -> tuple[str, ...]:
     construction and keeps it for its life. Resolving per spawn would let
     a sandbox that can replace the symlink (HOME in its writable set)
     point the next overlay elsewhere and leave the secret bare.
+
+    The HOME part is bubblewrap_home.denied_home_paths: the module list
+    plus the HOME paths the file safety policy refuses. An entry under
+    another one is dropped as covered by it.
     """
     home = os.path.abspath(os.path.expanduser(home))
-    nominal = [os.path.join(home, rel) for rel in SENSITIVE_HOME_PATHS]
-    nominal.append(os.path.abspath(os.path.expanduser(hermes_home)))
-    nominal.append(os.path.join(home, DEFAULT_HERMES_HOME_NAME))
-    resolved: list[str] = []
-    for path in nominal:
+    resolved = list(bubblewrap_home.denied_home_paths(home))
+    for path in (os.path.abspath(os.path.expanduser(hermes_home)), os.path.join(home, DEFAULT_HERMES_HOME_NAME)):
         real = os.path.realpath(path)
         if real not in resolved:
             resolved.append(real)
-    return tuple(resolved)
+    return tuple(p for p in resolved if not any(p != other and _is_within(p, other) for other in resolved))
 
 
 def empty_file_path(state_dir: str) -> str:
@@ -347,6 +374,10 @@ def sensitive_overlay_args(hidden_paths: Sequence[str], state_dir: str) -> list[
         elif os.path.exists(path):
             argv += ["--ro-bind", empty, path]
     return argv
+
+
+# Marks an argument the caller left out, where None already has a meaning.
+_UNRESOLVED: object = object()
 
 
 DOCKER_SOCKETS: tuple[str, ...] = ("/var/run/docker.sock", "/run/docker.sock")
@@ -578,6 +609,44 @@ def ancestor_pin_args(
     return argv
 
 
+def _late_mounts(
+    config: BubblewrapConfig,
+    profile: Profile,
+    state_dir: str,
+    hermes_home: str,
+    *,
+    scratch_dir: str | None,
+    ca_bundles: Sequence[str],
+) -> list[tuple[str, ...]]:
+    """The mounts that go on top of every overlay, in order: trust anchors, scratch, the profile home, the state dir."""
+    late: list[tuple[str, ...]] = []
+    # Trust anchors the overlays hid come back read-only at their own path
+    # (see CA_BUNDLE_VARS); -try, so a bundle removed from the host between
+    # spawns fails in the tool that opens it, not in bwrap.
+    late += [("--ro-bind-try", bundle, bundle) for bundle in ca_bundles]
+    # The Hermes scratch dir (TMPDIR for every command, and what the system
+    # prompt tells the model to write temporary files to) lives under the
+    # hidden HERMES_HOME. Left hidden, each command's scratch writes land in
+    # that sandbox's private tmpfs and are gone by the next command, with
+    # no error. Bound back at its own path: writable with the cwd, read-only
+    # under the restricted profile so a write fails loudly instead.
+    if scratch_dir:
+        late.append(("--bind-try" if profile.writable_cwd else "--ro-bind-try", scratch_dir, scratch_dir))
+    # Under home_mode=profile the subprocess HOME is HERMES_HOME/home
+    # (hermes_constants.get_subprocess_home), so bind it back read-write on
+    # top of the overlay; the rest of HERMES_HOME stays hidden.
+    if config.home_mode in PROFILE_HOME_MODES:
+        profile_home = os.path.join(os.path.abspath(os.path.expanduser(hermes_home)), "home")
+        if os.path.isdir(profile_home):
+            late.append(("--bind", profile_home, profile_home))
+    # The state dir holds the shell snapshot and the cwd file between
+    # commands (and the execute_code sandbox dir during a call); it is
+    # bound after the overlays so it stays writable at the same path in
+    # every spawn.
+    late.append(("--bind", state_dir, state_dir))
+    return late
+
+
 def build_bwrap_args(
     config: BubblewrapConfig,
     initial_cwd: str,
@@ -588,25 +657,40 @@ def build_bwrap_args(
     *,
     bwrap_path: str = "bwrap",
     hidden_paths: Sequence[str] | None = None,
+    home_root: str | None | object = _UNRESOLVED,
+    home_allow: Sequence[str] | None = None,
     ca_bundles: Sequence[str] | None = None,
     scratch_dir: str | None = None,
 ) -> list[str]:
     """Build the bwrap argv prefix; the caller appends the shell argv after the trailing ``--``.
 
     All arguments are fixed at environment construction except *tracked_cwd*,
-    which only sets ``--chdir``. *hidden_paths*, *ca_bundles* and
-    *scratch_dir* are what BubblewrapEnvironment resolved at construction;
-    when omitted they are resolved from *home*, *hermes_home* and the
-    process environment on this call, which suits tests of the pure builder
-    only.
+    which only sets ``--chdir``. *hidden_paths*, *home_root* (the real HOME
+    the default-deny layout is built over, None for no layout), *home_allow*
+    (the allowlist units), *ca_bundles* and *scratch_dir* are what
+    BubblewrapEnvironment resolved at construction; when omitted they are
+    resolved from *home*, *hermes_home* and the process environment on this
+    call, with no PATH and no operator items, which suits tests of the pure
+    builder only. The listing of the top of HOME is the one input read from
+    the host at each call, so a directory made on the host later shows in
+    the next spawn.
     """
     profile = resolve_profile(config.profile)
     if hidden_paths is None:
         hidden_paths = sensitive_paths(home, hermes_home)
-    if ca_bundles is None:
-        ca_bundles = hidden_ca_bundles(hidden_paths)
+    # Resolved first: get_scratch_dir makes the directory, and with it HOME
+    # when HERMES_HOME lies under a HOME that does not exist yet.
     if scratch_dir is None:
         scratch_dir = resolve_scratch_dir(hermes_home)
+    if home_root is _UNRESOLVED:
+        home_root = bubblewrap_home.resolve_home_root(home)
+    if home_allow is None and home_root is not None:
+        home_allow = bubblewrap_home.resolve_allowlist(
+            home_root, "", (),
+            denied_names=bubblewrap_home.denied_home_names(home_root), denied_paths=tuple(hidden_paths),
+        )
+    if ca_bundles is None:
+        ca_bundles = hidden_ca_bundles(hidden_paths)
 
     argv: list[str] = [
         bwrap_path,
@@ -634,55 +718,88 @@ def build_bwrap_args(
     # from the host, so LocalEnvironment's cwd recovery (a parent dir on
     # the read-only root) keeps commands running instead of every spawn
     # failing on a missing bind source.
-    argv += ["--bind-try" if profile.writable_cwd else "--ro-bind-try", initial_cwd, initial_cwd]
-
     # Dests are emitted as given: BubblewrapEnvironment resolved them at
     # construction, and a realpath here would let a symlink planted under a
     # dest between spawns move the mount.
     binds = filter_binds(config.binds, hidden_paths)
-    for bind in binds:
-        argv += ["--ro-bind" if bind.readonly else "--bind", bind.src, bind.dest]
-
-    # Pin the parents of the hidden paths that sit inside a writable bind
-    # (see ancestor_pin_args) after those binds, so the pins land on top of
-    # them, and before the overlays, so the overlays land on the pins.
+    mounts: list[tuple[str, str, str]] = [
+        ("--bind-try" if profile.writable_cwd else "--ro-bind-try", initial_cwd, initial_cwd),
+    ]
+    mounts += [("--ro-bind" if bind.readonly else "--bind", bind.src, bind.dest) for bind in binds]
     writable = [(initial_cwd, initial_cwd)] if profile.writable_cwd else []
     writable += [(bind.src, bind.dest) for bind in binds if not bind.readonly]
-    argv += ancestor_pin_args(writable, [initial_cwd, *(bind.dest for bind in binds)], hidden_paths)
+    mount_points = [initial_cwd, *(bind.dest for bind in binds)]
 
-    # The overlays come after the cwd, operator binds and pins so a bind of
-    # HOME itself still hides what sits under it, and before the state dir
-    # so that stays reachable under a hidden HERMES_HOME.
-    argv += sensitive_overlay_args(hidden_paths, state_dir)
+    # A bind that puts another directory over HOME (or over a parent of it)
+    # replaces HOME on purpose. The layout would put the host entries back
+    # on top of it, so it stands down and the plain overlays apply.
+    if home_root is not None and home_replaced_by_bind(home_root, binds):  # type: ignore[arg-type]
+        home_root = None
 
-    # Trust anchors the overlays just hid come back read-only at their own
-    # path (see CA_BUNDLE_VARS); -try, so a bundle removed from the host
-    # between spawns fails in the tool that opens it, not in bwrap.
-    for bundle in ca_bundles:
-        argv += ["--ro-bind-try", bundle, bundle]
+    late = _late_mounts(config, profile, state_dir, hermes_home, scratch_dir=scratch_dir, ca_bundles=ca_bundles)
 
-    # The Hermes scratch dir (TMPDIR for every command, and what the system
-    # prompt tells the model to write temporary files to) lives under the
-    # hidden HERMES_HOME. Left hidden, each command's scratch writes land in
-    # that sandbox's private tmpfs and are gone by the next command, with
-    # no error. Bound back at its own path: writable with the cwd, read-only
-    # under the restricted profile so a write fails loudly instead.
-    if scratch_dir:
-        argv += ["--bind-try" if profile.writable_cwd else "--ro-bind-try", scratch_dir, scratch_dir]
+    if home_root is None:
+        for mount in mounts:
+            argv += mount
+        # Pin the parents of the hidden paths that sit inside a writable bind
+        # (see ancestor_pin_args) after those binds, so the pins land on top
+        # of them, and before the overlays, so the overlays land on the pins.
+        argv += ancestor_pin_args(writable, mount_points, hidden_paths)
+        # The overlays come after the cwd, operator binds and pins so a bind
+        # of HOME itself still hides what sits under it, and before the late
+        # mounts so those stay reachable under a hidden HERMES_HOME.
+        argv += sensitive_overlay_args(hidden_paths, state_dir)
+        for mount in late:
+            argv += mount
+    else:
+        root: str = home_root  # type: ignore[assignment]
 
-    # Under home_mode=profile the subprocess HOME is HERMES_HOME/home
-    # (hermes_constants.get_subprocess_home), so bind it back read-write on
-    # top of the overlay; the rest of HERMES_HOME stays hidden.
-    if config.home_mode in PROFILE_HOME_MODES:
-        profile_home = os.path.join(os.path.abspath(os.path.expanduser(hermes_home)), "home")
-        if os.path.isdir(profile_home):
-            argv += ["--bind", profile_home, profile_home]
+        def in_home(path: str) -> bool:
+            return path != root and _is_within(path, root)
 
-    # The state dir holds the shell snapshot and the cwd file between
-    # commands (and the execute_code sandbox dir during a call); it is
-    # bound after the sensitive overlays so it stays writable at the same
-    # path in every spawn.
-    argv += ["--bind", state_dir, state_dir]
+        # Listed once per spawn and shared by the pins and the layout, so
+        # both see the same entries.
+        try:
+            listing = sorted(os.listdir(root))
+        except OSError:
+            listing = []
+        # A writable bind that covers HOME makes the non-dot entries
+        # writable and nothing else under HOME: the dot entries are
+        # read-only or hidden, and the top of HOME is a read-only tmpfs.
+        # So inside HOME the pins are computed against those entries, and
+        # the covering bind itself only pins parents of hidden paths that
+        # lie outside HOME.
+        covering = [pair for pair in writable if _is_within(root, pair[1])]
+        plain = [pair for pair in writable if pair not in covering]
+        hidden_in = [path for path in hidden_paths if in_home(path)]
+        hidden_out = [path for path in hidden_paths if not in_home(path)]
+        pins = ancestor_pin_args(plain, mount_points, hidden_paths)
+        pins += ancestor_pin_args(covering, mount_points, hidden_out)
+        if covering:
+            entries = [os.path.join(root, name) for name in listing if not name.startswith(".")]
+            entries = [path for path in entries if os.path.isdir(path) and not os.path.islink(path)]
+            pins += ancestor_pin_args([(path, path) for path in entries], [*mount_points, *entries], hidden_in)
+        mounts += [(pins[i], pins[i + 1], pins[i + 2]) for i in range(0, len(pins), 3)]
+
+        for mount in mounts:
+            if not in_home(mount[2]):
+                argv += mount
+        argv += bubblewrap_home.home_layout_args(
+            root,
+            tuple(home_allow or ()),
+            hidden_paths,
+            empty_file=empty_file_path(state_dir),
+            writable_roots=[dest for _src, dest in covering],
+            listing=listing,
+            binds=[mount for mount in mounts if in_home(mount[2])],
+            late_args=[token for mount in late if in_home(mount[-1]) for token in mount],
+        )
+        # The overlays for hidden paths outside HOME (a HERMES_HOME kept
+        # elsewhere, a credential directory that is a symlink out of HOME).
+        argv += sensitive_overlay_args(hidden_out, state_dir)
+        for mount in late:
+            if not in_home(mount[-1]):
+                argv += mount
 
     argv += ["--chdir", tracked_cwd, "--"]
     return argv
@@ -893,6 +1010,9 @@ _MOUNT_ARITY: dict[str, int] = {
     "--bind": 2, "--ro-bind": 2, "--bind-try": 2, "--ro-bind-try": 2,
     "--tmpfs": 1, "--dev": 1, "--proc": 1,
 }
+# Directives that take path operands but place no directory tree: their
+# operands are stepped over so they are not read as flags.
+_SKIPPED_ARITY: dict[str, int] = {"--symlink": 2, "--remount-ro": 1}
 
 
 def masked_inside(argv: Sequence[str], path: str) -> bool:
@@ -903,20 +1023,27 @@ def masked_inside(argv: Sequence[str], path: str) -> bool:
     visible (bwrap creates the mount point), a fresh --tmpfs, --dev or
     --proc hides everything below its root, and a bind shows what its
     source holds at the same relative path (the root bind of / shows the
-    host itself). A -try bind whose source is missing is skipped, as bwrap
-    skips it. Reads only the host presence of directories, as the pins do.
+    host itself). A mount below *path* makes *path* exist. A -try bind
+    whose source is missing is skipped, as bwrap skips it. Reads only the
+    host presence of directories, as the pins do.
     """
     visible = True
     i = 0
     while i < len(argv):
         arity = _MOUNT_ARITY.get(argv[i])
         if arity is None:
-            i += 1
+            i += 1 + _SKIPPED_ARITY.get(argv[i], 0)
             continue
         operands = argv[i + 1:i + 1 + arity]
         i += 1 + arity
         dest = operands[-1]
         if dest == path:
+            visible = True
+        elif _is_within(dest, path):
+            # A mount below *path* makes bwrap create every directory on
+            # the way to it, *path* included.
+            if arity == 2 and argv[i - 1 - arity].endswith("-try") and not os.path.exists(operands[0]):
+                continue
             visible = True
         elif _is_within(path, dest):
             if arity == 1:
@@ -989,6 +1116,16 @@ class BubblewrapEnvironment(LocalEnvironment):
         # Resolved once and kept for the life of the environment: the set
         # never follows a symlink swapped in later.
         self._hidden_paths = sensitive_paths(self._home, self._hermes_home)
+        # HOME is default-deny for dot entries. What a sandbox may see is
+        # fixed here too: a command cannot widen it by changing PATH.
+        self._home_root = bubblewrap_home.resolve_home_root(self._home)
+        self._home_allow: tuple[str, ...] = ()
+        if self._home_root is not None:
+            self._home_allow = bubblewrap_home.resolve_allowlist(
+                self._home_root, os.environ.get("PATH", ""), self._config.home_allow,
+                denied_names=bubblewrap_home.denied_home_names(self._home_root),
+                denied_paths=self._hidden_paths,
+            )
         self._ca_bundles = hidden_ca_bundles(self._hidden_paths)
         self._scratch_dir = resolve_scratch_dir(self._hermes_home)
         # The operator binds are filtered, their sources expanded and their
@@ -1108,9 +1245,10 @@ class BubblewrapEnvironment(LocalEnvironment):
         home = os.path.abspath(self._home).rstrip(os.sep) or os.sep
         if cwd == home or _is_within(home, cwd):
             logger.warning(
-                "bubblewrap cwd %s covers the home directory: every dotfile outside "
-                "the hidden set is writable inside the sandbox. Set terminal.cwd to "
-                "a project or scratch directory for a smaller writable set.",
+                "bubblewrap cwd %s covers the home directory: every existing non-dot "
+                "entry of it is writable inside the sandbox, and no new entry can be made "
+                "at the top of it (its dot entries are read-only or hidden). Set "
+                "terminal.cwd to a project or scratch directory for a smaller writable set.",
                 self._initial_cwd,
             )
 
@@ -1269,6 +1407,8 @@ class BubblewrapEnvironment(LocalEnvironment):
             tracked_cwd,
             bwrap_path=self._bwrap_path,
             hidden_paths=self._hidden_paths,
+            home_root=self._home_root,
+            home_allow=self._home_allow,
             ca_bundles=self._ca_bundles,
             scratch_dir=self._scratch_dir,
         )

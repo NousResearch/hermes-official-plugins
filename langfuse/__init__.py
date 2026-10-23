@@ -547,6 +547,8 @@ def _serialize_assistant_message(message: Any) -> dict[str, Any]:
     reasoning = next((getattr(message, attr, None) for attr in ("reasoning", "reasoning_content", "reasoning_details")
                       if getattr(message, attr, None) is not None), None)
     return {
+        # Normalized provider responses may omit role; this hook always represents the assistant.
+        "role": "assistant",
         "content": _capture_content(getattr(message, "content", None)),
         "reasoning": None if reasoning is None else _capture_content(reasoning),
         "tool_calls": [_serialize_tool_call(tc) for tc in getattr(message, "tool_calls", None) or ()],
@@ -963,9 +965,9 @@ def on_post_llm_call(*, task_id: str = "", session_id: str = "", provider: str =
     if assistant_message is not None:
         output = _serialize_assistant_message(assistant_message)
     elif assistant_response is not None:
-        output = {"content": _capture_content(assistant_response), "reasoning": None, "tool_calls": []}
+        output = {"role": "assistant", "content": _capture_content(assistant_response), "reasoning": None, "tool_calls": []}
     else:
-        output = {"content": f"[{assistant_content_chars} chars]" if assistant_content_chars else None, "reasoning": None,
+        output = {"role": "assistant", "content": f"[{assistant_content_chars} chars]" if assistant_content_chars else None, "reasoning": None,
                   "tool_calls": [{"id": f"tc_{i}"} for i in range(assistant_tool_call_count or 0)]}
 
     if output.get("tool_calls"):

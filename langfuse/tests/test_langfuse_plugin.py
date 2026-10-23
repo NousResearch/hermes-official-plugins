@@ -671,6 +671,41 @@ class TestRequestMessageCoercion:
 
 
 class TestAssistantMessageSerialization:
+    @pytest.mark.parametrize("kind", ["text", "tools", "legacy", "summary"])
+    def test_generation_output_is_an_assistant_message(self, monkeypatch, kind):
+        sys.modules.pop("langfuse_plugin", None)
+        mod = importlib.import_module("langfuse_plugin")
+        monkeypatch.setenv("HERMES_LANGFUSE_CAPTURE", "full")
+        monkeypatch.setattr(mod, "_get_langfuse", lambda: object())
+        monkeypatch.setattr(mod, "_finish_trace", lambda *a, **kw: None)
+        captured = {}
+        generation = SimpleNamespace(update=lambda **kw: captured.update(kw), end=lambda: None)
+        state = mod.TraceState(trace_id="trace-1", root_span=None)
+        state.generations[mod._request_key(1)] = generation
+        monkeypatch.setitem(mod._TRACE_STATE, mod._trace_key("task-1", "session-1"), state)
+        calls = [SimpleNamespace(id=f"call-{i}", type="function", function=SimpleNamespace(name=name, arguments="{}"))
+                 for i, name in enumerate(("terminal", "tool_call"))]
+        kwargs = {
+            "text": {"assistant_message": SimpleNamespace(role="assistant", content="answer", reasoning="thought")},
+            # Normalized Responses objects need not carry a role, including tool-only completions.
+            "tools": {"assistant_message": SimpleNamespace(content="", tool_calls=calls)},
+            "legacy": {"assistant_response": "answer"},
+            "summary": {"assistant_content_chars": 6, "assistant_tool_call_count": 1},
+        }[kind]
+
+        mod.on_post_llm_call(task_id="task-1", session_id="session-1", api_call_count=1, **kwargs)
+
+        output = captured["output"]
+        assert output["role"] == "assistant"
+        assert output["content"] == {"text": "answer", "tools": "", "legacy": "answer", "summary": "[6 chars]"}[kind]
+        assert output["reasoning"] == ("thought" if kind == "text" else None)
+        if kind == "tools":
+            assert [(tc["id"], tc["function"]) for tc in output["tool_calls"]] == [
+                (f"call-{i}", {"name": name, "arguments": "{}"}) for i, name in enumerate(("terminal", "tool_call"))]
+            assert all(saved is exported for saved, exported in zip(state.turn_tool_calls, output["tool_calls"], strict=True))
+        else:
+            assert output["tool_calls"] == ([{"id": "tc_0"}] if kind == "summary" else [])
+
     def test_serialize_assistant_message_prefers_reasoning(self):
         sys.modules.pop("langfuse_plugin", None)
         mod = importlib.import_module("langfuse_plugin")
@@ -2269,8 +2304,8 @@ class TestFinishTraceUsesSetTraceIo:
         root = roots[0]
         assert root.ended is True
         assert any("input" in u for u in root.trace_updates)
-        assert any("output" in u for u in root.trace_updates)
-        assert any("output" in u for u in root.updates)
+        assert any(u.get("output", {}).get("role") == "assistant" for u in root.trace_updates)
+        assert any(u.get("output", {}).get("role") == "assistant" for u in root.updates)
         assert mod._TRACE_STATE == {}
 
     def test_finish_still_ends_when_set_trace_io_raises(self, monkeypatch):

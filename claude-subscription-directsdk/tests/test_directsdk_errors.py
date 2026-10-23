@@ -76,3 +76,20 @@ def test_watchdog_kill_classifies_like_a_timeout(profile):
     for other in (RuntimeError('Native request failed: error_during_execution'), InterruptedError('Agent interrupted during API call'),
                   TimeoutError('Claude request timed out'), ValueError('model is required')):
         assert profile.classify_api_error(other) is None
+
+
+def test_missing_or_logged_out_claude_code_fails_closed_without_fallback(profile, tmp_path):
+    from agent.error_classifier import FailoverReason, classify_api_error
+
+    logged_out = _native(tmp_path, 'authentication_failed:Not logged in · Please run /login', profile.create_client)
+    try:
+        with pytest.raises(RuntimeError) as raised:
+            logged_out.create(**REQUEST)
+    finally:
+        logged_out.close()
+    assert type(raised.value).__name__ == 'ClaudeCodeLoggedOut'
+    missing = directsdk.ClaudeCodeMissing(directsdk.INSTALL_HINT)
+    for error in (raised.value, missing):
+        verdict = classify_api_error(error, provider=profile.name, model='sonnet')
+        # Without the hook a 401 reads as rotate-and-fall-back and a 503 as a server error that falls back.
+        assert (verdict.reason, verdict.retryable, verdict.should_fallback) == (FailoverReason.auth_permanent, False, False)

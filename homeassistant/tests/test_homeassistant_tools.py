@@ -9,6 +9,7 @@ Moved from hermes-agent core ``tests/tools/test_homeassistant_tool.py``.
 import asyncio
 import json
 import logging
+from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 import aiohttp
@@ -1128,3 +1129,165 @@ class TestRegistryHardening:
         assert pull.await_count == 0
         json.loads(ha_tool._handle_list_entities({"area": "kitchen"}))
         assert pull.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Local-time twins for the timestamps HA answers in UTC (#155)
+# ---------------------------------------------------------------------------
+
+
+UTC_STAMP = "2026-10-22T01:42:27.349875+00:00"
+
+
+def _state_payload(**overrides):
+    payload = {
+        "entity_id": "sensor.front_door",
+        "state": "off",
+        "attributes": {"friendly_name": "Front Door"},
+        "last_changed": UTC_STAMP,
+        "last_updated": UTC_STAMP,
+    }
+    payload.update(overrides)
+    return payload
+
+
+class TestLocalTimestampTwins:
+    """HA answers in UTC; the response also carries the local time, so the agent never converts."""
+
+    def _read(self, monkeypatch, state, config=None, calls=None):
+        async def fake_api_json(method, path, timeout, payload=None):
+            if calls is not None:
+                calls.append(path)
+            if path == "/api/config":
+                return config if config is not None else {"time_zone": "Europe/Berlin"}
+            if path.startswith("/api/states/"):
+                return state
+            raise AssertionError(f"unexpected request {method} {path}")
+
+        monkeypatch.setattr(ha_tool, "_api_json", fake_api_json)
+        monkeypatch.setattr(ha_tool, "_HASS_TIMEZONE", "")
+        monkeypatch.setattr(ha_tool, "_TZ_CACHE", {"ts": 0.0, "name": ""})
+        monkeypatch.setenv("HASS_TIMEZONE", "")
+        return asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+
+    def test_the_local_twin_is_the_instance_timezone(self, monkeypatch):
+        result = self._read(monkeypatch, _state_payload())
+        # 01:42 UTC in Berlin (UTC+2 in October) is 03:42 local.
+        assert result["last_changed_local"] == "2026-10-22T03:42:27.349875+02:00"
+        assert result["last_updated_local"] == "2026-10-22T03:42:27.349875+02:00"
+
+    def test_the_utc_value_is_kept_as_it_is(self, monkeypatch):
+        result = self._read(monkeypatch, _state_payload())
+        assert result["last_changed"] == UTC_STAMP
+        assert result["last_updated"] == UTC_STAMP
+
+    def test_an_automation_trigger_gets_its_local_twin(self, monkeypatch):
+        payload = _state_payload(attributes={
+            "friendly_name": "Front Door",
+            "last_triggered": UTC_STAMP,
+        })
+        result = self._read(monkeypatch, payload)
+        assert result["attributes"]["last_triggered_local"] == "2026-10-22T03:42:27.349875+02:00"
+        assert result["attributes"]["last_triggered"] == UTC_STAMP
+
+    def test_the_operator_override_wins(self, monkeypatch):
+        async def fake_api_json(method, path, timeout, payload=None):
+            if path == "/api/config":
+                return {"time_zone": "Europe/Berlin"}
+            if path.startswith("/api/states/"):
+                return _state_payload()
+            raise AssertionError(f"unexpected request {method} {path}")
+
+        monkeypatch.setattr(ha_tool, "_api_json", fake_api_json)
+        monkeypatch.setattr(ha_tool, "_HASS_TIMEZONE", "America/Los_Angeles")
+        monkeypatch.setattr(ha_tool, "_TZ_CACHE", {"ts": 0.0, "name": ""})
+        result = asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        assert result["last_changed_local"] == "2026-10-21T18:42:27.349875-07:00"
+
+    def test_an_unreadable_timestamp_is_left_alone(self, monkeypatch):
+        result = self._read(monkeypatch, _state_payload(last_changed="not a timestamp"))
+        assert result["last_changed"] == "not a timestamp"
+        assert "last_changed_local" not in result
+        assert result["last_updated_local"] == "2026-10-22T03:42:27.349875+02:00"
+
+    def test_the_instance_zone_is_read_once(self, monkeypatch):
+        calls = []
+
+        async def fake_api_json(method, path, timeout, payload=None):
+            calls.append(path)
+            if path == "/api/config":
+                return {"time_zone": "Europe/Berlin"}
+            if path.startswith("/api/states/"):
+                return _state_payload()
+            raise AssertionError(f"unexpected request {method} {path}")
+
+        monkeypatch.setattr(ha_tool, "_api_json", fake_api_json)
+        monkeypatch.setattr(ha_tool, "_HASS_TIMEZONE", "")
+        monkeypatch.setattr(ha_tool, "_TZ_CACHE", {"ts": 0.0, "name": ""})
+        asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        assert calls.count("/api/config") == 1  # cached for an hour
+
+    def test_an_instance_without_a_zone_falls_back_to_the_machine(self, monkeypatch):
+        result = self._read(monkeypatch, _state_payload(), config={"version": "2026.9.2"})
+        # The machine's own zone: the twin is exactly that rendering of the same instant (which is
+        # the UTC value on a UTC machine - the field stays correct, it is just not a different one).
+        local = result["last_changed_local"]
+        assert local
+        assert local == datetime.fromisoformat(UTC_STAMP).astimezone().isoformat()
+
+    def test_the_zone_is_not_shared_between_instances(self, monkeypatch):
+        """Two profiles pointing at different Home Assistants must not see each other's zone."""
+        zones = {"http://ha-one.local:8123": "Europe/Berlin", "http://ha-two.local:8123": "America/Los_Angeles"}
+        current = {"url": "http://ha-one.local:8123"}
+
+        async def fake_api_json(method, path, timeout, payload=None):
+            if path == "/api/config":
+                return {"time_zone": zones[current["url"]]}
+            if path.startswith("/api/states/"):
+                return _state_payload()
+            raise AssertionError(f"unexpected request {method} {path}")
+
+        monkeypatch.setattr(ha_tool, "_api_json", fake_api_json)
+        monkeypatch.setattr(ha_tool, "_HASS_TIMEZONE", "")
+        monkeypatch.setattr(ha_tool, "_TZ_CACHE", {"ts": 0.0, "name": "", "url": ""})
+        monkeypatch.setattr(ha_tool, "_get_config", lambda: (current["url"], "tok"))
+
+        first = asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        assert first["last_changed_local"] == "2026-10-22T03:42:27.349875+02:00"
+
+        # The other instance: its own zone, not the one cached for the first.
+        current["url"] = "http://ha-two.local:8123"
+        second = asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        assert second["last_changed_local"] == "2026-10-21T18:42:27.349875-07:00"
+
+    def test_an_unresolvable_zone_still_gives_a_local_time(self, monkeypatch):
+        """A zone this Python cannot resolve (no IANA database) must not lose the local twin."""
+        monkeypatch.setattr(ha_tool, "_HASS_TIMEZONE", "Not/AZone")
+        monkeypatch.setattr(ha_tool, "_TZ_CACHE", {"ts": 0.0, "name": ""})
+
+        async def fake_api_json(method, path, timeout, payload=None):
+            if path.startswith("/api/states/"):
+                return _state_payload()
+            raise AssertionError(f"unexpected request {method} {path}")
+
+        monkeypatch.setattr(ha_tool, "_api_json", fake_api_json)
+        result = asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        local = result["last_changed_local"]
+        assert local
+        assert local == datetime.fromisoformat(UTC_STAMP).astimezone().isoformat()
+
+    def test_a_failing_config_read_does_not_fail_the_state_read(self, monkeypatch):
+        async def fake_api_json(method, path, timeout, payload=None):
+            if path == "/api/config":
+                raise RuntimeError("boom")
+            if path.startswith("/api/states/"):
+                return _state_payload()
+            raise AssertionError(f"unexpected request {method} {path}")
+
+        monkeypatch.setattr(ha_tool, "_api_json", fake_api_json)
+        monkeypatch.setattr(ha_tool, "_HASS_TIMEZONE", "")
+        monkeypatch.setattr(ha_tool, "_TZ_CACHE", {"ts": 0.0, "name": ""})
+        result = asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        assert result["entity_id"] == "sensor.front_door"
+        assert result["last_changed"] == UTC_STAMP

@@ -20,8 +20,10 @@ id, endpoint and key never become tool parameters, so the agent cannot invent a 
 
 > [!IMPORTANT]
 > Needs Hermes 0.22.5 or newer, the first release with pluggable delegation providers
-> (`ctx.register_delegation_provider`). The plugin catalog listing requires it; installed on an
-> older core some other way, the plugin loads but does nothing (it logs one warning).
+> (`ctx.register_delegation_provider`). The plugin's manifest declares `requires_hermes: ">=0.22.5"`,
+> so Hermes 0.22.0 to 0.22.4 refuses to install or enable it (`requires hermes >=0.22.5, running
+> <version>`) and skips a copy that is already installed. Cores older than 0.22.0 ignore that field;
+> there the plugin loads but does nothing (it logs one warning).
 
 ## How it works
 

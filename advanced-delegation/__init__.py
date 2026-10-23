@@ -6,9 +6,10 @@
 Plus ``hermes delegation config`` (``cli.py``) to pick the mode and edit its routes, and the
 ``/delegation`` slash command (``slash.py``) to switch modes in a chat.
 
-The bundled ``default`` backend stays in Hermes core. This module only registers; on a Hermes core
-that predates pluggable delegation providers it logs one warning and registers nothing, so
-installing it there changes nothing.
+The bundled ``default`` backend stays in Hermes core. This module only registers. ``plugin.yaml``
+declares ``requires_hermes: ">=0.22.5"``, which Hermes 0.22.0+ enforces before import; older cores
+ignore that field, so on a core without pluggable delegation providers ``register`` logs one warning
+and registers nothing.
 """
 
 from __future__ import annotations

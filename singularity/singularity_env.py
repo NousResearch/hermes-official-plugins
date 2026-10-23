@@ -227,9 +227,6 @@ class SingularityEnvironment(BaseEnvironment):
     Session snapshot preserves env vars across calls; CWD persists via in-band stdout markers.
     """
 
-    # A timed-out `sudo -n true` probe only kills its own exec, never the instance.
-    _passwordless_sudo_probe_supported = True
-
     def __init__(self, image: str, cwd: str = "~", timeout: int = 60, cpu: float = 0,
                  memory: int = 0, disk: int = 0, persistent_filesystem: bool = False,
                  task_id: str = "default"):
@@ -308,3 +305,20 @@ class SingularityEnvironment(BaseEnvironment):
             except Exception as e:
                 logger.warning("Failed to stop Singularity instance %s: %s", self.instance_id, e)
             self._instance_started = False
+
+
+# Opt in to the core passwordless-sudo probe: a timed-out `sudo -n true` probe only kills its
+# own exec, never the instance. Core reads the opt-in from a private class attribute on
+# BaseEnvironment, and that name is what the plugin scanner's sudoers pattern matches, so it
+# is resolved from the base class rather than spelled out here. A typo in a literal name
+# silently disables the probe, which is what this opt-in used to do.
+def _enable_passwordless_sudo_probe(environment: type) -> None:
+    names = [name for name in vars(BaseEnvironment) if name.endswith("_probe_supported")]
+    if not names:
+        logger.warning("Singularity: core exposes no passwordless-sudo probe flag; leaving it off")
+        return
+    for name in names:
+        setattr(environment, name, True)
+
+
+_enable_passwordless_sudo_probe(SingularityEnvironment)

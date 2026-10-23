@@ -269,6 +269,12 @@ writable mount.
 A source may be a directory, a file, a Unix socket (a service or agent socket you choose to share), a
 FIFO or a device node.
 
+A read-write bind (or a writable working directory) that contains a credential path which does not
+exist on the host is refused when the backend starts: the backend hides a credential path by mounting
+over it, a path that is not there cannot be mounted over, and a command could then create it. A
+read-write bind of all of `~/.config` is refused while `~/.config/gh` does not exist. Bind the one
+directory a tool writes to instead (`~/.cache/pip`, `~/.cargo/registry`), at its own path.
+
 A bind whose source lies inside the working directory of a sandbox of this profile, inside another
 read-write bind or inside the profile home is refused, and the backend does not start, unless it has
 `dest` equal to `src` and sits directly under that directory with no symlink on the way: bwrap

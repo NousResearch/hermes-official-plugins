@@ -1390,6 +1390,7 @@ class BubblewrapEnvironment(LocalEnvironment):
                 **own,
             }
             self._check_bind_sources()
+            self._check_absent_denied_paths()
             sandbox_root = os.path.realpath(get_sandbox_dir())
             self._check_sandbox_root(sandbox_root)
             self._validate_host_binds(sandbox_root)
@@ -1775,6 +1776,50 @@ class BubblewrapEnvironment(LocalEnvironment):
                 "way: bound at its own path the source is a mount point, which no "
                 "command can rename or move from any path; or make it read-only."
             )
+
+    def _check_absent_denied_paths(self) -> None:
+        """Refuse a writable bind under which a command could create a credential path.
+
+        A denied path that exists gets an overlay. One that does not exist
+        cannot be mounted over, and a placeholder made for it would land on
+        the host through the same writable bind. The top of HOME and the
+        default-deny directories are read-only tmpfs layers, so a name
+        there cannot be created whatever the cwd is. That leaves a denied
+        path inside a directory the sandbox may write to: the cwd under a
+        writable profile, or a read-write operator bind. A command there
+        could create ~/.config/gh or a token file and the host would use
+        it later, so the environment does not start.
+        """
+        root = self._home_root
+        if root is None:
+            return
+        writable: list[tuple[str, str]] = []
+        if resolve_profile(self._config.profile).writable_cwd:
+            writable.append(("terminal.cwd", self._initial_cwd))
+        writable += [
+            (f"the {_setting_name(SETTING_BINDS)} entry {bind.src}", bind.dest)
+            for bind in self._config.binds if not bind.readonly
+        ]
+        homes = hermes_homes(self._home, self._hermes_home)
+        for label, bound in writable:
+            # The hidden set without the Hermes homes: the credential stores of
+            # HOME and any path the operator hides.
+            for path in (p for p in self._hidden_paths if p not in homes):
+                if path == bound or not _is_within(path, bound) or os.path.lexists(path):
+                    continue
+                if _is_within(root, bound) and _is_within(path, root):
+                    # The bind covers HOME. Under HOME only an existing
+                    # non-dot entry is writable through it.
+                    top = os.path.relpath(path, root).split(os.sep)
+                    if len(top) == 1 or top[0].startswith(".") or not os.path.isdir(os.path.join(root, top[0])):
+                        continue
+                raise ValueError(
+                    f"{label} makes {bound} writable inside the bubblewrap sandbox, and the "
+                    f"credential path {path} does not exist on the host, so the backend cannot "
+                    "hide it and a command could create it. Narrow the bind to the "
+                    "subdirectory you need (for a cache, that one cache directory), or use "
+                    "a project directory as terminal.cwd."
+                )
 
     def _check_sandbox_root(self, sandbox_root: str) -> None:
         """Refuse a sandbox dir a sandbox could write to.

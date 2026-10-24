@@ -66,6 +66,10 @@ export CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR=/path/to/official-cli-config
 
 An inherited `CLAUDE_CONFIG_DIR` also works; the per-profile `claude_config_dir` setting takes precedence over both environment directories. To select an executable outside PATH, set `CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND` to its absolute path. There is no unrestricted public CLI-flags setting; isolation and denial flags are plugin-owned. The low-level Python `Client(env=...)` injection is available for explicitly controlled local fixtures and does not apply the inherited-environment guard. It is not the normal Hermes provider path or an OAuth certification mechanism.
 
+A request without tools starts no inert MCP helper: the helper's interpreter start (~0.6 s) and its
+handshake are skipped for titles, summaries and other tool-less calls, where a fixed per-call spawn
+cost hurts most (#42).
+
 **Supervised gateways (launchd, systemd, containers, cron):** Claude Code's local login check reads the process identity — without `USER` in its environment a logged-in CLI reports `loggedIn: false`, instantly and with no upstream request. The plugin derives `USER`/`LOGNAME` (`USERNAME` on Windows) from the parent process or the running uid before every spawn, so a filtered gateway environment no longer surfaces as a false `ClaudeCodeLoggedOut`. When a logged-out error does fire, it now carries native's first stderr lines, which makes a gateway-only failure diagnosable instead of silent (#44).
 
 Persistent configuration:

@@ -7,6 +7,10 @@
 - Mythos 5.1 (`claude-mythos-5-1[1m]`, 1M) for organizations Anthropic has verified. It is listed only when the account's own picker offers it, never from the pinned catalog, so accounts without access do not see it. Reasoning-off requests ask for the lowest effort instead of a disable Mythos rejects.
 - Per-profile `claude_config_dir` setting selects the Claude login for every native spawn in a multiplexed gateway (#34).
 
+### Changed
+
+- A tool-less request no longer starts the inert MCP helper or writes its manifest: titles, summaries and other tool-less calls skip ~0.6 s of Python start plus one server handshake per call (#42).
+
 ### Fixed
 
 - Preserve the upstream request ID in incomplete-response errors, including an HTTP 200 stream cut short by EOF or a connection reset. Only a bounded, validated ID is added to the error text and metadata, without enabling debug logging or changing retry admission.

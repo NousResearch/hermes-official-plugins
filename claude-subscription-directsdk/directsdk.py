@@ -446,7 +446,8 @@ def _fast_eligible(result, admission, stopped, native_error):
             and admission.capture.message.get('stop_reason') != 'refusal'
             and ((result.get('subtype') == 'success' and not result.get('is_error'))
                  or (result.get('subtype') == 'error_max_turns' and any(
-                     b.get('type') == 'tool_use' for b in admission.capture.message['content']))))
+                     b.get('type') == 'tool_use' for b in admission.capture.message['content'])
+                     or bool(admission.capture.unparsed))))
 
 
 def _hand_off(process, admission, reader, err_drain):
@@ -1000,7 +1001,11 @@ class Client:
                         name = block['name'].removeprefix(PREFIX)
                         name = hermes_names.get(name, name)
                         calls.append({'id': block['id'], 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(block['input'], separators=(',', ':'), allow_nan=False)}})
-                boundary = bool(calls) and final.get('subtype') == 'error_max_turns' and (fast or proc_returncode == 1)
+                # Native keeps a call it cannot parse and answers it locally with a parse error, which sets a
+                # follow-up turn --max-turns 1 stops (error_max_turns, exit 1). Whole-dropped calls must behave
+                # like kept ones (#164), so the turn still returns Hermes' finish length.
+                turn_with_calls = bool(calls) or bool(admission.capture.unparsed)
+                boundary = turn_with_calls and final.get('subtype') == 'error_max_turns' and (fast or proc_returncode == 1)
                 if not boundary and not native_failure_handled and ((not fast and proc_returncode != 0) or final.get('is_error') or final.get('subtype') != 'success'):
                     raise RuntimeError('Native request failed: ' + str(final.get('subtype')) + _stderr_tail(native_stderr))
                 usage = assistants[0]['usage'] if admission.used else final.get('usage')

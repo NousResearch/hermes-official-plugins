@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- A tool call cut off at `max_tokens` reaches Hermes with the answer's text and finish `length` on the per-call path too: native keeps the unparsable call and answers it locally with a parse error, which a `--max-turns 1` spawn surfaces as `error_max_turns` with exit 1, and the step raised instead of returning the text it already had (#164).
 - Claude's reasoning reaches Hermes again: adaptive-thinking requests ask for `thinking.display: "summarized"`, as core's Anthropic adapter does. Claude 4.7 and later default the display to omitted, which returned signed but empty thinking blocks and left the reasoning panel blank (#45, thanks @mister-ideas). A turn of thinking alone, with no text and no tool call, still reaches Hermes without reasoning, so Hermes nudges the model on instead of taking the thinking as the final answer and ending the tool loop (thanks @100yenadmin, @shaggy2626).
 - Long tool calls are no longer cancelled as stalls: the relay asks the API to stream each tool's arguments as they are written (`eager_input_streaming`). Native enables that only for a first-party base URL, so behind the relay a whole-file `write_file` argument arrived in one burst after minutes of silence (live: 89.8 s with no chunk on Opus 5.5) and Hermes' stall timer killed the healthy call.
 - Report `Claude request cancelled` when a request is cancelled while native acknowledges replayed history, and include native's exit code and stderr when native exits before that acknowledgment (#122, thanks @Eros-H).

@@ -32,7 +32,7 @@ async def _direct(func, *args, **kwargs):
     return func(*args, **kwargs)
 
 
-@pytest.mark.parametrize("name", ["door_knock.mp3", "theme.wav"])
+@pytest.mark.parametrize("name", ["door_knock.mp3", "theme.wav", "ambient.ogg", "loop.opus"])
 def test_plain_audio_media_is_a_named_file_not_a_transcoded_voice_note(tmp_path, name):
     adapter, sent = _recording_adapter()
     path = tmp_path / name
@@ -48,3 +48,21 @@ def test_plain_audio_media_is_a_named_file_not_a_transcoded_voice_note(tmp_path,
     assert result.success
     assert sent["uploads"] == [("stream", name)]
     assert sent["messages"] == ["file"]
+
+
+def test_voice_intent_ogg_stays_a_native_audio_message(tmp_path):
+    adapter, sent = _recording_adapter()
+    path = tmp_path / "reply.ogg"
+    # a well-formed two-page Ogg stream: Feishu probes its granule for the voice duration
+    head = b"OpusHead" + bytes([1, 1]) + (312).to_bytes(2, "little") + (48000).to_bytes(4, "little") + b"\x00" * 3
+    path.write_bytes(b"".join(
+        b"OggS" + bytes([0, kind]) + granule.to_bytes(8, "little") + b"\x01\x00\x00\x00" + seq.to_bytes(4, "little")
+        + b"\x00" * 4 + bytes([1, len(packet)]) + packet
+        for kind, granule, seq, packet in ((2, 0, 0, head), (4, 96312, 1, b"\xfc" * 8))))
+
+    with patch("plugins.platforms.feishu.adapter.asyncio.to_thread", side_effect=_direct):
+        result = asyncio.run(adapter.send_voice("oc_chat", str(path)))
+
+    assert result.success
+    assert sent["uploads"] == [("opus", "reply.ogg")]
+    assert sent["messages"] == ["audio"]

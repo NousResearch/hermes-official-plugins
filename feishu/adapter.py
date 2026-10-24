@@ -4062,9 +4062,10 @@ class FeishuAdapter(BasePlatformAdapter):
 
     @staticmethod
     def _resolve_outbound_file_routing(*, file_path: str, requested_message_type: str) -> tuple[str, str]:
-        # requested_message_type is accepted for call-site symmetry; routing is by extension only.
+        # Opus only becomes an ``audio`` message (Lark's in-app voice recording) when the caller asked
+        # for one (send_voice with voice intent); a document/plain-audio send of an .ogg stays a file.
         ext = Path(file_path).suffix.lower()
-        if ext in _FEISHU_OPUS_UPLOAD_EXTENSIONS:
+        if ext in _FEISHU_OPUS_UPLOAD_EXTENSIONS and requested_message_type == "audio":
             return "opus", "audio"
         if ext in _FEISHU_MEDIA_UPLOAD_EXTENSIONS:
             return "mp4", "media"

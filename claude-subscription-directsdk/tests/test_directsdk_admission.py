@@ -576,3 +576,47 @@ def test_abort_wakes_a_real_getresponse_blocked_on_a_silent_upstream(monkeypatch
         listener.close()
         if reader is not None:
             reader.join(5)
+
+def test_an_explicit_gateway_upstream_wins_over_an_inherited_base_url(tmp_path):
+    """#46: an organizational gateway is selected by name; the inherited ANTHROPIC_BASE_URL (which
+    is otherwise refused as a conflict) must not be used even when it is set."""
+    calls = []
+    usage = {'input_tokens': 0, 'output_tokens': 0}
+    class Peer(BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def do_POST(self):
+            calls.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+            self.send_response(200); self.send_header('Content-Type','text/event-stream'); self.end_headers()
+            events = [
+                {'type':'message_start','message':{'id':'first','role':'assistant','model':'sonnet','content':[], 'usage':usage}},
+                {'type':'content_block_start','index':0,'content_block':{'type':'text','text':''}},
+                {'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':'FIRST'}},
+                {'type':'content_block_stop','index':0},
+                {'type':'message_delta','delta':{'stop_reason':'end_turn'},'usage':usage},
+                {'type':'message_stop'},
+            ]
+            self.wfile.write(''.join('data: '+json.dumps(e)+'\n\n' for e in events).encode())
+    peer=ThreadingHTTPServer(('127.0.0.1',0),Peer)
+    thread=threading.Thread(target=peer.serve_forever,daemon=True); thread.start()
+    native=tmp_path/'native.py'; native.write_text(NATIVE)
+    env={'PATH':os.defpath,'HOME':str(tmp_path),'ANTHROPIC_BASE_URL':'https://dead.invalid',
+         'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM':f'http://127.0.0.1:{peer.server_port}'}
+    client=directsdk.Client(command=[sys.executable,str(native)],env=env)
+    try:
+        result=client.create(model='sonnet',messages=[{'role':'user','content':'fixture'}])
+        assert len(calls)==1 and result.choices[0].message.content=='FIRST'
+    finally:
+        client.close(); peer.shutdown(); thread.join(timeout=3); peer.server_close()
+
+
+def test_an_unusable_gateway_upstream_is_refused_upfront(tmp_path):
+    """http is only accepted for loopback fixtures; a plain-http org gateway must say so at spawn."""
+    native=tmp_path/'native.py'; native.write_text(NATIVE)
+    env={'PATH':os.defpath,'HOME':str(tmp_path),
+         'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM':'http://gateway.example.internal'}
+    client=directsdk.Client(command=[sys.executable,str(native)],env=env)
+    try:
+        with pytest.raises(ValueError, match='Native upstream must be HTTPS'):
+            client.create(model='sonnet',messages=[{'role':'user','content':'fixture'}])
+    finally:
+        client.close()

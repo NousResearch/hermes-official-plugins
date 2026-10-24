@@ -804,8 +804,14 @@ class Client:
                 apply_traffic_policy(env)
                 # Hermes owns budgets; native's replayed reminder invalidates cached history.
                 env['CLAUDE_CODE_TOTAL_TOKENS_REMINDER'] = 'off'
+                # The direct upstream is Anthropic unless an explicit organizational gateway is named.
+                # A plain inherited ANTHROPIC_BASE_URL stays a conflict (it may belong to something else);
+                # this opt-in is the supported way to route the relay through a trusted gateway (#46).
+                upstream = (env.get('CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM')
+                            or (None if self.env is None else env.get('ANTHROPIC_BASE_URL'))
+                            or 'https://api.anthropic.com')
                 # The queried frame lets the relay keep the cache breakpoint off native's per-request context.
-                request.admission = Admission(env.get('ANTHROPIC_BASE_URL', 'https://api.anthropic.com'), timeout, queried=frames[-1]['message']['content'])
+                request.admission = Admission(upstream, timeout, queried=frames[-1]['message']['content'])
                 # A Hermes auxiliary one-shot (summary, title: marked by the profile hook, one turn, no tools) is
                 # never replayed, so the relay drops its message cache marks instead of moving them.
                 request.admission.one_shot = kwargs.get('hermes_auxiliary') is True and not manifest and len(frames) == 1

@@ -12,7 +12,7 @@ import sys
 import pytest
 
 from test_directsdk import FAKE
-from test_directsdk_telemetry import CAPTURE, _captured, _discovery_envs
+from test_directsdk_telemetry import CAPTURE, _captured, _discovery_envs, _turn_env
 
 CREDENTIALS = {
     "ANTHROPIC_API_KEY": "sk-ant-api-test",
@@ -47,3 +47,9 @@ def test_an_inherited_api_credential_never_reaches_the_child(profile, tmp_path, 
     for env in envs:
         leaked = sorted(k for k in CREDENTIALS if k in env)
         assert leaked == [], f"API credential reached the child: {leaked}"
+
+
+def test_an_explicit_env_keeps_its_api_credential(profile, tmp_path):
+    """`Client(env=...)` is a controlled fixture (the offline evals log native in with a fixture key)."""
+    env = _turn_env(profile, tmp_path, **CREDENTIALS)
+    assert {k: env.get(k) for k in CREDENTIALS} == CREDENTIALS

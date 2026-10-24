@@ -789,8 +789,10 @@ class Client:
                 root = Path(tmp)
                 (root / 'tools.json').write_text(json.dumps(manifest), encoding='utf-8')
                 mcp = {'mcpServers': {'hermes': {'command': sys.executable, 'args': [str(Path(__file__).with_name('inert_mcp.py')), str(root / 'tools.json')]}}}
-                env = drop_api_credentials(_with_login_identity(_with_windows_essentials(dict(self.env if self.env is not None else os.environ))))
+                env = _with_login_identity(_with_windows_essentials(dict(self.env if self.env is not None else os.environ)))
                 if self.env is None:
+                    # Explicit env= is a controlled fixture and keeps its login; only Hermes' own env is filtered.
+                    drop_api_credentials(env)
                     conflicts = [key for key in ('ANTHROPIC_BASE_URL',) if env.get(key)]
                     conflicts += [key for key in ('CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY') if env.get(key, '').lower() not in ('', '0', 'false', 'no', 'off')]
                     if conflicts:

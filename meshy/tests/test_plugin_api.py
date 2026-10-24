@@ -7,6 +7,7 @@ every refusal below must happen BEFORE the router reaches Meshy, so any urlopen 
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import urllib.error
@@ -34,12 +35,18 @@ def api(tmp_path, monkeypatch):
         raise AssertionError("network call reached before input validation")
 
     monkeypatch.setattr(urllib.request, "urlopen", tripwire)
+    monkeypatch.setattr(urllib.request, "build_opener", tripwire)  # the router's own opener (redirect guard)
     spec = importlib.util.spec_from_file_location("meshy_plugin_api_under_test", _SRC)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     mod.tmp = tmp_path
     mod.data = data
     return mod
+
+
+class _Resp(io.BytesIO):
+    """An asset response as the router reads it: a body and its headers."""
+    headers: dict = {}
 
 
 def _status(fn, *args, **kwargs) -> int:
@@ -104,7 +111,7 @@ def test_asset_failures_never_claim_the_api_key_was_rejected(api, monkeypatch, s
     def fail(*_args, **_kwargs):
         raise urllib.error.HTTPError(url, status, "asset error", {}, None)
 
-    monkeypatch.setattr(urllib.request, "urlopen", fail)
+    monkeypatch.setattr(api, "_open", fail)
     with pytest.raises(HTTPException) as err:
         if operation == "preview":
             api.remote(url)
@@ -114,7 +121,7 @@ def test_asset_failures_never_claim_the_api_key_was_rejected(api, monkeypatch, s
     assert err.value.status_code == (410 if status in (401, 403, 404, 410) else 502)
     if status == 403:
         # API authentication remains a different failure from a denied CDN signature.
-        assert "API key" in api._meshy_error(urllib.error.HTTPError(url, status, "", {}, None)).detail
+        assert "API key" in api._meshy_error(urllib.error.HTTPError(url, 401, "", {}, None)).detail
 
 
 def test_gallery_includes_image_sets_expiry_and_local_fallback(api, monkeypatch):
@@ -352,10 +359,12 @@ def test_image_download_rejects_missing_outputs_and_foreign_hosts_before_writing
 
 
 def test_image_lookup_uses_image_endpoint_response(api, monkeypatch):
+    """A generic route answers reshaped (no images); the record's own route has them."""
     monkeypatch.setattr(api, "_api_key", lambda: "offline-test-key")
     def get(path, *_a, **_k):
-        assert path.startswith("/openapi/v1/text-to-image/")
-        return {"id": _TASK, "image_urls": ["https://assets.meshy.ai/a.png"]}
+        if path.startswith("/openapi/v1/text-to-image/"):
+            return {"id": _TASK, "type": "text-to-image", "image_urls": ["https://assets.meshy.ai/a.png"]}
+        return {"id": _TASK, "type": "text-to-image"}
     monkeypatch.setattr(api, "_meshy_get", get)
     monkeypatch.setattr(api, "_download", lambda _url, dest: dest.write_bytes(b"image"))
     assert len(api.save_images({"task": _TASK})["paths"]) == 1
@@ -363,7 +372,6 @@ def test_image_lookup_uses_image_endpoint_response(api, monkeypatch):
 
 
 def test_image_download_ignores_preexisting_temporary_symlinks(api, monkeypatch):
-    import io
     monkeypatch.setattr(api, "_api_key", lambda: "offline-test-key")
     monkeypatch.setattr(api, "_task", lambda *_a, **_k: {"image_urls": ["https://assets.meshy.ai/a.png"]})
     folder = api._saved_assets_root() / _TASK
@@ -375,7 +383,7 @@ def test_image_download_ignores_preexisting_temporary_symlinks(api, monkeypatch)
         (folder / "images.json.part").symlink_to(victim)
     except OSError:
         pytest.skip("symlinks unavailable")
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *_a, **_k: io.BytesIO(b"image"))
+    monkeypatch.setattr(api, "_open", lambda *_a, **_k: _Resp(b"image"))
     saved = api.save_images({"task": _TASK})
     assert victim.read_text() == "unchanged"
     assert Path(saved["paths"][0]).read_bytes() == b"image"
@@ -420,22 +428,22 @@ def test_parallel_writes_keep_every_record_and_tasks_get_their_own_folder(api):
 
 def _fake_assets(monkeypatch, api, files: dict[str, bytes | int], delay: float = 0.0) -> dict[str, int]:
     """Serve ``https://assets.meshy.ai/<name>`` from ``files`` (an int = that HTTP error); count each fetch."""
-    import io
     import threading
     import time
     hits: dict[str, int] = {}
     lock = threading.Lock()
 
-    def urlopen(url, timeout=None):
+    def urlopen(url, timeout=None, allowed=None):
+        assert allowed(url)
         name = str(url).rsplit("/", 1)[-1]
         with lock:
             hits[name] = hits.get(name, 0) + 1
         time.sleep(delay)  # long enough for a second request to overlap the first
         if isinstance(files[name], int):
             raise urllib.error.HTTPError(str(url), files[name], "fixture", {}, None)
-        return io.BytesIO(files[name])
+        return _Resp(files[name])
 
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(api, "_open", urlopen)
     return hits
 
 
@@ -453,8 +461,7 @@ def test_save_downloads_a_file_once_and_a_retry_finishes_failed_companions(api, 
     assert [s["bytes"] for s in saved] == [3000, 3000] and hits["m.fbx"] == 1
 
     folder = api.data / "meshy_output" / _TASK
-    with pytest.raises(urllib.error.HTTPError):  # the .mtl fetch failed: not reported as saved
-        api.save({"task": _TASK, "format": "obj"})
+    assert _status(api.save, {"task": _TASK, "format": "obj"}) == 502  # the .mtl fetch failed: not reported as saved
     files["m.mtl"] = b"newmtl material\n"
     api.save({"task": _TASK, "format": "obj"})
     assert (folder / "model.mtl").read_text(encoding="utf-8") == "newmtl material\n" and hits["m.mtl"] == 2
@@ -484,7 +491,8 @@ def test_a_beside_export_is_reused_only_for_the_task_that_saved_it(api, monkeypa
     assert {"format": "stl", "saved": str(saved)} in api.formats(new, beside=str(anchor))["formats"]
     api.save({"task": new, "format": "stl", "beside": str(anchor)})
     assert hits["new.stl"] == 1  # this task's own export is reused
-    assert [f["name"] for f in api.local(limit=50)["files"]] == []  # exports are indexed, not gallery models
+    # Every saved format is a gallery model, listed under the task that saved it last (the regenerated one).
+    assert [(f["name"], f["task"]) for f in api.local(limit=50)["files"]] == [("robot.stl", new)]
 
     # A sibling Hermes never saved is the user's: never overwritten. The card's own model is this task's file.
     tank = anchor.with_name("tank.glb")
@@ -505,3 +513,117 @@ def test_a_beside_export_is_reused_only_for_the_task_that_saved_it(api, monkeypa
     obj = Path(api.save({"task": new, "format": "obj", "beside": str(tank)})["path"])
     assert tank.with_suffix(".mtl").read_text(encoding="utf-8") == "USER MTL" and obj.name == f"tank-{new[-8:]}.obj"
     assert obj.with_suffix(".mtl").read_text(encoding="utf-8") == "newmtl material\n"
+
+
+def test_viewing_a_file_never_makes_it_replaceable(api, monkeypatch):
+    """Only /save's own write lets a later save replace a file beside the project. Opening a handmade STL, or
+    reopening an export the user edited, in the viewer (/file, with or without a task) must never vouch for it:
+    the next save beside the same model takes a task-suffixed name instead. An untouched save viewed since is
+    still this task's file (reused, not duplicated), and an index row without a save-time record is not."""
+    other, task = "01a15976-d838-7532-99d8-000000000051", _TASK
+    a = "https://assets.meshy.ai/"
+    rows = {t: {"id": t, "model_urls": {"stl": a + f"{t[-2:]}.stl"}} for t in (other, task)}
+    monkeypatch.setattr(api, "_task", lambda t, _k: rows[t])
+    hits = _fake_assets(monkeypatch, api, {"51.stl": b"OTHER TASK STL", "6c.stl": b"THIS TASK STL"})
+    anchor = Path.home() / "projects" / "bot" / "robot.glb"
+    anchor.parent.mkdir(parents=True)
+    anchor.write_bytes(b"glTF")
+
+    handmade = anchor.with_suffix(".stl")
+    handmade.write_bytes(b"HANDMADE STL")
+    api.file(str(handmade))
+    api.file(str(handmade), task=task)
+    assert {"format": "stl", "saved": None} in api.formats(task, beside=str(anchor))["formats"]
+    first = Path(api.save({"task": task, "format": "stl", "beside": str(anchor)})["path"])
+    assert handmade.read_bytes() == b"HANDMADE STL" and first.name == f"robot-{task[-8:]}.stl"
+
+    # This task's untouched save, viewed since, is still its own: reused, never downloaded twice.
+    api.file(str(first), task=task)
+    assert Path(api.save({"task": task, "format": "stl", "beside": str(anchor)})["path"]) == first
+    assert hits["6c.stl"] == 1
+    # Edited, then reopened in the viewer: another task's save beside the project keeps the edit.
+    first.write_bytes(b"USER EDITED THE EXPORT")
+    api.file(str(first), task=task)
+    api.file(str(first))
+    second = Path(api.save({"task": other, "format": "stl", "beside": str(anchor)})["path"])
+    assert first.read_bytes() == b"USER EDITED THE EXPORT" and second.name == f"robot-{other[-8:]}.stl"
+    assert hits["6c.stl"] == 1
+
+    # An index row with only read-time size/mtime (an older index, or a gallery read) vouches for nothing.
+    legacy = anchor.with_name("tank.stl")
+    legacy.write_bytes(b"USER TANK")
+    st = legacy.stat()
+    api._write_json(api._index_path(), [*api._load_index(), {"path": str(legacy.resolve()), "bytes": st.st_size,
+                                                             "mtime": int(st.st_mtime * 1000), "task_id": other}])
+    tank = anchor.with_name("tank.glb")
+    tank.write_bytes(b"glTF-tank")
+    saved = Path(api.save({"task": other, "format": "stl", "beside": str(tank)})["path"])
+    assert legacy.read_bytes() == b"USER TANK" and saved.name == f"tank-{other[-8:]}.stl"
+
+
+def test_an_obj_anchor_hermes_did_not_save_is_never_rewritten(api, monkeypatch):
+    """The card's model can be the user's own OBJ (no .mtl beside it). Download ▸ OBJ of that card must not
+    complete "missing companions" over it: the user's mtllib line, texture and mesh stay, nothing is marked as
+    Hermes' save, and another task's OBJ saved beside the project later takes a new name."""
+    other, task = "01a15976-d838-7532-99d8-000000000052", _TASK
+    a = "https://assets.meshy.ai/"
+    rows = {t: {"id": t, "model_urls": {"obj": a + f"{t[-2:]}.obj", "mtl": a + "m.mtl"},
+                "texture_urls": [{"base_color": a + "tex.png"}]} for t in (other, task)}
+    monkeypatch.setattr(api, "_task", lambda t, _k: rows[t])
+    _fake_assets(monkeypatch, api, {"52.obj": b"mtllib material.mtl\nv 1 1 1\n", "6c.obj": b"mtllib material.mtl\nv 0 0 0\n",
+                                    "m.mtl": b"newmtl material\nmap_Kd texture_0.png\n", "tex.png": b"PNG-MESHY"})
+    proj = Path.home() / "projects" / "obj"
+    proj.mkdir(parents=True)
+    user_obj, user_tex = proj / "robot.obj", proj / "robot_texture.png"
+    user_obj.write_bytes(b"mtllib my_materials.mtl\nv 9 9 9\n")
+    user_tex.write_bytes(b"PNG-USER")
+    api.file(str(user_obj), task=task)
+
+    got = Path(api.save({"task": task, "format": "obj", "beside": str(user_obj)})["path"])
+    assert got == user_obj.resolve()
+    assert user_obj.read_bytes() == b"mtllib my_materials.mtl\nv 9 9 9\n" and user_tex.read_bytes() == b"PNG-USER"
+    assert not (proj / "robot.mtl").exists()
+    assert not any(r.get("saved") for r in api._load_index())
+
+    anchor = proj / "robot.glb"
+    anchor.write_bytes(b"glTF")
+    second = Path(api.save({"task": other, "format": "obj", "beside": str(anchor)})["path"])
+    assert second.name == f"robot-{other[-8:]}.obj" and second.with_suffix(".mtl").is_file()
+    assert user_obj.read_bytes() == b"mtllib my_materials.mtl\nv 9 9 9\n" and user_tex.read_bytes() == b"PNG-USER"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows has no metadata-change time; POSIX ctime catches this edit")
+def test_an_edit_that_restores_size_and_mtime_is_still_the_users(api, monkeypatch):
+    """``cp -p``/``touch -r`` and coarse-mtime filesystems can leave an edited export with its saved size and
+    mtime; it is still never replaced."""
+    other, task = "01a15976-d838-7532-99d8-000000000053", _TASK
+    a = "https://assets.meshy.ai/"
+    rows = {t: {"id": t, "model_urls": {"stl": a + f"{t[-2:]}.stl"}} for t in (other, task)}
+    monkeypatch.setattr(api, "_task", lambda t, _k: rows[t])
+    _fake_assets(monkeypatch, api, {"53.stl": b"OTHER TASK STL", "6c.stl": b"THIS TASK STL"})
+    anchor = Path.home() / "projects" / "edit" / "robot.glb"
+    anchor.parent.mkdir(parents=True)
+    anchor.write_bytes(b"glTF")
+    saved = Path(api.save({"task": task, "format": "stl", "beside": str(anchor)})["path"])
+    before = saved.stat()
+    with open(saved, "r+b") as fh:  # same size, in place
+        fh.write(b"USER")
+    os.utime(saved, ns=(before.st_atime_ns, before.st_mtime_ns))
+    again = Path(api.save({"task": other, "format": "stl", "beside": str(anchor)})["path"])
+    assert saved.read_bytes() == b"USER TASK STL" and again != saved
+
+
+def test_a_dangling_user_symlink_is_never_replaced(api, monkeypatch):
+    a = "https://assets.meshy.ai/"
+    monkeypatch.setattr(api, "_task", lambda t, _k: {"id": t, "model_urls": {"stl": a + "m.stl"}})
+    _fake_assets(monkeypatch, api, {"m.stl": b"MESHY STL"})
+    anchor = Path.home() / "projects" / "link" / "robot.glb"
+    anchor.parent.mkdir(parents=True)
+    anchor.write_bytes(b"glTF")
+    link = anchor.with_suffix(".stl")
+    try:
+        os.symlink(anchor.parent / "elsewhere.stl", link)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks need privileges on this Windows runner")
+    saved = Path(api.save({"task": _TASK, "format": "stl", "beside": str(anchor)})["path"])
+    assert link.is_symlink() and saved.name == f"robot-{_TASK[-8:]}.stl"

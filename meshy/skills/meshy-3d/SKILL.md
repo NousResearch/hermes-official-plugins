@@ -31,7 +31,7 @@ the user's Meshy credits.
 - The `meshy` plugin installed and enabled, then a NEW Hermes session so the MCP tools load.
   Node.js 18+ with `npx` on PATH (the first start downloads the pinned package).
 - `MESHY_API_KEY` in the Hermes profile's `.env` (`~/.hermes/.env`, or the profile's own).
-  Keys start with `msy_` and come from meshy.ai → Settings → API (Pro plan or above). Hermes
+  Keys start with `msy_` and are created at meshy.ai/developers/keys (any paid Meshy plan). Hermes
   hands MCP servers only a filtered environment, so a key exported in a shell alone is not
   seen. Never ask for the key in chat; tell the user where to put it.
 
@@ -46,13 +46,29 @@ setup step from Meshy's docs: the plugin already registers the server, and a sec
 
 The server is marked untrusted, so Hermes asks the user before every call that is not
 read-only (every create, download, cancel). Read-only calls (balance, status, lists, slicer
-detection) run without a prompt. When a call comes back "The user did not approve", stop:
+detection) run without a prompt. On Hermes builds after v0.22.5, the prompt's "for this session"
+answer keeps that one tool allowed for the rest of the chat and "Always" for every chat of the
+profile; on v0.22.5 and older both approve only that call. A call that would take the chat past
+its spend limit (200 credits by default) asks again anyway and offers only Once or Deny.
+When a call comes back "The user did not approve", stop:
 the user declined, or the run is unattended (cron, `chat -q`, a gateway with no approver)
 and cannot approve. Do not retry, inspect config or look for a workaround, and never suggest
 changing the server's trust, editing config or "always allow" as the fix; tell the user the
 exact call you would make and its cost, and that an interactive session (Desktop, CLI, or a
 chat gateway that shows approval buttons) can approve it. For a finished task, the signed link
 from `meshy_get_task_status` (read-only, no prompt) is the way to hand over the file meanwhile.
+
+Only when the USER asks to stop the prompts or for full creative control, tell them their
+options (the plugin README's "Full creative control" section) and let them choose; never change
+any of it yourself: `/yolo` for this chat, `hermes --yolo`, or `approvals.mode: off` for the
+profile (these skip the trust prompt on builds after v0.22.5), or "Always" once per tool. The
+per-chat spend limit is lifted only by a `mcp_servers.meshy` override in `config.yaml` that
+repeats the pinned command, the key passthrough and `timeout: 1500` and sets `spend_limit: 0`
+(off) or a higher number. That override also drops the trust prompt unless it keeps
+`trust: untrusted`, so say so when the user only wants a higher limit. Also tell them these settings
+cover unattended runs (cron, `chat -q`, a gateway with no approver): with `approvals.mode: off`,
+`--yolo` or an "Always" answer those runs make paid calls without asking up to the spend limit, and
+with `spend_limit: 0` plus any of those (or no `trust` line) they spend with no cap at all.
 
 ## Quick Reference
 
@@ -83,10 +99,19 @@ user's goal before the first paid call.
    second gate, not the first. Offer `meshy_check_balance` when the job is large.
 3. **Submit once.** Every create returns `{task_id, status}` (Creative Lab waits and returns
    the model). Keep the `task_id` and task type.
-4. **Wait** with `meshy_get_task_status` (`wait: true`, default 300 s per call). Generation
+4. **Wait.** **On a messaging platform (Telegram, Discord, Slack, WhatsApp, Signal, Matrix ...),
+   never wait inline:** `meshy_get_task_status` defaults to `wait: true`, and a foreground
+   `sleep` is the same thing: both hold the chat for the whole job. Right after the create, in the
+   same turn, make exactly these two moves and end the turn: reply "Started <what> (task <id>),
+   about N min", and arm the wake
+   `terminal(command="sleep 180 && echo meshy task <task_id>", background=true, notify_on_complete=true)`.
+   The wake turn checks once with `wait: false` and delivers. Only when no wake can come (no
+   terminal tool, or `notify_unsupported`) wait inline ([messaging](references/messaging.md)
+   § Long jobs). Elsewhere, wait with
+   `meshy_get_task_status` (`wait: true`, default 300 s per call). Generation
    usually takes 2–3 minutes. A wait that times out leaves the task running: poll the same
-   `task_id` again. **On Hermes Desktop, don't wait when nothing else needs the result:** right after
-   the create, end the reply with `::meshy-model{task="<task_id>" title="<short name>"}` on its own
+   `task_id` again. **On Hermes Desktop,
+   don't wait when nothing else needs the result:** right after the create, end the reply with `::meshy-model{task="<task_id>" title="<short name>"}` on its own
    line. The card shows Meshy's progress, then the model with its Next and Download menus. Wait only
    when the next step needs the finished task (a chained refine/rig, a download into the project, a
    chat app).
@@ -208,13 +233,14 @@ download result gave one), and that a saved file is permanent.
 - **Hermes Desktop:** the `::meshy-model` card (step 9) for a GLB; `MEDIA:<abs path>` for any
   other file becomes a download card.
 - **Messaging (Telegram, Discord, Slack, WhatsApp, Signal, Matrix ...):** never emit the
-  `::meshy-model` line (it shows as raw text). Send the thumbnail as an image: `![preview](<thumbnail_url>)`
-  on its own line (from `meshy_get_task_status`). Attach the file with a line that is only
-  `MEDIA:<absolute path>`; the gateway uploads it as a document. Write each local path only on its
-  `MEDIA:` line: the gateway also uploads any bare absolute file path in the reply, so repeating it in
-  prose sends the file twice. Upload caps: Telegram 20 MB on the hosted Bot API,
-  Discord 20 MB (more on boosted servers), others vary. A refined GLB is
-  often 10-40 MB and OBJ far larger: when the file is near or over the cap, or the upload is
+  `::meshy-model` line (it shows as raw text) or a markdown image (`![..](url)`): with streaming on
+  the gateway drops the image and the raw markdown stays. Every attachment
+  is a line that is only `MEDIA:<absolute path>`. For the thumbnail, download `thumbnail_url` into
+  `<HERMES_HOME>/cache/images/` first and attach that `.png`; it arrives as a photo (commands:
+  [messaging](references/messaging.md)). A 3D file goes out as a document. A path in prose is not an
+  attachment (never for 3D files, never in a streamed reply), so write each path only on its `MEDIA:`
+  line. Upload caps: Telegram 50 MB (bots), Discord 20 MB (more on boosted servers), others vary.
+  A refined GLB is often 10-40 MB and OBJ far larger: when the file is near or over the cap, or the upload is
   reported as skipped, give the signed `model_urls` link for that format instead and say it stops
   working at `expires_at`. Gateways in strict media mode deliver only files under Hermes' cache
   folders or created in the last 10 minutes: download right before you reply, or `save_to` under

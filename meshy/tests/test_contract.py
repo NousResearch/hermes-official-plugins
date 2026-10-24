@@ -6,7 +6,13 @@ MCP approval gate: a core change that would make Meshy spend credits without ask
 
 from __future__ import annotations
 
+import json
+import os
+import re
 import shutil
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -48,3 +54,55 @@ def test_core_refuses_a_paid_meshy_call_when_nobody_can_approve(package):
     refused = (_trust_gate_check("meshy", "meshy_text_to_3d") or "").lower()
     assert "not approve" in refused or "blocked" in refused, refused
     assert _trust_gate_check("meshy", "meshy_check_balance") is None  # read-only calls never prompt
+
+
+def test_core_gives_a_meshy_call_longer_than_the_servers_longest_wait(package):
+    """get_task_status waits up to 300 s and creative_lab up to 600 s per stage for 2 stages: on core's
+    300 s MCP default the call is cut off mid-wait and 3 such timeouts trip the server's breaker."""
+    from tools.mcp_tool_common import _resolve_tool_timeout
+
+    assert _resolve_tool_timeout(package.mcp_servers["meshy"]) > 2 * 600
+
+
+def _messaging_reply_example() -> str:
+    """The reply the skill tells the agent to send with a thumbnail on a chat platform."""
+    doc = (ROOT / "skills" / "meshy-3d" / "references" / "messaging.md").read_text(encoding="utf-8")
+    blocks = [b for b in re.findall(r"```[^\n]*\n(.*?)```", doc, re.DOTALL) if "MEDIA:" in b]
+    assert len(blocks) == 1, blocks
+    return blocks[0]
+
+
+def test_core_delivers_the_skills_thumbnail_reply_as_a_photo_even_in_strict_media_mode(tmp_path):
+    """The streaming gateway path (Telegram's default) delivers only MEDIA: lines, so the skill's thumbnail reply
+    must be a MEDIA: line to a file core accepts. Strict mode with recency trust off leaves only core's delivery
+    folders, and a fresh interpreter makes core compute those folders from this HERMES_HOME."""
+    home = tmp_path / "hermes"
+    reply = _messaging_reply_example().replace("<HERMES_HOME>", str(home)).replace("<task_id>", "0abc")
+    probe = textwrap.dedent("""
+        import json, os, sys
+        from pathlib import Path
+        home, reply = Path(sys.argv[1]), sys.argv[2]
+        old = 1_000_000_000  # long before any recency window
+        for sub in ("cache/images", "cache/meshy-preview"):  # the second is a control outside the delivery folders
+            f = home / sub / "meshy-0abc.png"
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(b"png")
+            os.utime(f, (old, old))
+        from gateway.platforms.base import BasePlatformAdapter, validate_media_delivery_path
+        from gateway.run_notifications import _IMAGE_EXTS
+        media, cleaned = BasePlatformAdapter.extract_media(reply)
+        kept = BasePlatformAdapter.filter_media_delivery_paths(media)
+        print(json.dumps({"media": media, "kept": kept, "cleaned": cleaned,
+                          "photo": [Path(p).suffix.lower() in _IMAGE_EXTS for p, _ in kept],
+                          "control": validate_media_delivery_path(str(home / "cache/meshy-preview/meshy-0abc.png"))}))
+    """)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("HERMES_")}
+    env.update(HOME=str(tmp_path), HERMES_HOME=str(home), HERMES_MEDIA_DELIVERY_STRICT="1", HERMES_MEDIA_TRUST_RECENT_FILES="0")
+    out = subprocess.run([sys.executable, "-c", probe, str(home), reply], env=env, capture_output=True,
+                         text=True, encoding="utf-8", check=True).stdout
+    result = json.loads(out.strip().splitlines()[-1])
+    assert result["control"] is None, result  # strict mode is really on: a non-delivery folder is refused
+    expected = (home / "cache" / "images" / "meshy-0abc.png").resolve()
+    assert [Path(p) for p, _ in result["kept"]] == [expected], result
+    assert result["photo"] == [True], result
+    assert "MEDIA:" not in result["cleaned"] and "](" not in result["cleaned"], result

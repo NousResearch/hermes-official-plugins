@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "meshy",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Generate, texture, rig, animate and 3D-print models with Meshy AI through Meshy's first-party MCP server (pinned @meshy-ai/meshy-mcp-server@0.6.5 over npx stdio), with a meshy-3d workflow skill bundled. Credit-spending calls ask for approval first. In Hermes Desktop: inline three.js 3D cards, a model gallery and a credit chip.",
   "author": {
     "name": "Nous Research",
@@ -26,6 +26,7 @@
       "servers": {
         "meshy": {
           "trust": "untrusted",
+          "timeout": 1500,
           "costs": {
             "meshy_text_to_3d": [
               5,
@@ -88,7 +89,7 @@
           "type": "secret",
           "env": "MESHY_API_KEY",
           "label": "Meshy API key",
-          "description": "From meshy.ai → API. Saving it restarts the Meshy tools with the new key."
+          "description": "Create one at meshy.ai/developers/keys (any paid Meshy plan). Saving it restarts the Meshy tools with the new key."
         },
         "show_credits": {
           "type": "bool",

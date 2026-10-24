@@ -168,6 +168,43 @@ def stats(path: str | None = None) -> dict:
 
 # ---------------------------------------------------------------- decimation
 
+KEEP_LOOSE = "hermes_source_loose"
+
+
+def mark_source_loose(me) -> None:
+    """Tag vertices that belong to no face BEFORE decimating (a glTF LINES/POINTS primitive): they are
+    source geometry, not decimation debris, and delete_loose keeps them."""
+    import numpy as np  # bundled with Blender
+    vi = np.empty(len(me.loops), dtype=np.int32)
+    me.loops.foreach_get("vertex_index", vi)
+    loose = np.ones(len(me.vertices), dtype=np.int32)
+    loose[vi] = 0
+    if loose.any():
+        me.attributes.new(KEEP_LOOSE, "INT", "POINT").data.foreach_set("value", loose)
+
+
+def delete_loose(me) -> None:
+    """Drop the vertices and edges Collapse left without a face. glTF meshes arrive split along every UV/normal
+    seam (one glTF vertex per attribute set) and Collapse cannot merge across those splits: it removes the
+    collapsed faces but keeps their vertices and edges. A 1M -> 15k triangle run kept ~1M of them in the saved
+    .blend (20 MB, a misleading vertex count); the exporters already skip them."""
+    import bmesh
+    bm = bmesh.new()
+    try:
+        bm.from_mesh(me)
+        layer = bm.verts.layers.int.get(KEEP_LOOSE)
+        keep = (lambda v: v[layer] == 1) if layer is not None else (lambda v: False)
+        bmesh.ops.delete(bm, geom=[e for e in bm.edges if not e.link_faces and not all(keep(v) for v in e.verts)],
+                         context="EDGES")
+        bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces and not keep(v)], context="VERTS")
+        bm.to_mesh(me)
+    finally:
+        bm.free()
+    if KEEP_LOOSE in me.attributes:
+        me.attributes.remove(me.attributes[KEEP_LOOSE])
+    me.update()
+
+
 def decimate_to(budget: int, allow_skinned: bool = False, allow_shape_keys: bool = False) -> dict:
     meshes = [o for o in mesh_objects() if tri_count(o) > 0]
     before = sum(tri_count(o) for o in meshes)
@@ -189,6 +226,8 @@ def decimate_to(budget: int, allow_skinned: bool = False, allow_shape_keys: bool
             "losing them")
     for o in keyed:
         o.shape_key_clear()
+    for o in meshes:
+        mark_source_loose(o.data)
     ratio = budget / before
     mods = []
     for o in meshes:
@@ -212,6 +251,8 @@ def decimate_to(budget: int, allow_skinned: bool = False, allow_shape_keys: bool
         bpy.context.view_layer.objects.active = o
         with bpy.context.temp_override(object=o, active_object=o):
             bpy.ops.object.modifier_apply(modifier=m.name)
+    for o in meshes:
+        delete_loose(o.data)
     after = sum(tri_count(o) for o in meshes)
     return {"applied": True, "method": "Decimate modifier (collapse), applied; not quad retopology",
             "budget": budget, "before": before, "after": after, "ratio": round(ratio, 6)}

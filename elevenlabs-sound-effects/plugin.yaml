@@ -1,0 +1,45 @@
+name: elevenlabs-sound-effects
+label: ElevenLabs Sound Effects
+kind: standalone
+version: 1.2.0
+author: NousResearch
+homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/elevenlabs-sound-effects
+description: >
+  ElevenLabs sound effects for Hermes Agent: one tool, `elevenlabs_sound_effect`, that turns a text
+  description ("glass shattering on a tile floor", "90s hip-hop drum loop, 90 BPM") into an audio
+  file through the ElevenLabs Sound Effects API, up to 30 seconds, optionally loopable. Bundles a
+  sound-design skill with a local post-processing script, and in Hermes Desktop an inline sound card
+  (waveform, play, loop audition, download per format, follow-up actions) and a sound library tab.
+  Uses your ElevenLabs API key (the same `ELEVENLABS_API_KEY` Hermes's ElevenLabs voice uses).
+requires_hermes: ">=0.22.0"
+provides_tools:
+  - elevenlabs_sound_effect
+provides_hooks: []
+requires_env:
+  - name: ELEVENLABS_API_KEY
+    description: "ElevenLabs API key (Profile → API keys). The sound effects tool appears once it is set."
+    url: https://elevenlabs.io/app/settings/api-keys
+    secret: true
+config_schema:
+  api_key:
+    type: secret
+    env: ELEVENLABS_API_KEY
+    label: ElevenLabs API key
+    description: "Shared with Hermes's ElevenLabs text-to-speech voice."
+  sound_model:
+    type: str
+    choices: [eleven_text_to_sound_v2, eleven_text_to_sound_v3]
+    default: eleven_text_to_sound_v2
+    label: Model
+    description: "ElevenLabs sound effects model."
+  output_format:
+    type: str
+    choices: [mp3_44100_128, mp3_44100_192, opus_48000_128, opus_48000_192, wav_44100, wav_48000]
+    default: mp3_44100_128
+    label: Audio format
+    description: "ElevenLabs documents 192 kbps MP3 for Creator plans and up, 44.1 kHz WAV for Pro and up."
+  api_base_url:
+    type: str
+    default: https://api.elevenlabs.io
+    label: API base URL
+    description: "Change only for an ElevenLabs data-residency endpoint (e.g. https://api.eu.residency.elevenlabs.io)."

@@ -1,0 +1,18 @@
+{
+  "name": "hermes-elevenlabs-sound-effects-desktop",
+  "version": "1.2.0",
+  "private": true,
+  "description": "ElevenLabs sound effects for Hermes Desktop: inline sound cards and a sound library tab.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/sound.test.mjs tests/plugin.test.mjs",
+    "build": "esbuild src/plugin.tsx --bundle --format=esm --platform=browser --jsx=automatic --minify --legal-comments=none --external:@hermes/plugin-sdk --external:react --external:react/jsx-runtime --outfile=desktop/plugin.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.12",
+    "esbuild": "0.28.1",
+    "typescript": "5.9.2"
+  }
+}

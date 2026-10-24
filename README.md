@@ -206,10 +206,15 @@ Catalog entries come in two tiers:
 </tr>
 <tr>
 <td width="50%" valign="top">
-<h3>More on the way</h3>
-<p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
+<a href="elevenlabs-sound-effects/"><img src="assets/elevenlabs-sound-effects.jpg" alt="ElevenLabs Sound Effects plugin"></a>
+<h3><a href="elevenlabs-sound-effects/">ElevenLabs Sound Effects</a></h3>
+<code>hermes plugins install elevenlabs-sound-effects</code>
+<p>Sound effects on demand from <a href="https://elevenlabs.io/docs/capabilities/sound-effects">ElevenLabs</a>: describe a sound ("glass shattering on a tile floor", "90s hip-hop drum loop, 90 BPM") and Hermes generates it, up to 30 seconds and optionally a seamless loop, and sends you the audio file. Uses the same <code>ELEVENLABS_API_KEY</code> as Hermes's ElevenLabs voice; model, format and endpoint are plugin settings.</p>
+<p><code>elevenlabs_sound_effect</code> · billed to your ElevenLabs account</p>
 </td>
 <td width="50%" valign="top">
+<h3>More on the way</h3>
+<p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
 </td>
 </tr>
 </table>

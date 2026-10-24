@@ -249,8 +249,14 @@ class TestConfigIntegration:
         assert Platform("homeassistant") in config.platforms
         ha = config.platforms[Platform("homeassistant")]
         assert ha.enabled is True
-        assert ha.token == "env-token"
         assert ha.extra["url"] == "http://10.0.0.5:8123"
+        # Core no longer copies HASS_TOKEN into PlatformConfig.token (that
+        # credential row left with the core extraction in
+        # NousResearch/hermes-agent#132469); the
+        # adapter reads the token from the env itself. Assert it at the layer
+        # that owns it now:
+        adapter = HomeAssistantAdapter(PlatformConfig(enabled=True))
+        assert adapter._hass_token == "env-token"
 
 
 # ---------------------------------------------------------------------------

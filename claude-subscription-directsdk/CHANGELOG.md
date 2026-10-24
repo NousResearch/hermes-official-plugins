@@ -6,6 +6,10 @@
 
 - Per-profile `claude_config_dir` setting selects the Claude login for every native spawn in a multiplexed gateway (#34).
 
+### Changed
+
+- A tool-less request no longer starts the inert MCP helper or writes its manifest: titles, summaries and other tool-less calls skip ~0.6 s of Python start plus one server handshake per call (#42).
+
 ### Fixed
 
 - Claude's reasoning reaches Hermes again: adaptive-thinking requests ask for `thinking.display: "summarized"`, as core's Anthropic adapter does. Claude 4.7 and later default the display to omitted, which returned signed but empty thinking blocks and left the reasoning panel blank (#45, thanks @mister-ideas). A turn of thinking alone, with no text and no tool call, still reaches Hermes without reasoning, so Hermes nudges the model on instead of taking the thinking as the final answer and ending the tool loop (thanks @100yenadmin, @shaggy2626).

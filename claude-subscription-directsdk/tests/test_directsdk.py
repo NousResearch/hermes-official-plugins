@@ -231,6 +231,8 @@ class Contract(unittest.TestCase):
                         list(result)
                 self.assertIn(LOGGED_OUT_HINT, str(raised.exception))
                 self.assertIn("Not logged in", str(raised.exception))
+                self.assertIn("cli: ", str(raised.exception))
+                self.assertIn("login: ", str(raised.exception))
                 self.assertEqual(raised.exception.status_code, 401)
             client.close()
             # Any other error native answers itself keeps its own text.

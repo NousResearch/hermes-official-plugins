@@ -35,6 +35,89 @@ print(json.dumps({'type':'result','subtype':'success','usage':{'input_tokens':0,
 '''
 
 
+NATIVE_TITLE_THEN_TURN = r'''
+import json, os, sys, urllib.request, urllib.error
+for line in sys.stdin:
+    frame=json.loads(line)
+    if frame.get('shouldQuery') is False:
+        print(json.dumps({'type':'result','num_turns':0}),flush=True)
+        continue
+    break
+url=os.environ['ANTHROPIC_BASE_URL']+'/v1/messages'
+def post(body):
+    try:
+        return urllib.request.urlopen(urllib.request.Request(url, data=json.dumps(body).encode(),
+            headers={'Content-Type':'application/json'}), timeout=5).status
+    except urllib.error.HTTPError as e:
+        return e.code
+title = post({'output_config': {'format': {'type': 'json_schema',
+    'schema': {'type': 'object', 'properties': {'title': {'type': 'string'}}, 'required': ['title']}}}})
+open(os.environ['TITLE_STATUS'], 'w').write(str(title))
+post({'model': 'sonnet', 'messages': [{'role': 'user', 'content': 'fixture'}]})
+print(json.dumps({'type':'assistant','message':{'id':'first','role':'assistant','content':[{'type':'text','text':'FIRST'}]}}))
+print(json.dumps({'type':'stream_event','event':{'type':'message_stop'}}))
+print(json.dumps({'type':'result','subtype':'success','usage':{'input_tokens':0,'output_tokens':0}}))
+'''
+
+
+def _title_shape(**extra):
+    return {'output_config': {'format': {'type': 'json_schema', 'schema': {
+        'type': 'object', 'properties': {'title': {'type': 'string'}}, 'required': ['title']}}}, **extra}
+
+
+def test_is_title_request_recognises_only_the_side_request_shape():
+    from admission import is_title_request
+    assert is_title_request(json.dumps(_title_shape()).encode())
+    assert not is_title_request(json.dumps(_title_shape(tools=[{'name': 'x'}])).encode())
+    assert not is_title_request(json.dumps({'messages': []}).encode())
+    assert not is_title_request(json.dumps({'output_config': {'format': {'type': 'json_schema', 'schema': {
+        'type': 'object', 'properties': {'title': {'type': 'string'}, 'summary': {'type': 'string'}}}}}}).encode())
+    assert not is_title_request(json.dumps({'output_config': {'format': {'type': 'text'}}}).encode())
+    assert not is_title_request(b'not json')
+
+
+def test_a_title_request_never_takes_the_turn_admission(tmp_path):
+    """#39: native sends the title side request next to the first turn; whichever is admitted first
+    wins. The title is answered locally, so the turn keeps the admission and the reply is not JSON."""
+    calls = []
+    usage = {'input_tokens': 0, 'output_tokens': 0}
+    class Peer(BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            calls.append(body)
+            # The real title endpoint answers a title object; the turn answers its text.
+            text = '{"title": "Greek"}' if 'tools' not in body and isinstance(body.get('output_config'), dict) else 'FIRST'
+            self.send_response(200); self.send_header('Content-Type','text/event-stream'); self.end_headers()
+            events = [
+                {'type':'message_start','message':{'id':'first','role':'assistant','model':'sonnet','content':[], 'usage':usage}},
+                {'type':'content_block_start','index':0,'content_block':{'type':'text','text':''}},
+                {'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':text}},
+                {'type':'content_block_stop','index':0},
+                {'type':'message_delta','delta':{'stop_reason':'end_turn'},'usage':usage},
+                {'type':'message_stop'},
+            ]
+            self.wfile.write(''.join('data: '+json.dumps(e)+'\n\n' for e in events).encode())
+    peer=ThreadingHTTPServer(('127.0.0.1',0),Peer)
+    thread=threading.Thread(target=peer.serve_forever,daemon=True); thread.start()
+    native=tmp_path/'native.py'; native.write_text(NATIVE_TITLE_THEN_TURN)
+    env={'PATH':os.defpath,'HOME':str(tmp_path),'TITLE_STATUS':str(tmp_path/'title-status'),
+         'ANTHROPIC_BASE_URL':f'http://127.0.0.1:{peer.server_port}'}
+    client=directsdk.Client(command=[sys.executable,str(native)],env=env)
+    try:
+        result=client.create(model='sonnet',messages=[{'role':'user','content':'fixture'}])
+        assert len(calls)==1  # the title request never reached upstream
+        assert (tmp_path/'title-status').read_text()=='400'
+        assert result.choices[0].message.content=='FIRST'
+        assert result.usage.native_admission.blocked_requests==0  # refused before the gate, not denied by it
+    finally:
+        client.close(); peer.shutdown(); thread.join(timeout=3); peer.server_close()
+
+
+def _first_response_peer(monkeypatch, tmp_path, requests_bodies):
+    raise NotImplementedError
+
+
 @pytest.mark.parametrize('stop', ['end_turn', 'max_tokens', 'model_context_window_exceeded'])
 def test_first_response_owns_usage_and_stops_recovery(tmp_path, stop):
     calls = []

@@ -34,6 +34,7 @@ try:
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, max_concurrent, observe_rate_limit,
         reap_orphaned_refresh_lock, relay, resolve_upstream, Upstream)
+    from .login_health import record as record_login_health
 except ImportError:
     import concurrency
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
@@ -42,6 +43,7 @@ except ImportError:
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, max_concurrent, observe_rate_limit,
         reap_orphaned_refresh_lock, relay, resolve_upstream, Upstream)
+    from login_health import record as record_login_health
 
 
 logger = logging.getLogger(__name__)
@@ -1151,6 +1153,8 @@ class Client:
                             first += ', upstream said: ' + admission.error_text()[:500]
                         # The first attempt's real HTTP status; a 200 cut short or a relay failure has none.
                         status = admission.status if isinstance(admission.status, int) and admission.status >= 400 else None
+                        if status in (401, 403):
+                            record_login_health(env, False)
                         raise ClaudeAPIError(f'Incomplete upstream response ({first})' + (': ' + native_error if native_error else ''),
                                              status, request_id=admission.request_id)
                     assistants = [admission.capture.message]
@@ -1163,6 +1167,7 @@ class Client:
                         # The child's own HOME, not Hermes': that is where native looked for ~/.claude.
                         home = env.get('HOME') or env.get('USERPROFILE')
                         login = env.get('CLAUDE_CONFIG_DIR') or str((Path(home) if home else Path.home()) / '.claude')
+                        record_login_health(env, False)
                         raise ClaudeCodeLoggedOut(f'{LOGGED_OUT_HINT} (native: {native_error}; cli: {resolved[0]}; login: {login}){_stderr_tail(native_stderr)}')
                     raise ClaudeAPIError('Native API error: ' + native_error, NATIVE_ERROR_STATUS.get(str(native_error_code)))
                 if len(results) != 1 or not assistants or not stopped:
@@ -1240,6 +1245,7 @@ class Client:
                     dict(tc, index=len(tool_stream.slots) + i) for i, tc in enumerate(c for c in calls if not tool_stream.streamed(c['id']))]
                 chunk = self._chunk(kwargs['model'], {'content': None, 'tool_calls': late or None, 'reasoning_details': [carrier], **({'refusal': message['refusal']} if refused else {})}, finish, normalized_usage)
                 chunk._response = response
+                record_login_health(env, True)
                 # Fast return removes these per-request files while native drains: safe on POSIX;
                 # ignore_cleanup_errors already tolerates files still held open on Windows.
                 yield chunk

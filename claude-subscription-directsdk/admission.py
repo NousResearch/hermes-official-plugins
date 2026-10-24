@@ -587,6 +587,44 @@ class Capture:
         self.complete = bool(self.message and self.message.get('stop_reason') and not self.arguments)
 
 
+SKILLS_REMINDER = ('<system-reminder>Before answering, check the skills index and load a matching '
+                   'skill with skill_view(name); deep turns and post-compaction contexts stop acting on '
+                   'the rule in the system prompt.</system-reminder>')
+
+
+def _skills_nudge_enabled() -> bool:
+    """Per-spawn read of the plugin's ``skills_nudge`` setting (default off)."""
+    try:
+        from .directsdk_setup import skills_nudge_enabled
+    except ImportError:
+        from directsdk_setup import skills_nudge_enabled
+    try:
+        return bool(skills_nudge_enabled())
+    except Exception:
+        return False
+
+
+def nudge_skills(payload: bytes) -> bytes:
+    """Append the skills reminder to the final user frame, after every other request rewrite (#41).
+
+    Only the final frame grows, so the growth is the uncached tail; replayed history frames are
+    untouched. An unparsable or shape-unknown payload is returned unchanged.
+    """
+    try:
+        body = json.loads(payload)
+        content = body['messages'][-1]['content']
+        reminder = {'type': 'text', 'text': SKILLS_REMINDER}
+        if isinstance(content, str):
+            body['messages'][-1]['content'] = [{'type': 'text', 'text': content}, reminder]
+        elif isinstance(content, list):
+            content.append(reminder)
+        else:
+            return payload
+        return json.dumps(body, separators=(',', ':')).encode()
+    except (ValueError, KeyError, IndexError, TypeError):
+        return payload
+
+
 def upstream_proxy(upstream):
     """``(host, port, tunnel_headers)`` of the HTTP CONNECT proxy for ``upstream``, or ``None``.
 
@@ -793,6 +831,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = stable_request_context(payload, gate.queried)
             payload = pin_message_breakpoint(payload, gate.queried)
             payload = stream_tool_input(payload)
+            if _skills_nudge_enabled():
+                payload = nudge_skills(payload)
             target = gate.upstream
             conn, upstream_socket = self._connect_upstream()
             if conn is None:

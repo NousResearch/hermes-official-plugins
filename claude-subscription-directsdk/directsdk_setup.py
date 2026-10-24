@@ -88,6 +88,21 @@ def _setting(key, default=None):
     return value
 
 
+SKILLS_NUDGE_SETTING = "skills_nudge"
+
+
+def skills_nudge_enabled():
+    """The active profile's ``skills_nudge`` plugin setting, default off.
+
+    Off keeps the wire and the cached prefix exactly as before; on restates the skills rule on
+    every final user frame (see ``directsdk.nudge_skills``).
+    """
+    value = _setting(SKILLS_NUDGE_SETTING, False)
+    if isinstance(value, str):
+        return value.strip().lower() not in _OFF
+    return value is True or value == 1
+
+
 def telemetry_enabled():
     """The active profile's ``claude_code_telemetry`` plugin setting, default on."""
     value = _setting(TELEMETRY_SETTING, True)

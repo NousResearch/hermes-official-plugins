@@ -94,6 +94,8 @@ Read on every native spawn, including auth-status and model-discovery probes. Pr
 
 **Plan limits (`/usage`)** are asked of Claude Code itself (its `get_usage` control request), so they follow this per-profile setting, work with `auth.adopt_external_logins: false`, and the plugin never reads or sends the Claude login. With `claude_code_telemetry` off, Claude Code skips that fetch and `/usage` says so.
 
+**Skills nudge** (`skills_nudge`, off by default). Claude loads Hermes skills far less often than other providers, worst after compaction (#41). On, every final user frame gains a one-line reminder to load a matching skill; only the last frame grows, so only the uncached tail changes. Turn it on per profile: `hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.skills_nudge true`.
+
 **Claude Code telemetry and feature flags** (`claude_code_telemetry`, on by default). Claude Code sends its usage telemetry and fetches feature flags; the flags are what unlock newer and older models in its model picker, so with them off the picker can shrink from every model your account runs to each family's current one (#86). Turn it off to keep Claude Code quiet: the plugin then starts it with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_TELEMETRY` and `DISABLE_ERROR_REPORTING` set, and the pinned model table fills in the picker. Change it in the Desktop app under **Capabilities → Plugins**: the settings gear on the `claude-subscription-directsdk-experimental` row opens the switch. Or from the CLI:
 
 ```sh

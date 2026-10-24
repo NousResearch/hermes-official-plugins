@@ -23,6 +23,14 @@ config_schema:
     default: ""
     label: Claude login config directory
     description: Select this profile's logged-in Claude config directory, overriding process environment directories.
+  skills_nudge:
+    type: bool
+    default: false
+    label: Restate the skills rule on every turn
+    description: >-
+      Append a short reminder to load a matching skill on each final user frame. Claude follows the
+      skills rule in the system prompt noticeably less often than other providers, worst deep into a
+      session and after compaction; off keeps the wire (and cached prefix) exactly as before.
   claude_code_telemetry:
     type: bool
     default: true

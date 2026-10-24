@@ -30,6 +30,7 @@ conversation key.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -221,6 +222,19 @@ def _compile_mention_patterns(raw: Any) -> List[re.Pattern]:
         except re.error:
             logger.warning("[xchat] invalid mention pattern skipped: %r", p)
     return compiled or [re.compile(p, re.IGNORECASE) for p in _DEFAULT_MENTION_PATTERNS]
+
+
+def _key_event_senders(events_b64: List[str]) -> set:
+    """Sender ids named by encrypted KeyChange blobs (unparsable blobs are skipped)."""
+    senders = set()
+    for blob in events_b64:
+        try:
+            sender = json.loads(base64.b64decode(blob)).get("sender_id")
+        except Exception:
+            continue
+        if sender:
+            senders.add(str(sender))
+    return senders
 
 
 class XChatAdapter(BasePlatformAdapter):
@@ -548,7 +562,10 @@ class XChatAdapter(BasePlatformAdapter):
 
         # Process oldest-first.
         collected.reverse()
-        await self._register_signing_keys(collected)
+        # A KeyChange is the signal that the participant roster itself moved: refresh the senders'
+        # keys even when they were already seen, or the new version's signing key never reaches the
+        # SDK and every rotated key stays unverifiable (#173).
+        await self._register_signing_keys(collected, refresh=_key_event_senders(key_events_b64))
 
         # Verify + cache any conversation-key changes FIRST (after signing
         # keys are registered — an unverifiable KeyChange is dropped by the
@@ -807,20 +824,31 @@ class XChatAdapter(BasePlatformAdapter):
         for eid, _ in items[: len(items) // 2]:
             self._seen_event_ids.pop(eid, None)
 
-    async def _register_signing_keys(self, events: List[Dict[str, Any]]) -> None:
-        """Fetch new senders' public keys into the SDK's signing-key store."""
+    async def _register_signing_keys(
+        self, events: List[Dict[str, Any]], refresh: Optional[set] = None
+    ) -> None:
+        """Fetch public keys for new senders, plus *refresh* senders unconditionally."""
         assert self._api is not None and self._crypto is not None
+        refresh = set(refresh or ())
         senders = {
             str(e.get("sender_id")) for e in events if e.get("sender_id")
-        } | {self._bot_user_id}
-        senders -= self._known_senders
+        } | {self._bot_user_id} | refresh
+        senders -= self._known_senders - refresh
         for sender_id in senders:
             try:
-                for pk in await self._api.get_public_keys(sender_id):
+                known = {
+                    (k.get("user_id"), k.get("public_key_version"))
+                    for k in self._signing_keys
+                }
+                rows = await self._api.get_public_keys(sender_id)
+                for pk in rows:
+                    version = str(pk.get("public_key_version") or "")
+                    if (sender_id, version) in known:
+                        continue
                     self._signing_keys.append(
                         {
                             "user_id": sender_id,
-                            "public_key_version": str(pk.get("public_key_version") or ""),
+                            "public_key_version": version,
                             "public_key": pk.get("signing_public_key") or "",
                             "identity_public_key": pk.get("public_key") or "",
                             "identity_public_key_signature": pk.get("identity_public_key_signature") or "",

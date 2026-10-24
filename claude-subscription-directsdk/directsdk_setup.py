@@ -68,6 +68,37 @@ QUIET_TRAFFIC = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_TELEM
 ALWAYS_QUIET = {"DISABLE_AUTOUPDATER": "1", "DISABLE_FEEDBACK_COMMAND": "1", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"}
 _OFF = ("false", "0", "no", "off")
 
+# The host session's Claude Code identity, inherited when Hermes itself runs inside Claude Code
+# (the CLI, the desktop app, an Agent SDK host). Passing it on makes native inject a per-process
+# scratchpad path - a random UUID - into the request at messages[1], so the cached prefix diverges
+# on every call and the whole conversation is re-written as cache creation each time (#150).
+#
+# The session ids are dropped for the same reason: they would attribute the native turn to the host
+# session rather than to the account in CLAUDE_CONFIG_DIR. A user's own opt-outs
+# (DISABLE_TELEMETRY, DO_NOT_TRACK, ...) and their CLAUDE_CONFIG_DIR are not touched.
+HOST_SESSION_ENV = (
+    "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS",
+    "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_DESKTOP_APP_VERSION", "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_ACCOUNT_UUID",
+    "CLAUDE_CODE_ORGANIZATION_UUID", "CLAUDE_CODE_USER_EMAIL", "CLAUDE_CODE_OAUTH_SCOPES",
+    "CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH", "CLAUDE_PID",
+)
+# The Agent SDK host's own namespace, same effect.
+HOST_SESSION_ENV_PREFIXES = ("CLAUDE_AGENT_SDK_",)
+
+
+def drop_host_session_env(env):
+    """Remove the host session's Claude Code identity from a child ``env`` (in place) and return it.
+
+    Only the identity that describes the *host* session goes: the account this plugin drives comes
+    from ``CLAUDE_CONFIG_DIR``, which is resolved separately.
+    """
+    for key in [k for k in env if k in HOST_SESSION_ENV or k.startswith(HOST_SESSION_ENV_PREFIXES)]:
+        env.pop(key, None)
+    return env
+
+
 
 def _setting(key, default=None):
     """Read one plugin setting, with unreadable config or missing keys treated as not set.
@@ -120,6 +151,7 @@ def apply_traffic_policy(env, telemetry=None):
 
 def _child_env(env):
     child = dict(env)
+    drop_host_session_env(child)
     apply_config_dir(child)
     return apply_traffic_policy(child)
 

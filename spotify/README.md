@@ -82,6 +82,20 @@ needs Premium and an active Spotify Connect device: open Spotify on any phone, d
 
 Full guide: <https://hermes-agent.nousresearch.com/docs/user-guide/features/spotify>
 
+## Default device
+
+Playback with no `device_id` goes to whichever device Spotify considers active, which is often a
+phone that is not playing anything. Name the device you mean instead, in `~/.hermes/config.yaml`:
+
+```yaml
+spotify:
+  default_device_name: "Kitchen Sonos"
+```
+
+A playback or queue action that names no device now targets that device. An explicit `device_id`
+in the tool call still wins, and a default device that is offline is reported by name along with
+the devices that are available, rather than silently falling back to Spotify's choice.
+
 ## Development
 
 The tests import Hermes core, so run them with a hermes-agent checkout on `PYTHONPATH`:

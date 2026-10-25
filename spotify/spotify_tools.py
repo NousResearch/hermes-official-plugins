@@ -13,7 +13,8 @@ from tools.registry import tool_error, tool_result
 
 from .spotify_auth import auth_status
 from .spotify_client import (
-    SpotifyClient, SpotifyError, normalize_spotify_id, normalize_spotify_uri, normalize_spotify_uris)
+    SpotifyClient, SpotifyError, normalize_spotify_id, normalize_spotify_uri, normalize_spotify_uris,
+    spotify_uri_type)
 
 _Handler = Callable[[SpotifyClient, dict, str], str]
 
@@ -23,6 +24,50 @@ def _check_spotify_available() -> bool:
         return bool(auth_status().get("logged_in"))
     except Exception:
         return False
+
+
+# Item types Spotify's queue endpoint accepts.
+_QUEUEABLE_TYPES = {"track", "episode"}
+
+# Message shown when a playback-changing command has no device to act on. The
+# API answers 403 for these, which reads as a permissions problem rather than
+# the actual cause: nothing is playing anywhere.
+_NO_ACTIVE_DEVICE = (
+    "No active Spotify playback device is available. Use `spotify_devices` to list devices, "
+    "then transfer playback before retrying."
+)
+
+
+def _coerce_queueable_spotify_uri(value: str) -> str:
+    """Normalize a queue target into ``spotify:track:<id>`` or ``spotify:episode:<id>``.
+
+    Spotify's ``POST /v1/me/player/queue`` accepts tracks *and* episodes, so the
+    type is inferred per input rather than forced to "track": a typed URI or an
+    ``open.spotify.com/<type>/<id>`` URL keeps its own type (and is still
+    canonicalized, never forwarded as a raw URL), while a bare id - the
+    search-result case - defaults to a track. Types Spotify cannot queue are
+    rejected here instead of coming back as a "Bad URI" from the API.
+    """
+    item_type = spotify_uri_type(value) or "track"
+    if item_type.lower() not in _QUEUEABLE_TYPES:
+        raise SpotifyError(f"Spotify can only queue a track or an episode, got {item_type}.")
+    # Pass the canonical lower-case type on: Spotify's own types are lower-case, so
+    # an oddly-cased one has to fail here with a clear message rather than be
+    # forwarded as `spotify:EPISODE:<id>` for the API to reject as a Bad URI.
+    return normalize_spotify_uri(value, item_type.lower())
+
+
+def _has_active_device(client: SpotifyClient) -> bool:
+    """Return True only when a device is currently *active* for playback.
+
+    Distinguishes the active device from merely-listed devices (Spotify's API
+    requires the currently active device when ``device_id`` is omitted). Lookup
+    failures are deliberately NOT swallowed here: the caller's top-level
+    ``except`` surfaces them via ``_spotify_tool_error`` instead of masking the
+    real cause behind a misleading "no active device" message.
+    """
+    devices = client.request("GET", "/me/player/devices") or {}
+    return any(bool(device.get("is_active")) for device in devices.get("devices") or [])
 
 
 def _spotify_tool_error(exc: Exception) -> str:
@@ -123,6 +168,18 @@ def _pb_read(fetch: Callable[..., Any], args: dict, action: str) -> str:
 _CONTEXT_TYPES = (("album", "spotify:album:", "/album/"), ("playlist", "spotify:playlist:", "/playlist/"), ("artist", "spotify:artist:", "/artist/"))
 
 
+def _pb_device_guard(client: SpotifyClient, args: dict) -> Optional[str]:
+    """Active-device requirement for playback-changing commands: an error string, or None.
+
+    A command that names its own ``device_id`` needs no lookup; without one
+    Spotify requires a currently active device, and answers 403 ("insufficient
+    client scope" / "no active device") rather than naming the real problem.
+    """
+    if not args.get("device_id") and not _has_active_device(client):
+        return _NO_ACTIVE_DEVICE
+    return None
+
+
 def _pb_play_tracks(client: SpotifyClient, args: dict, action: str, uris: list[str]) -> str:
     """Play a bare list of tracks: the first inside its album, the rest queued behind it.
 
@@ -141,6 +198,9 @@ def _pb_play_tracks(client: SpotifyClient, args: dict, action: str, uris: list[s
 
 
 def _pb_play(client: SpotifyClient, args: dict, action: str) -> str:
+    guard = _pb_device_guard(client, args)
+    if guard:
+        return tool_error(guard)
     offset = args.get("offset")
     payload_offset = {k: v for k, v in offset.items() if v is not None} if isinstance(offset, dict) else None
     uris = normalize_spotify_uris(_as_list(args.get("uris")), "track") if args.get("uris") else None
@@ -158,6 +218,9 @@ def _pb_play(client: SpotifyClient, args: dict, action: str) -> str:
 
 def _pb_cmd(client: SpotifyClient, args: dict, action: str, method: str, path: str, **extra: Any) -> str:
     """Player command whose only free argument is ``device_id`` (*extra* = fixed params)."""
+    guard = _pb_device_guard(client, args)
+    if guard:
+        return tool_error(guard)
     return _ok(action, client.request(method, path, params={**extra, "device_id": args.get("device_id")}))
 
 
@@ -210,7 +273,10 @@ _handle_spotify_devices = _dispatcher("spotify_devices", "list", {
 
 
 def _queue_add(client: SpotifyClient, args: dict, action: str) -> str:
-    uri = normalize_spotify_uri(str(args.get("uri") or ""), None)
+    guard = _pb_device_guard(client, args)
+    if guard:
+        return tool_error(guard)
+    uri = _coerce_queueable_spotify_uri(str(args.get("uri") or ""))
     return _ok(action, client.request("POST", "/me/player/queue", params={"uri": uri, "device_id": args.get("device_id")}), uri=uri)
 
 

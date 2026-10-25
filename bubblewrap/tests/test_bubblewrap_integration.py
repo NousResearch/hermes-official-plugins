@@ -69,6 +69,10 @@ def isolated_tool(tmp_path, work_dir, monkeypatch, bwrap_provider):
                     pass
             tt._active_environments.clear()
             tt._last_activity.clear()
+        # Core's own cleanup drops the file tools' cached ShellFileOperations with the environment;
+        # clearing the dict above does not, and a shell-path file op would reuse a dead sandbox.
+        from tools.file_tools import clear_file_ops_cache
+        clear_file_ops_cache()
 
     _clear()
     yield tt
@@ -165,6 +169,30 @@ class TestToolIntegration:
         assert host_file.read_text() == "hello"
         assert "hello" in read_file_tool(str(host_file), task_id=task_id)
 
+    @pytest.mark.parametrize("native", ["1", "0"])
+    def test_file_tools_reach_past_the_sandbox_only_on_the_native_path(self, isolated_tool, tmp_path, monkeypatch,
+                                                                        native):
+        """The prompt note's claim, live: with core's in-process file path (the default) the file tools
+        write and read a path outside the writable set that a command cannot write; with
+        HERMES_NATIVE_FILE_READ=0 they run through the sandbox and get the same refusal."""
+        from tools.file_tools import read_file_tool, write_file_tool
+
+        monkeypatch.setenv("HERMES_NATIVE_FILE_READ", native)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        target = outside / "note.txt"
+        task_id = f"file-tools-{native}"
+        r = json.loads(isolated_tool.terminal_tool(f"printf cmd > {target}", task_id=task_id))
+        assert r["exit_code"] != 0 and "Read-only file system" in r["output"], r
+        w = json.loads(write_file_tool(str(target), "FILE-TOOL\n", task_id=task_id))
+        if native == "1":
+            assert w.get("bytes_written") == 10, w
+            assert target.read_text() == "FILE-TOOL\n"
+            assert "FILE-TOOL" in read_file_tool(str(target), task_id=task_id)
+        else:
+            assert "Read-only file system" in w.get("error", ""), w
+            assert not target.exists()
+
     def test_ca_bundle_under_hermes_home_is_readable_inside_the_sandbox(self, isolated_tool, tmp_path, monkeypatch):
         """SSL_CERT_FILE pointing into the hidden HERMES_HOME (where hermes puts certifi's bundle) must
         still be readable, or every TLS client in the sandbox fails; the rest of HERMES_HOME stays hidden."""
@@ -174,6 +202,9 @@ class TestToolIntegration:
         bundle.write_text("TRUST-ANCHORS\n")
         (hermes_home / "config.yaml").write_text("secret: yes\n")
         monkeypatch.setenv("SSL_CERT_FILE", str(bundle))
+        # The venv stands in for the Python environment Hermes runs from, the one part of
+        # a Hermes home a trust anchor may be bound back from.
+        monkeypatch.setattr(bubblewrap, "python_env_roots", lambda: (str(hermes_home / "venv"),))
         r = json.loads(isolated_tool.terminal_tool(
             'cat "$SSL_CERT_FILE"; ls -A "$(dirname "$SSL_CERT_FILE")/../.."', task_id="ca-bundle",
         ))

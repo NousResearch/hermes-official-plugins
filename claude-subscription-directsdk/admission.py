@@ -125,19 +125,21 @@ def _breakpoints(value):
 
 
 def _frame_first(messages, queried):
-    """Put Hermes' first user turn ahead of the context native prepends to it (#77).
+    """Send Hermes' first user turn without the context native prepends to it (#77, #195).
 
-    On the opening request native puts its per-request context block (the account-email
-    reminder) *before* the frame Hermes queried; on every later request that turn is replayed
-    without it. Nothing of the first turn therefore recurs, and call #2 re-writes the whole of
-    it, which is most of a cron run whose first turn carries a source pack. On later turns
-    native already appends its context after the host content. Moving the prepended text
-    blocks behind the frame uses that same order for the first turn: no block is added,
-    dropped or edited, and the frame becomes a prefix the next request replays byte-identically.
+    On the opening request native puts its per-request context (the account-email reminder,
+    and any CLAUDE.md or auto-memory contents it loaded) *before* the frame Hermes queried; on
+    every later request that turn is replayed without it, and later turns' prepended context
+    is already dropped by ``stable_request_context``. Kept, that text sat in the user's turn,
+    where Claude read Claude Code's own notes as an injection attempt by the user (#195), and
+    nothing of the first turn recurred, so call #2 re-wrote all of it, which is most of a cron
+    run whose first turn carries a source pack. Dropping the prepended text blocks sends the
+    first turn exactly as every later request replays it. A cache marker on a dropped block
+    moves onto the frame with setdefault, never multiplying.
 
     Only the conversation's first turn is touched (no assistant message yet), only when the
     queried frame occurs exactly once, and only when everything before it is plain text.
-    Returns whether the order changed."""
+    Returns whether the turn changed."""
     if any(m.get('role') == 'assistant' for m in messages):
         return False
     first = next((m for m in messages if m.get('role') == 'user'), {})
@@ -150,9 +152,13 @@ def _frame_first(messages, queried):
     if len(starts) != 1 or starts[0] == 0:
         return False
     k = starts[0]
-    if not all(isinstance(b, dict) and b.get('type') == 'text' for b in content[:k]):
+    if not all(isinstance(b, dict) and b.get('type') == 'text' and set(b) <= {'type', 'text', 'cache_control'}
+               for b in content[:k]):
         return False
-    first['content'] = content[k:k + len(queried)] + content[:k] + content[k + len(queried):]
+    mark = next((b['cache_control'] for b in content[:k] if 'cache_control' in b), None)
+    del content[:k]
+    if mark is not None:
+        content[0].setdefault('cache_control', mark)
     return True
 
 
@@ -312,8 +318,8 @@ def pin_message_breakpoint(payload, queried):
     The count grows by at most that one mark and only within Anthropic's four across tools,
     system and messages; system and tools marks are never touched, and a moved or added
     marker keeps native's own order of TTLs.
-    The breakpoint never moves later, content never changes, and any payload that does not
-    parse forwards as is."""
+    The breakpoint never moves later, content changes only where ``_frame_first`` drops native's
+    context from the opening request, and any payload that does not parse forwards as is."""
     if not queried:
         return payload
     try:
@@ -323,7 +329,7 @@ def pin_message_breakpoint(payload, queried):
         blocks = [(i, j, b) for i, m in enumerate(messages) if isinstance(m.get('content'), list)
                   for j, b in enumerate(m['content'])]
         marked = [(i, j, b) for i, j, b in blocks if isinstance(b, dict) and 'cache_control' in b]
-        if not marked:
+        if not marked and not reordered:
             return payload
         last = max((i for i, m in enumerate(messages) if m.get('role') == 'assistant'), default=-1)
         stable = [(i, j, b) for i, j, b in blocks if i <= last]

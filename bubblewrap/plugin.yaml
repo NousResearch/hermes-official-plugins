@@ -1,6 +1,6 @@
 name: bubblewrap
 label: Bubblewrap
-version: 1.0.0
+version: 1.2.1
 manifest_version: 2
 kind: backend
 author: NousResearch
@@ -9,8 +9,9 @@ homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/bubb
 description: >
   Bubblewrap terminal backend for Linux: every terminal and execute_code
   command runs in its own bwrap sandbox on this machine, at the same paths.
-  Read-only root, writable working directory (per profile), SSH and cloud
-  credentials and the Hermes home hidden, private /tmp and /proc,
+  Read-only root, writable working directory (per profile), the dot entries
+  of the home directory (credential stores always) and the Hermes home hidden,
+  a scratch directory per sandbox, private /tmp and /proc,
   agent and docker sockets masked, and memory, CPU and process limits.
   Select it with `hermes config set terminal.backend bubblewrap`.
 requires_hermes: ">=0.22.2"
@@ -45,3 +46,8 @@ config_schema:
     default: 256
     label: Process limit
     description: "Processes and threads a command may add on top of what your user already runs (RLIMIT_NPROC). 0 disables it."
+  home_allow:
+    type: list
+    default: []
+    label: Extra home entries
+    description: "More dot entries of the home directory to show read-only, for example [\".zz-tool\", \".config/nvim\"]. Dot entries off the shipped allowlist are hidden; credential stores stay hidden."

@@ -5,7 +5,8 @@ Activated via ``plugins.enabled``; hooks are inert without the ``langfuse`` SDK
 and credentials. Env: HERMES_LANGFUSE_PUBLIC_KEY / SECRET_KEY (required),
 BASE_URL, ENV, RELEASE, SAMPLE_RATE, MAX_CHARS (12000), MAX_DEPTH (4), DEBUG, and CAPTURE =
 metadata (sizes/ids/usage only) | sanitized (default: secret redaction +
-truncation) | full (truncated raw content). See README.md.
+truncation) | full (truncated raw content). Config: plugins.entries.langfuse.settings.
+end_user_attribution (off) sets the trace userId to the gateway sender. See README.md.
 """
 from __future__ import annotations
 
@@ -18,9 +19,10 @@ import os
 import re
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,8 @@ class TraceState:
     trace_id: str
     root_span: Any
     generations: dict[str, Any] = field(default_factory=dict)
+    # Model each open generation was started with (the request-body model), same keys.
+    generation_models: dict[str, str] = field(default_factory=dict)
     tools: dict[str, Any] = field(default_factory=dict)
     pending_tools_by_name: dict[str, list] = field(default_factory=dict)
     turn_tool_calls: list[dict[str, Any]] = field(default_factory=list)
@@ -56,6 +60,13 @@ _TRACE_STATE: dict[str, TraceState] = {}
 # would leak forever, so over the cap the least-recently-updated are evicted.
 # Bounds the leak, not concurrency.
 _MAX_TRACE_STATE = 256
+# The messaging user who started each turn (hermes-agent#44639), keyed by turn, kept only when the
+# profile opts in (``_end_user_attribution``). Only the turn-scoped pre_llm_call hook carries
+# ``sender_id``; the root trace opens later, on pre_api_request. A subagent
+# has no sender of its own, so it inherits the user of the turn that spawned it. Both maps are bounded
+# like the trace state and guarded by ``_STATE_LOCK``.
+_SENDER_BY_TURN: OrderedDict[str, str] = OrderedDict()
+_USER_BY_CHILD_SESSION: OrderedDict[str, str] = OrderedDict()
 _LANGFUSE_CLIENT = None
 # Under a multiplexed profile override, one settled client (or _INIT_FAILED) per Hermes home: the
 # keys live in each profile's .env, so a single slot would trace profile B into profile A's project
@@ -93,8 +104,21 @@ _USAGE_FIELDS = (
     ("output", "output_tokens", "output_cost_per_million"),
     ("cache_read_input_tokens", "cache_read_tokens", "cache_read_cost_per_million"),
     ("cache_creation_input_tokens", "cache_write_tokens", "cache_write_cost_per_million"),
-    ("reasoning_tokens", "reasoning_tokens", None),
+    ("output_reasoning_tokens", "reasoning_tokens", "output_cost_per_million"),
 )
+
+
+def _usage_buckets(read: Callable[[str], Any]) -> dict[str, int]:
+    """Langfuse token buckets (every key) from canonical counts, ``read(attr)``.
+
+    Langfuse sums every usage key, but Hermes' ``output_tokens`` already includes reasoning.
+    Reasoning moves out of ``output`` into ``output_reasoning_tokens`` (billed at the output
+    rate), the split Langfuse itself makes when it ingests OpenAI usage, so the buckets add
+    up to ``CanonicalUsage.total_tokens``."""
+    tokens = {key: max(int(read(attr) or 0), 0) for key, attr, _ in _USAGE_FIELDS}
+    reasoning = min(tokens["output_reasoning_tokens"], tokens["output"])
+    tokens["output_reasoning_tokens"], tokens["output"] = reasoning, tokens["output"] - reasoning
+    return tokens
 
 
 def _env(name: str, default: str = "") -> str:
@@ -145,6 +169,30 @@ def _capture_mode() -> str:
             value, _DEFAULT_CAPTURE_MODE, ", ".join(_CAPTURE_MODES),
         )
     return _DEFAULT_CAPTURE_MODE
+
+
+# The sender id is a third-party identifier, and Langfuse credentials are not consent to export it, so
+# end-user attribution waits for an explicit per-profile opt-in in config.yaml (hermes-agent#44639).
+_END_USER_SETTING = "end_user_attribution"
+_warned_invalid_end_user = False
+
+
+def _end_user_attribution() -> bool:
+    """``plugins.entries.<id>.settings.end_user_attribution``: off unless set to true. Read per turn
+    through ``ctx.get_config``, which resolves the served profile's config.yaml under multiplexing.
+    Anything but a boolean warns once and counts as off."""
+    global _warned_invalid_end_user
+    if _PLUGIN_CTX is None:
+        return False
+    value = _PLUGIN_CTX.get_config(_END_USER_SETTING, False)
+    if isinstance(value, bool):
+        return value
+    if not _warned_invalid_end_user:
+        _warned_invalid_end_user = True
+        key = f"plugins.entries.{_PLUGIN_CTX.plugin_id}.settings.{_END_USER_SETTING}"
+        logger.warning("Langfuse plugin: %s=%r is not true or false, so traces get no userId. "
+                       "Fix it with `hermes config set %s true` (or false).", key, value, key)
+    return False
 
 
 def _redact_secrets(value: str) -> str:
@@ -352,6 +400,20 @@ def _trace_key(task_id: str, session_id: str, *, turn_id: str = "", api_request_
     return task_id or scope
 
 
+def _remember_locked(mapping: OrderedDict, key: str, value: str) -> None:
+    """Caller holds ``_STATE_LOCK``. Insert or refresh ``key``, dropping the oldest entries over the cap."""
+    mapping[key] = value
+    mapping.move_to_end(key)
+    while len(mapping) > _MAX_TRACE_STATE:
+        mapping.popitem(last=False)
+
+
+def _turn_user_locked(turn_id: str, session_id: str) -> str:
+    """Caller holds ``_STATE_LOCK``. The messaging user behind a turn: its own sender, else the user
+    inherited by a subagent session, else ``""`` (cron, CLI, API-server and other senderless turns)."""
+    return (_SENDER_BY_TURN.get(turn_id, "") if turn_id else "") or _USER_BY_CHILD_SESSION.get(str(session_id), "")
+
+
 def _state_for_turn(turn_id: str) -> Optional[TraceState]:
     """Live trace state for a turn id alone (caller holds ``_STATE_LOCK``). Subagent
     hooks carry ``parent_turn_id`` but no ``task_id``, so rebuilding the key would
@@ -556,10 +618,8 @@ def _serialize_assistant_message(message: Any) -> dict[str, Any]:
 def _canonical_usage_and_cost(canonical: Any, *, provider: str, model: str,
                               base_url: str) -> tuple[dict[str, int], dict[str, float]]:
     """Translate canonical Hermes usage into Langfuse usage and cost maps."""
-    usage_details: dict[str, int] = {
-        key: tokens for key, attr, _ in _USAGE_FIELDS
-        if (tokens := getattr(canonical, attr)) or key in ("input", "output")
-    }
+    buckets = _usage_buckets(lambda attr: getattr(canonical, attr))
+    usage_details: dict[str, int] = {key: tokens for key, tokens in buckets.items() if tokens or key in ("input", "output")}
     cost_details: dict[str, float] = {}
     try:
         from agent.usage_pricing import estimate_usage_cost, resolve_billing_route
@@ -595,10 +655,10 @@ def _canonical_usage_and_cost(canonical: Any, *, provider: str, model: str,
         # Above the context tier, estimate_usage_cost bills the WHOLE request at the
         # *_above rates; use them here too or the breakdown disagrees with "total".
         above = bool(entry) and entry.tier_threshold_tokens is not None and canonical.prompt_tokens > entry.tier_threshold_tokens
-        for key, attr, rate_attr in _USAGE_FIELDS if entry else ():
-            rate_above = getattr(entry, f"{rate_attr}_above", None) if above and rate_attr else None
-            rate = rate_above if rate_above is not None else getattr(entry, rate_attr, None) if rate_attr else None
-            tokens = getattr(canonical, attr)
+        for key, _attr, rate_attr in _USAGE_FIELDS if entry else ():
+            rate_above = getattr(entry, f"{rate_attr}_above", None) if above else None
+            rate = rate_above if rate_above is not None else getattr(entry, rate_attr, None)
+            tokens = buckets[key]
             if rate is not None and tokens:
                 cost_details[key] = float(Decimal(tokens) * rate / Decimal(1000000))
     except Exception:  # pragma: no cover - canonical total remains usable
@@ -643,7 +703,7 @@ def _trace_tags(platform: str) -> list[str]:
 
 def _start_root_trace(task_key: str, *, task_id: str, session_id: str, platform: str, provider: str, model: str,
                       api_mode: str, messages: Any, client: Langfuse,
-                      turn_id: str = "", api_request_id: str = "") -> TraceState:
+                      turn_id: str = "", api_request_id: str = "", user_id: str = "") -> TraceState:
     # Session IDs deliberately group Langfuse traces, but cannot also identify
     # a trace: gateway and hosted-room turns retain one session across many
     # replies.  Prefer the unique turn ID (then request ID for hook callers
@@ -678,6 +738,10 @@ def _start_root_trace(task_key: str, *, task_id: str, session_id: str, platform:
 
     root_span = None
     propagated = {"session_id": session_id or task_key, "trace_name": "Hermes turn", "tags": _trace_tags(platform)}
+    # Langfuse userId is the end user (hermes-agent#44639): the platform's own sender id, verbatim, so
+    # the Users view matches what the chat shows. The profile stays in metadata (hermes-agent#26455).
+    if user_id:
+        propagated["user_id"] = user_id
     if profile or kanban:
         propagated["metadata"] = {**({"profile": profile} if profile else {}), **kanban}
     if propagate_attributes is not None:
@@ -714,14 +778,15 @@ def _start_child_observation(state: TraceState, *, name: str, as_type: str, inpu
 
 def _end_observation(observation: Any, *, output: Any = None, metadata: Optional[dict] = None,
                      usage_details: Optional[dict] = None, cost_details: Optional[dict] = None,
-                     level: Optional[str] = None, status_message: Optional[str] = None) -> None:
+                     level: Optional[str] = None, status_message: Optional[str] = None,
+                     model: Optional[str] = None) -> None:
     if observation is None:
         return
     with _failsafe("end observation"):
         update_kwargs = {**({} if output is None else {"output": output}),
                          **{k: v for k, v in (("metadata", metadata), ("usage_details", usage_details),
                                               ("cost_details", cost_details), ("level", level),
-                                              ("status_message", status_message)) if v}}
+                                              ("status_message", status_message), ("model", model)) if v}}
         if update_kwargs:
             observation.update(**update_kwargs)
         observation.end()
@@ -781,6 +846,9 @@ def _finish_trace(task_key: str, *, output: Any = None) -> None:
     client = _get_langfuse()
     with _STATE_LOCK:
         state = _TRACE_STATE.pop(task_key, None) if client is not None else None
+        _, marker, turn_id = task_key.rpartition(":turn:")
+        if marker:
+            _SENDER_BY_TURN.pop(turn_id, None)
     if state is None:
         return
 
@@ -819,11 +887,18 @@ def _duration_meta(api_duration: Any) -> dict[str, Any]:
     return {"api_duration_s": round(api_duration, 3)} if api_duration and api_duration > 0 else {}
 
 
-def _pop_generation(task_key: str, api_call_count: Any) -> tuple[Optional[TraceState], Any]:
-    """Detach the open generation for one API call. Returns (state, generation); either may be None."""
+def _pop_generation(task_key: str, api_call_count: Any) -> tuple[Optional[TraceState], Any, Optional[str]]:
+    """Detach the open generation for one API call.
+
+    Returns (state, generation, start_model); any may be None. ``start_model`` is the
+    model the generation was started with in ``on_pre_llm_request``.
+    """
     with _STATE_LOCK:
         state = _TRACE_STATE.get(task_key)
-        return state, state.generations.pop(_request_key(api_call_count), None) if state else None
+        if state is None:
+            return None, None, None
+        req_key = _request_key(api_call_count)
+        return state, state.generations.pop(req_key, None), state.generation_models.pop(req_key, None)
 
 
 def _get_or_start_state_locked(task_key: str, **root_kwargs: Any) -> TraceState:
@@ -844,17 +919,24 @@ def _get_or_start_state_locked(task_key: str, **root_kwargs: Any) -> TraceState:
 
 def on_pre_llm_call(*, task_id: str = "", session_id: str = "", platform: str = "", model: str = "",
                     provider: str = "", api_mode: str = "", messages: Any = None,
-                    turn_id: str = "", api_request_id: str = "", **_: Any) -> None:
+                    turn_id: str = "", api_request_id: str = "", sender_id: Any = "", **_: Any) -> None:
+    # Without the opt-in the sender is dropped here, so nothing downstream keeps or exports it.
+    sender = str(sender_id).strip() if sender_id and _end_user_attribution() else ""
     # Only legacy request-shaped calls carry an API ``messages`` list; the
     # turn-scoped pre_llm_call would otherwise open an orphan root trace.
     if not isinstance(messages, list):
+        # It is still the only hook that names the sender: keep it for this turn's root trace.
+        if sender and turn_id:
+            with _STATE_LOCK:
+                _remember_locked(_SENDER_BY_TURN, str(turn_id), sender)
         return
     client, task_key = _client_and_key(task_id, session_id, turn_id, api_request_id)
     if client is None:
         return
     with _STATE_LOCK:
         _get_or_start_state_locked(task_key, task_id=task_id, session_id=session_id, platform=platform, provider=provider, model=model,
-                                   api_mode=api_mode, messages=messages, client=client, turn_id=turn_id, api_request_id=api_request_id)
+                                   api_mode=api_mode, messages=messages, client=client, turn_id=turn_id, api_request_id=api_request_id,
+                                   user_id=sender or _turn_user_locked(turn_id, session_id))
 
 
 def _emit_moa_reference_generations(state: TraceState, *, client: Langfuse, references: Any) -> None:
@@ -877,7 +959,8 @@ def _emit_moa_reference_generations(state: TraceState, *, client: Langfuse, refe
         if not isinstance(ref, dict):
             continue
         usage = ref.get("usage") or {}
-        usage_details = {key: usage[attr] for key, attr, _ in _USAGE_FIELDS if usage.get(attr)} if isinstance(usage, dict) else {}
+        usage_details = {key: tokens for key, tokens in _usage_buckets(usage.get).items() if tokens} \
+            if isinstance(usage, dict) else {}
         cost_usd = ref.get("cost_usd")
         cost_details = {"total": float(cost_usd)} if isinstance(cost_usd, (int, float)) else {}
 
@@ -920,7 +1003,8 @@ def on_pre_llm_request(*, task_id: str = "", session_id: str = "", platform: str
     with _STATE_LOCK:
         state = _get_or_start_state_locked(
             task_key, task_id=task_id, session_id=session_id, platform=platform, provider=provider, model=model,
-            api_mode=api_mode, messages=input_messages, client=client, turn_id=turn_id, api_request_id=api_request_id)
+            api_mode=api_mode, messages=input_messages, client=client, turn_id=turn_id, api_request_id=api_request_id,
+            user_id=_turn_user_locked(turn_id, session_id))
         previous = state.generations.pop(req_key, None)
         if previous is not None:
             _end_observation(previous, level="WARNING",
@@ -935,6 +1019,7 @@ def on_pre_llm_request(*, task_id: str = "", session_id: str = "", platform: str
             input_value=langfuse_input, metadata=gen_metadata, model=model,
             model_parameters={"api_mode": api_mode, "provider": provider},
         )
+        state.generation_models[req_key] = model  # overwrites a retried attempt's entry
 
 
 def on_post_llm_call(*, task_id: str = "", session_id: str = "", provider: str = "", base_url: str = "",
@@ -948,12 +1033,15 @@ def on_post_llm_call(*, task_id: str = "", session_id: str = "", provider: str =
         return
 
     # The response echoes the model that actually served the request.
-    if isinstance(response_model, str) and response_model:
-        model = response_model
+    served_model = response_model if isinstance(response_model, str) and response_model else None
 
-    state, generation = _pop_generation(task_key, api_call_count)
+    state, generation, start_model = _pop_generation(task_key, api_call_count)
     if state is None or generation is None:
         return
+    # Compare against what the generation was started with (the dispatched request-body
+    # model), not the hook's ``model`` (agent.model): the two differ without any reroute,
+    # e.g. native Anthropic name normalization or a MoA preset name.
+    requested_model = start_model or model
 
     if moa_references:
         _emit_moa_reference_generations(state, client=client, references=moa_references)
@@ -974,15 +1062,22 @@ def on_post_llm_call(*, task_id: str = "", session_id: str = "", provider: str =
     # post_api_request's ``response`` is a sanitized dict with no ``.usage``;
     # gate on the attribute so the usage-dict fallback is actually reached.
     if getattr(response, "usage", None) is not None:
-        usage_details, cost_details = _usage_and_cost(response, provider=provider, api_mode=api_mode, model=model, base_url=base_url)
+        usage_details, cost_details = _usage_and_cost(response, provider=provider, api_mode=api_mode, model=served_model or model,
+                                                     base_url=base_url)
     elif isinstance(usage, dict) and usage:
-        usage_details, cost_details = _usage_and_cost(None, provider=provider, model=model, base_url=base_url, usage=usage)
+        usage_details, cost_details = _usage_and_cost(None, provider=provider, model=served_model or model, base_url=base_url,
+                                                     usage=usage)
     else:
         usage_details, cost_details = {}, {}
 
     gen_metadata = {"tool_call_count": len(output.get("tool_calls", [])) or assistant_tool_call_count,
                     **_duration_meta(api_duration), **({"finish_reason": finish_reason} if finish_reason else {})}
-    _end_observation(generation, output=output, usage_details=usage_details, cost_details=cost_details, metadata=gen_metadata)
+    # Record the served model on the generation, keeping the started one in metadata
+    # when the two differ (routers, aliases, fallbacks).
+    if served_model and requested_model and served_model != requested_model:
+        gen_metadata["requested_model"] = requested_model
+    _end_observation(generation, output=output, usage_details=usage_details, cost_details=cost_details,
+                     metadata=gen_metadata, model=served_model)
 
     has_tools = bool(getattr(assistant_message, "tool_calls", None)) if assistant_message else assistant_tool_call_count > 0
     if not has_tools and output.get("content"):
@@ -1057,7 +1152,7 @@ def on_api_request_error(*, task_id: str = "", session_id: str = "", api_call_co
     client, task_key = _client_and_key(task_id, session_id, turn_id, api_request_id)
     if client is None:
         return
-    state, generation = _pop_generation(task_key, api_call_count)
+    state, generation, _start_model = _pop_generation(task_key, api_call_count)
     if state is None:
         return
 
@@ -1130,6 +1225,9 @@ def on_subagent_start(*, parent_turn_id: str = "", parent_subagent_id: Any = Non
             return
         metadata = {"child_session_id": child_session_id, "child_subagent_id": child_subagent_id, "child_role": child_role,
                     **({"parent_subagent_id": parent_subagent_id} if parent_subagent_id else {})}
+        # A subagent has no sender of its own: its traces belong to the user whose turn spawned it.
+        if state.propagated.get("user_id"):
+            _remember_locked(_USER_BY_CHILD_SESSION, str(child_session_id), state.propagated["user_id"])
         state.subagents[str(child_session_id)] = _start_child_observation(
             state, name=f"Subagent: {child_role or 'delegate'}", as_type="span",
             input_value=_capture_content(child_goal), metadata=metadata)
@@ -1142,6 +1240,7 @@ def on_subagent_stop(*, parent_turn_id: str = "", child_session_id: Any = None, 
         return
 
     with _STATE_LOCK:
+        _USER_BY_CHILD_SESSION.pop(str(child_session_id), None)
         state = _state_for_turn(parent_turn_id)
         if state is None:
             return

@@ -13,6 +13,7 @@ to and the system prompt note that tells the model where the boundary is.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 BACKEND_NAME = "bubblewrap"
 PROMPT_SECTION_ID = "bubblewrap-sandbox"
-SETTING_KEYS = ("profile", "binds", "memory_mb", "cpu_seconds", "max_procs")
+SETTING_KEYS = ("profile", "binds", "memory_mb", "cpu_seconds", "max_procs", "home_allow")
 
 _PROFILE_CHOICES = (
     ("restricted", "restricted - read-only working directory, no network"),
@@ -39,6 +40,18 @@ def _sandbox():
     from . import sandbox
 
     return sandbox
+
+
+def _file_tools_bypass_sandbox() -> bool:
+    """Whether Hermes' file tools skip this sandbox and touch files from the Hermes process itself.
+
+    Core gives ``read_file``, ``write_file``, ``patch`` and ``search_files`` an in-process path (Python
+    reads and writes, ripgrep spawned directly) on any POSIX ``LocalEnvironment``, which
+    ``BubblewrapEnvironment`` is; ``HERMES_NATIVE_FILE_READ`` off sends every file operation through
+    ``env.execute``, so into the sandbox (``ShellFileOperations._native_read_enabled`` in
+    ``tools/file_operations.py``, same parse).
+    """
+    return os.environ.get("HERMES_NATIVE_FILE_READ", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def _terminal_env(name: str, default: str = "") -> str:
@@ -161,13 +174,13 @@ class BubblewrapProvider(TerminalEnvironmentProvider):
         root = sandbox.writable_root_for(_terminal_env("TERMINAL_CWD", ""))
         start, replaced = sandbox.start_cwd_for(cwd, root)
         return sandbox.BubblewrapEnvironment(cwd=start, timeout=timeout, config=self.load_config(),
-                                             replaced_cwd=replaced, root=root)
+                                             replaced_cwd=replaced, root=root, session_key=task_id)
 
     # -- the model's view --
     def prompt_note(self, _session_info: Any = None) -> str:
         """Confinement notice for a new session on this backend; empty on any other backend.
 
-        Without it a ``Read-only file system`` refusal or an empty SSH directory reads as a broken host,
+        Without it a ``Read-only file system`` refusal or a missing ``~/.ssh`` reads as a broken host,
         and the model detours (sudo, another path, another tool) instead of reporting the boundary.
         """
         if (_terminal_env("TERMINAL_ENV", "local") or "local").strip().lower() != BACKEND_NAME:
@@ -184,21 +197,35 @@ class BubblewrapProvider(TerminalEnvironmentProvider):
             if config.home_mode in sandbox.PROFILE_HOME_MODES:
                 extra.append("the profile home ($HOME)")
         if profile.writable_cwd:
-            writable = ", ".join(["the working directory", "the scratch directory", *extra])
+            writable = ", ".join(["the working directory", "the scratch directory ($TMPDIR)", *extra])
         elif extra:
             writable = ", ".join(extra) + " (the working directory is read-only under this profile)"
         else:
             writable = "nothing (the working directory is read-only under this profile)"
         network = "the host network" if profile.share_net else "no network (loopback only)"
+        if _file_tools_bypass_sandbox():
+            file_tools = (
+                "`read_file`, `write_file`, `patch` and `search_files` do not run in this sandbox: Hermes performs them "
+                "itself on the host, with the host user's permissions and its own file-safety rules, so they can read "
+                "and change paths that are hidden or read-only for commands. The scratch directory ($TMPDIR) is not "
+                "the same directory for them: a file a command writes there is not visible to `read_file`, and one "
+                "`write_file` puts there is not visible to commands, so hand files over through the working directory."
+            )
+        else:
+            file_tools = (
+                "`read_file`, `write_file`, `patch` and `search_files` run through this sandbox too, so the same paths "
+                "are hidden and read-only for them."
+            )
         return (
             f"Terminal sandbox: bubblewrap, profile `{profile.name}`. Every `terminal` and `execute_code` call runs "
             f"in its own bwrap sandbox on this host with the same paths: the filesystem is read-only except {writable}; "
-            "the .ssh, .aws, .gnupg and .hermes directories in the home directory and the other credential paths "
-            "appear empty; /tmp and /proc are private to "
-            f"each command; it has {network}. A `Read-only file system` error, an empty credential directory or a "
+            "dot entries of the home directory that are not on the allowlist do not exist, the Hermes home is hidden, "
+            "and credential paths below a visible entry appear empty; the Hermes scratch directory ($TMPDIR) is this "
+            "sandbox's own and shows none of the files other sessions keep there; /tmp and /proc are private to "
+            f"each command; it has {network}. A `Read-only file system` error, a missing or empty credential path or a "
             "refused connection is that boundary, not a broken host: report it instead of working around it. "
             "Background processes are not available on this backend: each command's sandbox ends with it. "
-            "`read_file`, `write_file`, `patch` and `search_files` run on the host itself and are not confined."
+            f"{file_tools}"
         )
 
 

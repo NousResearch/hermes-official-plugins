@@ -1,13 +1,17 @@
 {
   "name": "hermes-memory-wiki",
   "private": true,
-  "version": "1.0.0",
-  "description": "Build tooling for the Memory Wiki dashboard plugin bundle (dashboard/dist/index.js). React comes from the host SDK at runtime; nothing is bundled but this plugin's own code.",
+  "version": "1.1.0",
+  "description": "Build and test tooling for Memory Wiki dashboard and native Desktop UI. Runtime React and SDK components are supplied by the host.",
   "scripts": {
     "build": "esbuild dashboard/src/index.jsx --bundle --format=iife --target=es2020 --jsx-factory=React.createElement --jsx-fragment=React.Fragment --banner:js=\"/* hermes-memory-wiki dashboard bundle — built from dashboard/src/index.jsx with esbuild; edit the source, run npm run build. MIT, (c) 2026 Nous Research; original by @Araja119 (hermes-agent #31244). */\" --outfile=dashboard/dist/index.js",
-    "check": "node --check dashboard/dist/index.js"
+    "check": "node --check dashboard/dist/index.js && node --input-type=module --check < desktop/plugin.js",
+    "test": "esbuild tests/desktop-entry.mjs --bundle --format=esm --platform=node --external:react --external:react/jsx-runtime --alias:@hermes/plugin-sdk=./tests/desktop-sdk-shim.mjs --outfile=node_modules/.memory-wiki-desktop-test.mjs && node --test --experimental-test-isolation=none tests/desktop.test.mjs"
   },
   "devDependencies": {
-    "esbuild": "0.28.1"
+    "esbuild": "0.28.1",
+    "jsdom": "^27.4.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
   }
 }

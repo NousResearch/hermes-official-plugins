@@ -31,6 +31,7 @@ from bubblewrap_plugin.sandbox import (
     masked_inside,
     HOST_SOCKET_VARS,
     build_bwrap_args,
+    load_bubblewrap_config,
 )
 from tools.environments.local import LocalEnvironment
 
@@ -151,7 +152,9 @@ class TestStateDir:
             env = BubblewrapEnvironment(cwd=str(work_dir), timeout=10)
             local = LocalEnvironment(cwd=str(work_dir), timeout=10)
         prefix = "unset " + " ".join(HOST_SOCKET_VARS) + "; "
-        assert f"eval '{prefix}echo hi'" in env._wrap_command("echo hi", str(work_dir))
+        wrapped = env._wrap_command("echo hi", str(work_dir))
+        assert f"eval '{prefix}" in wrapped
+        assert wrapped.index(prefix) < wrapped.index("echo hi'")
         assert "eval 'echo hi'" in local._wrap_command("echo hi", str(work_dir))
         assert "unset SSH_AUTH_SOCK" not in local._wrap_command("echo hi", str(work_dir))
 
@@ -342,10 +345,12 @@ class TestConstructionTimeMounts:
 
     def test_builder_signature_takes_only_construction_inputs_and_tracked_cwd(self):
         params = list(inspect.signature(build_bwrap_args).parameters)
-        # hidden_paths, ca_bundles and scratch_dir are what the environment resolved at
-        # construction; none of them ever comes from inside a sandbox.
+        # hidden_paths, home_root and home_allow (the HOME layout inputs), ca_bundles and
+        # the scratch dirs are what the environment resolved at construction; none of them
+        # ever comes from inside a sandbox.
         assert params == ["config", "initial_cwd", "state_dir", "home", "hermes_home", "tracked_cwd", "bwrap_path",
-                          "hidden_paths", "ca_bundles", "scratch_dir"]
+                          "hidden_paths", "home_root", "home_allow", "ca_bundles", "scratch_dir",
+                          "scratch_private", "profile_home", "sandbox_root"]
 
     def test_chdir_follows_tracked_cwd_with_fixed_mounts(self, sandbox_root, work_dir):
         home = os.path.expanduser("~")
@@ -362,7 +367,9 @@ class TestConstructionTimeMounts:
         assert _chdir(second) == home
         assert _mounts(second) == _mounts(first)
         assert (str(work_dir), str(work_dir)) in [m[1:] for m in _mounts(second) if m[0] == "--bind-try"]
-        assert home not in {p for m in _mounts(second) for p in m[1:]}
+        # HOME is never bound as a whole: the first directive on it is the
+        # tmpfs of the default-deny layout.
+        assert next(m for m in _mounts(second) if m[-1] == home) == ("--tmpfs", home)
 
     def test_builder_reads_nothing_from_state_dir(self, sandbox_root, work_dir, monkeypatch):
         with _no_session():
@@ -635,6 +642,14 @@ class TestInitialCwdGuard:
         env.cleanup()
         assert any("covers the home directory" in r.getMessage() for r in caplog.records)
 
+    def test_cwd_warning_says_new_top_level_entries_cannot_be_made(self, sandbox_root, fake_home, caplog):
+        with caplog.at_level(logging.WARNING, logger="bubblewrap_plugin.sandbox"), _no_session():
+            BubblewrapEnvironment(cwd=str(fake_home), timeout=10).cleanup()
+        message = next(r.getMessage() for r in caplog.records if "covers the home directory" in r.getMessage())
+        assert "no new entry can be made at the top of it" in message
+        assert "non-dot entry" in message
+        assert "every dotfile" not in message
+
     def test_project_dir_as_cwd_is_silent(self, sandbox_root, fake_home, work_dir, caplog):
         with caplog.at_level(logging.WARNING, logger="bubblewrap_plugin.sandbox"), _no_session():
             env = BubblewrapEnvironment(cwd=str(work_dir), timeout=10)
@@ -740,6 +755,57 @@ def host_dir(tmp_path):
         yield base
     finally:
         shutil.rmtree(base, ignore_errors=True)
+
+
+class TestHomeAllowKey:
+    """The home_allow setting widens what shows under HOME, read once at construction."""
+
+    @pytest.fixture
+    def fake_home(self, tmp_path, monkeypatch):
+        home = tmp_path / "homes" / "home"
+        home.mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+        return home
+
+    def test_loader_reads_the_setting_as_a_list_or_a_json_list(self):
+        assert load_bubblewrap_config({"home_allow": [".zz-extra", ".config/zz-app"]}).home_allow == (".zz-extra", ".config/zz-app")
+        assert load_bubblewrap_config({"home_allow": '[".zz-extra"]'}).home_allow == (".zz-extra",)
+        assert load_bubblewrap_config({}).home_allow == ()
+        assert load_bubblewrap_config({"home_allow": ""}).home_allow == ()
+
+    @pytest.mark.parametrize("value", ["not json", '{"a": 1}', "[1, 2]", '"one string"', [1, 2], {"a": 1}])
+    def test_loader_rejects_a_malformed_value_and_names_the_setting(self, value):
+        with pytest.raises(ValueError, match="plugins.entries.bubblewrap.settings.home_allow"):
+            load_bubblewrap_config({"home_allow": value})
+
+    def test_allow_items_make_their_entries_visible(self, sandbox_root, work_dir, fake_home):
+        (fake_home / ".zz-extra").mkdir()
+        (fake_home / ".config" / "zz-app").mkdir(parents=True)
+        (fake_home / ".zz-other").mkdir()
+        config = BubblewrapConfig(home_allow=(".zz-extra", ".config/zz-app"))
+        with _no_session():
+            env = BubblewrapEnvironment(cwd=str(work_dir), timeout=10, config=config)
+        try:
+            mounts = _mounts(env._wrap_popen_args(["bash"]))
+            assert ("--ro-bind-try", str(fake_home / ".zz-extra"), str(fake_home / ".zz-extra")) in mounts
+            assert ("--ro-bind-try", str(fake_home / ".config/zz-app"), str(fake_home / ".config/zz-app")) in mounts
+            assert str(fake_home / ".zz-other") not in {m[-1] for m in mounts}
+        finally:
+            env.cleanup()
+
+    def test_allow_item_for_a_credential_store_is_ignored(self, sandbox_root, work_dir, fake_home, caplog):
+        (fake_home / ".config" / "gh").mkdir(parents=True)
+        (fake_home / ".aws").mkdir()
+        config = BubblewrapConfig(home_allow=(".aws", ".config/gh"))
+        with caplog.at_level(logging.WARNING), _no_session():
+            env = BubblewrapEnvironment(cwd=str(work_dir), timeout=10, config=config)
+        try:
+            dests = {m[-1] for m in _mounts(env._wrap_popen_args(["bash"]))}
+            assert str(fake_home / ".aws") not in dests
+            assert str(fake_home / ".config" / "gh") not in dests
+            assert len([r for r in caplog.records if "settings.home_allow" in r.getMessage()]) == 2
+        finally:
+            env.cleanup()
 
 
 class TestSandboxDirGuard:
@@ -1042,9 +1108,10 @@ class TestMaskedInside:
         env, p = layout
         argv = env._wrap_popen_args(["bash"])
         state = Path(env.get_temp_dir())
-        visible = [p["work"] / "sub", p["home"] / ".ssh", p["hermes_home"], state / "inner", p["dest"] / "present", Path("/usr/share"), Path("/tmp")]
+        visible = [p["work"] / "sub", p["hermes_home"], state / "inner", p["dest"] / "present", Path("/usr/share"), Path("/tmp")]
         # /tmp is spelled literally: pytest's tmp_path follows TMPDIR, which on some hosts is not under /tmp.
-        masked = [p["home"] / ".ssh" / "deep", p["hermes_home"] / "logs", p["dest"] / "absent", Path("/tmp") / "other"]
+        # HOME/.ssh is off the allowlist, so it does not exist in the sandbox.
+        masked = [p["home"] / ".ssh", p["home"] / ".ssh" / "deep", p["hermes_home"] / "logs", p["dest"] / "absent", Path("/tmp") / "other"]
         assert [str(x) for x in visible if masked_inside(argv, str(x))] == []
         assert [str(x) for x in masked if not masked_inside(argv, str(x))] == []
 
@@ -1298,7 +1365,11 @@ class TestBindSourceGuard:
         cache = work_dir / "cache"
         cache.mkdir()
         self._constructs(work_dir, self._config(binds=[BindMount(src=str(cache), dest=str(cache), readonly=False)]))
-        self._constructs(work_dir, self._config(binds=[BindMount(src=str(cache), dest="/mnt/cache", readonly=True)]))
+        self._constructs(work_dir, self._config(binds=[BindMount(src=str(cache), dest=str(cache), readonly=True)]))
+        # Elsewhere the source is a plain entry of the writable cwd, which a command can swap.
+        with _no_session(), pytest.raises(ValueError, match="binds entry"):
+            BubblewrapEnvironment(cwd=str(work_dir), timeout=10,
+                                  config=self._config(binds=[BindMount(src=str(cache), dest="/mnt/cache", readonly=True)]))
 
     def test_rw_bind_of_the_cwd_itself_elsewhere_constructs(self, sandbox_root, work_dir):
         # The cwd is bound at its own path first, so it is a mount point inside.

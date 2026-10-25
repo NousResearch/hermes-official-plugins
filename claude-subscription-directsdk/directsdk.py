@@ -810,6 +810,10 @@ class Client:
                 apply_traffic_policy(env)
                 # Hermes owns budgets; native's replayed reminder invalidates cached history.
                 env['CLAUDE_CODE_TOTAL_TOKENS_REMINDER'] = 'off'
+                # Hermes owns memory and instructions. --setting-sources '' leaves auto memory and the managed
+                # CLAUDE.md loading, and native would put them in the conversation as a reminder on the user's
+                # turn, where Claude reads Claude Code's notes as text smuggled into the user's message (#195).
+                env.update(CLAUDE_CODE_DISABLE_AUTO_MEMORY='1', CLAUDE_CODE_DISABLE_CLAUDE_MDS='1')
                 # The queried frame lets the relay keep the cache breakpoint off native's per-request context.
                 request.admission = Admission(env.get('ANTHROPIC_BASE_URL', 'https://api.anthropic.com'), timeout, queried=frames[-1]['message']['content'])
                 # A Hermes auxiliary one-shot (summary, title: marked by the profile hook, one turn, no tools) is

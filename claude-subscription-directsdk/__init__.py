@@ -190,6 +190,9 @@ profile = ClaudeOAuthDirectSDKProfile(
     # A dataclass field (Hermes >= 0.21.4), so a method on the subclass would be shadowed by its None default.
     classify_api_error=classify_api_error,
 )
+# Attribute assignment keeps the plugin loadable on hosts predating this capability.
+# Newer hosts use it to avoid buffering a healthy native stream behind a stale-call timer.
+profile.supports_streaming = True
 register_provider(profile)
 
 # The provider stays registered when Claude Code is missing so `hermes model` can show the

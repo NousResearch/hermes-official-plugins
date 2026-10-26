@@ -783,8 +783,12 @@ class Client:
             # can still hold these open for a moment, and cleanup must not fail the request.
             with tempfile.TemporaryDirectory(prefix='claude-directsdk-', ignore_cleanup_errors=True) as tmp:
                 root = Path(tmp)
-                (root / 'tools.json').write_text(json.dumps(manifest), encoding='utf-8')
-                mcp = {'mcpServers': {'hermes': {'command': sys.executable, 'args': [str(Path(__file__).with_name('inert_mcp.py')), str(root / 'tools.json')]}}}
+                # No tools means no inert MCP helper: skipping it drops its interpreter start (~0.6 s)
+                # and one server handshake from every tool-less call, e.g. titles and summaries (#42).
+                mcp = {'mcpServers': {}}
+                if manifest:
+                    (root / 'tools.json').write_text(json.dumps(manifest), encoding='utf-8')
+                    mcp = {'mcpServers': {'hermes': {'command': sys.executable, 'args': [str(Path(__file__).with_name('inert_mcp.py')), str(root / 'tools.json')]}}}
                 env = _with_login_identity(_with_windows_essentials(dict(self.env if self.env is not None else os.environ)))
                 if self.env is None:
                     conflicts = [key for key in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_FOUNDRY_API_KEY') if env.get(key)]

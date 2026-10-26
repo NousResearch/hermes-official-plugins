@@ -6,6 +6,10 @@
 
 - Per-profile `claude_config_dir` setting selects the Claude login for every native spawn in a multiplexed gateway (#34).
 
+### Changed
+
+- A tool-less request no longer starts the inert MCP helper or writes its manifest: titles, summaries and other tool-less calls skip ~0.6 s of Python start plus one server handshake per call (#42).
+
 ### Fixed
 
 - Claude Code's own context no longer reaches Claude inside the user's message, where Claude took it for a prompt-injection attempt: native's auto memory (`MEMORY.md`) and CLAUDE.md files are not loaded (`--setting-sources ''` left auto memory and the managed CLAUDE.md on), and the relay drops the context native prepends to the conversation's first user turn (the account-email reminder) instead of moving it behind Hermes' frame, matching how every later request replays that turn (#195, thanks @obahareth).

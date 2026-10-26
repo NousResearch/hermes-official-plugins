@@ -80,7 +80,9 @@ Auxiliary/fallback routing remains owned by Hermes. Configure those routes expli
 
 ### Proxies
 
-The relay opens the upstream connection itself, so it applies native's proxy variables from the Hermes process environment: `https_proxy`/`HTTPS_PROXY`, then `http_proxy`/`HTTP_PROXY`, with `NO_PROXY` exceptions (standard-library matching; comma- or space-separated). The proxy must be an `http://` CONNECT proxy; `user:pass@` in its URL becomes a `Proxy-Authorization` header. TLS still terminates at `api.anthropic.com`, so the subscription bearer never reaches the proxy. A SOCKS or TLS-to-proxy URL is ignored with a warning and the relay connects directly, as it did before proxy support.
+The relay opens the upstream connection itself, so it honors a dedicated proxy via `CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY` (takes precedence over generic proxy variables without affecting the parent process), or native's proxy variables from the Hermes process environment: `https_proxy`/`HTTPS_PROXY`, then `http_proxy`/`HTTP_PROXY`, with `NO_PROXY` exceptions (standard-library matching; comma- or space-separated). The proxy must be an `http://` CONNECT proxy; `user:pass@` in its URL becomes a `Proxy-Authorization` header. TLS still terminates at `api.anthropic.com`, so the subscription bearer never reaches the proxy. A SOCKS or TLS-to-proxy URL is ignored with a warning and the relay connects directly, as it did before proxy support.
+
+For a TLS-inspecting egress broker (one that adds the subscription bearer on the way out, so the agent host only holds a placeholder `CLAUDE_CODE_OAUTH_TOKEN`), also set `CLAUDE_SUBSCRIPTION_DIRECTSDK_CA_FILE` to the broker's root CA PEM. The relay then trusts that root in addition to the system roots; verification is never turned off, and an unreadable file fails the request instead of connecting unverified. Both relay variables are read from the active profile's `.env` first, so a multiplexed gateway can route one profile through a broker while its siblings connect directly.
 
 ## Settings
 

@@ -5,6 +5,7 @@
 ### Added
 
 - Per-profile `claude_config_dir` setting selects the Claude login for every native spawn in a multiplexed gateway (#34).
+- Optional `skills_nudge` setting: a one-line reminder to load a matching skill rides the final user frame, because Claude stops acting on the system prompt's skills rule deep into a session and after compaction. Off by default; only the uncached tail grows (#41).
 
 ### Fixed
 

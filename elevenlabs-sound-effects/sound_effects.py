@@ -271,6 +271,17 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40] or "sound"
 
 
+def _is_audio(audio: bytes, output_format: str) -> bool:
+    """Recognize the container requested from ElevenLabs without trusting its MIME header."""
+    kind = FORMATS[output_format]
+    if kind == "wav":
+        return len(audio) >= 12 and audio[:4] == b"RIFF" and audio[8:12] == b"WAVE"
+    if kind == "opus":
+        return audio.startswith(b"OggS") and b"OpusHead" in audio[:512]
+    return audio.startswith(b"ID3") or (
+        len(audio) >= 2 and audio[0] == 0xff and audio[1] & 0xe0 == 0xe0)
+
+
 def _save(audio: bytes, prompt: str, output_format: str, sound_id: str) -> str:
     """Write under ``cache/generated/audio``: outside the transient caches the gateway sweeps, and
     inside the roots it delivers ``MEDIA:`` files from. Resolved per call (multiplexed profiles)."""
@@ -319,6 +330,11 @@ def generate(args: dict, settings: Callable[[str], Any], session_id: str = "") -
         return tool_error(_api_error(status, audio, reason))
     if not audio:
         return tool_error("ElevenLabs returned an empty audio response")
+    if not _is_audio(audio, output_format):
+        content_type = headers.get("content-type", "missing Content-Type").split(";", 1)[0]
+        return tool_error(
+            f"ElevenLabs returned HTTP 200 with {content_type}, but the response is not recognizable "
+            f"{FORMATS[output_format]} audio")
     sound_id = uuid.uuid4().hex[:12]
     path = _save(audio, body["text"], output_format, sound_id)
     requested = body.get("duration_seconds")

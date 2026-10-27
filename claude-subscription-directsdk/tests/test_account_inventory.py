@@ -30,6 +30,19 @@ class InventoryTests(unittest.TestCase):
         self.seed([{'id':'acct-one'},{'id':'acct-two'}]);pool=Inventory()
         first=pool.select(self.root);pool.rejected(first)
         self.assertTrue(all(pool.select(self.root)!=first for _ in range(5)))
+    def test_setup_usage_and_discovery_share_inventory_never_host_setting(self):
+        import directsdk_setup
+        self.seed([{'id':'acct-one'},{'id':'acct-two'}])
+        env={'CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR':str(self.root)}
+        with patch.object(directsdk_setup, '_setting', return_value=None):
+            child=directsdk_setup.apply_config_dir(dict(env))
+        self.assertEqual(child['CLAUDE_CONFIG_DIR'], str(self.root/'accounts/acct-one'))
+        with patch.object(directsdk_setup, '_setting', return_value=str(self.root.parent/'host-login')):
+            with self.assertRaises(ValueError):directsdk_setup.apply_config_dir(dict(env))
+        self.seed([])
+        with patch.object(directsdk_setup, '_setting', return_value=None):
+            with self.assertRaises(ValueError):directsdk_setup.apply_config_dir(dict(env))
+
     def test_client_passes_selected_directory_without_mutating_shared_environment(self):
         self.seed([{'id':'acct-one'},{'id':'acct-two'}])
         env={'CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR':str(self.root)}

@@ -18,7 +18,7 @@ class Inventory:
 
     @staticmethod
     def directories(root):
-        root = Path(root).resolve()
+        root = Path(root).expanduser().resolve()
         catalog = root / 'accounts.json'
         if not catalog.exists():
             return [str(root)]  # previous single-directory contract

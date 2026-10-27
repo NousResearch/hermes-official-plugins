@@ -774,21 +774,25 @@ class Client:
         except ImportError:
             from account_inventory import Inventory
         env = self.env if self.env is not None else os.environ
-        root = env.get('CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR') or env.get('CLAUDE_CONFIG_DIR')
+        try:
+            from .directsdk_setup import configured_directory
+        except ImportError:
+            from directsdk_setup import configured_directory
         directory = None
-        if root:
-            try:
+        try:
+            root = configured_directory(env)
+            if root and (Path(root).expanduser() / 'accounts.json').exists():
                 with self._lock:
                     if not hasattr(self, '_account_inventory'):
                         self._account_inventory = Inventory()
                 directory = self._account_inventory.select(root)
-                if (Path(root) / 'accounts.json').exists() and env.get('CLAUDE_CODE_OAUTH_TOKEN'):
+                if (Path(root).expanduser() / 'accounts.json').exists() and env.get('CLAUDE_CODE_OAUTH_TOKEN'):
                     raise ValueError('App-owned login refuses an unrelated token override')
-            except (OSError, ValueError) as error:
-                request.cancel()
-                with self._lock:
-                    self._requests.discard(request)
-                raise ClaudeCodeLoggedOut('Connect or reconnect Claude in the Claude connection app') from error
+        except (OSError, ValueError) as error:
+            request.cancel()
+            with self._lock:
+                self._requests.discard(request)
+            raise ClaudeCodeLoggedOut('Connect or reconnect Claude in the Claude connection app') from error
         try:
             yield from self._run_one(request, kwargs, body, manifest, names, system, frames, directory)
         except (ClaudeAPIError, ClaudeCodeLoggedOut) as error:

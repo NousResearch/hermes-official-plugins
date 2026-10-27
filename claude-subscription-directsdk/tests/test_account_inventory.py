@@ -10,7 +10,7 @@ from directsdk import Client, ClaudeAPIError, ClaudeCodeLoggedOut, Request
 
 class InventoryTests(unittest.TestCase):
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name)
+        self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name).resolve()
     def tearDown(self):self.tmp.cleanup()
     def seed(self,rows):
         (self.root/'accounts.json').write_text(json.dumps(rows))
@@ -37,6 +37,9 @@ class InventoryTests(unittest.TestCase):
         with patch.object(directsdk_setup, '_setting', return_value=None):
             child=directsdk_setup.apply_config_dir(dict(env))
         self.assertEqual(child['CLAUDE_CONFIG_DIR'], str(self.root/'accounts/acct-one'))
+        with patch.object(directsdk_setup, '_setting', return_value=str(self.root)):
+            configured=directsdk_setup.apply_config_dir({})
+        self.assertEqual(configured['CLAUDE_CONFIG_DIR'], str(self.root/'accounts/acct-one'))
         with patch.object(directsdk_setup, '_setting', return_value=str(self.root.parent/'host-login')):
             with self.assertRaises(ValueError):directsdk_setup.apply_config_dir(dict(env))
         self.seed([])

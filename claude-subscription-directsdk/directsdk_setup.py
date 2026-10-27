@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Mapping
+from pathlib import Path
 
 try:
     from .admission import Admission
@@ -96,27 +97,34 @@ def telemetry_enabled():
     return value is not False and value != 0
 
 
+def configured_directory(env):
+    """Resolve the upstream directory precedence; an app grant cannot be hidden by another setting."""
+    override = env.get("CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR")
+    inherited = env.get("CLAUDE_CONFIG_DIR")
+    setting = _setting(CONFIG_DIR_SETTING)
+    setting = setting.strip() if isinstance(setting, str) else ""
+    explicit = override or inherited
+    if explicit and (Path(explicit).expanduser() / 'accounts.json').exists():
+        if setting and Path(setting).expanduser().resolve() != Path(explicit).expanduser().resolve():
+            raise ValueError('App-owned login conflicts with another configured Claude directory')
+    return setting or override or inherited
+
+
 def apply_config_dir(env):
     """Select the active profile's Claude config directory on a child env, in place."""
-    override = env.pop("CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR", None)
-    setting = _setting(CONFIG_DIR_SETTING)
-    explicit = override or env.get("CLAUDE_CONFIG_DIR")
-    if explicit and (Path(explicit) / 'accounts.json').exists():
-        try:
-            from .account_inventory import Inventory
-        except ImportError:
-            from account_inventory import Inventory
-        if env.get('CLAUDE_CODE_OAUTH_TOKEN'):
-            raise ValueError('App-owned login refuses an unrelated token override')
-        if isinstance(setting, str) and setting.strip() and Path(setting).expanduser().resolve() != Path(explicit).expanduser().resolve():
-            raise ValueError('App-owned login conflicts with another configured Claude directory')
-        env['CLAUDE_CONFIG_DIR'] = Inventory().select(explicit)
-        return env
-    config = (setting.strip() if isinstance(setting, str) else "") or override or env.get("CLAUDE_CONFIG_DIR")
+    config = configured_directory(env)
+    env.pop("CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR", None)
     if config:
+        if (Path(config).expanduser() / 'accounts.json').exists():
+            try:
+                from .account_inventory import Inventory
+            except ImportError:
+                from account_inventory import Inventory
+            if env.get('CLAUDE_CODE_OAUTH_TOKEN'):
+                raise ValueError('App-owned login refuses an unrelated token override')
+            config = Inventory().select(config)
         env["CLAUDE_CONFIG_DIR"] = os.path.expanduser(config)
     return env
-
 
 def apply_traffic_policy(env, telemetry=None):
     """Set the plugin's Claude Code traffic flags on a child ``env`` (in place) and return it.

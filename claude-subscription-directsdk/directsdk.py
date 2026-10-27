@@ -769,6 +769,35 @@ class Client:
             stream.close()
 
     def _run(self, request, kwargs, body, manifest, names, system, frames):
+        try:
+            from .account_inventory import Inventory
+        except ImportError:
+            from account_inventory import Inventory
+        env = self.env if self.env is not None else os.environ
+        root = env.get('CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR') or env.get('CLAUDE_CONFIG_DIR')
+        directory = None
+        if root:
+            try:
+                with self._lock:
+                    if not hasattr(self, '_account_inventory'):
+                        self._account_inventory = Inventory()
+                directory = self._account_inventory.select(root)
+                if (Path(root) / 'accounts.json').exists() and env.get('CLAUDE_CODE_OAUTH_TOKEN'):
+                    raise ValueError('App-owned login refuses an unrelated token override')
+            except (OSError, ValueError) as error:
+                request.cancel()
+                with self._lock:
+                    self._requests.discard(request)
+                raise ClaudeCodeLoggedOut('Connect or reconnect Claude in the Claude connection app') from error
+        try:
+            yield from self._run_one(request, kwargs, body, manifest, names, system, frames, directory)
+        except (ClaudeAPIError, ClaudeCodeLoggedOut) as error:
+            if directory and getattr(error, 'status_code', None) in (401, 429):
+                self._account_inventory.rejected(directory)
+            # No automatic replay here: Hermes' next request/retry selects another subscription.
+            raise
+
+    def _run_one(self, request, kwargs, body, manifest, names, system, frames, directory=None):
         hermes_names = {native: hermes for hermes, native in names.items()}
         p = None
         reader = None
@@ -796,6 +825,8 @@ class Client:
                 if resolved is None:
                     raise ClaudeCodeMissing(INSTALL_HINT)
                 apply_config_dir(env)
+                if directory:
+                    env["CLAUDE_CONFIG_DIR"] = directory
                 # An inherited effort level would override the --effort Hermes passes below.
                 for key in ('CLAUDE_CODE_EXTRA_BODY', 'CLAUDE_CODE_EFFORT_LEVEL'):
                     env.pop(key, None)

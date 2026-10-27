@@ -100,6 +100,18 @@ def apply_config_dir(env):
     """Select the active profile's Claude config directory on a child env, in place."""
     override = env.pop("CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR", None)
     setting = _setting(CONFIG_DIR_SETTING)
+    explicit = override or env.get("CLAUDE_CONFIG_DIR")
+    if explicit and (Path(explicit) / 'accounts.json').exists():
+        try:
+            from .account_inventory import Inventory
+        except ImportError:
+            from account_inventory import Inventory
+        if env.get('CLAUDE_CODE_OAUTH_TOKEN'):
+            raise ValueError('App-owned login refuses an unrelated token override')
+        if isinstance(setting, str) and setting.strip() and Path(setting).expanduser().resolve() != Path(explicit).expanduser().resolve():
+            raise ValueError('App-owned login conflicts with another configured Claude directory')
+        env['CLAUDE_CONFIG_DIR'] = Inventory().select(explicit)
+        return env
     config = (setting.strip() if isinstance(setting, str) else "") or override or env.get("CLAUDE_CONFIG_DIR")
     if config:
         env["CLAUDE_CONFIG_DIR"] = os.path.expanduser(config)

@@ -172,6 +172,7 @@ def chunks(value: Any) -> tuple[list[dict[str, Any]], int]:
     if len(value) > S.MAX_CHUNKS:
         raise ValueError(f"chunks has {len(value)} entries; at most {S.MAX_CHUNKS} are allowed")
     out, total = [], 0
+    styles: list[str] = []
     for index, chunk in enumerate(value):
         where = f"chunks[{index}]"
         if not isinstance(chunk, dict):
@@ -181,7 +182,11 @@ def chunks(value: Any) -> tuple[list[dict[str, Any]], int]:
             total += ref["range"]["end_ms"] - ref["range"]["start_ms"]
             out.append(ref)
         else:
+            # A later section without styles keeps the previous one's (the schema: the first chunk's set the song).
+            if chunk.get("positive_styles") is None and styles:
+                chunk = {**chunk, "positive_styles": styles}
             gen = _generation_chunk(chunk, where)
+            styles = gen["positive_styles"]
             total += gen["duration_ms"]
             out.append(gen)
     if not S.MIN_SONG_SECONDS * 1000 <= total <= S.MAX_SONG_SECONDS * 1000:

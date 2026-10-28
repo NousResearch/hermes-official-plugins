@@ -50,7 +50,10 @@ def make_page_backend():
                 raise RuntimeError(client.NO_SESSION_ERROR)
             if secret and not secret_transport_ok(client.get_camofox_url()):
                 raise RuntimeError("vault fills need CAMOFOX_URL on loopback or HTTPS")
+            # proxies=None per scheme: requests would otherwise route through HTTP(S)_PROXY from the
+            # environment, sending the fill script in clear text past the loopback/HTTPS check above.
             resp = client.request("post", client.tab_path(session, "evaluate"), allow_redirects=False,
+                                  proxies={"http": None, "https": None},
                                   json={"expression": expression, "userId": session["user_id"]}).json()
             if not isinstance(resp, dict) or "result" not in resp or resp.get("error"):
                 raise RuntimeError(str(resp.get("error") if isinstance(resp, dict) else "") or "evaluate failed")

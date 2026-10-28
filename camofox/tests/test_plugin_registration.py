@@ -44,6 +44,18 @@ def test_registers_the_browser_tools_in_the_camofox_toolset():
     assert "camofox" in ctx.cli
 
 
+
+def test_a_refused_page_backend_still_loads_the_browser_tools():
+    """Under plugins.isolation: host the core refuses register_browser_page_backend by raising."""
+    class _HostCtx(_Ctx):
+        def register_browser_page_backend(self, backend):
+            raise RuntimeError("unsupported in the plugin host")
+
+    ctx = _HostCtx()
+    camofox_plugin.register(ctx)
+    assert set(ctx.tools) == EXPECTED_TOOLS and set(ctx.hooks) == {"on_session_end", "on_session_finalize"}
+    assert "camofox" in ctx.cli
+
 def test_manifest_lists_exactly_the_registered_tools():
     import pathlib
     import hermes_yaml

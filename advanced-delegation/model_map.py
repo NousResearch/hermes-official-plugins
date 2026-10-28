@@ -188,6 +188,12 @@ class ModelMapDelegationProvider(DelegationProvider):
     def summary(self) -> str:
         return "The agent picks a named model route for each subagent."
 
+    def snapshot_settings(self, config: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Pin active routes, not the saved preset library, into the session database."""
+        from copy import deepcopy
+        settings = self.settings(config)
+        return deepcopy({key: settings[key] for key in ("options", "default") if key in settings})
+
     @property
     def route_keys(self) -> tuple[str, ...]:
         # Route keys beyond core's that settings editors may write and must keep; the Desktop route editor offers

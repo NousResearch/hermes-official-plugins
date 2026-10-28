@@ -62,8 +62,8 @@ def is_chat_app(surface: str | None) -> bool:
 
 
 def _estimate(seconds: float | None) -> float:
-    # Measured: a 10 s clip took ~4 s end to end; generation runs well under real time.
-    return 8 + 0.4 * (seconds if seconds else 120)
+    # Measured end to end: 6-30 s songs took 3-5 s; generation runs well under real time.
+    return 5 + 0.2 * (seconds if seconds else 120)
 
 
 def _slug(text: str) -> str:
@@ -146,12 +146,19 @@ def _song_result(settings: Settings, response, meta: dict[str, Any], session_id:
     return result
 
 
-def _pending(record: dict[str, Any], chat_app: bool) -> dict[str, Any]:
+def _pending(record: dict[str, Any], chat_app: bool, rearm: bool = True) -> dict[str, Any]:
     job_id = record["id"]
-    remaining = max(15, int(record.get("est_seconds") or 60) - int(_jobs.elapsed(record)))
+    left = int(record.get("est_seconds") or 60) - int(_jobs.elapsed(record))
+    remaining = max(15, left)
     view = {"success": True, "status": "running", "job_id": job_id, "label": record.get("label"),
-            "elapsed_seconds": round(_jobs.elapsed(record)), "estimated_seconds_left": remaining}
-    if chat_app:
+            "elapsed_seconds": round(_jobs.elapsed(record)),
+            "estimated_seconds_left": left if left > 0 else "past the estimate, any moment now"}
+    if chat_app and not rearm:
+        # A quick "is it done?" check: the wake armed when the job started still delivers it.
+        view["next_step"] = ("Still generating. Tell the user in one line. The wake armed when it started will deliver "
+                             "it: do not arm another wake, and never start the same request again (it would bill "
+                             "twice).")
+    elif chat_app:
         sleep = min(600, remaining + 10)
         view["next_step"] = (
             f"Still generating in the background. Now, in this same turn: (1) reply to the user in one line that it "
@@ -168,7 +175,7 @@ def _pending(record: dict[str, Any], chat_app: bool) -> dict[str, Any]:
     return view
 
 
-def job_view(record: dict[str, Any] | None, chat_app: bool) -> str:
+def job_view(record: dict[str, Any] | None, chat_app: bool, rearm: bool = True) -> str:
     if record is None:
         return tool_error("No music job with that id in this profile (job records are kept for 7 days).")
     status = record.get("status")
@@ -180,7 +187,7 @@ def job_view(record: dict[str, Any] | None, chat_app: bool) -> str:
         return tool_error(f"Music job {record['id']} ({record.get('label')}) was interrupted (Hermes restarted while "
                           f"it ran) and left no result. ElevenLabs may still have billed it; tell the user before "
                           f"trying again.")
-    return tool_result(_pending(record, chat_app))
+    return tool_result(_pending(record, chat_app, rearm))
 
 
 def _start(kind: str, label: str, est: float, work: Callable[[], dict], *, surface: str | None,
@@ -485,5 +492,6 @@ def job(args: dict, setting: Setting, *, surface: str | None = None, **_) -> str
     if not isinstance(job_id, str) or not _jobs.JOB_ID_RE.fullmatch(job_id.strip()):
         raise ValueError("job_id must be the 12-character id a music tool returned")
     wait = _in.number(args, "wait_seconds", 0, 240) or 0
-    return job_view(_jobs.wait(job_id.strip(), wait), is_chat_app(surface))
+    # A zero-wait check is the user asking mid-job; a waiting call is the wake turn, which may need to re-arm.
+    return job_view(_jobs.wait(job_id.strip(), wait), is_chat_app(surface), rearm=wait > 0)
 

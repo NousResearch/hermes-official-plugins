@@ -1,6 +1,5 @@
 """Named route snapshots: isolated config writes and shared consumer API."""
 from copy import deepcopy
-from typing import Any, cast
 
 import pytest
 import hermes_yaml as yaml
@@ -14,8 +13,10 @@ OPTION = {"name": "local", "description": "Private work", "model": "qwen",
           "fallback_providers": [{"provider": "openrouter", "model": "backup"}]}
 
 
-@pytest.fixture
-def config_file(tmp_path):
+@pytest.fixture(params=["available", "baseline"])
+def config_file(tmp_path, monkeypatch, request):
+    if request.param == "baseline":
+        monkeypatch.delattr("hermes_cli.config.update_user_config", raising=False)
     path = tmp_path / "os-home" / ".hermes" / "config.yaml"
     path.write_text(yaml.safe_dump({"model": {"default": "main"}, "delegation": {
         "backend": "model_map", "max_concurrent_children": 2,
@@ -345,24 +346,25 @@ def test_save_validates_provider_at_transaction_time(config_file, monkeypatch):
     assert config_file.read_bytes() == before
 
 
-def test_write_holds_core_shared_writer_lock(config_file, monkeypatch):
+def test_write_uses_public_raw_config_mutation(config_file, monkeypatch):
     import hermes_cli.config as core
-    original_read = core.require_readable_config_before_write
-    original_write = core.atomic_config_write
+    original = getattr(core, "update_user_config", None)
+    if not callable(original):
+        pytest.skip("Optional public transaction is not available on this core")
+    assert callable(original)
     observations = []
 
-    def read(path):
-        observations.append(("read", cast(Any, core._CONFIG_LOCK)._is_owned()))
-        return original_read(path)
+    def update(mutate):
+        def edit(data):
+            observations.append(deepcopy(data))
+            mutate(data)
+        original(edit)
 
-    def write(path, data):
-        observations.append(("write", cast(Any, core._CONFIG_LOCK)._is_owned()))
-        return original_write(path, data)
-
-    monkeypatch.setattr(core, "require_readable_config_before_write", read)
-    monkeypatch.setattr(core, "atomic_config_write", write)
+    monkeypatch.setattr(core, "update_user_config", update)
     store.set_mode("default")
-    assert observations and all(held for _, held in observations)
+    assert len(observations) == 1
+    assert observations[0]["model"] == {"default": "main"}
+    assert section(config_file)["backend"] == "default"
 
 
 def test_fallback_reasoning_is_validated(config_file):

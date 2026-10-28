@@ -8,6 +8,7 @@
                               next session (``/new``). Modes: ``default``, ``model_map``/``models``,
                               ``profile_routes``/``profiles``, or the number shown
 ``/delegation <mode> --now``  save it AND apply it to this chat now
+``/delegation preset [NAME] [--now]`` list/pick or select a saved model-route preset
 
 Saving for the next session is the default because the mode is part of the chat's cached prompt: the
 ``delegate_task`` schema carries the mode's per-task choices (``option`` / ``profile``), and swapping it
@@ -142,6 +143,9 @@ def handle(raw_args: str = "", session_key: str = "", ask_choice: Optional[AskCh
     which itself returns None where the surface cannot ask (a hook, cron, an event-loop handler)."""
     section = store.delegation_section()
     saved = store.current_mode(section)
+    words = (raw_args or "").split()
+    if words and words[0].lower() == "preset":
+        return _preset(words[1:], section, session_key, ask_choice, api)
     mode, now, unknown = _parse(raw_args or "")
     if unknown.startswith("-"):
         return f"Unknown option '{unknown}'. Usage: {USAGE}"
@@ -157,6 +161,68 @@ def handle(raw_args: str = "", session_key: str = "", ask_choice: Optional[AskCh
                 return f"Delegation mode unchanged: {store.mode_label(saved)}."
             now = when == "now"
     return _switch(mode, now, section, saved, api, session_key)
+
+
+def _preset(words: list[str], section: Mapping[str, Any], session_key: str,
+            ask_choice: Optional[AskChoice], api) -> str:
+    usage = "Usage: /delegation preset [NAME] [--now]"
+    flags = [word for word in words if word.startswith("-")]
+    names = [word for word in words if not word.startswith("-")]
+    if any(flag != "--now" for flag in flags) or len(flags) > 1 or len(names) > 1:
+        return f"Invalid preset arguments. {usage}"
+    now = bool(flags)
+    try:
+        presets = store.list_presets(section)
+        active = store.active_preset(section)
+        if not names:
+            if not presets:
+                return "No model-route presets saved. Create one with `hermes delegation preset save NAME`."
+            choices = [{"value": name, "label": name + (" (current)" if name == active else "")}
+                       for name in presets]
+            name = ask_choice("Choose a model-route preset:", choices) if ask_choice else None
+            if name is None:
+                return "Model-route presets:\n" + "\n".join(
+                    f"  {i}. {item['label']}" for i, item in enumerate(choices, 1)) + f"\n{usage}"
+            if name not in presets:
+                return f"Invalid preset selection. {usage}"
+            if api is not None and not now:
+                when = ask_choice(f"Use preset {name} from:", _WHEN)
+                if when is None:
+                    return "Preset unchanged."
+                if when not in ("now", "next"):
+                    return "Invalid timing selection. Preset unchanged."
+                now = when == "now"
+        else:
+            name = names[0]
+        snapshot = store.get_preset(section, name)
+        candidate = {"backends": {"model_map": snapshot}}
+        if not _ready("model_map", candidate):
+            return f"Preset {name!r} has no configured model routes; not switched."
+        if now and not session_key:
+            return "Not switched: --now requires a session key."
+        problem = _problem("model_map", api)
+        if problem:
+            return f"Not switched: {problem}"
+        store.use_preset(name)
+    except (ValueError, PermissionError, RuntimeError, OSError) as exc:
+        return f"Not switched: {exc}"
+
+    head = f"Preset {name!r} saved"
+    if not now:
+        return (f"{head} for the next session (/new). Add --now to rebuild this chat's tools. "
+                "Older Hermes versions that do not pin route settings may use the saved models "
+                "in existing chats before then; update Hermes for next-session isolation.")
+    if api is None:
+        return f"{head} for the next session (/new). Applying it now needs a newer Hermes."
+    try:
+        api.set_global_backend("model_map", session_key=session_key, apply_now=True)
+    except TypeError as exc:
+        if "apply_now" in str(exc) and ("unexpected keyword" in str(exc) or "keyword argument" in str(exc)):
+            return f"{head} for the next session (/new). Applying it now needs a newer Hermes."
+        return f"{head}, but applying it now failed: {exc}"
+    except (ValueError, PermissionError, RuntimeError, OSError) as exc:
+        return f"{head}, but applying it now failed: {exc}"
+    return f"{head} and applied to this chat: its tools rebuild at the next message (one prompt-cache break)."
 
 
 def _save(mode: str, now: bool, api, session_key: str) -> bool:

@@ -263,3 +263,13 @@ def test_a_failure_after_elevenlabs_answered_says_it_may_be_billed(loaded):
         audio_dir.chmod(0o700)
     assert len(stand_in.requests) == 1
     assert "billed" in result["error"] and "Retrying" in result["error"], result
+
+
+def test_a_plan_section_without_styles_keeps_the_previous_sections(loaded):
+    dispatch, stand_in, _home = loaded
+    result = dispatch("elevenlabs_music_compose_plan", {"chunks": [
+        {"text": "[Verse]\nla la", "duration_ms": 8000, "positive_styles": ["indie pop", "female vocals"]},
+        {"text": "[Chorus]\noh oh", "duration_ms": 8000}]})
+    assert result["success"] is True, result
+    sent = stand_in.requests[-1]["body"]["composition_plan"]["chunks"]
+    assert sent[1]["positive_styles"] == ["indie pop", "female vocals"]

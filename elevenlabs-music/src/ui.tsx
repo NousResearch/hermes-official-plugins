@@ -328,7 +328,7 @@ export function NextMenu({ rec, detail, measured, cardSession }: { rec: TrackRec
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" style={{ maxWidth: 400 }}>
         {actions.map((a, i) => (
-          <DropdownMenuItem data-music-action={a.id} key={`${a.id}-${i}`} onSelect={() => void run(a.message, a.draft)} title={a.message}>
+          <DropdownMenuItem data-music-action={a.id} key={`${a.id}-${i}`} onSelect={() => void run(a.message, a.draft)}>
             <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <span>{a.label}</span>
               <span style={S.muted}>{a.detail}</span>

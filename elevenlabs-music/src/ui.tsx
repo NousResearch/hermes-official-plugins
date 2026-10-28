@@ -14,7 +14,7 @@ import {
 import { type CSSProperties, type ReactNode, useEffect, useId, useRef, useState } from 'react'
 
 import { errorText, fetchAudio, loadTrack, player, saveDownload, SEND_FAILED, sendToChat } from './audio.ts'
-import { clockLabel, extLabel, type HostInfo, nextActions, type TrackDetail, type TrackRecord } from './music.ts'
+import { clockLabel, CONVERTED_CAP_MB, convertedTooBig, extLabel, type HostInfo, nextActions, type TrackDetail, type TrackRecord } from './music.ts'
 
 // Desktop's documented theme variables for plugins (`--ui-*`), so the card reskins with every theme.
 // The `--color-*` names exist only inside Desktop's own Tailwind build, not as CSS variables.
@@ -96,7 +96,9 @@ export function Waveform({ data, progress, onSeek, height = 44 }: { data: number
   )
 }
 
-type Loaded = { state: 'idle' } | { state: 'loading' } | { state: 'error'; message: string } | { state: 'ready'; buffer: AudioBuffer; wave: number[] }
+// Only the waveform and length stay in component state; the decoded audio lives in the bounded cache in audio.ts,
+// so a chat full of song cards does not pin every decoded song in memory.
+type Loaded = { state: 'idle' } | { state: 'loading' } | { state: 'error'; message: string } | { state: 'ready'; duration: number; wave: number[] }
 
 /**
  * Loads (once) and plays one sound. Decoded audio comes from a small shared cache (`loadSound`); nothing polls. While it
@@ -133,12 +135,19 @@ export function useTrack(ctx: PluginContext, rec: null | TrackRecord, ownerPrefi
   }, [playing])
 
   const load = async (): Promise<AudioBuffer | null> => {
-    if (loaded.state === 'ready') return loaded.buffer
     if (!rec || !rec.exists) return null
+    if (loaded.state === 'ready') {
+      try {
+        return (await loadTrack(ctx, rec.id)).buffer // cache hit, or one re-fetch after eviction
+      } catch (err) {
+        if (alive.current) setLoaded({ state: 'error', message: errorText(err) })
+        return null
+      }
+    }
     setLoaded({ state: 'loading' })
     try {
       const { buffer, wave } = await loadTrack(ctx, rec.id)
-      if (alive.current) setLoaded({ state: 'ready', buffer, wave })
+      if (alive.current) setLoaded({ state: 'ready', duration: buffer.duration, wave })
       return buffer
     } catch (err) {
       if (alive.current) setLoaded({ state: 'error', message: errorText(err) })
@@ -165,7 +174,7 @@ export function useTrack(ctx: PluginContext, rec: null | TrackRecord, ownerPrefi
     player.setLoop(owner, value)
   }
 
-  const duration = loaded.state === 'ready' ? loaded.buffer.duration : null
+  const duration = loaded.state === 'ready' ? loaded.duration : null
   const progress = duration ? player.position(owner) / duration : 0
   return { loaded, load, toggle, seek, playing, loop, setLooping, duration, progress }
 }
@@ -224,6 +233,7 @@ export function DownloadMenu({ ctx, rec, info }: { ctx: PluginContext; rec: Trac
     }
   }
   const conversions = (info?.conversions ?? []).filter(f => f !== rec.ext)
+  const tooBig = (f: string) => convertedTooBig(f, rec.length_seconds)
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -238,7 +248,13 @@ export function DownloadMenu({ ctx, rec, info }: { ctx: PluginContext; rec: Trac
         </DropdownMenuItem>
         {conversions.length > 0 && <DropdownMenuSeparator />}
         {conversions.map(f => (
-          <DropdownMenuItem data-music-format={f} key={f} onSelect={() => void run(f)}>
+          <DropdownMenuItem
+            data-music-format={f}
+            disabled={tooBig(f)}
+            key={f}
+            onSelect={() => void run(f)}
+            title={tooBig(f) ? `Too long for ${f.toUpperCase()} here (over ${CONVERTED_CAP_MB} MB); use MP3 or the original` : undefined}
+          >
             {f === 'ogg' ? 'OGG Vorbis (game engines)' : f === 'wav' ? 'WAV 16-bit (video editors, DAWs)' : f === 'flac' ? 'FLAC (lossless archive)' : 'MP3 (chat, web)'}
           </DropdownMenuItem>
         ))}

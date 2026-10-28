@@ -34,7 +34,7 @@ export interface DecodedTrack {
 // A chat with many cards opens without one /audio read + decode per card per remount: concurrent
 // loads of a track share one request and the last few decoded tracks stay in memory (a 3-minute song
 // decodes to ~60 MB of 44.1 kHz stereo floats, so the bound stays small).
-const decoded = new PromiseCache<DecodedTrack>(3)
+const decoded = new PromiseCache<DecodedTrack>(2)
 
 /** Original bytes of track `id` from the active backend, decoded, with waveform peaks. (The seam's
  *  `file.resolveUrl()` is a media-element URL: Desktop's `hermes-media:` scheme refuses `fetch`, so it

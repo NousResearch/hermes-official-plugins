@@ -82,6 +82,15 @@ export const kindLabel = (kind: null | string): string => (kind === 'stem' ? 'St
 
 export const extLabel = (ext: string): string => (ext === 'opus' ? 'Ogg Opus' : ext.toUpperCase() || '?')
 
+/** The backend's cap on a converted download (dashboard/plugin_api.py `_MAX_AUDIO_BYTES`). */
+export const CONVERTED_CAP_MB = 60
+// Worst case 48 kHz 16-bit stereo; FLAC rarely beats ~70% of that on dense music.
+const BYTES_PER_SECOND: Record<string, number> = { wav: 192_000, flac: 134_400 }
+
+/** Whether converting a track this long to `format` would hit the backend's cap (lossy formats never do). */
+export const convertedTooBig = (format: string, seconds: null | number): boolean =>
+  seconds != null && (BYTES_PER_SECOND[format] ?? 0) * seconds > CONVERTED_CAP_MB * 1024 * 1024
+
 export function formatLabel(format: null | string): string {
   const m = /^(mp3|opus)_(\d+)_(\d+)$/.exec(format || '')
   if (!m) return format || '?'

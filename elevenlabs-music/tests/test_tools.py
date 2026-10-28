@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shutil
 import threading
 import zipfile
@@ -188,11 +189,13 @@ def test_bad_input_never_reaches_elevenlabs(loaded, tool, args, fragment):
 def test_stems_unpack_each_audio_file_and_skip_anything_else(loaded):
     dispatch, stand_in, home = loaded
     song = dispatch("elevenlabs_music_compose", {"prompt": "acoustic"})
+    _set(home, output_format="mp3_48000_320")  # the stems endpoint has no 48 kHz MP3
     result = dispatch("elevenlabs_music_stems", {"track_id": song["track_id"], "stems": "two"})
     assert result["success"] is True, result
     request = stand_in.requests[-1]
     assert request["path"] == "/v1/music/stem-separation" and request["type"].startswith("multipart/form-data")
     assert b'name="stem_variation_id"\r\n\r\ntwo_stems_v1' in request["body"]
+    assert request["query"] == {"output_format": ["mp3_44100_192"]}
     assert sorted(s["stem"] for s in result["stems"]) == ["instrumental", "vocals"]
     audio_dir = home / "cache" / "generated" / "audio"
     assert all(Path(s["file_path"]).parent == audio_dir for s in result["stems"])
@@ -202,10 +205,59 @@ def test_stems_unpack_each_audio_file_and_skip_anything_else(loaded):
     assert {provenance.find(s["track_id"])["parent_id"] for s in result["stems"]} == {song["track_id"]}
 
 
+def _set(home, **settings):
+    config = yaml.safe_load((home / "config.yaml").read_text())
+    config["plugins"]["entries"][PLUGIN]["settings"].update(settings)
+    (home / "config.yaml").write_text(yaml.safe_dump(config))
+
+
 def test_a_setting_outside_its_choices_is_refused(loaded):
     dispatch, stand_in, home = loaded
-    config = yaml.safe_load((home / "config.yaml").read_text())
-    config["plugins"]["entries"][PLUGIN]["settings"]["output_format"] = "wav_44100"
-    (home / "config.yaml").write_text(yaml.safe_dump(config))
+    _set(home, output_format="wav_44100")
     result = dispatch("elevenlabs_music_compose", {"prompt": "x"})
     assert "output_format" in result["error"] and stand_in.requests == []
+
+
+def test_a_job_lands_in_the_calling_profile_from_its_worker_thread(loaded, tmp_path):
+    """One gateway serves many profiles: profile B's song must be saved and recorded under B's home."""
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    dispatch, stand_in, home = loaded
+    other = tmp_path / "profile-b"
+    other.mkdir()
+    shutil.copy(home / "config.yaml", other / "config.yaml")
+    stand_in.gate = threading.Event()
+    token = set_hermes_home_override(other)
+    tokens = set_session_vars(platform="telegram", chat_id="1", session_key="agent:main:telegram:dm:1")
+    try:
+        started = dispatch("elevenlabs_music_compose", {"prompt": "x", "length_seconds": 5})
+        stand_in.gate.set()
+        done = dispatch("elevenlabs_music_job", {"job_id": started["job_id"], "wait_seconds": 10})
+    finally:
+        clear_session_vars(tokens)
+        reset_hermes_home_override(token)
+    assert Path(done["file_path"]).is_relative_to(other), done
+    assert not (home / "cache" / "generated" / "audio").exists()
+
+
+def test_a_stored_song_is_not_uploaded_and_billed_again(loaded):
+    dispatch, stand_in, _home = loaded
+    song = dispatch("elevenlabs_music_compose", {"prompt": "x"})
+    result = dispatch("elevenlabs_music_upload", {"track_id": song["track_id"]})
+    assert "already stored" in result["error"] and song["elevenlabs_song_id"] in result["error"]
+    assert [r["path"] for r in stand_in.requests] == ["/v1/music/detailed"]
+
+
+@pytest.mark.skipif(os.name == "nt" or os.geteuid() == 0, reason="needs POSIX permissions")
+def test_a_failure_after_elevenlabs_answered_says_it_may_be_billed(loaded):
+    dispatch, stand_in, home = loaded
+    audio_dir = home / "cache" / "generated" / "audio"
+    audio_dir.mkdir(parents=True)
+    audio_dir.chmod(0o500)
+    try:
+        result = dispatch("elevenlabs_music_compose", {"prompt": "x"})
+    finally:
+        audio_dir.chmod(0o700)
+    assert len(stand_in.requests) == 1
+    assert "billed" in result["error"] and "Retrying" in result["error"], result

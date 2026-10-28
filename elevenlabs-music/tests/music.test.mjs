@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { isMusicToolCall, lyricWindow, nextActions, sections, trackIdOf } from '../src/music.ts'
+import { convertedTooBig, isMusicToolCall, lyricWindow, nextActions, sections, trackIdOf } from '../src/music.ts'
 
 const base = {
   id: 'a1b2c3d4e5f6', created_at: null, kind: 'song', tool: 'elevenlabs_music_compose', title: 'Morning Run',
@@ -51,4 +51,12 @@ test('tool events count when wrapped by tool search', () => {
   assert.ok(isMusicToolCall('elevenlabs_music_job', {}))
   assert.ok(isMusicToolCall('tool_call', { calls: [{ name: 'elevenlabs_music_compose', arguments: {} }] }))
   assert.ok(!isMusicToolCall('tool_call', { calls: [{ name: 'elevenlabs_music_finetunes' }] }))
+})
+
+test('lossless downloads of long songs are offered only while they fit the backend cap', () => {
+  assert.equal(convertedTooBig('wav', 180), false)
+  assert.equal(convertedTooBig('wav', 600), true)
+  assert.equal(convertedTooBig('flac', 400), false)
+  assert.equal(convertedTooBig('mp3', 600), false)
+  assert.equal(convertedTooBig('wav', null), false)
 })

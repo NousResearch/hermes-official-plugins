@@ -212,7 +212,7 @@ function ReadyCard({
         <NextMenu cardSession={sessionId} detail={detail} measured={sound.duration} rec={rec} />
       </div>
       {showLyrics && lyrics && (
-        <pre data-music-lyrics="" style={{ ...S.muted, fontSize: 12.5, whiteSpace: 'pre-wrap', fontFamily: 'inherit', margin: 0, maxHeight: 280, overflow: 'auto', color: T.secondary }}>
+        <pre data-music-lyrics="" style={{ ...S.muted, fontSize: 12.5, whiteSpace: 'pre-wrap', fontFamily: 'inherit', margin: 0, padding: 0, background: 'transparent', border: 0, borderRadius: 0, maxHeight: 280, overflow: 'auto', color: T.secondary }}>
           {lyrics}
         </pre>
       )}

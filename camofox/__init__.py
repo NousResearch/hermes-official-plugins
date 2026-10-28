@@ -80,9 +80,14 @@ def register(ctx) -> None:
             t.cleanup_task(session_id)
 
     # browser_vault fills the Camofox tab through this; a core without the seam keeps its old behaviour.
+    # Under plugins.isolation: host the core refuses this registration (the script carries the
+    # credential); the browser tools must still load there.
     if hasattr(ctx, "register_browser_page_backend"):
         from .camofox_vault import make_page_backend
-        ctx.register_browser_page_backend(make_page_backend())
+        try:
+            ctx.register_browser_page_backend(make_page_backend())
+        except Exception as exc:  # noqa: BLE001 -- vault fill unavailable in this mode; tools still work
+            logger.info("camofox: browser_vault fill unavailable here (%s)", exc)
 
     ctx.register_hook("on_session_end", _on_session_end)
     ctx.register_hook("on_session_finalize", _on_session_finalize)

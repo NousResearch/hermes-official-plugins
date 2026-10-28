@@ -39,3 +39,13 @@ def test_vault_scripts_run_on_the_navigated_tab_and_never_open_one(camofox, back
 def test_secret_scripts_need_loopback_or_https(url, ok):
     from camofox_plugin.camofox_vault import secret_transport_ok
     assert secret_transport_ok(url) is ok
+
+
+def test_secret_scripts_ignore_environment_proxies(camofox, backend, monkeypatch):
+    """HTTP_PROXY would carry the fill script in clear text past the loopback check."""
+    from camofox_plugin import camofox_tools as t
+
+    assert json.loads(t.browser_navigate("https://example.com", task_id="t1"))["success"]
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")  # nothing listens: a proxied call fails
+    monkeypatch.setenv("NO_PROXY", "")
+    assert backend.evaluate("t1", "1", secret=True) == camofox.evaluate_result

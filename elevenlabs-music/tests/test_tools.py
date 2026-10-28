@@ -157,6 +157,8 @@ def test_chat_apps_get_a_job_id_and_a_wake_instead_of_a_held_chat(loaded):
         started = dispatch("elevenlabs_music_compose", {"prompt": "slow lofi", "length_seconds": 30})
         assert started["status"] == "running", started
         assert "background=true" in started["next_step"] and started["job_id"] in started["next_step"]
+        check = dispatch("elevenlabs_music_job", {"job_id": started["job_id"], "wait_seconds": 0})
+        assert check["status"] == "running" and "do not arm another wake" in check["next_step"], check
         stand_in.gate.set()
         finished = dispatch("elevenlabs_music_job", {"job_id": started["job_id"], "wait_seconds": 10})
     finally:

@@ -213,8 +213,19 @@ Catalog entries come in two tiers:
 <p><code>elevenlabs_sound_effect</code> · billed to your ElevenLabs account</p>
 </td>
 <td width="50%" valign="top">
+<a href="elevenlabs-music/"><img src="assets/elevenlabs-music.jpg" alt="ElevenLabs Music plugin"></a>
+<h3><a href="elevenlabs-music/">ElevenLabs Music</a></h3>
+<code>hermes plugins install elevenlabs-music</code>
+<p>Songs and instrumentals from <a href="https://elevenlabs.io/docs/overview/capabilities/music">ElevenLabs Music</a>: describe a track or paste your lyrics and Hermes writes, generates and sends it, 3 seconds to 10 minutes. It can redo one section, extend or loop a song, split it into vocal, drum and bass stems, and score a video. Long songs finish in the background and arrive in the chat. In Hermes Desktop each track gets a music card with synced lyrics and a library tab.</p>
+<p><code>elevenlabs_music_compose</code> and 7 more · billed to your ElevenLabs account</p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 <h3>More on the way</h3>
 <p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
+</td>
+<td width="50%" valign="top">
 </td>
 </tr>
 </table>

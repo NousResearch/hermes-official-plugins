@@ -71,14 +71,18 @@ Requirements:
   these, and the skill tells the agent not to either.
 
 Engines found on `PATH` (objdump, gdb, rizin) work as is. Engines REA locates
-through an environment variable do not: Hermes passes MCP servers only a small
-set of environment variables, and this plugin forwards only
-`REA_PWNTOOLS_PYTHON`. To use Kuna (`REA_KUNA_COMMAND`), TShark
-(`REA_TSHARK_COMMAND`, `REA_CAPINFOS_COMMAND`), sigrok (`REA_SIGROK_COMMAND`),
-WABT (`REA_WABT_BIN_DIRECTORY`) or Ghidra/JDK locations, add them to a
-same-name `mcp_servers.rea` override as shown in the
-[recovery guide](skills/reverse-engineer-anything/references/connection-and-recovery.md)
-(keep the pinned launch command).
+through an environment variable are forwarded for you: `mcp.json` passes
+`GHIDRA_INSTALL_DIR`, `JAVA_HOME`, `REA_ANALYSIS_PROVIDER`,
+`REA_KUNA_COMMAND`, `REA_TSHARK_COMMAND`, `REA_CAPINFOS_COMMAND`,
+`REA_SIGROK_COMMAND` and `REA_WABT_BIN_DIRECTORY` from Hermes' own
+environment — set them in `~/.hermes/.env` (a value exported only in your
+shell does not reach the gateway that spawns the server, so restart Hermes
+after adding them). An unset variable is dropped, so an install that does not
+use the engine is unaffected. The same-name `mcp_servers.rea` override from
+the [recovery guide](skills/reverse-engineer-anything/references/connection-and-recovery.md)
+remains available to pin a value per machine — note that it **replaces** the
+plugin's pinned server, so keep the launch command current when this plugin
+bumps its `rea-agents` pin.
 
 Do not also run `npx rea-agents setup --client hermes`. It writes its own
 `mcp_servers.rea` entry to config.yaml, which replaces this plugin's pinned

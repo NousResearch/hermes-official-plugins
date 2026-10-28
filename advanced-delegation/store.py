@@ -1,10 +1,12 @@
 """Read and write the delegation settings this plugin owns, for ``hermes delegation config`` and
 ``/delegation``.
 
-Reads use the effective config (``load_config_readonly``); writes go through core's
-``atomic_config_write`` on the profile's own ``config.yaml`` (comment-preserving, and it refuses a
-write that would drop existing settings). Only ``delegation.backend`` and
-``delegation.backends.<mode>`` are ever written.
+Reads use the effective config (``load_config_readonly``). Writes prefer core's public
+``update_user_config`` transaction when callable; older cores retain the original public guarded
+raw read and comment-preserving ``atomic_config_write`` path. Only the new transaction seam
+serializes cooperating in-process writers; the baseline path retains its original semantics,
+without read-modify-write serialization. Neither path promises cross-process serialization.
+The active profile is bound by the caller/host, never by rewriting the environment.
 """
 
 from __future__ import annotations
@@ -75,22 +77,26 @@ def profile_default(section: Mapping[str, Any]) -> str:
 def _write(mutate: Callable[[dict[str, Any]], None]) -> None:
     """Raises RuntimeError (with the user-facing reason) when the config must not be written: a
     package-manager-managed install, or an unreadable / would-lose-settings file."""
-    from hermes_cli.config import (_CONFIG_LOCK, atomic_config_write, format_managed_message, get_config_path, is_managed,
-                                   require_readable_config_before_write)
-    if is_managed():
-        raise RuntimeError(format_managed_message("change delegation settings"))
-    path = get_config_path()
-    # Core has no public raw-config transaction API. Use the same reentrant lock as
-    # load_config/save_config, not a plugin-owned lock that other writers cannot see.
-    # This serializes cooperating in-process writers; it is not a cross-process CAS.
-    with _CONFIG_LOCK:
-        data = require_readable_config_before_write(path)
+    from hermes_cli import config
+
+    def edit(data: dict[str, Any]) -> None:
         section = data.get("delegation")
         if not isinstance(section, dict):
             section = data["delegation"] = {}
         mutate(section)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_config_write(path, data)
+
+    update = getattr(config, "update_user_config", None)
+    if callable(update):
+        update(edit)
+        return  # Transaction errors propagate; never retry through the baseline writer.
+
+    if config.is_managed():
+        raise RuntimeError(config.format_managed_message("change delegation settings"))
+    path = config.get_config_path()
+    data = config.require_readable_config_before_write(path)
+    edit(data)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    config.atomic_config_write(path, data)
 
 
 def _backend_block(section: dict[str, Any], mode: str) -> dict[str, Any]:

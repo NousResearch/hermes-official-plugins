@@ -141,6 +141,15 @@ credentials. Keep credentials in the provider's normal credential store rather t
 `{name, options, default}` snapshots; `active_preset` identifies the last saved or applied set only
 while the current routes still match.
 
+The plugin also mounts an authenticated, profile-scoped preset API at
+`/api/plugins/advanced-delegation/presets` for the Desktop settings page. It accepts named
+save/use/rename/delete actions and returns only names and the active marker, never route credentials.
+A hidden dashboard placeholder supplies the required frontend registration; it adds no navigation tab.
+Writes affect only the active profile's delegation settings. Newer cores perform the guarded raw
+read/mutate/write through the public `update_user_config` operation; older cores retain the plugin's
+original public config-writer path. Neither path promises cross-process compare-and-swap for the
+file backend, so avoid simultaneous CLI and UI configuration edits.
+
 ## Switch modes in a chat: `/delegation`
 
 ```
@@ -250,7 +259,12 @@ hermes config set delegation.backends.profile_routes.profiles '[{name: coder, de
 ```bash
 cd advanced-delegation
 HERMES_AGENT_REPO=~/src/hermes-agent PYTHONPATH=~/src/hermes-agent python -m pytest -q
+node --test tests/test_dashboard_packaging.cjs
 ```
+
+The JavaScript check needs Node.js 18 or newer (test-only, not a plugin runtime dependency).
+The repository's existing `evals/ci.sh` workflow hook runs it on Linux and macOS. It executes the
+manifest-selected bundle and verifies hidden-page registration, including rejection of a missing asset.
 
 Tests that need the core seam skip themselves on a core without `agent.delegation_provider`; the
 old-core test always runs.

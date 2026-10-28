@@ -161,10 +161,10 @@ def _pending(record: dict[str, Any], chat_app: bool, rearm: bool = True) -> dict
     elif chat_app:
         sleep = min(600, remaining + 10)
         view["next_step"] = (
-            f"Still generating in the background. Now, in this same turn: (1) reply to the user in one line that it "
-            f"started and you'll send it here in about {remaining} s; (2) arm a wake with "
+            f"Still generating in the background. Now, in this same turn: (1) arm a wake with "
             f"terminal(command=\"sleep {sleep} && echo elevenlabs music job {job_id}\", background=true, "
-            f"notify=true); (3) end your turn. When the wake arrives, call elevenlabs_music_job with "
+            f"notify=true), writing no message before it; (2) then, as your only reply, tell the user in one line that "
+            f"it started and you'll send it here in about {remaining} s, and end your turn. When the wake arrives, call elevenlabs_music_job with "
             f"job_id \"{job_id}\" and wait_seconds 60, then send each media_tag line. If the user asks meanwhile, "
             f"check with wait_seconds 0. If the terminal tool or its notifications are unavailable here, call "
             f"elevenlabs_music_job with wait_seconds 240 instead. Never start the same request again: it would "

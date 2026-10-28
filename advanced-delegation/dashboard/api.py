@@ -53,20 +53,18 @@ def presets():
 
 @router.post("/presets")
 def change_preset(body: PresetAction):
-    # Match core settings' write serialization; the host middleware has already
-    # bound the authenticated request's profile. No session ID is accepted here.
-    from hermes_cli.web_routers._common import config_write_scope
-    with config_write_scope(None):
-        try:
-            actions = {
-                "save": lambda: store.save_preset(body.name, overwrite=body.overwrite),
-                "use": lambda: store.use_preset(body.name),
-                "rename": lambda: store.rename_preset(body.name, body.new_name),
-                "delete": lambda: store.delete_preset(body.name),
-            }
-            actions[body.action]()
-            return _state()
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(409, " ".join(str(exc).split())) from exc
+    # The host binds the authenticated profile; the store uses the public config
+    # mutation API. Its lock is process-local, not a gateway-wide write scope.
+    try:
+        actions = {
+            "save": lambda: store.save_preset(body.name, overwrite=body.overwrite),
+            "use": lambda: store.use_preset(body.name),
+            "rename": lambda: store.rename_preset(body.name, body.new_name),
+            "delete": lambda: store.delete_preset(body.name),
+        }
+        actions[body.action]()
+        return _state()
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(409, " ".join(str(exc).split())) from exc

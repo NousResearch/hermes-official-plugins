@@ -92,3 +92,10 @@ def test_presets_require_auth_and_plugin_consent_and_reject_snapshot_payloads(ap
     path.write_text(yaml.safe_dump(data))
     assert c.get(URL).status_code == 404
     assert c.post(URL, json={"action": "save", "name": "x"}).status_code == 404
+
+
+def test_presets_crud_without_optional_public_transaction(api_client, monkeypatch):
+    from hermes_cli import config
+
+    monkeypatch.delattr(config, "update_user_config", raising=False)
+    test_presets_crud_reads_back_real_store_without_exposing_keys(api_client)

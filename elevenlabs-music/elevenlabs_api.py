@@ -96,7 +96,7 @@ def read_settings(setting: Callable[[str], Any]) -> Settings:
         raise ValueError(f"{SETTINGS_KEY}.chat_app_wait_seconds must be a number from 0 to 240")
     try:
         wait = float(wait)
-    except ValueError:
+    except (ValueError, OverflowError):
         raise ValueError(f"{SETTINGS_KEY}.chat_app_wait_seconds must be a number from 0 to 240") from None
     if not 0 <= wait <= 240:
         raise ValueError(f"{SETTINGS_KEY}.chat_app_wait_seconds must be a number from 0 to 240")

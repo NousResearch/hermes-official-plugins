@@ -125,7 +125,8 @@ def _song_result(settings: Settings, response, meta: dict[str, Any], session_id:
         "instrumental": meta.get("instrumental"), "finetune_id": meta.get("finetune_id"), "seed": meta.get("seed"),
         "requested_seconds": meta.get("requested_seconds"), "length_seconds": length,
         "output_format": settings.output_format, "file_name": path.name, "bytes": len(audio), "song_id": song_id,
-        "stored_for_editing": bool(song_id) and settings.store_for_editing, "parent_id": parent.get("id"),
+        "stored_for_editing": bool(song_id) and settings.store_for_editing and meta["model"] in PLAN_MODELS,
+        "parent_id": parent.get("id"),
         "session_id": session_id or None,
     }
     _provenance.record(record, {"composition_plan": plan, "song_metadata": song,
@@ -139,8 +140,9 @@ def _song_result(settings: Settings, response, meta: dict[str, Any], session_id:
         "lyrics": _lyrics(plan) or None, "composition_plan": plan or None,
     }
     if not record["stored_for_editing"]:
-        result["editing_note"] = ("Not stored at ElevenLabs for editing (store_for_editing is off), so its slices "
-                                  "cannot be reused; elevenlabs_music_upload can store the file.")
+        why = "store_for_editing is off" if meta["model"] in PLAN_MODELS else "music_v1 songs cannot be edited"
+        result["editing_note"] = (f"Not stored at ElevenLabs for editing ({why}), so its slices cannot be "
+                                  "reused; elevenlabs_music_upload can store the file.")
     return result
 
 
@@ -155,7 +157,7 @@ def _pending(record: dict[str, Any], chat_app: bool) -> dict[str, Any]:
             f"Still generating in the background. Now, in this same turn: (1) reply to the user in one line that it "
             f"started and you'll send it here in about {remaining} s; (2) arm a wake with "
             f"terminal(command=\"sleep {sleep} && echo elevenlabs music job {job_id}\", background=true, "
-            f"notify_on_complete=true); (3) end your turn. When the wake arrives, call elevenlabs_music_job with "
+            f"notify=true); (3) end your turn. When the wake arrives, call elevenlabs_music_job with "
             f"job_id \"{job_id}\" and wait_seconds 60, then send each media_tag line. If the user asks meanwhile, "
             f"check with wait_seconds 0. If the terminal tool or its notifications are unavailable here, call "
             f"elevenlabs_music_job with wait_seconds 240 instead. Never start the same request again: it would "
@@ -212,7 +214,8 @@ def compose(args: dict, setting: Setting, *, surface: str | None = None, session
     finetune = _in.finetune(args)
     api_key()  # a missing key fails here, before a job exists
     body: dict[str, Any] = {"prompt": prompt, "model_id": model, "force_instrumental": instrumental,
-                            "store_for_inpainting": settings.store_for_editing, "with_timestamps": True}
+                            "store_for_inpainting": settings.store_for_editing and model in PLAN_MODELS,
+                            "with_timestamps": True}
     if length is not None:
         body["music_length_ms"] = int(round(length * 1000))
     if finetune:
@@ -284,11 +287,16 @@ def draft_plan(args: dict, setting: Setting, **_) -> str:
     plan = ok(call(settings, "POST", "/v1/music/plan", json_body=body, deadline=120)).json()
     if not isinstance(plan, dict) or not isinstance(plan.get("chunks"), list):
         raise ToolFailure("ElevenLabs returned a plan this tool cannot read")
-    total = sum(int(c.get("duration_ms") or 0) for c in plan["chunks"] if isinstance(c, dict))
-    return tool_result({"success": True, "model": model, "total_seconds": total / 1000, "chunks": plan["chunks"],
-                        "sections": _sections(plan), "billed": False,
-                        "next_step": "Show the user the sections and lyrics; after any edits, pass chunks (and this "
-                                     "model) to elevenlabs_music_compose_plan to make it."})
+    sections = _sections(plan)
+    out = {"success": True, "model": model, "total_seconds": (sections[-1]["end_ms"] if sections else 0) / 1000,
+           "chunks": plan["chunks"], "sections": sections, "billed": False,
+           "next_step": "Show the user the sections and lyrics; after any edits, pass chunks (and this "
+                        "model) to elevenlabs_music_compose_plan to make it."}
+    kept = [c for c in body.get("source_composition_plan", {}).get("chunks", []) if "song_id" in c]
+    if kept and not any(isinstance(c, dict) and "song_id" in c for c in plan["chunks"]):
+        out["note"] = ("ElevenLabs returned new-audio chunks in place of the kept slices; put the original "
+                       "{song_id, range} chunks back before elevenlabs_music_compose_plan to keep that audio.")
+    return tool_result(out)
 
 
 @_guarded
@@ -327,9 +335,11 @@ def _source_audio(args: dict, cwd: str) -> tuple[str, bytes, dict[str, Any] | No
     return path.name, path.read_bytes(), row
 
 
-def _mime(name: str) -> str:
+def _mime(name: str, video: bool = False) -> str:
     ext = name.rsplit(".", 1)[-1].lower()
-    return {"mp3": "audio/mpeg", "wav": "audio/wav", "flac": "audio/flac", "ogg": "audio/ogg", "opus": "audio/ogg",
+    if video and ext == "webm":
+        return "video/webm"
+    return {"aiff": "audio/aiff", "aif": "audio/aiff", "mp3": "audio/mpeg", "wav": "audio/wav", "flac": "audio/flac", "ogg": "audio/ogg", "opus": "audio/ogg",
             "m4a": "audio/mp4", "aac": "audio/aac", "webm": "audio/webm", "mp4": "video/mp4", "mov": "video/quicktime",
             "m4v": "video/mp4", "mkv": "video/x-matroska", "avi": "video/x-msvideo"}.get(ext, "application/octet-stream")
 
@@ -338,6 +348,9 @@ def _mime(name: str) -> str:
 def upload(args: dict, setting: Setting, *, surface: str | None = None, session_id: str = "", cwd: str = "") -> str:
     settings = read_settings(setting)
     name, audio, row = _source_audio(args, cwd)
+    if row is not None and row.get("song_id") and row.get("stored_for_editing"):
+        raise ValueError(f"track {row['id']} is already stored at ElevenLabs for editing: use elevenlabs_song_id "
+                         f"{row['song_id']!r} in elevenlabs_music_compose_plan chunks (uploading it again bills again)")
     extract = _in.flag(args.get("extract_plan"), "extract_plan", default=True)
     api_key()
     data = {"with_timestamps": "true"}
@@ -348,7 +361,7 @@ def upload(args: dict, setting: Setting, *, surface: str | None = None, session_
         answer = ok(call(settings, "POST", "/v1/music/upload", data=data,
                          files=[("file", (name, audio, _mime(name)))], deadline=_SONG_DEADLINE)).json()
         if not isinstance(answer, dict) or not answer.get("song_id"):
-            raise ToolFailure("ElevenLabs accepted the upload but returned no song id")
+            raise ToolFailure(f"ElevenLabs accepted the upload (billed) but returned no song id. {NO_RETRY}")
         plan = answer.get("composition_plan") if isinstance(answer.get("composition_plan"), dict) else {}
         return {"success": True, "elevenlabs_song_id": answer["song_id"], "source": row["id"] if row else name,
                 "sections": _sections(plan), "lyrics": _lyrics(plan) or None, "composition_plan": plan or None,
@@ -375,9 +388,10 @@ def _extract_zip(blob: bytes, prefix: str, label: str, base: dict[str, Any], out
     members = [m for m in archive.infolist() if not m.is_dir()
                and m.filename.rsplit(".", 1)[-1].lower() in _STEM_EXTS]
     if not members:
-        raise ToolFailure("ElevenLabs' ZIP archive held no audio files")
+        raise ToolFailure(f"ElevenLabs' ZIP archive held no audio files (the request was billed). {NO_RETRY}")
     if sum(m.file_size for m in members) > _MAX_STEM_TOTAL:
-        raise ToolFailure(f"ElevenLabs' ZIP archive unpacks to more than {_MAX_STEM_TOTAL // (1024 * 1024)} MB")
+        raise ToolFailure(f"ElevenLabs' ZIP archive unpacks to more than {_MAX_STEM_TOTAL // (1024 * 1024)} MB "
+                          f"(the request was billed). {NO_RETRY}")
     out = []
     for member in members:
         stem = _slug(Path(member.filename).stem)[:24]
@@ -441,7 +455,7 @@ def from_video(args: dict, setting: Setting, *, surface: str | None = None, sess
     label = description or ", ".join(tags) or paths[0].stem
 
     def work() -> dict:
-        files = [("videos", (p.name, p.read_bytes(), _mime(p.name))) for p in paths]
+        files = [("videos", (p.name, p.read_bytes(), _mime(p.name, video=True))) for p in paths]
         response = ok(call(settings, "POST", "/v1/music/video-to-music", params={"output_format": output_format},
                            data=data, files=files, deadline=_SONG_DEADLINE))
         base = {"kind": "score", "tool": S.FROM_VIDEO["name"], "prompt": label, "model": model,

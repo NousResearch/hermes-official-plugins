@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from . import provenance as _provenance
-from .elevenlabs_api import ToolFailure
+from .elevenlabs_api import NO_RETRY, ToolFailure
 
 JOB_ID_RE = re.compile(r"[0-9a-f]{12}")
 # Longer than the longest request deadline (video scoring) plus saving: a running record older than
@@ -102,7 +102,9 @@ def start(kind: str, label: str, est_seconds: float, work: Callable[[], dict[str
         except ToolFailure as exc:
             record.update(status="failed", error=str(exc))
         except Exception as exc:
-            record.update(status="failed", error=f"unexpected {type(exc).__name__} while generating: {exc}"[:600])
+            record.update(status="failed", error=(
+                f"unexpected {type(exc).__name__} after the request was sent ({str(exc)[:300]}). ElevenLabs may "
+                f"already have billed it. {NO_RETRY}"))
         record["finished_at"] = _now()
         try:
             _write(record)

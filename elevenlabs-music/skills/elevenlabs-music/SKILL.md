@@ -79,7 +79,7 @@ and what is banned ("four bars, no melody, just drums").
   goes in `positive_styles`, short cues in braces (`{guitar solo}`), sung sounds in parentheses
   (`(ooh)`). The first chunk's styles set the song: give it 6+.
 - A style the user named that matches a curated finetune: `elevenlabs_music_finetunes` with
-  `created_by: elevenlabs`, then pass its `finetune_id`.
+  `created_by: elevenlabs`, then pass its `finetune_id` and its `model_id` as `model`.
 
 ### 3. Edit, extend, loop, re-style (plan chunks over a stored song)
 
@@ -106,7 +106,7 @@ whole result's length, kept slices included. For the user's own file: `elevenlab
 - **Chat apps (Telegram, Discord, Slack, WhatsApp, Signal, ...):** a generation that is not done within a
   few seconds returns `status: running` with a `job_id` and a `next_step`. Follow it exactly, in the same
   turn: reply in one line that it started (with the estimate), arm
-  `terminal(command="sleep <N> && echo elevenlabs music job <job_id>", background=true, notify_on_complete=true)`,
+  `terminal(command="sleep <N> && echo elevenlabs music job <job_id>", background=true, notify=true)`,
   and end the turn. A foreground `sleep` holds the chat just like waiting. When the wake arrives, call
   `elevenlabs_music_job` with `wait_seconds: 60` and send the `media_tag` lines. If the user asks "is it
   done?" meanwhile, check with `wait_seconds: 0`, deliver if finished, and answer the later wake with

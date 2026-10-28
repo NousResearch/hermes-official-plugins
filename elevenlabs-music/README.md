@@ -106,7 +106,7 @@ player. That needs a Hermes Desktop with tool-media renderers (on `main` since c
 older Desktops the same line plays in the built-in player. The card shows the title, ElevenLabs'
 description, genres, length, model and format; a waveform you can click to seek; Play/Pause and Loop; the
 words being sung, highlighted as the song plays; the full **Lyrics**; **Download** (the original, or MP3 /
-WAV / OGG / FLAC converted by ffmpeg on the machine Hermes runs on); and **Reveal** in your file manager.
+WAV / OGG / FLAC converted by ffmpeg on the machine Hermes runs on; WAV for songs up to about 5 minutes, FLAC up to about 7); and **Reveal** in your file manager.
 **Next** offers 3 variations, an instrumental version, the other model, **Extend by 30 s**, **Redo** any
 section (it puts a started message in the composer for you to say what to change), and **Split into
 stems**. Each row says how much music it bills and sends a chat message naming the tool and its

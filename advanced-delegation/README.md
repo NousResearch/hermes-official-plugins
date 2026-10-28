@@ -93,6 +93,54 @@ hermes delegation config --show   # print the current mode and routes (no termin
 Everything is written to the profile's `config.yaml` with Hermes's own config writer (comments and
 other settings are kept). Changes apply to new sessions.
 
+## Named model-route presets
+
+A preset saves the **whole set of model routes and its default**. Route names stay the same while
+providers, models, reasoning effort and service tiers can change together. Presets are per profile;
+they do not include Profile routes, concurrency limits or the parent model.
+
+```bash
+hermes delegation preset save claude
+hermes delegation preset list
+hermes delegation preset show claude
+hermes delegation preset use codex
+hermes delegation preset rename codex openai
+hermes delegation preset delete openai
+hermes delegation preset save claude --force  # explicitly replace an existing snapshot
+```
+
+Set up each set with the route editor, then save it under a name. Names use letters, digits,
+periods, underscores or hyphens (up to 64 characters, starting with a letter or digit).
+Using a preset restores every route field and the default together and selects **Model routes**.
+Deleting a preset only removes the saved snapshot, not the currently configured routes. Editing a
+route does not overwrite its preset; the active marker disappears when the current set no longer
+matches. Save again with `--force` to deliberately replace a snapshot.
+
+From a chat:
+
+```text
+/delegation preset                  # list saved presets, or pick one where supported
+/delegation preset codex            # save for the next session
+/delegation preset codex --now      # also apply to this chat at its next turn
+```
+
+In **Settings → Model → Subagents → Model routes**, the **Saved presets** dropdown restores a
+whole route set immediately for new chats. **Save current as…**, **Rename preset** and **Delete preset**
+manage the server-side library. **Apply to current chat** is a separate, confirmed action and is only
+available for a running chat on the same profile and connection. It uses the same `/delegation preset
+NAME --now` command as the CLI/chat surface; draft or unrelated chats cannot be retargeted.
+
+The Desktop selector and strict next-session isolation require the companion Hermes core update.
+Older cores keep the previous tool schema but can read newly saved models for existing route names;
+start a new session after switching on those versions. With the core update, existing chats retain
+their route snapshots unless `--now` is requested.
+
+Presets retain complete route entries, including custom fields and any explicitly configured
+credentials. Keep credentials in the provider's normal credential store rather than inline route
+`api_key` fields. Presets are stored in `delegation.backends.model_map.presets` as a list of
+`{name, options, default}` snapshots; `active_preset` identifies the last saved or applied set only
+while the current routes still match.
+
 ## Switch modes in a chat: `/delegation`
 
 ```

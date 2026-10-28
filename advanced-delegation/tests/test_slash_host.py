@@ -88,3 +88,32 @@ def test_hosted_now_rebuilds_the_tools_of_this_processs_session(hosted, monkeypa
     reply = _run(fn, "model_map --now")
     assert "applied to this chat" in reply and _saved(home) == "model_map"
     assert apply_requested_tool_rebuild(agent)  # the request landed here, not in the plugin host
+
+
+@pytest.mark.skipif(not APPLY_NOW, reason="core without set_global_backend(apply_now=)")
+def test_hosted_preset_save_and_now_rebuild_target_owner_process(hosted, monkeypatch):
+    from agent.delegation_backends import apply_requested_tool_rebuild
+    from run_agent import AIAgent
+    monkeypatch.delenv("HERMES_SESSION_KEY", raising=False)
+    fn, home = hosted
+    path = home / "config.yaml"
+    config = yaml.safe_load(path.read_text())
+    block = config["delegation"]["backends"]["model_map"]
+    block["presets"] = [{"name": "alternate", "options": [
+        {"name": "deep", "description": "Careful.", "provider": "openrouter", "model": "m2"}],
+        "default": "deep"}]
+    path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    agent = AIAgent(base_url="http://127.0.0.1:9/v1", api_key="test", model="test-model", quiet_mode=True,
+                    enabled_toolsets=["delegation"], session_id=KEY, skip_context_files=True, skip_memory=True)
+    assert "next session" in _run(fn, "preset alternate")
+    assert not apply_requested_tool_rebuild(agent)
+    saved = yaml.safe_load(path.read_text())["delegation"]["backends"]["model_map"]
+    assert saved["options"][0]["model"] == "m2" and saved["default"] == "deep"
+    assert "applied to this chat" in _run(fn, "preset alternate --now")
+    assert apply_requested_tool_rebuild(agent)
+    tool = next(t for t in agent.tools if t["function"]["name"] == "delegate_task")
+    options = tool["function"]["parameters"]["properties"]["tasks"]["items"]["properties"]["option"]
+    assert options["enum"] == ["deep"]
+    if hasattr(backends, "saved_backend_config"):
+        pinned = agent._delegation_backend_config["backends"]["model_map"]
+        assert "presets" not in pinned and "active_preset" not in pinned

@@ -15,6 +15,7 @@ setup and needs no terminal; interactive editing refuses to run without one.
 from __future__ import annotations
 
 import sys
+from pprint import pformat
 from typing import Any, Mapping, Optional
 
 from . import store
@@ -37,10 +38,23 @@ def setup_parser(parser) -> None:
         description="Pick how delegate_task routes subagents (Default, Model routes, Profile routes) "
                     "and edit the routes. Changes apply to new sessions.")
     config.add_argument("--show", action="store_true", help="Print the current mode and routes, then exit")
+    preset = sub.add_parser("preset", help="Manage named model-route presets")
+    commands = preset.add_subparsers(dest="preset_command", metavar="<command>")
+    save = commands.add_parser("save", help="Save the current model routes as a preset")
+    save.add_argument("name", metavar="NAME")
+    save.add_argument("--force", action="store_true", help="Overwrite an existing preset")
+    commands.add_parser("list", help="List presets and mark the active one")
+    for command in ("show", "use", "delete"):
+        commands.add_parser(command, help=f"{command.capitalize()} a preset").add_argument("name", metavar="NAME")
+    rename = commands.add_parser("rename", help="Rename a preset")
+    rename.add_argument("name", metavar="OLD")
+    rename.add_argument("new_name", metavar="NEW")
     parser.set_defaults(func=handle)
 
 
 def handle(args) -> int:
+    if getattr(args, "delegation_command", None) == "preset":
+        return _handle_preset(args)
     if getattr(args, "delegation_command", None) != "config":
         print("usage: hermes delegation config [--show]")
         return 0
@@ -53,6 +67,43 @@ def handle(args) -> int:
     try:
         run()
     except RuntimeError as exc:  # store refused the write (managed install, unreadable config)
+        print(f"✗ {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _handle_preset(args) -> int:
+    command = getattr(args, "preset_command", None)
+    if not command:
+        print("usage: hermes delegation preset {save,list,show,use,rename,delete} ...", file=sys.stderr)
+        return 1
+    try:
+        if command == "list":
+            section = store.delegation_section()
+            names = store.list_presets(section)
+            active = store.active_preset(section)
+            if not names:
+                print("No presets saved. Use `hermes delegation preset save NAME` to create one.")
+            for name in names:
+                print(f"{name}{' (active)' if name == active else ''}")
+        elif command == "show":
+            from hermes_cli.config import redact_config_value
+            preset = store.get_preset(store.delegation_section(), args.name)
+            print(f"Preset {args.name}:\n{pformat(redact_config_value(preset), sort_dicts=False)}")
+        elif command == "save":
+            store.save_preset(args.name, overwrite=args.force)
+            print(f"Saved preset {args.name!r}.")
+        elif command == "use":
+            store.use_preset(args.name)
+            print(f"Using preset {args.name!r}; delegation mode is Model routes (model_map). "
+                  "New sessions pick this up.")
+        elif command == "rename":
+            store.rename_preset(args.name, args.new_name)
+            print(f"Renamed preset {args.name!r} to {args.new_name!r}.")
+        elif command == "delete":
+            store.delete_preset(args.name)
+            print(f"Deleted preset {args.name!r}.")
+    except (ValueError, RuntimeError, OSError) as exc:
         print(f"✗ {exc}", file=sys.stderr)
         return 1
     return 0

@@ -9,6 +9,7 @@ write that would drop existing settings). Only ``delegation.backend`` and
 
 from __future__ import annotations
 
+from copy import deepcopy
 import re
 from typing import Any, Callable, Mapping, Sequence
 
@@ -74,18 +75,22 @@ def profile_default(section: Mapping[str, Any]) -> str:
 def _write(mutate: Callable[[dict[str, Any]], None]) -> None:
     """Raises RuntimeError (with the user-facing reason) when the config must not be written: a
     package-manager-managed install, or an unreadable / would-lose-settings file."""
-    from hermes_cli.config import (atomic_config_write, format_managed_message, get_config_path, is_managed,
+    from hermes_cli.config import (_CONFIG_LOCK, atomic_config_write, format_managed_message, get_config_path, is_managed,
                                    require_readable_config_before_write)
     if is_managed():
         raise RuntimeError(format_managed_message("change delegation settings"))
     path = get_config_path()
-    data = require_readable_config_before_write(path)
-    section = data.get("delegation")
-    if not isinstance(section, dict):
-        section = data["delegation"] = {}
-    mutate(section)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_config_write(path, data)
+    # Core has no public raw-config transaction API. Use the same reentrant lock as
+    # load_config/save_config, not a plugin-owned lock that other writers cannot see.
+    # This serializes cooperating in-process writers; it is not a cross-process CAS.
+    with _CONFIG_LOCK:
+        data = require_readable_config_before_write(path)
+        section = data.get("delegation")
+        if not isinstance(section, dict):
+            section = data["delegation"] = {}
+        mutate(section)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_config_write(path, data)
 
 
 def _backend_block(section: dict[str, Any], mode: str) -> dict[str, Any]:
@@ -161,6 +166,11 @@ def offered_tier(route: Mapping[str, Any], tier: str) -> bool:
 def validate_route(route: Mapping[str, Any], others: Sequence[Mapping[str, Any]]) -> list[str]:
     """Problems that would make core skip or refuse this route (empty list = savable). ``others`` are
     the other routes, for the unique-name check."""
+    return _validate_route(route, others, runtime=True)
+
+
+def _validate_route(route: Mapping[str, Any], others: Sequence[Mapping[str, Any]], *, runtime: bool) -> list[str]:
+    """Structural checks always apply; provider/tier availability only applies at save/use."""
     problems: list[str] = []
     name = _text(route.get("name"))
     if not _NAME_RE.match(name):
@@ -175,7 +185,7 @@ def validate_route(route: Mapping[str, Any], others: Sequence[Mapping[str, Any]]
     provider = _text(route.get("provider"))
     if not provider and not _text(route.get("base_url")):
         problems.append("A route needs a provider or a base_url.")
-    elif provider and not _provider_known(provider):
+    elif runtime and provider and not _provider_known(provider):
         problems.append(f"Unknown provider {provider!r} (see `hermes model` for the providers Hermes knows).")
     effort = route.get("reasoning_effort")
     if effort not in (None, ""):
@@ -183,10 +193,200 @@ def validate_route(route: Mapping[str, Any], others: Sequence[Mapping[str, Any]]
         if parse_reasoning_effort(effort) is None:
             problems.append(f"Unknown reasoning effort {effort!r}; use none or one of: "
                             f"{', '.join(VALID_REASONING_EFFORTS)}.")
-    tier = _tier_problem(route) if not problems else ""
+    tier = ""
+    if not problems:
+        if runtime:
+            tier = _tier_problem(route)
+        elif _text(route.get("service_tier")):
+            from agent.fast_mode import parse_exact_service_tier
+            try:
+                parse_exact_service_tier(_text(route.get("service_tier")))
+            except ValueError:
+                tier = f"Unknown speed tier {route.get('service_tier')!r}."
     if tier:
         problems.append(tier)
     return problems
+
+
+# --- named model-route presets ----------------------------------------------------------------
+# Lists let atomic_config_write safely rename/delete entries without dropping mapping paths.
+# Snapshots deliberately include whole entries, not just the editor's ROUTE_KEYS: api_key,
+# api_mode, fallback_providers and future route fields must survive a round trip.
+
+
+def _preset_name(name: Any) -> str:
+    if not isinstance(name, str) or not _NAME_RE.fullmatch(name):
+        raise ValueError("A preset name needs 1–64 letters, digits, '.', '_' or '-' (start with a letter or digit).")
+    return name
+
+
+def _preset_block(section: Mapping[str, Any]) -> Mapping[str, Any]:
+    backends = section.get("backends", {})
+    if not isinstance(backends, Mapping):
+        raise ValueError("delegation.backends must be a mapping.")
+    block = backends.get("model_map", {})
+    if not isinstance(block, Mapping):
+        raise ValueError("delegation.backends.model_map must be a mapping.")
+    return block
+
+
+def _snapshot(block: Mapping[str, Any], *, runtime: bool = False) -> dict[str, Any]:
+    options, default = block.get("options"), block.get("default", "")
+    if not isinstance(options, list):
+        raise ValueError("Preset options must be a list.")
+    if not isinstance(default, str):
+        raise ValueError("Preset default must be a route name or an empty string.")
+    seen: list[Mapping[str, Any]] = []
+    for entry in options:
+        if not isinstance(entry, Mapping):
+            raise ValueError("Each preset option must be a mapping.")
+        for key in (*ROUTE_KEYS, "api_key", "api_mode"):
+            if key in entry and entry[key] is not None and not isinstance(entry[key], str):
+                raise ValueError(f"Route field {key} must be a string.")
+        name = entry.get("name")
+        if not isinstance(name, str) or not _NAME_RE.fullmatch(name):
+            raise ValueError("Invalid route name in preset.")
+        problems = _validate_route(entry, seen, runtime=runtime)
+        if problems:
+            raise ValueError(" ".join(problems))
+        if "fallback_providers" in entry:
+            chain = entry["fallback_providers"]
+            if not isinstance(chain, list) or any(not isinstance(item, Mapping) for item in chain):
+                raise ValueError("fallback_providers must be a list of mappings.")
+            for item in chain:
+                if any(value is not None and not isinstance(value, str)
+                       for key, value in item.items() if key in (*ROUTE_KEYS, "api_key", "api_mode")):
+                    raise ValueError("Fallback route fields must be strings.")
+                problems = _validate_route(
+                    {**entry, **item, "name": "fallback", "description": "Fallback route"}, [], runtime=runtime)
+                if problems:
+                    raise ValueError(" ".join(problems))
+        seen.append(entry)
+    if default and default not in {entry["name"] for entry in options}:
+        raise ValueError(f"Preset default {default!r} is not an option.")
+    return deepcopy({"options": options, "default": default})
+
+
+def _presets(section: Mapping[str, Any]) -> list[dict[str, Any]]:
+    raw = _preset_block(section).get("presets", [])
+    if not isinstance(raw, list):
+        raise ValueError("Model-route presets must be a list.")
+    result: list[dict[str, Any]] = []
+    names: set[str] = set()
+    for entry in raw:
+        if not isinstance(entry, Mapping):
+            raise ValueError("Each preset must be a mapping.")
+        name = _preset_name(entry.get("name"))
+        if name in names:
+            raise ValueError(f"Duplicate preset {name!r}.")
+        names.add(name)
+        result.append({"name": name, **_snapshot(entry)})
+    return result
+
+
+def list_presets(section: Mapping[str, Any]) -> list[str]:
+    """Preset names in saved order; malformed registries raise ValueError."""
+    return [entry["name"] for entry in _presets(section)]
+
+
+def get_preset(section: Mapping[str, Any], name: str) -> dict[str, Any]:
+    """Return an isolated {options, default} snapshot; unknown names raise ValueError.
+
+    Contains all route fields, including credentials: consumers must redact before display.
+    """
+    _preset_name(name)
+    for entry in _presets(section):
+        if entry["name"] == name:
+            return {"options": entry["options"], "default": entry["default"]}
+    raise ValueError(f"Unknown model-route preset {name!r}.")
+
+
+def active_preset(section: Mapping[str, Any]) -> str:
+    """Saved/used preset name only while backend and the complete snapshot still match.
+
+    Manual edits, deleted/corrupt presets and another backend all report ''. No writes.
+    """
+    if current_mode(section) != "model_map":
+        return ""
+    try:
+        block = _preset_block(section)
+        name = block.get("active_preset", "")
+        return name if name and get_preset(section, name) == _snapshot(block) else ""
+    except (ValueError, TypeError):
+        return ""
+
+
+def save_preset(name: str, *, overwrite: bool = False) -> None:
+    """Snapshot effective model routes without changing the backend; collisions require overwrite."""
+    _preset_name(name)
+    effective = delegation_section()
+    snapshot = _snapshot(_preset_block(effective))
+    marker = _preset_block(effective).get("active_preset", "")
+
+    def mutate(section: dict[str, Any]) -> None:
+        _snapshot(snapshot, runtime=True)  # selected snapshot only, against current availability
+        presets = _presets(section)  # reconcile the current registry, not the effective read
+        if name in [entry["name"] for entry in presets] and not overwrite:
+            raise ValueError(f"Preset {name!r} already exists; use overwrite=True to replace it.")
+        replacement = {"name": name, **snapshot}
+        presets = [replacement if entry["name"] == name else entry for entry in presets]
+        if name not in [entry["name"] for entry in presets]:
+            presets.append(replacement)
+        block = _backend_block(section, "model_map")
+        block["presets"] = deepcopy(presets)
+        if block.get("active_preset", "") == marker and current_mode(section) == current_mode(effective):
+            block["active_preset"] = name if current_mode(section) == "model_map" else ""
+    _write(mutate)
+
+
+def use_preset(name: str) -> None:
+    """Atomically select model_map and restore only options/default from the named snapshot."""
+    _preset_name(name)
+
+    def mutate(section: dict[str, Any]) -> None:
+        snapshot = _snapshot(get_preset(section, name), runtime=True)
+        block = _backend_block(section, "model_map")
+        block.update(deepcopy(snapshot))
+        block["active_preset"] = name
+        section["backend"] = "model_map"
+    _write(mutate)
+
+
+def rename_preset(old: str, new: str) -> None:
+    """Rename without overwriting another preset; rename-to-self validates then does nothing."""
+    _preset_name(old)
+    _preset_name(new)
+    if old == new:
+        get_preset(delegation_section(), old)
+        return
+
+    def mutate(section: dict[str, Any]) -> None:
+        presets = _presets(section)
+        get_preset(section, old)
+        if new in [entry["name"] for entry in presets]:
+            raise ValueError(f"Preset {new!r} already exists.")
+        for entry in presets:
+            if entry["name"] == old:
+                entry["name"] = new
+        block = _backend_block(section, "model_map")
+        block["presets"] = deepcopy(presets)
+        if block.get("active_preset") == old:
+            block["active_preset"] = new
+    _write(mutate)
+
+
+def delete_preset(name: str) -> None:
+    """Delete a snapshot without changing live routes; unknown names raise ValueError."""
+    _preset_name(name)
+
+    def mutate(section: dict[str, Any]) -> None:
+        get_preset(section, name)
+        presets = [entry for entry in _presets(section) if entry["name"] != name]
+        block = _backend_block(section, "model_map")
+        block["presets"] = deepcopy(presets)
+        if block.get("active_preset") == name:
+            block["active_preset"] = ""
+    _write(mutate)
 
 
 # --- display ----------------------------------------------------------------------------------
@@ -211,6 +411,9 @@ def describe(section: Mapping[str, Any]) -> str:
     mode = current_mode(section)
     lines = [f"Delegation mode: {mode_label(mode)} (delegation.backend: {mode})"]
     if mode == "model_map":
+        active = active_preset(section)
+        if active:
+            lines.append(f"  Active preset: {active}")
         options, default = routes(section), route_default(section)
         lines.append(f"  Model routes ({len(options)}){f', default: {default}' if default else ''}:")
         width = max((len(_text(o.get('name'))) for o in options), default=0)

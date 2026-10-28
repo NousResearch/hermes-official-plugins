@@ -79,6 +79,11 @@ def register(ctx) -> None:
         if session_id:
             t.cleanup_task(session_id)
 
+    # browser_vault fills the Camofox tab through this; a core without the seam keeps its old behaviour.
+    if hasattr(ctx, "register_browser_page_backend"):
+        from .camofox_vault import make_page_backend
+        ctx.register_browser_page_backend(make_page_backend())
+
     ctx.register_hook("on_session_end", _on_session_end)
     ctx.register_hook("on_session_finalize", _on_session_finalize)
     ctx.register_cli_command(

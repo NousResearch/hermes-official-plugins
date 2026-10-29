@@ -61,7 +61,22 @@ logger = logging.getLogger(__name__)
 MAX_MESSAGE_LENGTH = 9500
 
 DEFAULT_POLL_INTERVAL = 10.0
+# Adaptive pacing. X caps user-context calls at 1,000 per 24 hours per account
+# (`x-user-limit-24hour-*`), and an idle bot spends one call per cycle just asking
+# whether anything arrived — so a short interval left running overnight exhausts the
+# quota and the channel goes dark until the window resets. Poll briskly for a while
+# after any traffic, then fall back to the idle interval.
+DEFAULT_ACTIVE_INTERVAL = 15.0
+DEFAULT_ACTIVE_WINDOW = 600.0
+DEFAULT_DAILY_CALL_BUDGET = 900
 ERROR_BACKOFF = [5, 15, 30, 60, 120]
+
+
+def _quota_day() -> str:
+    """UTC day key for the per-account 24-hour call budget."""
+    return time.strftime("%Y-%m-%d", time.gmtime())
+
+
 DEDUP_MAX_SIZE = 5000
 # Bounded cache of recent decrypted events per conversation — used to build
 # native threaded replies (encrypt_reply needs the decrypted target event).
@@ -261,6 +276,36 @@ class XChatAdapter(BasePlatformAdapter):
             self._poll_interval = DEFAULT_POLL_INTERVAL
         self._poll_interval = max(2.0, self._poll_interval)
 
+        def _setting(name: str, default: float, *, minimum: float = 0.0) -> float:
+            key = name[len("XCHAT_"):].lower() if name.startswith("XCHAT_") else name.lower()
+            raw = extra.get(key) or os.getenv(name, "")
+            try:
+                value = float(raw) if raw not in ("", None) else default
+            except (TypeError, ValueError):
+                value = default
+            return max(minimum, value)
+
+        self._active_interval = _setting(
+            "XCHAT_POLL_INTERVAL_ACTIVE", DEFAULT_ACTIVE_INTERVAL, minimum=2.0
+        )
+        self._active_window = _setting("XCHAT_ACTIVE_WINDOW", DEFAULT_ACTIVE_WINDOW)
+        self._daily_call_budget = int(
+            _setting("XCHAT_DAILY_CALL_BUDGET", float(DEFAULT_DAILY_CALL_BUDGET))
+        )
+        # Pacing state: the active interval applies while the last traffic is recent.
+        self._last_activity_at: float = 0.0
+        # Token bucket for the 24h call budget: X enforces a rolling window, so a
+        # calendar-day counter would drift out of phase with it. The refill rate is the
+        # allowance's mean (budget/86400); the capacity is a third of the day's
+        # allowance, which funds a real conversation burst while idle polling — the
+        # steady drain at ~288 calls a day — is comfortably below the refill rate.
+        self._call_capacity: float = max(4.0, self._daily_call_budget * 0.33)
+        self._call_tokens: float = self._call_capacity
+        self._last_refill_at: float = 0.0
+        self._calls_day: str = _quota_day()
+        self._calls_today: int = 0
+        self._budget_warned: bool = False
+
         # Pinned conversations (skip discovery when set).
         conv_raw = extra.get("conversation_ids") or os.getenv("XCHAT_CONVERSATION_IDS", "")
         if isinstance(conv_raw, list):
@@ -447,7 +492,74 @@ class XChatAdapter(BasePlatformAdapter):
 
     # -- Polling loop -----------------------------------------------------------
 
+    def _note_activity(self) -> None:
+        """Recent traffic: keep polling at the active interval for the next window."""
+        self._last_activity_at = time.monotonic()
+
+    def _refill_budget(self, now: float) -> None:
+        """Refill the call-budget bucket at the allowance's mean rate."""
+        if not self._daily_call_budget:
+            return
+        if self._last_refill_at <= 0.0:
+            self._last_refill_at = now
+            return
+        elapsed = now - self._last_refill_at
+        if elapsed <= 0:
+            return
+        rate = self._daily_call_budget / 86400.0
+        self._call_tokens = min(self._call_capacity, self._call_tokens + elapsed * rate)
+        self._last_refill_at = now
+
+    def _charge_calls(self, count: int = 1, now: Optional[float] = None) -> None:
+        """Spend ``count`` calls from the budget bucket, warning once when it empties."""
+        current = time.monotonic() if now is None else now
+        today = _quota_day()
+        if today != self._calls_day:
+            logger.info("[xchat] new quota day — previous day used %d call(s)", self._calls_today)
+            self._calls_day = today
+            self._calls_today = 0
+        self._calls_today += count
+        self._refill_budget(current)
+        if not self._daily_call_budget:
+            return
+        self._call_tokens -= count
+        if self._call_tokens < 1.0 and not self._budget_warned:
+            logger.warning(
+                "[xchat] call budget spent (%d/24h) — holding the idle interval until it refills",
+                self._daily_call_budget,
+            )
+            self._budget_warned = True
+        elif self._call_tokens >= 1.0 and self._budget_warned:
+            self._budget_warned = False
+
+    def _next_poll_interval(self, now: Optional[float] = None) -> float:
+        """Active interval for a while after traffic, idle interval otherwise.
+
+        The bucket is a hard floor: once the allowance is spent the loop never polls
+        faster than the idle interval, so a chatty afternoon cannot run the account's
+        quota to zero and strand the channel for the rest of the day.
+        """
+        current = time.monotonic() if now is None else now
+        self._refill_budget(current)
+        recent = (
+            self._active_window > 0
+            and self._last_activity_at > 0
+            and (current - self._last_activity_at) <= self._active_window
+        )
+        interval = self._active_interval if recent else self._poll_interval
+        if self._daily_call_budget and self._call_tokens < 1.0:
+            interval = max(interval, self._poll_interval)
+        return interval
+
     async def _run_poll_loop(self) -> None:
+        logger.info(
+            "[xchat] pacing: idle=%.0fs, active=%.0fs for %.0fs after traffic, "
+            "budget=%d calls/24h",
+            self._poll_interval,
+            self._active_interval,
+            self._active_window,
+            self._daily_call_budget,
+        )
         backoff_idx = 0
         while self._running:
             try:
@@ -456,6 +568,9 @@ class XChatAdapter(BasePlatformAdapter):
                 # are billed per resource returned, so re-reading idle conversations
                 # every cycle is the dominant cost.
                 newest = await self._discover_conversations()
+                # Charged per cycle, not per page: discovery is one request for any
+                # account that fits a single page, which is what this bucket models.
+                self._charge_calls(1)
                 for conv_id in list(self._conversations):
                     if not self._running:
                         return
@@ -464,9 +579,10 @@ class XChatAdapter(BasePlatformAdapter):
                     if head and cursor and not _event_id_newer(head, cursor):
                         continue
                     await self._poll_conversation(conv_id)
+                    self._charge_calls(1)
 
                 backoff_idx = 0
-                await asyncio.sleep(self._poll_interval)
+                await asyncio.sleep(self._next_poll_interval())
             except asyncio.CancelledError:
                 return
             except XChatRateLimited as e:
@@ -663,6 +779,8 @@ class XChatAdapter(BasePlatformAdapter):
         if message_id:
             self._sent_ids.add(message_id)
             _remember_sent(message_id)
+        # Outbound traffic starts a fast-poll window: a reply usually draws another.
+        self._note_activity()
 
     def _absorb_key_batch(
         self, conv_id: str, events_b64: List[str], *, label: str = "key-events"
@@ -859,6 +977,8 @@ class XChatAdapter(BasePlatformAdapter):
         media_types: Optional[List[str]] = None,
         reply_to: Optional[Dict[str, Any]] = None,
     ) -> None:
+        # Inbound traffic opens a fast-poll window so the next reply lands in seconds.
+        self._note_activity()
         is_group = conv_id.startswith("g")
         chat_type = "group" if is_group else "dm"
 

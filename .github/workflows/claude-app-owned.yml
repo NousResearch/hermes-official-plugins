@@ -1,0 +1,31 @@
+name: Claude app-owned inventory
+on:
+  push:
+    branches: [feat/app-owned-claude-inventory]
+  pull_request:
+    paths:
+      - 'claude-subscription-directsdk/**'
+      - '.github/workflows/claude-app-owned.yml'
+permissions:
+  contents: read
+jobs:
+  inventory-and-native-transport:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: pantheon
+      - uses: actions/checkout@v4
+        with:
+          repository: NousResearch/hermes-agent
+          path: hermes-agent
+      - uses: astral-sh/setup-uv@v6
+      - name: Complete Claude provider suite against current stock Hermes
+        env:
+          HERMES_AGENT_REPO: ${{ github.workspace }}/hermes-agent
+          HERMES_HOME: ${{ runner.temp }}/isolated-claude-test-home
+        run: uv run --project hermes-agent --python 3.14 --no-dev --with pytest --with pytest-asyncio python -m pytest -q pantheon/claude-subscription-directsdk

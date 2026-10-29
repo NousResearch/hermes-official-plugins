@@ -68,6 +68,17 @@ QUIET_TRAFFIC = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_TELEM
 ALWAYS_QUIET = {"DISABLE_AUTOUPDATER": "1", "DISABLE_FEEDBACK_COMMAND": "1", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"}
 _OFF = ("false", "0", "no", "off")
 
+# Hermes loads `~/.hermes/.env` into its own process, so a key set there for its `anthropic` provider
+# is inherited here too. Claude Code would sign in with it and bill API usage instead of the
+# subscription, so no child of this plugin receives one.
+API_CREDENTIAL_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_FOUNDRY_API_KEY")
+
+
+def drop_api_credentials(env):
+    for key in API_CREDENTIAL_ENV:
+        env.pop(key, None)
+    return env
+
 
 def _setting(key, default=None):
     """Read one plugin setting, with unreadable config or missing keys treated as not set.
@@ -119,7 +130,7 @@ def apply_traffic_policy(env, telemetry=None):
 
 
 def _child_env(env):
-    child = dict(env)
+    child = drop_api_credentials(dict(env))
     apply_config_dir(child)
     return apply_traffic_policy(child)
 

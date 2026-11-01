@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from bubblewrap_plugin import binds as bubblewrap_binds
+from bubblewrap_plugin.home import DENY_ALL, DENY_DOT
 from bubblewrap_plugin.sandbox import (
     BindMount,
     BubblewrapConfig,
@@ -386,7 +388,6 @@ class TestAncestorPins:
         assert (str(home / "docs"), str(home / "docs")) in triples(argv, "--bind-try")
         assert str(keys) in singles(argv, "--tmpfs")
 
-
     def test_cwd_above_home_needs_no_pin_for_home(self, paths, home):
         # HOME is a tmpfs mount point on top of the writable parent: it
         # cannot be renamed, and its dot entries are not reachable below it.
@@ -761,3 +762,25 @@ class TestSandboxDirViews:
         i_remount = next(i for i, a in enumerate(argv) if a == "--remount-ro" and argv[i + 1] == view)
         assert i_bind < i_tmpfs < i_remount < argv.index("--chdir")
         assert build(config, paths=paths).count(view) == 0
+
+
+class TestBindGuardHomeDefaultDeny:
+    @pytest.mark.parametrize(("mode", "rel", "words"), [
+        (DENY_ALL, "Private/profile/ca.pem", "an entry of HOME"),
+        (DENY_ALL, "server/profile/ca.pem", None),
+        (DENY_DOT, ".certs/ca.pem", "a dot entry of HOME"),
+    ])
+    def test_an_unlisted_entry_is_refused_by_mode(self, tmp_path, mode, rel, words):
+        (tmp_path / rel).parent.mkdir(parents=True)
+        (tmp_path / rel).write_text("# anchors")
+        guard = bubblewrap_binds.BindGuard(home_root=str(tmp_path), home_allow=("server",), home_default_deny=mode)
+        _real, reason = bubblewrap_binds.bind_refusal(str(tmp_path / rel), guard)
+        assert (reason is None) if words is None else (words in reason)
+
+    def test_an_allowed_entry_under_a_covering_root_stays_swappable(self, tmp_path):
+        # Only dot entries are read-only in every layout; an allowed non-dot entry is writable there.
+        (tmp_path / "server" / "sub").mkdir(parents=True)
+        guard = bubblewrap_binds.BindGuard(
+            writable=(str(tmp_path),), home_root=str(tmp_path), home_allow=("server",), home_default_deny=DENY_ALL,
+        )
+        assert guard.writable_root(str(tmp_path / "server" / "sub")) == str(tmp_path)

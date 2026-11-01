@@ -299,6 +299,16 @@ class TestLoadConfig:
         with pytest.raises(ValueError, match=f"plugins.entries.bubblewrap.settings.{name}"):
             load_bubblewrap_config({name: value})
 
+    def test_home_default_deny_defaults_to_dot_and_is_normalized(self):
+        assert load_bubblewrap_config({}).home_default_deny == DENY_DOT
+        assert load_bubblewrap_config({"home_default_deny": " "}).home_default_deny == DENY_DOT
+        assert load_bubblewrap_config({"home_default_deny": " ALL "}).home_default_deny == DENY_ALL
+
+    @pytest.mark.parametrize("value", ["none", True])
+    def test_bad_home_default_deny_raises(self, value):
+        with pytest.raises(ValueError, match=r"settings\.home_default_deny must be one of dot, all"):
+            load_bubblewrap_config({"home_default_deny": value})
+
     def test_home_mode_comes_from_terminal_home_mode(self):
         assert load_bubblewrap_config({}).home_mode == "auto"
         assert load_bubblewrap_config({}, " Profile ").home_mode == "profile"

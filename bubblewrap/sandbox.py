@@ -170,6 +170,7 @@ SETTING_CPU_SECONDS = "cpu_seconds"
 SETTING_MAX_PROCS = "max_procs"
 SETTING_HOME_ALLOW = "home_allow"
 SETTING_HIDE = "hide"
+SETTING_HOME_DEFAULT_DENY = "home_default_deny"
 SETTINGS_PREFIX = "plugins.entries.bubblewrap.settings"
 # terminal.home_mode is a core setting; core bridges it to this env name and
 # hermes_constants.get_subprocess_home reads it. The spellings that
@@ -301,6 +302,16 @@ def _parse_limit(key: str, raw: object, default: int) -> int:
     return parsed
 
 
+def _parse_choice(key: str, raw: object, choices: tuple[str, ...], default: str) -> str:
+    """One of *choices*, case and surrounding blanks ignored; missing or blank gives *default*."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return default
+    value = raw.strip().lower() if isinstance(raw, str) else None
+    if value not in choices:
+        raise ValueError(f"{_setting_name(key)} must be one of {', '.join(choices)}, got {raw!r}")
+    return value
+
+
 def load_bubblewrap_config(settings: Mapping[str, object] | None = None, home_mode: str = "") -> BubblewrapConfig:
     """Build the config from the plugin's settings mapping and terminal.home_mode.
 
@@ -320,6 +331,10 @@ def load_bubblewrap_config(settings: Mapping[str, object] | None = None, home_mo
         home_mode=(home_mode or "").strip().lower() or DEFAULT_HOME_MODE,
         home_allow=_parse_string_list(SETTING_HOME_ALLOW, settings.get(SETTING_HOME_ALLOW)),
         hide=_parse_string_list(SETTING_HIDE, settings.get(SETTING_HIDE)),
+        home_default_deny=_parse_choice(
+            SETTING_HOME_DEFAULT_DENY, settings.get(SETTING_HOME_DEFAULT_DENY),
+            (bubblewrap_home.DENY_DOT, bubblewrap_home.DENY_ALL), bubblewrap_home.DENY_DOT,
+        ),
     )
 
 

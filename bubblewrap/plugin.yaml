@@ -50,9 +50,15 @@ config_schema:
     type: list
     default: []
     label: Extra home entries
-    description: "More dot entries of the home directory to show read-only, for example [\".zz-tool\", \".config/nvim\"]. Dot entries off the shipped allowlist are hidden; credential stores stay hidden."
+    description: "More dot entries of the home directory to show read-only, for example [\".zz-tool\", \".config/nvim\"]. Dot entries off the shipped allowlist are hidden; credential stores stay hidden. Under home_default_deny all it also takes top-level names such as \"projects\"."
   hide:
     type: list
     default: []
     label: Extra hidden paths
     description: "More paths to hide, absolute or relative to the home directory, for example [\"~/Documents/keys\"]."
+  home_default_deny:
+    type: str
+    choices: [dot, all]
+    default: dot
+    label: Hidden home entries
+    description: "dot: hide dot entries of the home directory off the allowlist. all: hide every entry off it."

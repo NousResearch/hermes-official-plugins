@@ -105,6 +105,7 @@ class TestDiscovery:
         note = sections["bubblewrap-sandbox"]
         assert "profile `workspace`" in note
         assert "no network" in note
+        assert "; dot entries of the home directory that are not on the allowlist do not exist" in note
         assert "Background processes are not available" in note
         monkeypatch.setenv("TERMINAL_ENV", "local")
         assert "bubblewrap-sandbox" not in {s.id for s in manager.render_system_prompt_sections({})}
@@ -122,6 +123,19 @@ class TestDiscovery:
         assert "they share the commands' scratch directory ($TMPDIR)" in note
         assert "do not run in this sandbox" not in note
         assert "HERMES_NATIVE_FILE_READ" not in note
+
+    def test_home_default_deny_reaches_the_config_and_the_prompt_note(self, discovered, monkeypatch):
+        manager, provider = discovered({"home_default_deny": "all"})
+        monkeypatch.setenv("TERMINAL_ENV", "bubblewrap")
+        assert provider.load_config().home_default_deny == "all"
+        note = {s.id: s.content for s in manager.render_system_prompt_sections({})}["bubblewrap-sandbox"]
+        assert "; entries of the home directory that are not on the allowlist do not exist" in note
+
+    def test_the_prompt_note_survives_a_bad_home_default_deny(self, discovered, monkeypatch):
+        manager, _provider = discovered({"home_default_deny": "none"})
+        monkeypatch.setenv("TERMINAL_ENV", "bubblewrap")
+        note = {s.id: s.content for s in manager.render_system_prompt_sections({})}["bubblewrap-sandbox"]
+        assert "; dot entries of the home directory that are not on the allowlist do not exist" in note
 
     def test_bad_settings_name_the_setting(self, discovered):
         _manager, provider = discovered({"memory_mb": "lots"})

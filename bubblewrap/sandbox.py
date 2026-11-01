@@ -24,9 +24,9 @@ Layout of the argv (later mounts overlay earlier ones):
    a command cannot rename the parent of a hidden path out from under its
    overlay
 6. the HOME layout (bubblewrap_home.home_layout_args), which makes HOME
-   default-deny for dot entries: a tmpfs over HOME, the non-dot entries
-   and the allowed dot entries bound back, a tmpfs with the allowed
-   children for HOME/.config, HOME/.local and HOME/.local/share, an
+   default-deny for dot entries, or for every entry under home_default_deny
+   all: a tmpfs over HOME, the visible entries bound back, a tmpfs with
+   the allowed children for HOME/.config, HOME/.local and HOME/.local/share, an
    overlay for each hidden path that is still visible, and at the very
    end a read-only remount of each tmpfs. The cwd, the operator binds and
    the pins of steps 3 to 5 that land under HOME, and the binds of steps
@@ -232,6 +232,7 @@ class BubblewrapConfig:
     # paths to hide, absolute or relative to HOME.
     home_allow: tuple[str, ...] = ()
     hide: tuple[str, ...] = ()
+    home_default_deny: str = bubblewrap_home.DENY_DOT
 
 
 def _setting_name(key: str) -> str:
@@ -556,6 +557,7 @@ def bind_guard(
     writable: Iterable[str],
     home_root: str | None,
     home_allow: Sequence[str],
+    home_default_deny: str = bubblewrap_home.DENY_DOT,
 ) -> bubblewrap_binds.BindGuard:
     """The BindGuard for an environment: the hidden set split into credential stores and Hermes homes."""
     homes = tuple(homes)
@@ -566,6 +568,7 @@ def bind_guard(
         writable=tuple(dict.fromkeys(os.path.realpath(p) for p in writable)),
         home_root=home_root,
         home_allow=tuple(home_allow),
+        home_default_deny=home_default_deny,
     )
 
 
@@ -894,7 +897,7 @@ def build_bwrap_args(
         writable += [scratch_dir, os.path.dirname(state_dir)]
         guard = bind_guard(
             hidden_paths, hermes_homes(home, hermes_home), writable,
-            home_root, home_allow or (),  # type: ignore[arg-type]
+            home_root, home_allow or (), config.home_default_deny,  # type: ignore[arg-type]
         )
         ca_bundles = ca_bundle_binds(guard)
 
@@ -975,7 +978,7 @@ def build_bwrap_args(
             listing = sorted(os.listdir(root))
         except OSError:
             listing = []
-        # A writable bind that covers HOME makes the non-dot entries
+        # A writable bind that covers HOME makes the visible non-dot entries
         # writable and nothing else under HOME: the dot entries are
         # read-only or hidden, and the top of HOME is a read-only tmpfs.
         # So inside HOME the pins are computed against those entries, and
@@ -985,10 +988,14 @@ def build_bwrap_args(
         plain = [pair for pair in writable if pair not in covering]
         hidden_in = [path for path in hidden_paths if in_home(path)]
         hidden_out = [path for path in hidden_paths if not in_home(path)]
+        units = tuple(home_allow or ())
         pins = ancestor_pin_args(plain, mount_points, hidden_paths)
         pins += ancestor_pin_args(covering, mount_points, hidden_out)
         if covering:
-            entries = [os.path.join(root, name) for name in listing if not name.startswith(".")]
+            entries = [
+                os.path.join(root, name) for name in listing
+                if not name.startswith(".") and bubblewrap_home.shows_entry(name, units, config.home_default_deny)
+            ]
             entries = [path for path in entries if os.path.isdir(path) and not os.path.islink(path)]
             pins += ancestor_pin_args([(path, path) for path in entries], [*mount_points, *entries], hidden_in)
         mounts += [(pins[i], pins[i + 1], pins[i + 2]) for i in range(0, len(pins), 3)]
@@ -998,13 +1005,14 @@ def build_bwrap_args(
                 argv += mount
         argv += bubblewrap_home.home_layout_args(
             root,
-            tuple(home_allow or ()),
+            units,
             hidden_paths,
             empty_file=empty_file_path(state_dir),
             writable_roots=[dest for _src, dest in covering],
             listing=listing,
             binds=[mount for mount in mounts if in_home(mount[2])],
             late_args=[token for mount in late if in_home(mount[-1]) for token in mount],
+            default_deny=config.home_default_deny,
         )
         # The overlays for hidden paths outside HOME (a HERMES_HOME kept
         # elsewhere, a credential directory that is a symlink out of HOME).
@@ -1380,15 +1388,22 @@ class BubblewrapEnvironment(LocalEnvironment):
         # never follows a symlink swapped in later.
         self._operator_hidden = operator_hidden_paths(self._home, self._config.hide)
         self._hidden_paths = sensitive_paths(self._home, self._hermes_home, self._operator_hidden)
-        # HOME is default-deny for dot entries. What a sandbox may see is
+        # HOME is default-deny (home_default_deny). What a sandbox may see is
         # fixed here too: a command cannot widen it by changing PATH.
         self._home_root = bubblewrap_home.resolve_home_root(self._home)
+        if self._home_root is None and self._config.home_default_deny != bubblewrap_home.DENY_DOT:
+            raise ValueError(
+                f"{bubblewrap_home.DENY_KEY} is {self._config.home_default_deny}, but HOME ({self._home}) is not a "
+                "usable directory, so nothing under it could be hidden. Point HOME at a real directory or set "
+                f"{bubblewrap_home.DENY_KEY} to {bubblewrap_home.DENY_DOT}."
+            )
         self._home_allow: tuple[str, ...] = ()
         if self._home_root is not None:
             self._home_allow = bubblewrap_home.resolve_allowlist(
                 self._home_root, os.environ.get("PATH", ""), self._config.home_allow,
                 denied_names=bubblewrap_home.denied_home_names(self._home_root),
                 denied_paths=self._hidden_paths,
+                default_deny=self._config.home_default_deny,
             )
         self._scratch_dir: str | None = resolve_scratch_dir(self._hermes_home)
         # The operator binds are filtered, their sources expanded and their
@@ -1497,6 +1512,7 @@ class BubblewrapEnvironment(LocalEnvironment):
             home_root = None
         guard = bind_guard(
             self._hidden_paths, hermes_homes(self._home, self._hermes_home), writable, home_root, self._home_allow,
+            self._config.home_default_deny,
         )
         kept: list[BindMount] = []
         for bind in self._config.binds:
@@ -1530,7 +1546,7 @@ class BubblewrapEnvironment(LocalEnvironment):
         resolved to here, at HERMES_HOME/home, never the name. A missing
         profile home gets no bind. A refused one (a link to a directory a
         sandbox can write to, where a command could swap it for a link to
-        another tree, or into a hidden dot entry of HOME) stops the
+        another tree, or into a hidden entry of HOME) stops the
         construction like the other profile home checks
         (_check_profile_home). The plain directory lies in the hidden
         Hermes home and is the one public part of it.
@@ -1664,7 +1680,7 @@ class BubblewrapEnvironment(LocalEnvironment):
         home = os.path.abspath(self._home).rstrip(os.sep) or os.sep
         if cwd == home or _is_within(home, cwd):
             logger.warning(
-                "bubblewrap cwd %s covers the home directory: every existing non-dot "
+                "bubblewrap cwd %s covers the home directory: every visible non-dot "
                 "entry of it is writable inside the sandbox, and no new entry can be made "
                 "at the top of it (its dot entries are read-only or hidden). Set "
                 "terminal.cwd to a project or scratch directory for a smaller writable set.",

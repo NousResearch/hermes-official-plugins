@@ -794,6 +794,25 @@ class TestHomeAllowKey:
         finally:
             env.cleanup()
 
+    def test_allow_items_name_top_level_entries_under_all(self, sandbox_root, work_dir, fake_home):
+        (fake_home / "zz-shown").mkdir()
+        config = BubblewrapConfig(home_allow=("zz-shown",), home_default_deny="all")
+        with _no_session():
+            env = BubblewrapEnvironment(cwd=str(work_dir), timeout=10, config=config)
+        try:
+            mounts = _mounts(env._wrap_popen_args(["bash"]))
+            assert ("--ro-bind-try", str(fake_home / "zz-shown"), str(fake_home / "zz-shown")) in mounts
+        finally:
+            env.cleanup()
+
+    @pytest.mark.parametrize("mode", ["all", "bogus"])
+    def test_an_unusable_home_stops_construction_unless_dot(self, sandbox_root, work_dir, tmp_path, monkeypatch, mode):
+        monkeypatch.setenv("HOME", str(tmp_path / "no-such-home"))
+        with _no_session(), pytest.raises(ValueError, match=f"home_default_deny is {mode}, but HOME"):
+            BubblewrapEnvironment(cwd=str(work_dir), timeout=10, config=BubblewrapConfig(home_default_deny=mode))
+        with _no_session():
+            BubblewrapEnvironment(cwd=str(work_dir), timeout=10, config=BubblewrapConfig()).cleanup()
+
     def test_allow_item_for_a_credential_store_is_ignored(self, sandbox_root, work_dir, fake_home, caplog):
         (fake_home / ".config" / "gh").mkdir(parents=True)
         (fake_home / ".aws").mkdir()
@@ -1213,6 +1232,16 @@ class TestProfileHomeGuard:
             BubblewrapEnvironment(cwd=str(work_dir), timeout=10, config=BubblewrapConfig(home_mode="profile"))
         assert os.path.realpath(target) in str(exc.value)
         assert not sandbox_root.exists() or not any(sandbox_root.iterdir())
+
+    def test_profile_home_linked_into_an_unlisted_entry_is_refused_under_all(self, sandbox_root, work_dir, fake_home,
+                                                                             hermes_home):
+        target = fake_home / "Private" / "home"
+        target.mkdir(parents=True)
+        self._link(hermes_home, target)
+        with _no_session(), pytest.raises(ValueError, match="an entry of HOME the sandbox hides"):
+            BubblewrapEnvironment(
+                cwd=str(work_dir), timeout=10, config=BubblewrapConfig(home_mode="profile", home_default_deny="all"),
+            )
 
     def test_profile_home_linked_to_hermes_home_itself_is_refused(self, sandbox_root, work_dir, fake_home, hermes_home):
         # The bind would show config.yaml and .env at HERMES_HOME/home.

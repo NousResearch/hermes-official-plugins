@@ -1001,6 +1001,57 @@ class TestHomeDefaultDenyIntegration:
             env.cleanup()
 
 @needs_bwrap
+class TestHomeDefaultDenyAllIntegration:
+    """Under home_default_deny all, every top-level entry of HOME off the allowlist is hidden too."""
+
+    HIDDEN = ("zz-plain/secret", "zz-plain-file", "dotfiles/a/other", ".ssh/id_ed25519", ".pgpass")
+
+    @pytest.fixture
+    def all_home(self, deny_home, monkeypatch):
+        shutil.rmtree(deny_home / ".ssh")
+        _write(deny_home / "dotfiles" / "a" / "ssh" / "id_ed25519")
+        _write(deny_home / "dotfiles" / "a" / "other")
+        (deny_home / ".ssh").symlink_to("dotfiles/a/ssh")
+        _write(deny_home / "zz-plain" / "secret")
+        _write(deny_home / "zz-plain-file")
+        _write(deny_home / "allowed" / "x", VISIBLE)
+        _write(deny_home / "tools" / "bin" / "zz-tool", f"#!/bin/sh\necho {VISIBLE}").chmod(0o755)
+        monkeypatch.setenv("PATH", str(deny_home / "tools" / "bin") + os.pathsep + os.environ["PATH"])
+        return deny_home
+
+    @staticmethod
+    def _env(cwd):
+        config = BubblewrapConfig(home_default_deny="all", home_allow=("allowed",))
+        return BubblewrapEnvironment(cwd=str(cwd), timeout=30, config=config)
+
+    def test_with_the_cwd_in_a_hidden_folder_only_allowed_entries_show(self, sandbox_root, all_home):
+        env = self._env(all_home / "proj")
+        try:
+            for rel in self.HIDDEN:
+                assert MARKER not in env.execute(f"cat {all_home / rel} 2>&1")["output"], rel
+            listed = set(env.execute(f"ls -A {all_home}")["output"].split())
+            assert {"allowed", "tools", "proj"} <= listed, listed
+            assert listed.isdisjoint({"zz-plain", "zz-plain-file", "dotfiles", "sibling", ".pgpass"}), listed
+            assert env.execute(f"cat {all_home}/allowed/x")["output"].strip() == VISIBLE
+            assert env.execute("printf ok > made-here.txt")["returncode"] == 0
+        finally:
+            env.cleanup()
+        assert (all_home / "proj" / "made-here.txt").read_text() == "ok"
+
+    def test_with_the_cwd_at_home_no_pin_shows_a_hidden_entry(self, sandbox_root, all_home):
+        env = self._env(all_home)
+        try:
+            listed = set(env.execute(f"ls -A {all_home}")["output"].split())
+            assert listed.isdisjoint({"proj", "zz-plain", "dotfiles"}), listed
+            assert env.execute(f"printf ok > {all_home}/allowed/from-sandbox")["returncode"] == 0
+            assert env.execute(f"printf x > {all_home}/zz-plain/new")["returncode"] != 0
+        finally:
+            env.cleanup()
+        assert (all_home / "allowed" / "from-sandbox").read_text() == "ok"
+        assert not (all_home / "zz-plain" / "new").exists()
+
+
+@needs_bwrap
 class TestCoveredDefaultDenyDirIntegration:
     """A bind on ~/.local covers the tmpfs of ~/.local/share below it: the
     layout must not remount a path that is no longer a mount point."""

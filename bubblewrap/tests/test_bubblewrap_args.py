@@ -388,6 +388,25 @@ class TestAncestorPins:
         assert (str(home / "docs"), str(home / "docs")) in triples(argv, "--bind-try")
         assert str(keys) in singles(argv, "--tmpfs")
 
+    @pytest.mark.parametrize("allow", [(), ("docs", ".keep")])
+    def test_layout_and_pins_agree_on_an_entry_under_all(self, paths, home, allow):
+        keys, dot_keys = home / "docs" / "deep" / "keys", home / ".keep" / "deep" / "keys"
+        for path in (keys, dot_keys):
+            path.mkdir(parents=True)
+        hidden = (*sensitive_paths(paths["home"], paths["hermes_home"]), str(keys), str(dot_keys))
+        argv = build(
+            BubblewrapConfig(home_default_deny=DENY_ALL), paths=paths, initial_cwd=str(home),
+            tracked_cwd=str(home), hidden_paths=hidden, home_allow=allow,
+        )
+        # A dot entry is read-only; a pin, a read-write bind, would make part of it writable.
+        assert (str(dot_keys.parent),) * 2 not in triples(argv, "--bind")
+        docs = str(home / "docs")
+        if allow:
+            assert (docs, docs) in triples(argv, "--bind-try")
+            assert (str(home / "docs" / "deep"),) * 2 in triples(argv, "--bind")
+        else:
+            assert not [token for token in argv if token == docs or token.startswith(docs + os.sep)]
+
     def test_cwd_above_home_needs_no_pin_for_home(self, paths, home):
         # HOME is a tmpfs mount point on top of the writable parent: it
         # cannot be renamed, and its dot entries are not reachable below it.
@@ -784,3 +803,15 @@ class TestBindGuardHomeDefaultDeny:
             writable=(str(tmp_path),), home_root=str(tmp_path), home_allow=("server",), home_default_deny=DENY_ALL,
         )
         assert guard.writable_root(str(tmp_path / "server" / "sub")) == str(tmp_path)
+
+    @pytest.mark.parametrize(("mode", "bound"), [(DENY_DOT, True), (DENY_ALL, False)])
+    def test_the_builder_guards_a_ca_bundle_with_the_configured_mode(self, paths, monkeypatch, mode, bound):
+        home = Path(paths["home"])
+        real = home / "Private" / "ca.pem"
+        real.parent.mkdir(parents=True)
+        real.write_text("# anchors")
+        (home / ".ssh").mkdir()
+        (home / ".ssh" / "ca.pem").symlink_to(real)
+        monkeypatch.setenv("SSL_CERT_FILE", str(home / ".ssh" / "ca.pem"))
+        argv = build(BubblewrapConfig(home_default_deny=mode), paths=paths)
+        assert ((str(real), str(home / ".ssh" / "ca.pem")) in triples(argv, "--ro-bind-try")) is bound

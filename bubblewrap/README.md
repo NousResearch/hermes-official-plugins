@@ -48,6 +48,7 @@ hermes config set plugins.entries.bubblewrap.settings.max_procs 256        # 0 d
 hermes config set plugins.entries.bubblewrap.settings.binds '[{"src": "/data/models"}, {"src": "/srv/scratch", "readonly": false}]'
 hermes config set plugins.entries.bubblewrap.settings.home_allow '[".config/nvim"]'
 hermes config set plugins.entries.bubblewrap.settings.hide '["~/Documents/keys"]'
+hermes config set plugins.entries.bubblewrap.settings.home_default_deny all  # dot | all
 ```
 
 Settings are read each time a sandbox environment is created, per profile. `terminal.cwd`,
@@ -69,8 +70,8 @@ Each command gets:
   keyring and D-Bus sockets there are unreachable, and `SSH_AUTH_SOCK`, `GPG_AGENT_INFO` and
   `DBUS_SESSION_BUS_ADDRESS` are removed from the environment (again after your shell rc files run).
   The docker socket, if present, is replaced by an empty file.
-- **Your home directory with its dot entries hidden** unless they are on an allowlist, and credential
-  stores hidden always (below).
+- **Your home directory with its dot entries hidden** (or every entry, with `home_default_deny: all`)
+  unless they are on an allowlist, and credential stores hidden always (below).
 - **Resource limits** per command (memory, CPU time, processes), applied by `prlimit`: memory and CPU
   before `bwrap` starts, the process limit inside the sandbox. Nothing runs in between.
 - **`--die-with-parent` and `--new-session`**: a sandbox dies with Hermes and cannot inject input into
@@ -131,6 +132,12 @@ on the way or its final target lies in the working directory, in a read-write bi
 home, a command could rewrite a file your next login shell reads, so the backend refuses to start and
 names the entry. Use a project directory as the working directory, or make the bind read-only.
 
+With `home_default_deny: all` (default `dot`), non-dot entries follow the same rule: every top-level
+entry of the home directory, files included, is hidden unless allowed, and `home_allow` also takes
+top-level names (`["projects", "bin"]`). The working directory and its parents still show. A `PATH`
+directory under the home directory shows its whole top-level entry; that is Hermes' own `PATH`, so
+a gateway run as a service may need `bin` in `home_allow`.
+
 The allowlist and the hidden set are fixed when the backend starts, so a command cannot widen them by
 changing `PATH`. The listing of the home directory is read at every command, so a directory you create
 on the host shows up in the next command.
@@ -186,8 +193,8 @@ mount uses the resolved path, so a symlink changed later cannot redirect it. A p
   sandboxes, a read-write bind, the profile home, the Hermes scratch directory, the sandbox directory),
   where a command could swap it before the next command; a `binds` source bound at its own path
   directly under such a directory is the exception, since it cannot be renamed while mounted;
-- for a CA bundle, the scratch directory or the profile home: resolves into a credential store, into a
-  dot entry of the home directory that is not allowed, or into the Hermes home outside the Python
+- for a CA bundle, the scratch directory or the profile home: resolves into a credential store, into an
+  entry of the home directory the sandbox hides, or into the Hermes home outside the Python
   environment Hermes runs from (credentials, transcripts and the other profiles live there).
 
 A refused read-only `binds` entry or profile home stops the backend with an error naming it: skipping
@@ -240,7 +247,7 @@ backend) is the writable set: everything under it can be changed, everything els
 it at a project or scratch directory. Only that setting decides what is writable: a `cd` (the model's,
 or a Desktop/TUI workspace outside it) moves where commands start, and they run read-only there, also
 after Hermes recreates the environment. A `terminal.cwd` that does not exist runs commands read-only in
-its nearest existing parent. With your home directory as the working directory, the existing non-dot
+its nearest existing parent. With your home directory as the working directory, the visible non-dot
 entries of it are writable and nothing else is: the dot entries are read-only or hidden, and no new
 file or directory can be made at the top of the home directory. Hermes logs a warning in that case. A working directory of
 `/` is refused, and so is one under the Hermes home or a hidden path, since no command could run there.

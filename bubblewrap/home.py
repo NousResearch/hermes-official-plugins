@@ -200,6 +200,9 @@ ALLOWED_HOME_ENTRIES: tuple[str, ...] = (
 )
 
 ALLOW_KEY = "plugins.entries.bubblewrap.settings.home_allow"
+DENY_KEY = "plugins.entries.bubblewrap.settings.home_default_deny"
+DENY_DOT = "dot"
+DENY_ALL = "all"
 
 
 def _relative_to_home(home: str, path: str) -> str | None:
@@ -211,22 +214,25 @@ def _relative_to_home(home: str, path: str) -> str | None:
     return None
 
 
-def allow_unit(home: str, path: str) -> str | None:
+def allow_unit(home: str, path: str, default_deny: str = DENY_DOT) -> str | None:
     """The smallest allowlist unit that holds *path*, relative to *home*, else None.
 
     A unit is a top-level dot entry of HOME, or a child of a default-deny
     directory: HOME/.nvm/versions/x/bin gives ``.nvm``,
     HOME/.local/share/pnpm/bin gives ``.local/share/pnpm``. A path outside
-    HOME, under a non-dot entry (those are visible already), or naming a
-    default-deny directory itself has no unit.
+    HOME, under a non-dot entry (unless *default_deny* is ``all``, where
+    that entry is the unit) or naming a default-deny directory itself has
+    no unit.
     """
     home = os.path.abspath(home)
     rel = _relative_to_home(home, os.path.abspath(path))
     if rel is None:
         return None
     parts = rel.split(os.sep)
-    if not parts[0].startswith(".") or parts[0] in (".", ".."):
+    if parts[0] in (".", ".."):
         return None
+    if not parts[0].startswith("."):
+        return None if default_deny == DENY_DOT else parts[0]
     unit = parts[0]
     rest = parts[1:]
     while unit in DEFAULT_DENY_DIRS:
@@ -237,14 +243,19 @@ def allow_unit(home: str, path: str) -> str | None:
     return unit
 
 
-def _operator_unit(home: str, item: str) -> str | None:
+def shows_entry(name: str, units: tuple[str, ...] | list[str] | set[str], default_deny: str = DENY_DOT) -> bool:
+    """Whether the layout binds the top-level entry *name* of HOME, given the allowlist *units*."""
+    return name in units or (default_deny == DENY_DOT and not name.startswith("."))
+
+
+def _operator_unit(home: str, item: str, default_deny: str = DENY_DOT) -> str | None:
     """The unit an allow-key item names, or None when the item is not exactly one unit."""
     text = item.strip()
     text = text.removeprefix("~/")
     if not text:
         return None
     path = text if os.path.isabs(text) else os.path.join(home, text)
-    unit = allow_unit(home, path)
+    unit = allow_unit(home, path, default_deny)
     if unit is None or _relative_to_home(home, os.path.abspath(path)) != unit.replace("/", os.sep):
         return None
     return unit
@@ -257,6 +268,7 @@ def resolve_allowlist(
     *,
     denied_names: tuple[str, ...],
     denied_paths: tuple[str, ...],
+    default_deny: str = DENY_DOT,
 ) -> tuple[str, ...]:
     """Allowlist units under *home*, relative to it, sorted.
 
@@ -281,17 +293,18 @@ def resolve_allowlist(
     for entry in path_env.split(os.pathsep):
         if not entry or not os.path.isabs(entry):
             continue
-        unit = allow_unit(home, entry)
+        unit = allow_unit(home, entry, default_deny)
         if unit is not None and not is_denied(unit):
             units.add(unit)
     for item in allow_items:
         if not item.strip():
             continue
-        unit = _operator_unit(home, item)
+        unit = _operator_unit(home, item, default_deny)
         if unit is None:
             logger.warning(
-                "Ignoring %s entry %r: it must name a dot entry at the top of HOME or a child of %s",
+                "Ignoring %s entry %r: it must name one entry at the top of HOME or a child of %s%s",
                 ALLOW_KEY, item, ", ".join(DEFAULT_DENY_DIRS),
+                f" (a non-dot entry needs {DENY_KEY} {DENY_ALL})" if default_deny == DENY_DOT else "",
             )
         elif is_denied(unit):
             logger.warning("Ignoring %s entry %r: it names a credential store that stays hidden", ALLOW_KEY, item)
@@ -343,16 +356,17 @@ def home_layout_args(
     listing: tuple[str, ...] | list[str] | None = None,
     binds: tuple[tuple[str, str, str], ...] | list[tuple[str, str, str]] = (),
     late_args: list[str] | tuple[str, ...] = (),
+    default_deny: str = DENY_DOT,
 ) -> list[str]:
-    """Mount directives that make *home* default-deny for dot entries.
+    """Mount directives that make *home* default-deny for dot entries, or for every entry under ``all``.
 
     *home* is the result of resolve_home_root; None gives no directives.
     The order is what makes the layout hold:
 
     1. a tmpfs over HOME, so nothing of the host HOME shows by default;
-    2. each visible top-level entry: every non-dot entry, and each dot
-       entry on *allowlist*. A dot entry is read-only always. A non-dot
-       entry is writable only when a root in *writable_roots* covers HOME;
+    2. each top-level entry shows_entry passes. A dot entry is read-only
+       always. A non-dot entry is writable only when a root in
+       *writable_roots* covers HOME;
     3. for HOME/.config, HOME/.local and HOME/.local/share that exist as
        plain directories: a tmpfs, then the allowed children read-only;
     4. *binds*, (flag, source, destination) directives of the caller that
@@ -380,11 +394,10 @@ def home_layout_args(
     visible: list[str] = []
     for name in names:
         path = os.path.join(home, name)
-        if any(_is_within(path, root) for root in hidden):
+        if any(_is_within(path, root) for root in hidden) or not shows_entry(name, units, default_deny):
             continue
         if name.startswith("."):
-            if name in units:
-                argv += _entry_args(path, "--ro-bind-try", visible)
+            argv += _entry_args(path, "--ro-bind-try", visible)
         else:
             argv += _entry_args(path, "--bind-try" if home_writable else "--ro-bind-try", visible)
 

@@ -1,7 +1,7 @@
 name: agent-importers
 label: Agent Importers
 kind: standalone
-version: 1.2.0
+version: 1.2.1
 author: NousResearch
 homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/agent-importers
 description: >

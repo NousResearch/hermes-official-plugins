@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shlex
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -285,7 +286,9 @@ def import_agent_command(args) -> None:
     if not args.yes:
         if not sys.stdin.isatty():
             print_info("Non-interactive session — preview only.")
-            print_info(f"To execute, re-run with: hermes import-agent {agent} --yes")
+            again = f" --source {shlex.quote(explicit_source)}" if explicit_source else ""
+            print_info(f"To execute, re-run with: hermes import-agent {agent}{again} --yes"
+                       + (" (piping the reply in again)" if explicit_source == "-" else ""))
             return
         if not prompt_yes_no("Proceed with import?", default=True):
             print_info("Import cancelled.")

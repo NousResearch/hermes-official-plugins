@@ -685,6 +685,13 @@ def read_clipboard_text() -> Optional[str]:
     return None
 
 
+def _is_export(text: str) -> bool:
+    try:
+        return bool(parse_export(text))
+    except ExportFormatError:
+        return False
+
+
 def _discard_pending_input() -> None:
     """Drop the rest of a paste still streaming into the terminal, so it does not answer the next
     prompts: flush until the input has been quiet for half a second."""
@@ -706,7 +713,7 @@ def read_terminal_paste() -> str:
     ~4 KB (1 KB on macOS) and a Bot's skill text is one long JSON line, so the tty is switched to
     raw input for the read; elsewhere, plain stdin."""
     from hermes_cli.cli_output import print_info
-    print_info("Reading the rest of the reply: press Ctrl-D when it has all pasted (Ctrl-Z then Enter on Windows).")
+    print_info("Press Ctrl-D once it has all pasted (Ctrl-Z then Enter on Windows).")
     try:
         import termios
     except ImportError:
@@ -771,7 +778,7 @@ def resolve_export_files(args) -> list[Path]:
             if found := find_export_files(None):  # saved to ~/Downloads meanwhile
                 return found
             text = read_clipboard_text()
-            if text and EXPORT_FORMAT in text:
+            if text and _is_export(text):
                 args.pasted_text = text
                 return [PASTED]
             print_error("The clipboard holds no Grok Bot export" + ("" if text is not None else

@@ -686,11 +686,19 @@ def read_clipboard_text() -> Optional[str]:
 
 
 def _discard_pending_input() -> None:
+    """Drop the rest of a paste still streaming into the terminal, so it does not answer the next
+    prompts: flush until the input has been quiet for half a second."""
     try:
+        import select
         import termios
-        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+        fd = sys.stdin.fileno()
+        for _ in range(40):
+            pending = select.select([fd], [], [], 0.5)[0]
+            termios.tcflush(fd, termios.TCIFLUSH)
+            if not pending:
+                return
     except (ImportError, OSError, ValueError):  # Windows console, or stdin is not a terminal
-        pass
+        return
 
 
 def read_terminal_paste() -> str:

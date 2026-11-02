@@ -143,8 +143,9 @@ def test_setup_status_reports_login_and_models_from_the_cli(profile, tmp_path):
     assert [m["label"] for m in models[:3]] == ["Sonnet 5 (1M context)", "Opus 5.5", "Haiku 4.5"]
     assert models[1]["note"] == "usage credits"
     assert models[2]["note"] == ""
-    # The handshake writes only `initialize`: no upstream request reaches Anthropic
-    assert all(m["upstream_requests"] == 0 for m in models)
+    # First-party nothing counts the CLI's traffic, so the count is unobserved rather than a claimed zero
+    # (the handshake writes only `initialize`; see test_an_inherited_backend_override_... for the counted path).
+    assert all(m["upstream_requests"] is None for m in models)
 
 
 MYTHOS = {"value": "claude-mythos-5-1", "resolvedModel": "claude-mythos-5-1", "displayName": "Mythos 5.1", "description": ""}
@@ -168,7 +169,7 @@ def test_entitlement_gated_models_come_from_the_account_picker(profile, tmp_path
     assert rows["claude-mythos-5-1[1m]"]["label"] == "Mythos 5.1" and rows["claude-mythos-5-1[1m]"]["note"] == ""
     assert profile.get_model_context_length("claude-mythos-5-1[1m]") == 1_000_000
     assert all(json.loads(line)["base_url"] is None for line in record.read_text().splitlines())
-    assert all(m["upstream_requests"] == 0 for m in rows.values())
+    assert all(m["upstream_requests"] is None for m in rows.values())
 
     command, env = _cli(tmp_path, {**PRO, "models": PINNED_PICKER, "served": [SERVED_OPUS, MYTHOS]})
     labels = {m["id"]: m["label"] for m in profile.discover_models(command=command, env=env)}
@@ -190,14 +191,30 @@ def test_an_inherited_backend_override_keeps_discovery_behind_the_relay(profile,
     assert not any("mythos" in i for i in ids)
     seen = [json.loads(line)["base_url"] for line in record.read_text().splitlines()]
     assert seen and all(url.startswith("http://127.0.0.1:") for url in seen)
+    # Behind the relay the count is observed again.
+    assert all(m["upstream_requests"] == 0 for m in profile.discover_models(command=command, env=env))
 
 
-@pytest.mark.parametrize("plan, credits", [("Claude Pro", True), ("Claude Max", False), ("Claude Ultra", False)])
-def test_fable_bills_usage_credits_only_on_plans_that_exclude_it(profile, tmp_path, plan, credits):
-    """Fable is a standard part of Max and Ultra; Pro bills it to usage credits from the first request."""
-    command, env = _cli(tmp_path, {**PRO, "account": {"subscriptionType": plan}, "models": PINNED_PICKER})
+# The served catalog's Fable rows carry taglines, never billing language.
+SERVED_FABLE = [
+    {"value": "fable", "resolvedModel": "claude-fable-5-1", "displayName": "Fable 5.1", "description": "For your toughest challenges"},
+    {"value": "claude-fable-5", "resolvedModel": "claude-fable-5", "displayName": "Fable 5", "description": "Most capable for your hardest and longest-running tasks"},
+]
+
+
+@pytest.mark.parametrize("plan, note", [
+    ("Claude Pro", "usage credits"), ("Claude Max", ""), ("Claude Ultra", ""),
+    # The handshake names the plan, not the seat tier: premium seats include Fable, standard seats do not.
+    ("Claude Team", "usage credits on standard seats"), ("Claude Enterprise", "usage credits on standard seats"),
+])
+def test_fable_5_and_5_1_follow_the_documented_plan_rule(profile, tmp_path, plan, note):
+    """Fable 5 and 5.1 are a standard part of Max and Ultra; Pro (and standard seats) bill both to usage
+    credits from the first request, and under -p Claude Code bills without asking. The rule must reach a
+    served Fable 5 row too, whose description says nothing about billing."""
+    command, env = _cli(tmp_path, {**PRO, "account": {"subscriptionType": plan}, "models": PINNED_PICKER, "served": SERVED_FABLE})
     rows = {m["id"]: m for m in profile.discover_models(command=command, env=env)}
-    assert (rows["claude-fable-5-1[1m]"]["note"] == "usage credits") is credits
+    assert rows["claude-fable-5-1[1m]"]["note"] == note
+    assert rows["claude-fable-5"]["note"] == (note + " · unpinned" if note else "unpinned")
 
 
 def test_every_model_the_cli_advertises_is_selectable(profile, tmp_path):
@@ -216,7 +233,7 @@ def test_every_model_the_cli_advertises_is_selectable(profile, tmp_path):
     # Unpinned is visible, never at the cost of the CLI's own billing warning, which reads first.
     assert fresh["claude-opus-9[1m]"]["note"] == "usage credits · unpinned"
     assert fresh["claude-sonnet-5-9"]["note"] == fresh["claude-fable-9[1m]"]["note"] == "unpinned"
-    assert all(m["upstream_requests"] == 0 for m in fresh.values())
+    assert all(m["upstream_requests"] is None for m in fresh.values())
 
 
 def test_pinned_models_the_picker_omits_stay_selectable(profile, tmp_path):
@@ -239,7 +256,7 @@ def test_pinned_models_the_picker_omits_stay_selectable(profile, tmp_path):
     assert rows["claude-opus-5[1m]"]["label"] == "Opus 5"
     # Pro bills Fable to usage credits from the first request; the appended row says so too.
     assert rows["claude-fable-5-1[1m]"]["note"] == "usage credits"
-    assert all(m["upstream_requests"] == 0 for m in models)
+    assert all(m["upstream_requests"] is None for m in models)
 
 
 # What a CLI started with DISABLE_TELEMETRY / CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC advertises
@@ -273,7 +290,7 @@ def test_privacy_flags_shrunk_picker_is_unioned_with_the_pinned_table(profile, t
     # Opus 4.6 reaches 1M only via [1m], which bills usage credits on Pro and is not plan-checked
     # behind our relay; the plugin must never offer that route on its own.
     assert not any(i.startswith("claude-opus-4-6") for i in ids)
-    assert all(m["upstream_requests"] == 0 for m in models)
+    assert all(m["upstream_requests"] is None for m in models)
 
 
 def test_hermes_never_budgets_a_discovered_row_past_the_native_window(profile, tmp_path):

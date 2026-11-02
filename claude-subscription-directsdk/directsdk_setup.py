@@ -1,8 +1,10 @@
 """Setup-time probes of the user's Claude CLI: login state and its own model picker.
 
 Neither sends a Messages request: ``auth status`` reads the local credential store, and the
-``initialize`` handshake enumerates the picker without one (the admission relay proves it by
-counting upstream calls). With the ``claude_code_telemetry`` setting on (the default) the CLI
+``initialize`` handshake enumerates the picker without one: it writes only ``initialize`` and no
+user turn. The handshake runs first-party, because Claude Code serves the account's own picker only
+then, so no relay counts its upstream calls and each row's ``upstream_requests`` is ``None``
+(unobserved). With an inherited auth/backend override it stays behind the relay, which counts them. With the ``claude_code_telemetry`` setting on (the default) the CLI
 fetches its feature flags for the handshake, which is what makes its picker list every model. Anything unexpected returns ``None``/``False`` so callers
 fall back to the pinned catalog rather than failing setup.
 """
@@ -201,7 +203,8 @@ def discover_models(command=None, env=None, timeout=40):
         rows = [json.loads(line) for line in run.stdout.splitlines() if line.startswith("{")]
         response = next(r["response"] for r in rows if r.get("type") == "control_response")
         native = response.get("response", {}).get("models") or []
-        upstream = int(bool(gate is not None and gate.used))
+        # Counted only behind the relay; first-party nothing observes the CLI's traffic, so say so.
+        upstream = None if gate is None else int(bool(gate.used))
     except (OSError, ValueError, StopIteration, KeyError, subprocess.SubprocessError):
         return None
     finally:
@@ -209,12 +212,19 @@ def discover_models(command=None, env=None, timeout=40):
             gate.close()
     if upstream or not native:
         return None
-    # Fable is a standard part of Max and Ultra plans (and premium seats); Pro / Team-standard seats bill
-    # it to usage credits from the first request. The CLI only says so at request time, so apply the
-    # documented plan rule here: https://support.claude.com/en/articles/15424964
+    # Fable 5 and 5.1 are a standard part of Max and Ultra and of premium Team/Enterprise seats; Pro and
+    # standard seats bill both to usage credits from the first request, and under -p Claude Code bills
+    # without asking. The CLI says so only at request time, so apply the documented rule here
+    # (https://support.claude.com/en/articles/15424964). The handshake names the plan, not the seat
+    # tier, so a Team/Enterprise row says the rule applies to standard seats instead of guessing.
     plan = str((response.get("response", {}).get("account") or {}).get("subscriptionType") or "").lower()
-    fable_included = any(name in plan for name in ("max", "ultra"))
-    credit_billed_on_plan = {"claude-fable-5-1"} if plan and not fable_included else set()
+    fable = {"claude-fable-5", "claude-fable-5-1"}
+    if "pro" in plan:
+        credit_billed_on_plan, credit_note = fable, "usage credits"
+    elif "team" in plan or "enterprise" in plan:
+        credit_billed_on_plan, credit_note = fable, "usage credits on standard seats"
+    else:
+        credit_billed_on_plan, credit_note = set(), "usage credits"
     # The pinned table adds metadata (1M route, window, aliases) to the models it knows; it never
     # decides visibility, so a model the CLI ships before the table does is listed the same day.
     announced = [str(row.get("resolvedModel") or row.get("value") or "") for row in native]
@@ -242,9 +252,12 @@ def discover_models(command=None, env=None, timeout=40):
         label = named or str(row.get("description") or "").split("·")[0].strip() or route
         entry = routes.setdefault(route, {"id": route, "label": label, "note": "" if pinned else "unpinned",
                                           "upstream_requests": upstream})
-        if "usage credit" in str(row.get("description") or "").lower() or base in credit_billed_on_plan:
-            # The billing warning reads first; an unpinned row keeps its marker after it.
-            entry["note"] = "usage credits" if pinned else "usage credits · unpinned"
+        described = "usage credit" in str(row.get("description") or "").lower()
+        if described or base in credit_billed_on_plan:
+            # The billing warning reads first; an unpinned row keeps its marker after it. The CLI's own
+            # wording is about this account, so it beats the seat-tier caveat.
+            warning = "usage credits" if described else credit_note
+            entry["note"] = warning if pinned else warning + " · unpinned"
     if not routes:
         return None
     # The live picker names only each family's current model, yet the account still runs the older
@@ -256,7 +269,7 @@ def discover_models(command=None, env=None, timeout=40):
             continue
         canonical = MODEL_METADATA[route]["canonical_model"]
         routes[route] = {"id": route, "label": _catalog_label(canonical),
-                         "note": "usage credits" if canonical in credit_billed_on_plan else "",
+                         "note": credit_note if canonical in credit_billed_on_plan else "",
                          "upstream_requests": upstream}
     return list(routes.values())
 

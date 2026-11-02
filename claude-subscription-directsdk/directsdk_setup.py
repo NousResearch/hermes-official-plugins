@@ -74,6 +74,9 @@ ALWAYS_QUIET = {"DISABLE_AUTOUPDATER": "1", "DISABLE_FEEDBACK_COMMAND": "1", "CL
 # CLAUDE_CODE_DISABLE_ARTIFACT keeps the request identical to the `sdk-cli` one apart from the name.
 CALLER_IDENTITY = {"CLAUDE_CODE_ENTRYPOINT": "hermes-agent", "CLAUDE_CODE_DISABLE_ARTIFACT": "1"}
 _OFF = ("false", "0", "no", "off")
+# Inherited auth/backend overrides the request path refuses (directsdk.Client); discovery treats them alike.
+BACKEND_OVERRIDES = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_FOUNDRY_API_KEY")
+BACKEND_SWITCHES = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
 
 
 def _setting(key, default=None):
@@ -160,6 +163,12 @@ def setup_status(command=None, env=None, timeout=20):
             "login_command": login_command}
 
 
+def _first_party(env):
+    """No inherited auth or backend override: native talks to Anthropic with the CLI's own login."""
+    return (not any(env.get(key) for key in BACKEND_OVERRIDES)
+            and all(str(env.get(key, "")).strip().lower() in (*_OFF, "") for key in BACKEND_SWITCHES))
+
+
 def discover_models(command=None, env=None, timeout=40):
     """The account's live picker as ``[{id, label, note, upstream_requests}]`` in Hermes route ids,
     or ``None`` when the CLI is missing, logged out, or the handshake fails."""
@@ -170,9 +179,17 @@ def discover_models(command=None, env=None, timeout=40):
     if resolved is None or not setup_status(command=resolved, env=env, timeout=timeout)["logged_in"]:
         return None
     child = _child_env(env)
-    gate = Admission("https://api.anthropic.com", timeout)
+    # The account's own picker (entitlement-gated models such as Mythos, older models it still runs) is
+    # native's served catalog, and native serves it only first-party: behind any ANTHROPIC_BASE_URL,
+    # our relay included, it logs `[servedCatalog] off (not_first_party)` and answers a generic list.
+    # The handshake therefore talks to Anthropic directly. It writes only `initialize` and closes
+    # stdin, so native has no user turn to query; its debug log shows bootstrap, MCP-directory and
+    # telemetry fetches and no Messages request. An inherited auth/backend override keeps the relay,
+    # since the request path refuses those environments anyway and the bearer must not leave for them.
+    gate = None if _first_party(child) else Admission("https://api.anthropic.com", timeout)
     try:
-        child["ANTHROPIC_BASE_URL"] = gate.url
+        if gate is not None:
+            child["ANTHROPIC_BASE_URL"] = gate.url
         argv = resolved + ["-p", "--model", "sonnet", "--input-format", "stream-json", "--output-format", "stream-json",
                            "--verbose", "--tools", "", "--setting-sources", "", "--strict-mcp-config",
                            "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands", "--no-session-persistence"]
@@ -184,17 +201,20 @@ def discover_models(command=None, env=None, timeout=40):
         rows = [json.loads(line) for line in run.stdout.splitlines() if line.startswith("{")]
         response = next(r["response"] for r in rows if r.get("type") == "control_response")
         native = response.get("response", {}).get("models") or []
-        upstream = int(bool(gate.used))
+        upstream = int(bool(gate is not None and gate.used))
     except (OSError, ValueError, StopIteration, KeyError, subprocess.SubprocessError):
         return None
     finally:
-        gate.close()
+        if gate is not None:
+            gate.close()
     if upstream or not native:
         return None
-    # Pro / Team-standard seats bill Fable to usage credits from the first request; the CLI only
-    # says so at request time, so apply the documented plan rule here.
+    # Fable is a standard part of Max and Ultra plans (and premium seats); Pro / Team-standard seats bill
+    # it to usage credits from the first request. The CLI only says so at request time, so apply the
+    # documented plan rule here: https://support.claude.com/en/articles/15424964
     plan = str((response.get("response", {}).get("account") or {}).get("subscriptionType") or "").lower()
-    credit_billed_on_plan = {"claude-fable-5-1"} if plan and "max" not in plan else set()
+    fable_included = any(name in plan for name in ("max", "ultra"))
+    credit_billed_on_plan = {"claude-fable-5-1"} if plan and not fable_included else set()
     # The pinned table adds metadata (1M route, window, aliases) to the models it knows; it never
     # decides visibility, so a model the CLI ships before the table does is listed the same day.
     announced = [str(row.get("resolvedModel") or row.get("value") or "") for row in native]
@@ -214,8 +234,12 @@ def discover_models(command=None, env=None, timeout=40):
                 continue
             if base in long_context:
                 route = base + "[1m]"
-        # Model names, not the native "Default (recommended)" alias row.
-        label = str(row.get("description") or "").split("·")[0].strip() or route
+        # A model name, never the "Default (recommended)" alias label. The served (first-party) catalog
+        # names the model in displayName ("Opus 5.5"); the generic list names only the family there
+        # ("Opus") and the model before the "·" in its description ("Opus 5.5 · Best for ...").
+        display = str(row.get("displayName") or "").strip()
+        named = display if any(c.isdigit() for c in display) and not display.lower().startswith("default") else ""
+        label = named or str(row.get("description") or "").split("·")[0].strip() or route
         entry = routes.setdefault(route, {"id": route, "label": label, "note": "" if pinned else "unpinned",
                                           "upstream_requests": upstream})
         if "usage credit" in str(row.get("description") or "").lower() or base in credit_billed_on_plan:

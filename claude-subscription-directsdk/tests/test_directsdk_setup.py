@@ -87,8 +87,14 @@ FAKE_CLI = textwrap.dedent('''
     if state.get("hang_upstream"):
         import urllib.request
         urllib.request.urlopen(os.environ["ANTHROPIC_BASE_URL"] + "/v1/messages", data=b"{}")
+    # Native serves the account's own catalog only first-party; behind any ANTHROPIC_BASE_URL it
+    # logs `[servedCatalog] off (not_first_party)` and answers its generic list instead.
+    first_party = not os.environ.get("ANTHROPIC_BASE_URL")
+    if state.get("record"):
+        open(state["record"], "a").write(json.dumps({"base_url": os.environ.get("ANTHROPIC_BASE_URL")}) + "\\n")
+    models = state.get("served", state["models"]) if first_party else state["models"]
     print(json.dumps({"type": "control_response", "response": {"subtype": "success", "request_id": req["request_id"],
-          "response": {"models": state["models"], "account": state["account"]}}}))
+          "response": {"models": models, "account": state["account"]}}}))
 ''')
 
 
@@ -133,11 +139,59 @@ def test_setup_status_reports_login_and_models_from_the_cli(profile, tmp_path):
     ids = [m["id"] for m in models]
     # Native picker rows are deduplicated to their Hermes route ids (opus and opus[1m] both -> opus 1M)
     assert ids[:3] == ["claude-sonnet-5[1m]", "claude-opus-5-5[1m]", "claude-haiku-4-5-20251001"]
-    assert [m["label"] for m in models[:3]] == ["Sonnet 5 for long sessions", "Opus 5.5", "Haiku 4.5"]
+    # The label names the model: displayName when it carries the version, else the description before "·"
+    assert [m["label"] for m in models[:3]] == ["Sonnet 5 (1M context)", "Opus 5.5", "Haiku 4.5"]
     assert models[1]["note"] == "usage credits"
     assert models[2]["note"] == ""
-    # Discovery goes through the admission relay with zero upstream requests
+    # The handshake writes only `initialize`: no upstream request reaches Anthropic
     assert all(m["upstream_requests"] == 0 for m in models)
+
+
+MYTHOS = {"value": "claude-mythos-5-1", "resolvedModel": "claude-mythos-5-1", "displayName": "Mythos 5.1", "description": ""}
+# The served catalog's shape (2.1.316): the model in displayName, a tagline in description.
+SERVED_OPUS = {"value": "opus", "resolvedModel": "claude-opus-5-5", "displayName": "Opus 5.5", "description": "For complex work and everyday tasks"}
+MYTHOS_DEFAULT = {"value": "default", "resolvedModel": "claude-mythos-5-1", "displayName": "Default (recommended)", "description": "Mythos 5.1"}
+
+
+def test_entitlement_gated_models_come_from_the_account_picker(profile, tmp_path):
+    """An access-gated model (Mythos) is in native's served catalog only for accounts entitled to it, and
+    native serves that catalog only first-party. Discovery reads it without our relay's base URL, so an
+    entitled account sees Mythos and an account without access does not."""
+    record = tmp_path / "spawns.jsonl"
+    command, env = _cli(tmp_path, {**PRO, "models": PINNED_PICKER, "served": [MYTHOS_DEFAULT] + PINNED_PICKER + [MYTHOS],
+                                   "record": str(record)})
+    rows = {m["id"]: m for m in profile.discover_models(command=command, env=env)}
+    assert rows["claude-mythos-5-1"]["label"] == "Mythos 5.1"
+    command, env = _cli(tmp_path, {**PRO, "models": PINNED_PICKER, "served": [SERVED_OPUS, MYTHOS]})
+    labels = {m["id"]: m["label"] for m in profile.discover_models(command=command, env=env)}
+    assert labels["claude-opus-5-5[1m]"] == "Opus 5.5" and labels["claude-mythos-5-1"] == "Mythos 5.1"
+    # Not pinned: listed bare and budgeted at native's 200K default, as every unpinned plain id is.
+    assert rows["claude-mythos-5-1"]["note"] == "unpinned"
+    assert all(json.loads(line)["base_url"] is None for line in record.read_text().splitlines())
+    assert all(m["upstream_requests"] == 0 for m in rows.values())
+
+    command, env = _cli(tmp_path, {**PRO, "models": PINNED_PICKER, "served": PINNED_PICKER})
+    assert not any("mythos" in m["id"] for m in profile.discover_models(command=command, env=env))
+
+
+def test_an_inherited_backend_override_keeps_discovery_behind_the_relay(profile, tmp_path):
+    """The request path refuses inherited auth/backend overrides; discovery must not hand the CLI's login
+    to them either, so it stays behind the relay (which only ever forwards to Anthropic)."""
+    record = tmp_path / "spawns.jsonl"
+    command, env = _cli(tmp_path, {**PRO, "models": PINNED_PICKER, "served": PINNED_PICKER + [MYTHOS], "record": str(record)})
+    env["ANTHROPIC_BASE_URL"] = "https://gateway.example.com"
+    ids = [m["id"] for m in profile.discover_models(command=command, env=env)]
+    assert "claude-mythos-5-1" not in ids
+    seen = [json.loads(line)["base_url"] for line in record.read_text().splitlines()]
+    assert seen and all(url.startswith("http://127.0.0.1:") for url in seen)
+
+
+@pytest.mark.parametrize("plan, credits", [("Claude Pro", True), ("Claude Max", False), ("Claude Ultra", False)])
+def test_fable_bills_usage_credits_only_on_plans_that_exclude_it(profile, tmp_path, plan, credits):
+    """Fable is a standard part of Max and Ultra; Pro bills it to usage credits from the first request."""
+    command, env = _cli(tmp_path, {**PRO, "account": {"subscriptionType": plan}, "models": PINNED_PICKER})
+    rows = {m["id"]: m for m in profile.discover_models(command=command, env=env)}
+    assert (rows["claude-fable-5-1[1m]"]["note"] == "usage credits") is credits
 
 
 def test_every_model_the_cli_advertises_is_selectable(profile, tmp_path):

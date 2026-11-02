@@ -17,6 +17,15 @@ class TestIdentity:
         assert a["managed"] is False
         assert client.get_session("t1") is a
 
+    def test_ephemeral_identity_is_reproducible_for_the_same_task(self, camofox):
+        # A fresh process starts with an empty session map; the same task
+        # must still resolve to the same browser user, or the tab its
+        # previous call opened is invisible to the next one.
+        first = client.get_session("t1")["user_id"]
+        client.drop_session("t1")
+        assert client.get_session("t1")["user_id"] == first
+        assert client.get_session("t2")["user_id"] != first
+
     def test_managed_persistence_is_stable_and_matches_core(self, camofox, write_config, _isolated_home):
         """Same derivation core used, so a migrated profile keeps its Camofox browser profile."""
         import uuid

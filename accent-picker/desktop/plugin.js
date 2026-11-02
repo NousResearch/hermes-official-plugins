@@ -1,5 +1,5 @@
 // src/plugin.tsx
-import { $accentOverride as $accentOverride2, PALETTE_AREA, setAccentOverride as setAccentOverride2, STATUSBAR_AREAS } from "@hermes/plugin-sdk";
+import { $accentOverride as $accentOverride2, PALETTE_AREA, persistAccent as persistAccent2, setAccentOverride as setAccentOverride2, STATUSBAR_AREAS } from "@hermes/plugin-sdk";
 
 // src/picker.tsx
 import {
@@ -9,6 +9,7 @@ import {
   maxChroma,
   oklchToHex,
   oklchToSrgb255,
+  persistAccent,
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -159,7 +160,7 @@ function AccentPicker() {
     setLch(next);
     const hex = oklchToHex(next);
     setText(hex);
-    setAccentOverride(hex);
+    persistAccent(hex);
     requestAnimationFrame(() => {
       dragging.current = false;
     });
@@ -177,7 +178,7 @@ function AccentPicker() {
           className: "min-w-0 flex-1 rounded-sm border border-(--dt-border) bg-transparent px-1.5 py-0.5 font-mono text-[11px] uppercase",
           onChange: (event) => {
             setText(event.target.value);
-            setAccentOverride(event.target.value);
+            persistAccent(event.target.value);
           },
           spellCheck: false,
           value: text
@@ -187,7 +188,7 @@ function AccentPicker() {
         "button",
         {
           className: "shrink-0 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px]",
-          onClick: () => setAccentOverride(null),
+          onClick: () => persistAccent(null),
           type: "button",
           children: "reset"
         }
@@ -197,7 +198,7 @@ function AccentPicker() {
       "button",
       {
         className: "size-5 rounded-sm border border-(--dt-border)",
-        onClick: () => setAccentOverride(swatch.hex),
+        onClick: () => persistAccent(swatch.hex),
         style: { background: swatch.hex },
         title: `${swatch.name} \xB7 ${swatch.hex}`,
         type: "button"
@@ -253,10 +254,9 @@ import { jsx as jsx2 } from "react/jsx-runtime";
 var plugin = {
   id: "accent",
   name: "Accent Picker",
-  description: "Pick the theme accent from an OKLCH color picker in the status bar; the palette re-derives live. Authoring tool \u2014 the color is not persisted.",
+  description: "Pick the theme accent from an OKLCH color picker in the status bar; the palette re-derives live. The chosen color is persisted as a user theme.",
   defaultEnabled: false,
   register(ctx) {
-    ctx.onDispose(() => setAccentOverride2(null));
     ctx.registerMany([
       {
         id: "picker",
@@ -271,7 +271,7 @@ var plugin = {
           id: "accent.reset",
           label: "Accent: reset to the theme default",
           keywords: ["accent", "color", "theme", "reset", "default"],
-          run: () => setAccentOverride2(null)
+          run: () => persistAccent2(null)
         }
       },
       {

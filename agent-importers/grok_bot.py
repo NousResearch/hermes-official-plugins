@@ -93,7 +93,8 @@ and attach that file to your reply. If you cannot attach files, put the whole do
 }
 
 Rules: include EVERY routine you own (paused ones too) and EVERY skill enabled for you, with full \
-text, not summaries. Never include passwords, API keys, tokens, webhook keys, cookies or card \
+text, not summaries. If you cannot read something (a routine's schedule, a skill's text), leave \
+it out and tell me in your reply what you left out; never guess or fill it in from memory. Never include passwords, API keys, tokens, webhook keys, cookies or card \
 numbers: leave those out entirely. Output valid JSON only (no comments).
 If it is too long for one message or file, split it: send several documents, each complete and \
 valid in this same shape with the same bot name, each holding the part the others do not. They \

@@ -150,6 +150,8 @@ delegation:
           service_tier: fast             # optional speed tier: normal, fast or ultrafast
           max_iterations: 60             # optional turn limit for this route's subagents
           child_timeout_seconds: 300     # optional idle timeout (seconds) for this route's subagents
+          escalate_reasoning: true       # optional; with escalate_ceiling, retry with more reasoning
+          escalate_ceiling: xhigh        # optional; the highest reasoning level a retry may reach
         - name: local
           description: "Private: runs on this machine."
           base_url: http://localhost:8080/v1
@@ -159,7 +161,8 @@ delegation:
 
 Route keys: `name` and `description` (required), `model` (required), `provider` and/or `base_url`
 (at least one), and optionally `reasoning_effort`, `service_tier`, `fallback_providers`, `api_key`,
-`api_mode`, `max_iterations` and `child_timeout_seconds`, each meaning the same as the matching `delegation.*` key. Prefer `provider:` over `api_key:`: provider
+`api_mode`, `max_iterations` and `child_timeout_seconds`, each meaning the same as the matching `delegation.*` key.
+Routes additionally support the route-only `escalate_reasoning` and `escalate_ceiling` keys. Prefer `provider:` over `api_key:`: provider
 credentials stay in `.env` / `auth.json`, while an `api_key` here is stored in `config.yaml` in plain
 text. Malformed routes and repeated names are skipped with a warning in `hermes logs`.
 
@@ -173,6 +176,14 @@ budget, overriding `delegation.max_iterations` / `delegation.child_timeout_secon
 route can get 5 turns while a coding route keeps 60. A bad value refuses that task alone; the other
 tasks in the batch still run. Needs a Hermes core that reads the two keys (`ROUTE_KEYS` in
 `agent/delegation_provider.py`); older cores ignore them.
+
+`escalate_reasoning` (a boolean, default `false`) and `escalate_ceiling` (a level on the ladder `none`,
+`minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`) let core retry this route's task with more
+reasoning, up to the ceiling. Escalation runs only when a route sets both; either alone leaves it off. Both
+are forwarded as written and core refuses a bad value for that task alone. Profile routes ignore both keys.
+Needs a Hermes core that reads them; older cores ignore them. `hermes delegation config` keeps both keys
+through any edit but does not ask about them: change or remove them in the desktop route editor, the web
+API, or `config.yaml` (deleting and re-adding the route also clears them).
 
 ### Profile routes (`profile_routes`)
 

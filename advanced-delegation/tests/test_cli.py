@@ -207,7 +207,8 @@ def test_edit_keeps_unedited_keys_and_delete_removes_a_route(terminal, home):
     _write(home, {"delegation": {"backends": {"model_map": {"options": [
         {"name": "fast", "description": "Quick.", "provider": "openrouter", "model": "m1",
          "fallback_providers": [{"provider": "anthropic", "model": "claude-haiku-5"}],
-         "max_iterations": 15, "child_timeout_seconds": 120},
+         "max_iterations": 15, "child_timeout_seconds": 120,
+         "escalate_reasoning": True, "escalate_ceiling": "xhigh"},
         {"name": "old", "description": "Gone soon.", "provider": "openrouter", "model": "m2"}]}}}})
     terminal.menu(DOWN, ENTER)                 # Model routes
     terminal.menu(ENTER)                       # routes list -> "fast"
@@ -225,7 +226,8 @@ def test_edit_keeps_unedited_keys_and_delete_removes_a_route(terminal, home):
     assert delegation["backends"]["model_map"]["options"] == [{
         "name": "fast", "description": "Quick lookups and summaries.", "provider": "anthropic",
         "model": "claude-opus-5", "fallback_providers": [{"provider": "anthropic", "model": "claude-haiku-5"}],
-        "max_iterations": 15, "child_timeout_seconds": 120}]
+        "max_iterations": 15, "child_timeout_seconds": 120,
+        "escalate_reasoning": True, "escalate_ceiling": "xhigh"}]
     assert "backend" not in delegation  # quitting the editor keeps the mode; route edits are saved
 
 

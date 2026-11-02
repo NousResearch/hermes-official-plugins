@@ -18,10 +18,10 @@ import sys
 from typing import Any, Mapping, Optional
 
 from . import store
-from .model_map import ROUTE_LIMITS
+from .model_map import ROUTE_ESCALATION, ROUTE_LIMITS
 
 #: Stored route keys the editor never asks about but keeps through any edit (the rest survive only a same-endpoint edit).
-_KEPT_ON_ANY_EDIT = ("fallback_providers", *ROUTE_LIMITS)
+_KEPT_ON_ANY_EDIT = ("fallback_providers", *ROUTE_LIMITS, *ROUTE_ESCALATION)
 
 _NO_TTY = ("`hermes delegation config` needs an interactive terminal to edit routes.\n"
            "Print the current setup with `hermes delegation config --show`, or set keys directly with\n"

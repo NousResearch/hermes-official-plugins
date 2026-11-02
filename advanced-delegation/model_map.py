@@ -19,6 +19,8 @@ Settings live in ``delegation.backends.model_map`` of config.yaml::
               service_tier: fast            # optional; core refuses the spawn if the route has no fast tier
               max_iterations: 60            # optional; turn limit for this route's children
               child_timeout_seconds: 300    # optional; idle timeout for this route's children
+              escalate_reasoning: true      # optional; with escalate_ceiling, core retries with more reasoning
+              escalate_ceiling: xhigh       # optional; the highest level a retry may reach
             - name: local
               description: Private; runs on this machine.
               base_url: http://localhost:8080/v1
@@ -48,6 +50,9 @@ ROUTE_FIELDS = ("provider", "model", "base_url", "api_key", "api_mode", "reasoni
 #: Per-route budget keys forwarded as written: a turn limit and an idle timeout for this route's children,
 #: overriding ``delegation.max_iterations`` / ``delegation.child_timeout_seconds``. Core owns the rules.
 ROUTE_LIMITS = ("max_iterations", "child_timeout_seconds")
+#: Reasoning-escalation keys forwarded as written: core retries with more reasoning, up to the ceiling, only
+#: when a route sets both. Core owns the rules (and profile routes ignore them).
+ROUTE_ESCALATION = ("escalate_reasoning", "escalate_ceiling")
 _warned: set[str] = set()
 
 
@@ -101,7 +106,7 @@ def configured_options(settings: Mapping[str, Any]) -> dict[str, dict[str, Any]]
                  if isinstance(entry.get(key), str) and entry[key].strip()}
         if isinstance(entry.get("fallback_providers"), list):
             route["fallback_providers"] = list(entry["fallback_providers"])
-        for limit in ROUTE_LIMITS:
+        for limit in (*ROUTE_LIMITS, *ROUTE_ESCALATION):
             value = entry.get(limit)
             if isinstance(value, str):
                 value = value.strip()  # the web save path treats a whitespace-only value as blank; so does this

@@ -192,7 +192,7 @@ def validate_route(route: Mapping[str, Any], others: Sequence[Mapping[str, Any]]
 # --- display ----------------------------------------------------------------------------------
 
 def route_summary(route: Mapping[str, Any]) -> str:
-    """``provider · model [· reasoning X] [· tier] [· N turns] [· N s idle]`` for one route."""
+    """``provider · model [· reasoning X] [· tier] [· N turns] [· N s idle] [· escalates to X]`` for one route."""
     where = _text(route.get("provider")) or _text(route.get("base_url"))
     parts = [where, _text(route.get("model"))]
     if _text(route.get("reasoning_effort")):
@@ -204,6 +204,9 @@ def route_summary(route: Mapping[str, Any]) -> str:
         parts.append(f"{route['max_iterations']} turns")
     if route.get("child_timeout_seconds") not in (None, ""):
         parts.append(f"{route['child_timeout_seconds']} s idle")
+    # Core escalates only when a route sets both keys, so the list says so only then.
+    if route.get("escalate_reasoning") is True and _text(route.get("escalate_ceiling")):
+        parts.append(f"escalates to {_text(route.get('escalate_ceiling'))}")
     return " · ".join(p for p in parts if p)
 
 

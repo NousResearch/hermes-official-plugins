@@ -167,6 +167,51 @@ def test_route_summary_shows_the_budget_the_editor_keeps():
     assert route_summary({"provider": "openrouter", "model": "m"}) == "openrouter · m"
 
 
+def test_an_options_reasoning_escalation_is_routed_to_core_as_written(provider):
+    config = _config(options=[{"name": "coder", "description": "d", "provider": "openrouter", "model": "m",
+                               "escalate_reasoning": True, "escalate_ceiling": "XHigh "},
+                              {"name": "plain", "description": "d", "provider": "openrouter", "model": "m"}])
+    route = provider.route_task({"goal": "g", "index": 0, "option": "coder"}, config)
+    assert route["escalate_reasoning"] is True and route["escalate_ceiling"] == "XHigh"
+    assert type(route["escalate_reasoning"]) is bool and type(route["escalate_ceiling"]) is str
+    plain = provider.route_task({"goal": "g", "index": 1, "option": "plain"}, config)
+    assert "escalate_reasoning" not in plain and "escalate_ceiling" not in plain
+
+
+@pytest.mark.parametrize("bad", ["yes", 1, False, "galaxy"])
+def test_a_bad_escalation_value_is_passed_through_for_core_to_refuse_not_hidden(provider, bad):
+    config = _config(options=[{"name": "coder", "description": "d", "provider": "openrouter", "model": "m",
+                               "escalate_reasoning": bad, "escalate_ceiling": bad}])
+    route = provider.route_task({"goal": "g", "index": 0, "option": "coder"}, config)
+    assert route["escalate_reasoning"] == bad and route["escalate_ceiling"] == bad
+    assert type(route["escalate_reasoning"]) is type(bad) and type(route["escalate_ceiling"]) is type(bad)
+
+
+def test_a_disabled_escalation_pair_is_forwarded_as_written(provider):
+    config = _config(options=[{"name": "coder", "description": "d", "provider": "openrouter", "model": "m",
+                               "escalate_reasoning": False, "escalate_ceiling": "xhigh"}])
+    route = provider.route_task({"goal": "g", "index": 0, "option": "coder"}, config)
+    assert route["escalate_reasoning"] is False and type(route["escalate_reasoning"]) is bool
+    assert route["escalate_ceiling"] == "xhigh" and type(route["escalate_ceiling"]) is str
+
+
+def test_a_blank_escalation_key_is_omitted_like_an_absent_one(provider):
+    config = _config(options=[{"name": "coder", "description": "d", "provider": "openrouter", "model": "m",
+                               "escalate_reasoning": None, "escalate_ceiling": "  "}])
+    route = provider.route_task({"goal": "g", "index": 0, "option": "coder"}, config)
+    assert "escalate_reasoning" not in route and "escalate_ceiling" not in route
+
+
+def test_route_summary_shows_escalation_only_when_both_keys_enable_it():
+    from advanced_delegation_plugin.store import route_summary
+    base = {"provider": "openrouter", "model": "m"}
+    assert route_summary({**base, "escalate_reasoning": True, "escalate_ceiling": "xhigh"}) \
+        == "openrouter · m · escalates to xhigh"
+    assert route_summary({**base, "escalate_reasoning": False, "escalate_ceiling": "xhigh"}) == "openrouter · m"
+    assert route_summary({**base, "escalate_reasoning": True}) == "openrouter · m"
+    assert route_summary({**base, "escalate_reasoning": True, "escalate_ceiling": " "}) == "openrouter · m"
+
+
 def test_task_without_option_runs_on_the_parent_route_not_delegation_model(provider):
     # In this mode delegation.model / delegation.provider are inactive: an empty route inherits the parent.
     config = {**_config(options=OPTIONS), "model": "m", "provider": "openrouter", "base_url": "http://x/v1"}

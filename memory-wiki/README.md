@@ -2,6 +2,8 @@
 
 # hermes-memory-wiki
 
+[简体中文说明](README.zh-CN.md)
+
 > Part of [Hermes Official Plugins](../README.md), Nous Research's official plugins for Hermes Agent. Formerly [`NousResearch/hermes-memory-wiki`](https://github.com/NousResearch/hermes-memory-wiki), which is archived; this directory carries its full history.
 
 Memory Wiki dashboard and native Desktop plugin for [Hermes Agent](https://github.com/NousResearch/hermes-agent):
@@ -12,6 +14,23 @@ your local `state.db`) plus a read-only **Persistent Memory audit panel** showin
 No LLM calls, no writes: the plugin opens `state.db` read-only through the public
 `hermes_state.SessionDB` API and only reads memory files. Editing memory stays with the `memory`
 tool (prompt-cache safe).
+
+## Languages and Chinese subjects
+
+The native Desktop page registers English and Simplified Chinese bundles with the
+Desktop plugin i18n SDK and follows the host's language, with English fallback.
+The dashboard has its own **Automatic / 中文 / English** selector: automatic mode
+uses the document language, then the browser language. Only the plugin's language
+preference is stored; session and memory content is never translated or persisted.
+Switching language preserves the current view, search and detail selection.
+
+Chinese and mixed Han/Latin phrases in titles, previews, the first nonempty user
+message and explicit user quotes can produce literal subject names. Han characters
+are retained in stable URL slugs, so unrelated Chinese names no longer collapse to
+`subject`. This is bounded, deterministic phrase extraction, not semantic Chinese
+segmentation: subject queries filter generated names/keywords, not every message.
+For example, `示例甲检索核对` matches `示例甲` or `检索`, and `示例 API SDK` matches
+`示例`, `API` or `SDK`. No LLM, new runtime dependency or database migration is used.
 
 ## What you get
 
@@ -118,7 +137,7 @@ Use Node.js 22.12+ for the native DOM tests.
 npm ci                      # build/test dependencies only; runtime React comes from Desktop
 npm run build               # rebuild dashboard/dist/index.js
 npm run check               # dashboard and emitted Desktop ESM syntax
-npm test                    # node:test DOM behavior against desktop/plugin.js
+npm test                    # native Desktop and web dashboard DOM/language regressions
 HERMES_AGENT_REPO=~/.hermes/hermes-agent \
   ~/.hermes/hermes-agent/.venv/bin/python -m pytest tests/ -o "addopts="
 ```

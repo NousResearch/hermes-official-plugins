@@ -249,6 +249,12 @@ def fetch_usage(command=None, env=None, timeout=8):
     if resolved is None:
         return None, INSTALL_HINT
     child = _child_env(env)
+    if "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in env:
+        # The quiet-traffic setting must not blind /usage: with this flag the CLI skips the very fetch
+        # the user just asked for (rate_limits: null on 2.1.302). DISABLE_TELEMETRY and
+        # DISABLE_ERROR_REPORTING stay on, and the probe runs behind the unused admission gate, so
+        # nothing but the plan-limits read leaves. A flag the user exported themselves is kept.
+        child.pop("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", None)
     gate = Admission("https://api.anthropic.com", timeout)
     try:
         child["ANTHROPIC_BASE_URL"] = gate.url
@@ -279,7 +285,7 @@ def fetch_usage(command=None, env=None, timeout=8):
         return None, "no Claude subscription login found (run `claude` and log in)"
     if child.get("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"):
         # Measured on 2.1.302: with nonessential traffic off the CLI answers rate_limits: null.
-        return None, "Claude Code skips the usage fetch with nonessential traffic off (claude_code_telemetry)"
+        return None, "Claude Code skips the usage fetch with nonessential traffic off (CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is exported)"
     return None, "Claude Code returned no plan limits"
 
 

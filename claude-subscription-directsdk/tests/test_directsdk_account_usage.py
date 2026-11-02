@@ -104,11 +104,27 @@ def test_failures_name_the_reason(cli, reply, reason):
     assert snapshot.windows == () and lines[-1] == f'Unavailable: {reason}'
 
 
-def test_quiet_mode_says_why_limits_are_missing(cli, monkeypatch):
+def test_quiet_mode_still_fetches_limits(cli, monkeypatch):
+    # claude_code_telemetry: false must not blind /usage: the CLI skips get_usage under the
+    # nonessential-traffic flag, so the probe drops that one flag and keeps the rest of the quiet set.
     import directsdk_setup
+    monkeypatch.delenv('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', raising=False)
     monkeypatch.setattr(directsdk_setup, 'telemetry_enabled', lambda: False)
+    cli.reply = _answer(LEGACY)
+    limits, reason = directsdk_setup.fetch_usage()
+    assert reason is None and limits == LEGACY
+    env = cli.calls[-1].env
+    assert 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC' not in env
+    assert env['DISABLE_TELEMETRY'] == '1' and env['DISABLE_ERROR_REPORTING'] == '1'
+    assert env['ANTHROPIC_BASE_URL'].startswith('http://127.0.0.1:')
+
+
+def test_a_user_exported_quiet_flag_is_kept_and_named(cli, monkeypatch):
+    import directsdk_setup
+    monkeypatch.setenv('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', '1')
     cli.reply = _answer(None)
     limits, reason = directsdk_setup.fetch_usage()
+    assert cli.calls[-1].env['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'] == '1'
     assert limits is None and 'nonessential traffic off' in reason
 
 

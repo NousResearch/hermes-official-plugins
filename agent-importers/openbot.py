@@ -172,8 +172,11 @@ def _pairs(raw: Optional[str]) -> dict[str, str]:
     return {str(i["key"]): str(i.get("value", "")) for i in items if isinstance(i, dict) and i.get("key")}
 
 
-def _mcp_servers(db: sqlite3.Connection) -> dict[str, Any]:
+def _mcp_servers(db: sqlite3.Connection) -> tuple[dict[str, Any], dict[str, list[str]]]:
+    """Enabled servers in Hermes' shape, plus each server's env passthrough names (variables OpenBot
+    hands over from its own environment, which Hermes' MCP config has no field for)."""
     servers: dict[str, Any] = {}
+    passthrough: dict[str, list[str]] = {}
     for row in _rows(db, "SELECT * FROM projection_mcp_servers WHERE enabled = 1 ORDER BY position"):
         entry: dict[str, Any] = ({"url": row["url"], "headers": _pairs(row["headers_json"])}
                                  if row["transport"] == "http" else
@@ -182,10 +185,13 @@ def _mcp_servers(db: sqlite3.Connection) -> dict[str, Any]:
         if row["transport"] != "http" and row["working_directory"]:
             entry["cwd"] = row["working_directory"]
         servers[row["name"]] = entry
-    return servers
+        if names := [str(n) for n in json.loads(row["env_passthrough_json"] or "[]") if n]:
+            passthrough[row["name"]] = names
+    return servers, passthrough
 
 
-def read_agents(user_data: Path, scratch_parent: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def read_agents(user_data: Path, scratch_parent: Path
+                ) -> tuple[list[dict[str, Any]], tuple[dict[str, Any], dict[str, list[str]]]]:
     """Every OpenBot agent as a normalized bot dict (see :class:`.grok_bot.GrokBotImporter`), plus the
     MCP servers, which are machine-wide in OpenBot. ``scratch_parent`` holds the database copy when a
     read-only open cannot be used, and only for the duration of the read."""
@@ -236,11 +242,12 @@ class OpenBotImporter(GrokBotImporter):
                          activate_routines=activate_routines, bot_names=bot_names)
         self.user_data = user_data
         self.shared_mcp: dict[str, Any] = {}
+        self.mcp_passthrough: dict[str, list[str]] = {}
 
     def load_bots(self) -> list[tuple[Path, dict[str, Any]]]:
         database = self.user_data / DATABASE
         try:
-            agents, self.shared_mcp = read_agents(self.user_data, self.target_root / "cache")
+            agents, (self.shared_mcp, self.mcp_passthrough) = read_agents(self.user_data, self.target_root / "cache")
         except (sqlite3.Error, OSError, ValueError) as exc:
             self.record("database", database, None, "error", f"Could not read OpenBot's database: {exc}")
             return []
@@ -253,3 +260,7 @@ class OpenBotImporter(GrokBotImporter):
         ``--bot`` picked."""
         if self.shared_mcp:
             self.import_mcp_servers(self.shared_mcp, kind="mcp-servers")
+        for name, variables in self.mcp_passthrough.items():
+            self.record("mcp-env-passthrough", name, None, "skipped",
+                        f"OpenBot passed {', '.join(variables)} to this server from its environment; "
+                        f"add them under mcp_servers.{name}.env (secrets in the profile's .env)")

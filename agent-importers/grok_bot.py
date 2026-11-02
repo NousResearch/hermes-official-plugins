@@ -240,6 +240,7 @@ class GrokBotImporter(AgentImporter):
             bots = [(p, b) for p, b in bots if str(b.get("name")).strip().lower() in self.bot_names]
             if not bots:
                 self.record("export", None, None, "skipped", "No bot or agent matches --bot")
+                return self.build_report()  # a mistyped name imports nothing, shared items included
         for path, bot in bots:
             self._import_bot(path, bot, single=len(bots) == 1)
         self.import_shared()
@@ -396,9 +397,19 @@ class GrokBotImporter(AgentImporter):
                       f"- Trigger: {r.get('trigger') or 'unknown'}",
                       f"- Details: {r.get('trigger_details') or r.get('schedule_text') or 'n/a'}", "",
                       str(r.get("instruction") or "").strip(), ""]
+        text = "\n".join(lines)
+        if destination.is_file():
+            current = read_text(destination)
+            if current == text:
+                self.record("event-routines", source, destination, "skipped", "Notes already saved")
+                return
+            if not self.overwrite:
+                self.record("event-routines", source, destination, "conflict", "Notes file exists and was edited")
+                return
+
         def write() -> None:
             destination.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_text(destination, "\n".join(lines))
+            atomic_write_text(destination, text)
 
         self.apply("event-routines", source, destination,
                    f"Would save {len(routines)} routine(s) with no schedule as notes to recreate", write)

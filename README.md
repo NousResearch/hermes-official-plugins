@@ -222,10 +222,15 @@ Catalog entries come in two tiers:
 </tr>
 <tr>
 <td width="50%" valign="top">
-<h3>More on the way</h3>
-<p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
+<a href="n8n/"><img src="assets/n8n.jpg" alt="n8n plugin"></a>
+<h3><a href="n8n/">n8n</a></h3>
+<code>hermes plugins install n8n</code>
+<p>Connect Hermes to your n8n instance's official MCP server, self-hosted or n8n Cloud, to search, inspect, run and edit the workflows your account allows. <code>hermes n8n setup</code> asks for your instance's MCP Server URL and adds it as the <code>n8n-official</code> MCP server; sign-in is OAuth in the browser, no API key. Formerly the <code>n8n-official</code> MCP catalog entry; an existing entry is kept.</p>
+<p>CLI setup · <code>hermes n8n setup</code> then <code>hermes mcp login n8n-official</code></p>
 </td>
 <td width="50%" valign="top">
+<h3>More on the way</h3>
+<p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
 </td>
 </tr>
 </table>

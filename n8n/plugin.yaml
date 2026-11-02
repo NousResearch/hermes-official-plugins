@@ -1,0 +1,15 @@
+name: n8n
+label: n8n
+kind: standalone
+version: 1.0.0
+author: NousResearch
+homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/n8n
+description: >
+  Connect Hermes to your n8n instance's official MCP server (self-hosted or
+  n8n Cloud). `hermes n8n setup` asks for your instance's MCP Server URL,
+  adds it to config.yaml as the `n8n-official` MCP server with OAuth, and
+  signs you in through Hermes' MCP OAuth flow. No n8n API key. An existing
+  `n8n-official` server from Hermes' old MCP catalog is kept as it is.
+requires_hermes: ">=0.21.6"
+provides_tools: []
+provides_hooks: []

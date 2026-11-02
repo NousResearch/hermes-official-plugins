@@ -1,0 +1,12 @@
+[project]
+name = "hermes-n8n"
+version = "1.0.0"
+description = "Connect Hermes Agent to your n8n instance's official MCP server (official plugin)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nous Research" }]
+requires-python = ">=3.11"
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/n8n"

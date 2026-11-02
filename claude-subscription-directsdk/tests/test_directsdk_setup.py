@@ -156,22 +156,28 @@ MYTHOS_DEFAULT = {"value": "default", "resolvedModel": "claude-mythos-5-1", "dis
 def test_entitlement_gated_models_come_from_the_account_picker(profile, tmp_path):
     """An access-gated model (Mythos) is in native's served catalog only for accounts entitled to it, and
     native serves that catalog only first-party. Discovery reads it without our relay's base URL, so an
-    entitled account sees Mythos and an account without access does not."""
+    entitled account sees Mythos, on its pinned 1M route, and an account without access does not, even
+    though the route is pinned."""
     record = tmp_path / "spawns.jsonl"
     command, env = _cli(tmp_path, {**PRO, "models": PINNED_PICKER, "served": [MYTHOS_DEFAULT] + PINNED_PICKER + [MYTHOS],
                                    "record": str(record)})
-    rows = {m["id"]: m for m in profile.discover_models(command=command, env=env)}
-    assert rows["claude-mythos-5-1"]["label"] == "Mythos 5.1"
-    command, env = _cli(tmp_path, {**PRO, "models": PINNED_PICKER, "served": [SERVED_OPUS, MYTHOS]})
-    labels = {m["id"]: m["label"] for m in profile.discover_models(command=command, env=env)}
-    assert labels["claude-opus-5-5[1m]"] == "Opus 5.5" and labels["claude-mythos-5-1"] == "Mythos 5.1"
-    # Not pinned: listed bare and budgeted at native's 200K default, as every unpinned plain id is.
-    assert rows["claude-mythos-5-1"]["note"] == "unpinned"
+    models = profile.discover_models(command=command, env=env)
+    rows = {m["id"]: m for m in models}
+    # The default row and the explicit row name one model: a single pinned 1M route.
+    assert [m["id"] for m in models].count("claude-mythos-5-1[1m]") == 1
+    assert rows["claude-mythos-5-1[1m]"]["label"] == "Mythos 5.1" and rows["claude-mythos-5-1[1m]"]["note"] == ""
+    assert profile.get_model_context_length("claude-mythos-5-1[1m]") == 1_000_000
     assert all(json.loads(line)["base_url"] is None for line in record.read_text().splitlines())
     assert all(m["upstream_requests"] == 0 for m in rows.values())
 
+    command, env = _cli(tmp_path, {**PRO, "models": PINNED_PICKER, "served": [SERVED_OPUS, MYTHOS]})
+    labels = {m["id"]: m["label"] for m in profile.discover_models(command=command, env=env)}
+    assert labels["claude-opus-5-5[1m]"] == "Opus 5.5" and labels["claude-mythos-5-1[1m]"] == "Mythos 5.1"
+
     command, env = _cli(tmp_path, {**PRO, "models": PINNED_PICKER, "served": PINNED_PICKER})
     assert not any("mythos" in m["id"] for m in profile.discover_models(command=command, env=env))
+    # Nor does the static fallback picker (CLI missing, logged out, handshake failed) offer it.
+    assert not any("mythos" in route for route in profile.fallback_models)
 
 
 def test_an_inherited_backend_override_keeps_discovery_behind_the_relay(profile, tmp_path):
@@ -181,7 +187,7 @@ def test_an_inherited_backend_override_keeps_discovery_behind_the_relay(profile,
     command, env = _cli(tmp_path, {**PRO, "models": PINNED_PICKER, "served": PINNED_PICKER + [MYTHOS], "record": str(record)})
     env["ANTHROPIC_BASE_URL"] = "https://gateway.example.com"
     ids = [m["id"] for m in profile.discover_models(command=command, env=env)]
-    assert "claude-mythos-5-1" not in ids
+    assert not any("mythos" in i for i in ids)
     seen = [json.loads(line)["base_url"] for line in record.read_text().splitlines()]
     assert seen and all(url.startswith("http://127.0.0.1:") for url in seen)
 
@@ -216,14 +222,16 @@ def test_every_model_the_cli_advertises_is_selectable(profile, tmp_path):
 def test_pinned_models_the_picker_omits_stay_selectable(profile, tmp_path):
     """The live picker names only each family's current model; older pinned models the account
     still runs (Opus 5, Opus 4.8) are appended after the advertised rows, never dropped."""
-    from model_catalog import MODEL_METADATA
+    from model_catalog import PICKER_ROUTES
     models = _discover(profile, tmp_path, PINNED_PICKER + UNPINNED_PICKER)
     ids = [m["id"] for m in models]
     advertised = [m["id"] for m in _discover(profile, tmp_path, UNPINNED_PICKER) if "unpinned" in m["note"]]
-    # Every pinned route is listed exactly once, whether or not the CLI announced it.
-    assert set(MODEL_METADATA) <= set(ids) and len(ids) == len(set(ids))
+    # Every pinned route open to all accounts is listed exactly once, whether or not the CLI announced it.
+    assert set(PICKER_ROUTES) <= set(ids) and len(ids) == len(set(ids))
+    # Access-gated routes are pinned but never appended (test_entitlement_gated_models_...).
+    assert "claude-mythos-5-1[1m]" not in ids
     # Catalog-only rows follow every advertised row, in catalog order.
-    appended = [r for r in MODEL_METADATA if r not in ("claude-sonnet-5[1m]", "claude-opus-5-5[1m]", "claude-haiku-4-5-20251001")]
+    appended = [r for r in PICKER_ROUTES if r not in ("claude-sonnet-5[1m]", "claude-opus-5-5[1m]", "claude-haiku-4-5-20251001")]
     assert ids[-len(appended):] == appended
     assert set(advertised) <= set(ids[:-len(appended)])
     rows = {m["id"]: m for m in models}
@@ -251,12 +259,12 @@ PRIVACY_PICKER = [
 def test_privacy_flags_shrunk_picker_is_unioned_with_the_pinned_table(profile, tmp_path):
     """#86: the 5-row picker the privacy-flagged CLI returns is the floor, never the whole list. Every
     advertised model comes first, then each pinned route it omitted, once per canonical model."""
-    from model_catalog import MODEL_METADATA
+    from model_catalog import MODEL_METADATA, PICKER_ROUTES
     models = _discover(profile, tmp_path, PRIVACY_PICKER)
     ids = [m["id"] for m in models]
     advertised = ["claude-opus-5-5[1m]", "claude-sonnet-5[1m]", "claude-fable-5-1[1m]", "claude-haiku-4-5-20251001"]
     assert ids[:len(advertised)] == advertised
-    assert set(ids) == set(advertised) | set(MODEL_METADATA)
+    assert set(ids) == set(advertised) | set(PICKER_ROUTES)
     assert {"claude-opus-5[1m]", "claude-opus-4-8[1m]"} <= set(ids[len(advertised):])
     # No route twice and no canonical model twice (aliases and plain/[1m] pairs collapse).
     assert len(ids) == len(set(ids))

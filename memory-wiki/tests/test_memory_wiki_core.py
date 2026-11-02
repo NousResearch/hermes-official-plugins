@@ -308,3 +308,88 @@ def test_build_memory_notes_missing_files_yield_empty_lists(memory_wiki_core, he
     notes = build_memory_notes()
 
     assert notes == {"memory": [], "user": [], "memory_count": 0, "user_count": 0}
+
+
+def _dated_session(db, session_id, messages, *, hidden=False):
+    import sqlite3
+    from datetime import datetime
+
+    day_a = datetime(2026, 10, 20, 12).timestamp()
+    db.create_session(session_id, "cli")
+    for offset, content in messages:
+        db.append_message(session_id, "assistant", "Updated: " + content, timestamp=day_a + offset)
+    if hidden:
+        db.set_session_hidden(session_id, True)
+    with sqlite3.connect(db.db_path) as conn:
+        conn.execute("UPDATE sessions SET started_at = ? WHERE id = ?", (day_a, session_id))
+    return day_a
+
+
+def test_build_hidden_session_subjects_and_daily_logs(memory_wiki_core, tmp_path):
+    from hermes_state import SessionDB
+
+    db = SessionDB(db_path=tmp_path / "state.db")
+    try:
+        _dated_session(db, "hidden", [(0, "Update hidden/project.py")], hidden=True)
+        subjects = memory_wiki_core.build_memory_subjects(db)
+        logs = memory_wiki_core.build_daily_logs(db)
+        assert any(subject["slug"] == "hidden-project-py" for subject in subjects)
+        assert logs[0]["sessions"][0]["id"] == "hidden"
+        assert logs[0]["message_count"] == 1
+    finally:
+        db.close()
+
+
+def test_build_forever_session_buckets_messages_by_day(memory_wiki_core, tmp_path):
+    from hermes_state import SessionDB
+
+    db = SessionDB(db_path=tmp_path / "state.db")
+    try:
+        started = _dated_session(db, "forever", [
+            (0, "Update alpha/first.py"),
+            (60, "Review alpha/second.py"),
+            (86400, "Fix beta/third.py"),
+        ], hidden=True)
+        logs = memory_wiki_core.build_daily_logs(db)
+        assert [day["date"] for day in logs] == ["2026-10-21", "2026-10-20"]
+        for day, count, first, last, path, absent in [
+            (logs[0], 1, started + 86400, started + 86400, "beta-third-py", "alpha-first-py"),
+            (logs[1], 2, started, started + 60, "alpha-first-py", "beta-third-py"),
+        ]:
+            assert day["session_count"] == 1
+            assert [session["id"] for session in day["sessions"]] == ["forever"]
+            assert day["message_count"] == count
+            assert day["started_at_min"] == first
+            assert day["last_active_max"] == last
+            slugs = {subject["slug"] for subject in day["subjects"]}
+            assert path in slugs
+            assert absent not in slugs
+            assert len(day["work_items"]) == count
+            assert all(first <= item["timestamp"] <= last for item in day["work_items"])
+            assert memory_wiki_core.get_daily_log(db, day["date"]) == day
+    finally:
+        db.close()
+
+
+def test_build_single_day_session_unchanged(memory_wiki_core, tmp_path):
+    from hermes_state import SessionDB
+
+    db = SessionDB(db_path=tmp_path / "state.db")
+    try:
+        started = _dated_session(db, "normal", [(0, "Update normal/file.py")])
+        session, messages = memory_wiki_core._load_memory_sessions(db, limit=100)[0]
+        candidates = memory_wiki_core.extract_subject_candidates(session, messages)
+        subjects = [{"slug": c.slug, "name": c.name, "count": 1} for c in candidates]
+        subjects.sort(key=lambda subject: (-subject["count"], subject["name"].lower()))
+        assert memory_wiki_core.build_daily_logs(db) == [{
+            "date": "2026-10-20",
+            "started_at_min": started,
+            "last_active_max": started,
+            "session_count": 1,
+            "message_count": 1,
+            "subjects": subjects[:20],
+            "sessions": [memory_wiki_core._session_info(session)],
+            "work_items": memory_wiki_core._work_items_for_session(session, messages),
+        }]
+    finally:
+        db.close()

@@ -43,6 +43,25 @@ def test_date_returns_to_string_or_list_environment(env, tail):
     assert out[2]['content'] == [FRAME]
 
 
+def test_date_first_in_multi_block_trailing_system_moves_to_environment():
+    # Native 2.1.311 on Fable: the date line shares the trailing system
+    # message with a per-step reminder. Only the date moves, so the
+    # environment message matches the user-turn shape byte for byte.
+    reminder = {'type': 'text', 'text': 'First privately list what you need next'}
+    messages = native(tail=[{'type': 'text', 'text': DATE}, reminder])
+    out = json.loads(stable_request_context(wire(messages), [FRAME]))['messages']
+    assert out[0]['content'] == ENV + '\n\n' + DATE
+    assert out[-1] == {'role': 'system', 'content': [reminder]}
+
+
+def test_date_first_multi_block_matches_user_turn_environment():
+    user_turn = json.loads(stable_request_context(wire(native()), [FRAME]))['messages']
+    reminder = {'type': 'text', 'text': 'First privately list what you need next'}
+    tool_step = json.loads(stable_request_context(
+        wire(native(tail=[{'type': 'text', 'text': DATE}, reminder])), [FRAME]))['messages']
+    assert tool_step[0] == user_turn[0]
+
+
 @pytest.mark.parametrize('tail', ["Today's date is 2031-01-01. Now 09:30.", 'Per-request note', "Today's date is soon."])
 def test_trailing_text_other_than_the_date_line_stays_in_place(tail):
     out = json.loads(stable_request_context(wire(native(tail=tail)), [FRAME]))['messages']

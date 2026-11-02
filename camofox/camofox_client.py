@@ -329,7 +329,7 @@ def _adopt_existing_tab(session: dict[str, Any]) -> dict[str, Any]:
 def get_session(task_id: Optional[str]) -> dict[str, Any]:
     """Get or create the task's session. Identity precedence: external override
     (``CAMOFOX_USER_ID`` / config) → profile-scoped identity when managed persistence is on →
-    random ephemeral userId."""
+    deterministic per-task userId (random only for unkeyed calls)."""
     key = _session_key(task_id)
     with _sessions_lock:
         session = _sessions.get(key)
@@ -343,8 +343,16 @@ def get_session(task_id: Optional[str]) -> dict[str, Any]:
         if identity is None and _managed_persistence_enabled(camofox_cfg):
             identity = get_camofox_identity(key[1])
         if identity is None:
-            identity = {"user_id": f"hermes_{uuid.uuid4().hex[:10]}", "session_key": f"task_{key[1][:16]}"}
-            managed, adopt = False, False
+            # Task-scoped, not profile-scoped: derived from (this profile,
+            # this task) so a call in a separate process resolves to the
+            # same browser user again. Unkeyed calls keep a random id, so
+            # they never collapse onto one shared profile.
+            digest = (uuid.uuid5(uuid.NAMESPACE_URL, f"camofox-task:{get_camofox_state_dir()}:{task_id}").hex[:10]
+                      if task_id else uuid.uuid4().hex[:10])
+            identity = {"user_id": f"hermes_{digest}", "session_key": f"task_{key[1][:16]}"}
+            # Adoption only makes sense for a reproducible identity.
+            managed, adopt = False, bool(task_id) and _flag(
+                "CAMOFOX_ADOPT_EXISTING_TAB", camofox_cfg, "adopt_existing_tab")
         else:
             managed, adopt = True, _flag("CAMOFOX_ADOPT_EXISTING_TAB", camofox_cfg, "adopt_existing_tab")
         session = {"user_id": identity["user_id"], "tab_id": None, "session_key": identity["session_key"],

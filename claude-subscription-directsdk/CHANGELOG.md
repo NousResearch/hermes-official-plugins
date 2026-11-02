@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.0] - Unreleased
+
+### Fixed
+
+- `/usage` shows the plan limits with `claude_code_telemetry: false`: the CLI skips its `get_usage` fetch under `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, so the zero-inference usage probe no longer sets that one flag (telemetry and error reporting stay off; a flag the user exported is kept).
+
 ## [0.3.1] - Unreleased
 
 ### Added

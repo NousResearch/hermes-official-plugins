@@ -685,6 +685,14 @@ def read_clipboard_text() -> Optional[str]:
     return None
 
 
+def _discard_pending_input() -> None:
+    try:
+        import termios
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+    except (ImportError, OSError, ValueError):  # Windows console, or stdin is not a terminal
+        pass
+
+
 def read_terminal_paste() -> str:
     """Text pasted at a terminal, up to Ctrl-D. A POSIX terminal in line mode cuts each line at
     ~4 KB (1 KB on macOS) and a Bot's skill text is one long JSON line, so the tty is switched to
@@ -743,30 +751,33 @@ def resolve_export_files(args) -> list[Path]:
     print_export_instructions(prompt_file)
     if args.dry_run or args.yes or not sys.stdin.isatty():
         return []
-    print()
-    try:
-        answer = input("Copy the Bot's reply and press Enter (or type the path to its file; q to stop): ").strip()
-    except (EOFError, KeyboardInterrupt):
-        return []
-    if answer.lower() in ("q", "quit"):
-        return []
-    if not answer:
-        if found := find_export_files(None):  # saved to ~/Downloads meanwhile
-            return found
-        text = read_clipboard_text()
-        if text and EXPORT_FORMAT in text:
-            args.pasted_text = text
-            return [PASTED]
-        print_error("The clipboard holds no Grok Bot export" + ("" if text is not None else
-                    " (no clipboard tool found)") + ". Copy the Bot's whole reply and run this again,")
-        print_error("or save it as ~/Downloads/grok-bot-export-<bot>.json.")
-        raise SystemExit(1)
-    picked = Path(answer.strip("'\"")).expanduser()
-    if not picked.exists():
-        # not a path: the reply pasted into the terminal after all; read the rest (raw, as a
-        # terminal line holds only ~4 KB), up to Ctrl-D
-        args.pasted_text = answer + "\n" + read_terminal_paste()
-        return [PASTED]
+    while True:
+        print()
+        try:
+            answer = input("Copy the Bot's reply and press Enter (or type the path to its file; q to stop): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return []
+        if answer.lower() in ("q", "quit"):
+            return []
+        if not answer:
+            if found := find_export_files(None):  # saved to ~/Downloads meanwhile
+                return found
+            text = read_clipboard_text()
+            if text and EXPORT_FORMAT in text:
+                args.pasted_text = text
+                return [PASTED]
+            print_error("The clipboard holds no Grok Bot export" + ("" if text is not None else
+                        " (no clipboard tool found)") + ". Copy the Bot's whole reply, or save it as")
+            print_error("~/Downloads/grok-bot-export-<bot>.json, then press Enter again.")
+            continue
+        picked = Path(answer.strip("'\"")).expanduser()
+        if picked.exists():
+            break
+        # Pasted into the terminal: a terminal line holds only ~4 KB (1 KB on macOS), so a reply
+        # arrives cut; drop what is still queued and point at the clipboard instead.
+        _discard_pending_input()
+        print_error(f"No file at {answer[:60]!r}. If that was the reply pasted here: a terminal cuts it short,")
+        print_error("so copy it and just press Enter instead (or pipe it in with --source -).")
     found = find_export_files(picked) if picked.exists() else []
     if not found:
         print_error(f"No export found at {picked}")

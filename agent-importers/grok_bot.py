@@ -57,9 +57,10 @@ EXPORT_PROMPT = """\
 I'm moving to another assistant and need a complete, machine-readable copy of your setup. Do not \
 change, pause or delete anything.
 
-Write one JSON document with exactly this shape, then save it as /workspace/grok-bot-export.json \
-and attach that file to your reply. If you cannot attach files, put the whole document in a single \
-```json code block instead.
+Write one JSON document with exactly this shape, then save it as grok-bot-export-<your name>.json \
+(your name in lowercase, spaces as hyphens): in my Downloads folder if you can write to my computer, \
+otherwise in your workspace, and attach it to your reply. If you cannot attach files, put the whole \
+document in a single ```json code block instead.
 
 {
   "format": "grok-bot-export",
@@ -295,8 +296,9 @@ def _rename_skill(skill_md: Path, name: str) -> None:
 def _skill_markdown(skill: dict[str, Any], name: str) -> str:
     description = " ".join(str(skill.get("description") or f"Imported Grok Bot skill: {skill.get('name')}").split())
     body = str(skill.get("instructions") or "").strip()
-    return (f"---\nname: {name}\ndescription: {json.dumps(description[:300])}\n---\n\n"
-            f"# {str(skill.get('name')).strip()}\n\n{body}\n")
+    if not body.startswith("# "):  # a Bot often copies the skill with its own title heading
+        body = f"# {str(skill.get('name')).strip()}\n\n{body}"
+    return f"---\nname: {name}\ndescription: {json.dumps(description[:300])}\n---\n\n{body}\n"
 
 
 class GrokBotImporter(AgentImporter):
@@ -407,6 +409,9 @@ class GrokBotImporter(AgentImporter):
             return
         soul = self.target_root / "SOUL.md"
         current = read_text(soul) if soul.is_file() else ""
+        if instructions in current:  # imported before: a re-run must not copy it into memory too
+            self.record("role", source, soul, "skipped", "Already in SOUL.md")
+            return
         if single and (not current.strip() or _is_seeded_soul(current) or self.overwrite):
             heading = f"# {name}" + (f" — {title}" if title else "")
 
@@ -635,11 +640,11 @@ def print_export_instructions(prompt_file: Optional[Path]) -> None:
         print_info(f"(The same message is saved in {prompt_file})")
     print()
     print(EXPORT_PROMPT)
-    print_header("Step 2 — import the file")
-    print_info("Download the grok-bot-export.json the Bot attaches (or copy its whole reply into a")
-    print_info("text file), then run:")
-    print_info("  hermes import-agent grok-bot --source ~/Downloads/grok-bot-export.json")
-    print_info("Exports saved as ~/Downloads/grok-bot-export*.json are found without --source.")
+    print_header("Step 2 — bring the export back")
+    print_info("Paste the Bot's whole reply below when asked, or save the file it attaches to")
+    print_info("~/Downloads (grok-bot-export-<bot>.json, one per Bot) and run this command again.")
+    print_info("Exports in ~/Downloads named grok-bot-export*.json are found without --source; a file")
+    print_info("elsewhere: hermes import-agent grok-bot --source <file>")
 
 
 # Stands for the export read from stdin (``--source -``); the text rides on the importer.
@@ -687,12 +692,17 @@ def resolve_export_files(args) -> list[Path]:
         return []
     print()
     try:
-        answer = input("Path to the export file once you have it (Enter to stop here): ").strip()
+        answer = input("Paste the Bot's reply (or the path to its file), Enter alone to stop here: ").strip()
     except (EOFError, KeyboardInterrupt):
         return []
     if not answer:
         return []
     picked = Path(answer.strip("'\"")).expanduser()
+    if not picked.exists():  # the first line of a pasted reply: read the rest, up to Ctrl-D
+        from hermes_cli.cli_output import print_info
+        print_info("Reading the rest of the reply: press Ctrl-D when done (Ctrl-Z then Enter on Windows).")
+        args.pasted_text = answer + "\n" + sys.stdin.read()
+        return [PASTED]
     found = find_export_files(picked) if picked.exists() else []
     if not found:
         print_error(f"No export found at {picked}")

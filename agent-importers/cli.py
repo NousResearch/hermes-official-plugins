@@ -202,10 +202,11 @@ def import_agent_command(args) -> None:
     if agent == GROK_BOT:
         from .grok_bot import PASTED, GrokBotImporter, read_pasted_export, resolve_export_files
         _print_banner()
+        args.pasted_text = None  # set when the reply is pasted at the prompt
         export_files = resolve_export_files(args)
         if not export_files:
             return
-        pasted = read_pasted_export() if export_files == [PASTED] else None
+        pasted = args.pasted_text or (read_pasted_export() if export_files == [PASTED] else None)
         source_label = ", ".join(str(p) for p in export_files)
 
         def make_importer(execute: bool):

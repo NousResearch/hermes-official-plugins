@@ -27,6 +27,7 @@ import shutil
 import sys
 from pathlib import Path
 from typing import Any, Optional, Sequence
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .importer import (AgentImporter, atomic_write_text, extract_markdown_entries, is_secret_key,
                        read_text)
@@ -47,6 +48,12 @@ _SECRET_VALUE_RE = re.compile(
     r"\b(?:sk-[A-Za-z0-9_-]{16,}|xox[abprs]-[A-Za-z0-9-]{10,}|gh[pousr]_[A-Za-z0-9]{20,}|"
     r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})|(?i:bearer\s+[A-Za-z0-9._~+/-]{20,})")
 _SCHEDULE_TRIGGERS = {"schedule", "scheduled", "time", "cron", "interval"}
+# What chat apps and phones do to JSON on the way to a file: curly quotes, and trailing commas.
+_SMART_QUOTES = str.maketrans({"\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'"})
+_TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
+# Per-bot lists merged across documents (an export split over several messages or files), keyed so
+# a repeated export adds nothing twice.
+_LIST_KEYS = {"routines": "name", "skills": "name", "apps": "name", "memories": None, "user_facts": None}
 
 EXPORT_PROMPT = """\
 I'm moving to another assistant and need a complete, machine-readable copy of your setup. Do not \
@@ -90,6 +97,9 @@ and attach that file to your reply. If you cannot attach files, put the whole do
 Rules: include EVERY routine you own (paused ones too) and EVERY skill enabled for you, with full \
 text, not summaries. Never include passwords, API keys, tokens, webhook keys, cookies or card \
 numbers: leave those out entirely. Output valid JSON only (no comments).
+If it is too long for one message or file, split it: send several documents, each complete and \
+valid in this same shape with the same bot name, each holding the part the others do not. They \
+are imported together.
 """
 
 
@@ -146,20 +156,66 @@ def redact_secrets(value: Any) -> tuple[Any, int]:
 
 
 def parse_export(text: str) -> list[dict[str, Any]]:
-    """Return the bots in a Grok Bot export: a bare JSON document, or the first ```json block that
-    holds one inside a pasted reply."""
-    candidates = [text.strip()] + _FENCE_RE.findall(text)
-    if "{" in text:
+    """Return the bots in a Grok Bot export: a bare JSON document, or every ```json block holding one
+    inside a pasted reply (a Bot may split a long export into several), merged per bot. Curly quotes
+    and trailing commas, which copying through a chat app or phone adds, are repaired."""
+    blocks = _FENCE_RE.findall(text)
+    candidates = blocks or [text.strip()]
+    if not blocks and "{" in text:
         candidates.append(text[text.index("{"):text.rindex("}") + 1])
-    for candidate in candidates:
+    documents = [d for d in (_load_document(c) for c in candidates) if d is not None]
+    if blocks and not documents:  # fenced, but none parsed: try the whole text once
+        documents = [d for d in (_load_document(text.strip()),) if d is not None]
+    if not documents:
+        if text.count("{") > text.count("}"):
+            raise ExportFormatError("the export looks cut off (more { than }); ask the Bot to send the "
+                                    "rest as another document in the same shape, or one bot per message")
+        raise ExportFormatError("no Grok Bot export found (expected a JSON document with "
+                                f"\"format\": \"{EXPORT_FORMAT}\" and a \"bots\" list)")
+    return merge_bots([bot for document in documents for bot in _validated_bots(document)])
+
+
+def _load_document(candidate: str) -> Optional[dict[str, Any]]:
+    """``candidate`` as an export document: the export shape itself, a bare list of bots, or a single
+    bot object; None when it is none of those."""
+    for attempt in (candidate, _TRAILING_COMMA_RE.sub(r"\1", candidate.translate(_SMART_QUOTES))):
         try:
-            data = json.loads(candidate)
+            data = json.loads(attempt)
         except (json.JSONDecodeError, ValueError):
             continue
+        if isinstance(data, list) and data and all(isinstance(b, dict) and "name" in b for b in data):
+            return {"format": EXPORT_FORMAT, "version": 1, "bots": data}
         if isinstance(data, dict) and (data.get("format") == EXPORT_FORMAT or "bots" in data):
-            return _validated_bots(data)
-    raise ExportFormatError("no Grok Bot export found (expected a JSON document with "
-                            f"\"format\": \"{EXPORT_FORMAT}\" and a \"bots\" list)")
+            return data
+        if isinstance(data, dict) and "name" in data and set(data) & {"instructions", *_LIST_KEYS}:
+            return {"format": EXPORT_FORMAT, "version": 1, "bots": [data]}
+    return None
+
+
+def merge_bots(bots: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One bot per name (case-insensitive): lists are unioned (by item name, or by text), scalar
+    fields keep the last non-empty value, so a split or repeated export imports each thing once."""
+    merged: dict[str, dict[str, Any]] = {}
+    for bot in bots:
+        key = str(bot["name"]).strip().lower()
+        into = merged.setdefault(key, {})
+        for field, value in bot.items():
+            if field in _LIST_KEYS and isinstance(value, list):
+                into[field] = _union(into.get(field, []), value, _LIST_KEYS[field])
+            elif value not in (None, "", [], {}) or field not in into:
+                into[field] = value
+    return list(merged.values())
+
+
+def _union(current: list[Any], incoming: list[Any], key: Optional[str]) -> list[Any]:
+    def ident(item: Any) -> str:
+        if key and isinstance(item, dict):
+            return str(item.get(key) or "").strip().lower() or json.dumps(item, sort_keys=True)
+        return json.dumps(item, sort_keys=True) if not isinstance(item, str) else item.strip()
+    order = {ident(item): item for item in current}
+    for item in incoming:
+        order[ident(item)] = item  # the later copy of a routine/skill wins
+    return list(order.values())
 
 
 def _secret_keys(value: Any, path: str = "") -> list[str]:
@@ -221,8 +277,9 @@ class GrokBotImporter(AgentImporter):
 
     def __init__(self, export_files: Sequence[Path], target_root: Path, execute: bool = False,
                  overwrite: bool = False, activate_routines: bool = False,
-                 bot_names: Sequence[str] = ()) -> None:
+                 bot_names: Sequence[str] = (), pasted: Optional[str] = None) -> None:
         self.agent = self.AGENT
+        self.pasted = pasted  # an export read from stdin (``--source -``) instead of a file
         self.source_root = Path(export_files[0]).parent if export_files else Path.home()
         self.export_files = [Path(p) for p in export_files]
         self.target_root = Path(target_root)
@@ -233,6 +290,7 @@ class GrokBotImporter(AgentImporter):
         self.sync_skills: dict[str, Optional[str]] = {}
         self.items: list[dict[str, Any]] = []
         self.stripped_secrets: list[str] = []
+        self._claimed_slugs: dict[str, str] = {}  # skill folder name → which skill took it this run
 
     def run(self) -> dict[str, Any]:
         bots = self.load_bots()
@@ -251,17 +309,20 @@ class GrokBotImporter(AgentImporter):
 
     def load_bots(self) -> list[tuple[Path, dict[str, Any]]]:
         """(where it came from, normalized bot) for every bot in the sources; problems are recorded."""
-        bots: list[tuple[Path, dict[str, Any]]] = []
+        found: list[tuple[Path, dict[str, Any]]] = []
         for path in self.export_files:
             try:
-                parsed, redacted = redact_secrets(parse_export(read_text(path)))
+                text = self.pasted if self.pasted is not None and path == PASTED else read_text(path)
+                parsed, redacted = redact_secrets(parse_export(text))
             except (OSError, ExportFormatError) as exc:
                 self.record("export", path, None, "error", str(exc))
                 continue
             if redacted:
                 self.stripped_secrets.append(f"{path.name}: {redacted} token-like value(s) redacted")
-            bots.extend((path, bot) for bot in parsed)
-        return bots
+            found.extend((path, bot) for bot in parsed)
+        # The same Bot across files (a split export, or one exported twice) imports once.
+        origin = {str(b["name"]).strip().lower(): p for p, b in found}
+        return [(origin[str(b["name"]).strip().lower()], b) for b in merge_bots([b for _, b in found])]
 
     def _import_bot(self, path: Path, bot: dict[str, Any], single: bool) -> None:
         name = str(bot["name"]).strip()
@@ -316,11 +377,14 @@ class GrokBotImporter(AgentImporter):
         for skill in skills:
             label = str(skill.get("name") or "").strip()
             folder = Path(skill["path"]) if skill.get("path") else None
+            if folder is not None and not (folder / "SKILL.md").is_file():
+                self.record("skill", f"{source} / {label}", None, "skipped", f"No SKILL.md in {folder}")
+                continue
             if not label or not (folder or str(skill.get("instructions") or "").strip()):
                 self.record("skill", f"{source} / {label or '?'}", None, "skipped",
                             "Skill has no name or no instructions")
                 continue
-            slug = _slug(label)
+            slug = self._unique_slug(_slug(label), f"{label.lower()}\0{folder or skill.get('instructions')}")
             destination = root / slug
             if destination.exists() and not self.overwrite:
                 self.record("skill", f"{source} / {label}", destination, "conflict",
@@ -340,6 +404,16 @@ class GrokBotImporter(AgentImporter):
                        "Would copy skill directory" if folder else "Would write SKILL.md", write)
             mapped[label.lower()] = slug
         return mapped
+
+    def _unique_slug(self, slug: str, identity: str) -> str:
+        """Two different skills whose names slug alike in one run ("Daily Brief" and "daily-brief", or
+        two agents' own "standup") get ``-2``, ``-3``... instead of the second overwriting the first;
+        the same skill seen twice keeps one name."""
+        candidate, n = slug, 2
+        while self._claimed_slugs.get(candidate, identity) != identity:
+            candidate, n = f"{slug}-{n}", n + 1
+        self._claimed_slugs[candidate] = identity
+        return candidate
 
     def _import_routines(self, source: str, bot_name: str, routines: list[dict[str, Any]],
                          skills: dict[str, str]) -> None:
@@ -366,11 +440,15 @@ class GrokBotImporter(AgentImporter):
                     self.record("routine", f"{source} / {label}", where, "skipped",
                                 "A cron job with this name already exists (imported before?)")
                     continue
+                existing.add(job_name)  # a second routine of the same name in this run is skipped too
                 job_skills = [skills[s.lower()] for s in _strings(routine.get("skills")) if s.lower() in skills]
                 paused = not self.activate_routines or bool(routine.get("paused"))
                 kwargs = _create_job_kwargs(cron_jobs.create_job, routine, paused, self.PRODUCT)
 
                 details: dict[str, Any] = {"schedule": schedule, "paused": paused, "skills": job_skills}
+                if zone_note := _zone_note(routine, kwargs):  # imported rows print only where they went
+                    details["timezone_note"] = zone_note
+                    where = f"{where} ({zone_note})"
 
                 def create(job_name=job_name, instruction=instruction, schedule=schedule,
                            job_skills=job_skills, kwargs=kwargs, details=details) -> None:
@@ -459,10 +537,28 @@ def _create_job_kwargs(create_job, routine: dict[str, Any], paused: bool, produc
     kwargs: dict[str, Any] = {"paused": paused}
     if paused:
         kwargs["paused_reason"] = f"Imported from {product}: resume once the {product} routine is off"
-    tz = str(routine.get("timezone") or "").strip()
+    tz = _valid_zone(routine)
     if tz and "timezone" in inspect.signature(create_job).parameters:
         kwargs["timezone"] = tz
     return kwargs
+
+
+def _valid_zone(routine: dict[str, Any]) -> str:
+    tz = str(routine.get("timezone") or "").strip()
+    try:
+        return tz if tz and ZoneInfo(tz) else ""
+    except (ZoneInfoNotFoundError, ValueError):
+        return ""
+
+
+def _zone_note(routine: dict[str, Any], kwargs: dict[str, Any]) -> str:
+    """Say when the job will not run on the routine's own clock, instead of shifting it silently."""
+    tz = str(routine.get("timezone") or "").strip()
+    if not tz or "timezone" in kwargs:
+        return ""
+    if not _valid_zone(routine):
+        return f"unknown time zone {tz!r}, runs in this profile's time zone"
+    return f"this Hermes cannot pin a zone per job, so it runs in the profile's time zone, not {tz}"
 
 
 def print_export_instructions(prompt_file: Optional[Path]) -> None:
@@ -483,11 +579,26 @@ def print_export_instructions(prompt_file: Optional[Path]) -> None:
     print_info("Exports saved as ~/Downloads/grok-bot-export*.json are found without --source.")
 
 
+# Stands for the export read from stdin (``--source -``); the text rides on the importer.
+PASTED = Path("<pasted export>")
+
+
+def read_pasted_export() -> str:
+    """The export from stdin: piped (``pbpaste | hermes import-agent grok-bot --source -``) or pasted
+    at the terminal, ended with Ctrl-D (Ctrl-Z then Enter on Windows)."""
+    from hermes_cli.cli_output import print_info
+    if sys.stdin.isatty():
+        print_info("Paste the Bot's whole reply, then press Ctrl-D (Ctrl-Z then Enter on Windows):")
+    return sys.stdin.read()
+
+
 def resolve_export_files(args) -> list[Path]:
     """The export files for this run; with none found, print the export steps and (interactively)
     ask for a path."""
     from hermes_cli.cli_output import print_error
     from hermes_constants import get_hermes_home
+    if args.source == "-":
+        return [PASTED]
     source = Path(args.source).expanduser().resolve() if args.source else None
     if source is not None and not source.exists():
         print()

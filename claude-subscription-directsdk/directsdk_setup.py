@@ -15,10 +15,10 @@ from collections.abc import Mapping
 
 try:
     from .admission import Admission
-    from .model_catalog import MODEL_METADATA, native_model
+    from .model_catalog import MODEL_METADATA, PICKER_ROUTES, native_model
 except ImportError:
     from admission import Admission
-    from model_catalog import MODEL_METADATA, native_model
+    from model_catalog import MODEL_METADATA, PICKER_ROUTES, native_model
 
 INSTALL_HINT = ("Claude Code is not installed (no `claude` on PATH or in the usual install directories). Install it with "
                 "`npm install -g @anthropic-ai/claude-code` or set CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND to the binary.")
@@ -250,10 +250,11 @@ def discover_models(command=None, env=None, timeout=40):
     # The live picker names only each family's current model, yet the account still runs the older
     # pinned ones (Opus 5, Opus 4.8, ...). Replacing the static catalog with the picker would hide
     # them, so every pinned route the CLI did not announce is appended after the advertised rows.
-    for route, meta in MODEL_METADATA.items():
+    # Access-gated routes (Mythos) are never appended: only an account the CLI offers one to sees it.
+    for route in PICKER_ROUTES:
         if route in routes:
             continue
-        canonical = meta["canonical_model"]
+        canonical = MODEL_METADATA[route]["canonical_model"]
         routes[route] = {"id": route, "label": _catalog_label(canonical),
                          "note": "usage credits" if canonical in credit_billed_on_plan else "",
                          "upstream_requests": upstream}

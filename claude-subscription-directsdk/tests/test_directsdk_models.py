@@ -17,13 +17,18 @@ EXPECTED = {
     'claude-opus-4-8[1m]': 1_000_000,
     'claude-fable-5-1[1m]': 1_000_000,
 }
+# Pinned like any route (window, thinking, capabilities) but granted per organization: never in the
+# static fallback picker, listed only when the account's own picker offers it (test_directsdk_setup).
+GATED = {
+    'claude-mythos-5-1[1m]': 1_000_000,
+}
 
 
 def test_catalog_windows_match_explicit_native_routes(profile):
     from agent.model_metadata import get_model_context_length
     assert set(profile.fallback_models) == set(EXPECTED)
     assert profile.default_aux_model == 'claude-sonnet-5[1m]'
-    for model, window in EXPECTED.items():
+    for model, window in {**EXPECTED, **GATED}.items():
         assert profile.get_model_context_length(model) == window
         assert get_model_context_length(model, provider=profile.name) == window
         assert get_model_context_length(model, provider=profile.name, config_context_length=200000) == 200000
@@ -42,10 +47,11 @@ def test_native_argv_enables_only_known_long_context_models(profile, tmp_path):
                'haiku-5.5':'claude-haiku-5-5[1m]', 'claude-haiku-4-5':'claude-haiku-4-5-20251001',
                'haiku-4-5':'claude-haiku-4-5-20251001', 'haiku-4.5':'claude-haiku-4-5-20251001',
                'opus-4.8':'claude-opus-4-8[1m]', 'fable':'claude-fable-5-1[1m]',
+               'claude-mythos-5-1':'claude-mythos-5-1[1m]', 'mythos-5.1':'claude-mythos-5-1[1m]',
                'unqualified-future-model':'unqualified-future-model'}
     with_client = profile.create_client(command=[sys.executable,str(native)], env={'PATH':os.defpath,'HOME':str(tmp_path),'ARGV_CAPTURE':str(capture)})
     try:
-        for requested, expected in {**{m:m for m in EXPECTED}, **aliases}.items():
+        for requested, expected in {**{m:m for m in {**EXPECTED, **GATED}}, **aliases}.items():
             with_client.create(model=requested, messages=[{'role':'user','content':'fixture'}],
                                tools=[{'type':'function','function':{'name':'probe','description':'TAIL','parameters':{'type':'object','properties':{'value':{'type':'string'}}}}}])
             argv = json.loads(capture.read_text())

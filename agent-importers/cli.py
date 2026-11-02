@@ -79,7 +79,8 @@ def setup_cli(parser) -> None:
         help=f"Which agent to import from (default: auto-detect {_dirs_hint()})")
     parser.add_argument(
         "--source", help=f"Path to the agent's config directory (default: {_dirs_hint()}); for "
-                         "grok-bot, the export file the Bot wrote (or a folder of them); for openbot, its user "
+                         "grok-bot, the export file the Bot wrote (or a folder of them, or - to read a pasted reply "
+                         "from stdin); for openbot, its user "
                          "data folder (the one holding openbot.db)")
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -198,17 +199,18 @@ def import_agent_command(args) -> None:
     from_setup = getattr(args, "from_setup", False)
     hermes_home = get_hermes_home()
     if agent == GROK_BOT:
-        from .grok_bot import GrokBotImporter, resolve_export_files
+        from .grok_bot import PASTED, GrokBotImporter, read_pasted_export, resolve_export_files
         _print_banner()
         export_files = resolve_export_files(args)
         if not export_files:
             return
+        pasted = read_pasted_export() if export_files == [PASTED] else None
         source_label = ", ".join(str(p) for p in export_files)
 
         def make_importer(execute: bool):
             return GrokBotImporter(export_files, hermes_home.resolve(), execute=execute,
                                    overwrite=overwrite, activate_routines=args.activate_routines,
-                                   bot_names=args.bot or ())
+                                   bot_names=args.bot or (), pasted=pasted)
     elif agent == OPENBOT:
         from .openbot import OpenBotImporter, find_user_data
         _print_banner()

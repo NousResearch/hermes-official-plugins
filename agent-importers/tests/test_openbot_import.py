@@ -129,3 +129,27 @@ def test_every_openbot_schedule_shape_maps_to_a_hermes_schedule():
     }
     assert {k: schedule_to_cron(json.loads(k), "America/New_York") for k in cases} == cases
     assert schedule_to_cron({"kind": "lunar"}) is None
+
+
+def test_an_older_openbot_database_still_imports_and_a_foreign_one_is_refused(tmp_path, capsys):
+    """A database from an OpenBot release without the memories table or the MCP env passthrough
+    column imports what it has; a SQLite file that is not OpenBot's fails the command and imports
+    nothing."""
+    import pytest
+    home = tmp_path / ".hermes"
+    user_data, live = _fixture_openbot(tmp_path)
+    live.executescript("DROP TABLE projection_agent_memories; "
+                       "ALTER TABLE projection_mcp_servers DROP COLUMN env_passthrough_json;")
+    live.commit()
+    live.close()
+
+    _run(["openbot", "--bot", "Inbox Keeper", "-y"])
+    assert len(json.loads((home / "cron" / "jobs.json").read_text())["jobs"]) == 2
+    assert "notes-mcp" in (home / "config.yaml").read_text(encoding="utf-8")
+
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    sqlite3.connect(other / "openbot.db").execute("CREATE TABLE t (x)").connection.close()
+    with pytest.raises(SystemExit) as refused:
+        _run(["openbot", "--source", str(other), "-y"])
+    assert refused.value.code == 1 and "not an OpenBot database" in capsys.readouterr().out

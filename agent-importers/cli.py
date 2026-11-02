@@ -218,7 +218,7 @@ def import_agent_command(args) -> None:
             print_error("OpenBot's data folder (with openbot.db) was not found"
                         + (f" at {explicit_source}" if explicit_source else "") + ".")
             print_info("Point at it: hermes import-agent openbot --source '<OpenBot user data folder>'")
-            return
+            raise SystemExit(1)
         source_label = str(user_data)
 
         def make_importer(execute: bool):
@@ -231,7 +231,7 @@ def import_agent_command(args) -> None:
             print()
             print_error(f"Agent directory not found: {source_dir}")
             print_info(f"Specify a custom path: hermes import-agent {agent} --source /path/to/{AGENT_DEFAULT_DIRS[agent]}")
-            return
+            raise SystemExit(1)
         source_label = str(source_dir)
 
         def make_importer(execute: bool):
@@ -262,12 +262,14 @@ def import_agent_command(args) -> None:
     # Phase 1: preview (always)
     preview = run_import(False, " preview")
     if preview is None:
-        return
+        raise SystemExit(1)
     summary = preview.get("summary", {})
     if summary.get("imported", 0) == 0 and summary.get("conflict", 0) == 0:
         print()
         print_info(f"Nothing to import from {agent}.")
         print_import_report(preview, dry_run=True, from_setup=from_setup)
+        if summary.get("error"):  # e.g. an export refused for carrying credentials
+            raise SystemExit(1)
         return
     print()
     print_header(f"Import Preview — {summary.get('imported', 0)} item(s) would be imported")
@@ -288,19 +290,24 @@ def import_agent_command(args) -> None:
             return
     report = run_import(True, "")
     if report is None:
-        return
+        raise SystemExit(1)
     print_import_report(report, dry_run=False, from_setup=from_setup)
     if agent in (GROK_BOT, OPENBOT):
         _print_routine_next_steps(report, "Grok Bot" if agent == GROK_BOT else "OpenBot")
     else:
         _register_for_sync(agent, source_dir, hermes_home, overwrite, report)
     print()
-    print_success("Import complete.")
+    if errors := report.get("summary", {}).get("error"):
+        print_error(f"Import finished with {errors} error(s); see the list above.")
+    else:
+        print_success("Import complete.")
     if from_setup:
         print_info("API keys and credentials were NOT imported.")
     else:
         print_info("API keys and credentials were NOT imported — run 'hermes setup' "
                    f"to configure providers, or add them to {display_hermes_home()}/.env.")
+    if report.get("summary", {}).get("error"):
+        raise SystemExit(1)
 
 
 def _print_banner() -> None:

@@ -17,10 +17,13 @@ Chat history, provider accounts and the browser profile are not read.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sqlite3
 import tempfile
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any, Optional, Sequence
 
 from .grok_bot import GrokBotImporter
@@ -29,14 +32,19 @@ AGENT = "openbot"
 # Electron's userData for productName "OpenBot", per OS.
 USER_DATA_DIRS = ("Library/Application Support/OpenBot", ".config/OpenBot", "AppData/Roaming/OpenBot")
 DATABASE = "openbot.db"
-_SKILL_DIRS = (".agents/skills", ".claude/skills")
+# The seven workspace skill folders OpenBot lists (docs/architecture/skills-and-plugins.md).
+_SKILL_DIRS = (".agents/skills", ".claude/skills", ".opencode/skills", ".gemini/skills", ".cursor/skills",
+               ".cline/skills", ".clinerules/skills")
+# A cron field "N/S" with no range: OpenBot's scheduler fires it at N only, Hermes' at N, N+S, ...
+_BARE_STEP_RE = re.compile(r"^\d+/\d+$")
 _WEEKDAYS = "1-5"
 
 
 def find_user_data(source: Optional[Path] = None) -> Optional[Path]:
     """The OpenBot user data folder (the one holding ``openbot.db``): ``source`` (that folder or the
     database file itself), else the OS default."""
-    candidates = [source] if source is not None else [Path.home() / d for d in USER_DATA_DIRS]
+    candidates = ([source.expanduser().resolve()] if source is not None
+                  else [Path.home() / d for d in USER_DATA_DIRS])
     for candidate in candidates:
         if candidate.is_file() and candidate.name == DATABASE:
             return candidate.parent
@@ -45,10 +53,15 @@ def find_user_data(source: Optional[Path] = None) -> Optional[Path]:
     return None
 
 
-def schedule_to_cron(schedule: dict[str, Any]) -> Optional[str]:
+def schedule_to_cron(schedule: dict[str, Any], timezone: str = "UTC") -> Optional[str]:
     """An OpenBot routine schedule (``RoutineSchedule`` in its contracts) as a schedule Hermes cron
-    accepts; None for a shape with no equivalent."""
+    accepts, firing at the same instants; None for a shape with no faithful equivalent. ``timezone``
+    is the routine's own zone (one-time runs and interval anchors are wall-clock there)."""
     kind = schedule.get("kind")
+    try:
+        zone = ZoneInfo(timezone or "UTC")
+    except (ZoneInfoNotFoundError, ValueError):
+        zone = ZoneInfo("UTC")
 
     def clock(time: str) -> str:
         hour, minute = str(time).split(":")
@@ -60,15 +73,35 @@ def schedule_to_cron(schedule: dict[str, Any]) -> Optional[str]:
         "weekdays": lambda s: f"{clock(s['time'])} * * {_WEEKDAYS}",
         "weekly": lambda s: f"{clock(s['time'])} * * {int(s['weekday'])}",
         "monthly": lambda s: f"{clock(s['time'])} {int(s['day'])} * *",
-        "interval": lambda s: f"every {int(s['amount'])}{str(s['unit'])[0]}",
-        "custom": lambda s: str(s["expression"]).strip(),
-        "once": lambda s: f"{s['date']}T{s['time']}",
+        "interval": _interval_cron,
+        "custom": _custom_cron,
+        "once": lambda s: datetime.fromisoformat(f"{s['date']}T{s['time']}").replace(tzinfo=zone).isoformat(),
         "advanced": _advanced_cron,
     }
     try:
         return simple[kind](schedule) if kind in simple else None
     except (KeyError, ValueError, TypeError):
         return None
+
+
+def _interval_cron(schedule: dict[str, Any]) -> str:
+    """Keep OpenBot's anchor: a step that divides the hour (or day) becomes a cron on the anchor's
+    phase; anything else falls back to Hermes' interval, which counts from the import. An interval is
+    elapsed time, so the cron is in UTC (the caller pins the job to UTC), never shifted by DST."""
+    amount, unit = int(schedule["amount"]), str(schedule["unit"])
+    anchor = datetime.fromisoformat(str(schedule["anchorAt"]).replace("Z", "+00:00")).astimezone(ZoneInfo("UTC"))
+    if unit == "minutes" and 60 % amount == 0:
+        return f"{anchor.minute % amount}-59/{amount} * * * *" if amount > 1 else "* * * * *"
+    if unit == "hours" and 24 % amount == 0:
+        return f"{anchor.minute} {anchor.hour % amount}-23/{amount} * * *"
+    if unit == "days" and amount == 1:
+        return f"{anchor.minute} {anchor.hour} * * *"
+    return f"every {amount}{unit[0]}"
+
+
+def _custom_cron(schedule: dict[str, Any]) -> Optional[str]:
+    expression = str(schedule["expression"]).strip()
+    return None if any(_BARE_STEP_RE.match(f) for f in expression.split()) else expression
 
 
 def _advanced_cron(schedule: dict[str, Any]) -> Optional[str]:
@@ -133,23 +166,29 @@ def _skills(workspace: Path) -> list[dict[str, Any]]:
     return list(found.values())
 
 
+def _pairs(raw: Optional[str]) -> dict[str, str]:
+    """OpenBot stores env vars and headers as ``[{"key": ..., "value": ...}]`` (``McpKeyValue[]``)."""
+    items = json.loads(raw or "[]")
+    return {str(i["key"]): str(i.get("value", "")) for i in items if isinstance(i, dict) and i.get("key")}
+
+
 def _mcp_servers(db: sqlite3.Connection) -> dict[str, Any]:
     servers: dict[str, Any] = {}
     for row in _rows(db, "SELECT * FROM projection_mcp_servers WHERE enabled = 1 ORDER BY position"):
-        entry: dict[str, Any] = ({"url": row["url"], "headers": json.loads(row["headers_json"] or "{}")}
+        entry: dict[str, Any] = ({"url": row["url"], "headers": _pairs(row["headers_json"])}
                                  if row["transport"] == "http" else
                                  {"command": row["command"], "args": json.loads(row["args_json"] or "[]"),
-                                  "env": json.loads(row["env_json"] or "{}")})
+                                  "env": _pairs(row["env_json"])})
         if row["transport"] != "http" and row["working_directory"]:
             entry["cwd"] = row["working_directory"]
         servers[row["name"]] = entry
     return servers
 
 
-def read_agents(user_data: Path, scratch_parent: Path) -> list[dict[str, Any]]:
-    """Every OpenBot agent as a normalized bot dict (see :class:`.grok_bot.GrokBotImporter`). The MCP
-    servers are machine-wide in OpenBot, so they ride on the first agent. ``scratch_parent`` holds the
-    database copy when a read-only open cannot be used, and only for the duration of the read."""
+def read_agents(user_data: Path, scratch_parent: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Every OpenBot agent as a normalized bot dict (see :class:`.grok_bot.GrokBotImporter`), plus the
+    MCP servers, which are machine-wide in OpenBot. ``scratch_parent`` holds the database copy when a
+    read-only open cannot be used, and only for the duration of the read."""
     scratch_parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="openbot-import-", dir=scratch_parent) as scratch:
         db = _open_snapshot(user_data / DATABASE, Path(scratch))
@@ -165,9 +204,11 @@ def read_agents(user_data: Path, scratch_parent: Path) -> list[dict[str, Any]]:
                                "ON t.routine_id = r.routine_id WHERE r.agent_id = ? ORDER BY r.created_at",
                            agent_id):
                 schedule = json.loads(r["schedule_json"]) if r["schedule_json"] else None
-                cron = schedule_to_cron(schedule) if isinstance(schedule, dict) else None
+                cron = schedule_to_cron(schedule, r["timezone"]) if isinstance(schedule, dict) else None
+                interval = isinstance(schedule, dict) and schedule.get("kind") == "interval"
                 routines.append({
-                    "name": r["name"], "instruction": r["instruction"], "timezone": r["timezone"],
+                    "name": r["name"], "instruction": r["instruction"],
+                    "timezone": "UTC" if interval else r["timezone"],
                     "paused": not r["active"], "trigger": "schedule" if cron else "other",
                     "schedule_cron": cron or "",
                     "trigger_details": "" if cron else f"OpenBot schedule {json.dumps(schedule)}" if schedule
@@ -177,9 +218,7 @@ def read_agents(user_data: Path, scratch_parent: Path) -> list[dict[str, Any]]:
             bots.append({"name": agent.get("name") or agent_id, "title": agent.get("title") or "",
                          "instructions": agent.get("description") or "", "memories": memories,
                          "skills": _skills(workspace), "routines": routines})
-        if bots:
-            bots[0]["mcp_servers"] = _mcp_servers(db)
-        return bots
+        return bots, _mcp_servers(db)
     finally:
         db.close()
 
@@ -196,14 +235,21 @@ class OpenBotImporter(GrokBotImporter):
         super().__init__([user_data / DATABASE], target_root, execute=execute, overwrite=overwrite,
                          activate_routines=activate_routines, bot_names=bot_names)
         self.user_data = user_data
+        self.shared_mcp: dict[str, Any] = {}
 
     def load_bots(self) -> list[tuple[Path, dict[str, Any]]]:
         database = self.user_data / DATABASE
         try:
-            agents = read_agents(self.user_data, self.target_root / "cache")
+            agents, self.shared_mcp = read_agents(self.user_data, self.target_root / "cache")
         except (sqlite3.Error, OSError, ValueError) as exc:
             self.record("database", database, None, "error", f"Could not read OpenBot's database: {exc}")
             return []
         if not agents:
             self.record("agents", database, None, "skipped", "No agents in OpenBot")
         return [(database, agent) for agent in agents]
+
+    def import_shared(self) -> None:
+        """OpenBot's MCP servers belong to the computer, not an agent: imported whichever agents
+        ``--bot`` picked."""
+        if self.shared_mcp:
+            self.import_mcp_servers(self.shared_mcp, kind="mcp-servers")

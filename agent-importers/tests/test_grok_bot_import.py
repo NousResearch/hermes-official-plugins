@@ -73,19 +73,34 @@ def test_pasted_export_becomes_paused_cron_jobs_skills_memories_and_soul(tmp_pat
     assert "hermes cron resume" in capsys.readouterr().out
 
 
-def test_without_an_export_it_prints_the_export_prompt_and_imports_nothing(tmp_path, capsys):
-    """Nothing to read yet: the user gets the message to paste into the Bot; a credential-carrying
-    export is refused whole."""
+def test_without_an_export_it_prints_the_prompt_and_failures_exit_non_zero(tmp_path, capsys):
+    """Nothing to read yet: the user gets the message to paste into the Bot and nothing is written. A
+    missing --source or a credential-carrying export fails the command (exit 1) and imports nothing;
+    an export holding only event-triggered routines still saves their notes."""
+    import pytest
     home = tmp_path / ".hermes"
     _run(["grok-bot", "--dry-run"])
     out = capsys.readouterr().out
     assert '"format": "grok-bot-export"' in out and "hermes import-agent grok-bot --source" in out
-    assert not _jobs(home)
+    assert not _jobs(home) and not (home / "grok-bot-import").exists()
+
+    with pytest.raises(SystemExit) as missing:
+        _run(["grok-bot", "--source", str(tmp_path / "nope.json"), "-y"])
+    assert missing.value.code == 1
 
     bad = dict(EXPORT, bots=[dict(EXPORT["bots"][0], api_key="xai-123")])
     path = tmp_path / "Downloads" / "grok-bot-export.json"
     path.parent.mkdir()
     path.write_text(json.dumps(bad), encoding="utf-8")
-    _run(["grok-bot", "-y"])  # found in ~/Downloads without --source
-    assert "credential-looking keys" in capsys.readouterr().out
+    with pytest.raises(SystemExit) as refused:
+        _run(["grok-bot", "-y"])  # found in ~/Downloads without --source
+    assert refused.value.code == 1 and "credential-looking keys" in capsys.readouterr().out
     assert not _jobs(home) and not (home / "skills" / "grok-bot-imports").exists()
+
+    bot = EXPORT["bots"][0]
+    events_only = {"format": "grok-bot-export", "version": 1,
+                   "bots": [{"name": bot["name"], "routines": [bot["routines"][1]]}]}
+    path.write_text(json.dumps(events_only), encoding="utf-8")
+    _run(["grok-bot", "-y"])
+    notes = home / "grok-bot-import" / "account-health-event-routines.md"
+    assert "Reproduce the ticket in staging" in notes.read_text(encoding="utf-8")

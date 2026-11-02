@@ -135,7 +135,7 @@ folder, opened read-only, so OpenBot can stay running) and each agent's workspac
 | Routine with no schedule (run by hand, a script or a webhook) | Listed in `openbot-import/<agent>-event-routines.md` |
 | Agent description (its role) | `SOUL.md` when it still holds Hermes' default and one agent is imported, else memory entries |
 | Agent memories | Memory entries in `memories/MEMORY.md` |
-| Workspace skills (`.agents/skills`, `.claude/skills`) | `skills/openbot-imports/<name>/` (OpenBot's bundled skills stay behind) |
+| Workspace skills (`.agents/skills`, `.claude/skills`, `.opencode`, `.gemini`, `.cursor`, `.cline`, `.clinerules`) | `skills/openbot-imports/<name>/` (OpenBot's bundled skills stay behind) |
 | MCP servers | `mcp_servers` in `config.yaml`, secret-looking env vars and headers stripped and listed |
 
 Chats, provider accounts, channels and the browser profile are not imported. OpenBot keeps running

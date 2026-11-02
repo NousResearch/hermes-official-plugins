@@ -242,7 +242,11 @@ class GrokBotImporter(AgentImporter):
                 self.record("export", None, None, "skipped", "No bot or agent matches --bot")
         for path, bot in bots:
             self._import_bot(path, bot, single=len(bots) == 1)
+        self.import_shared()
         return self.build_report()
+
+    def import_shared(self) -> None:
+        """Items that belong to the whole source rather than one bot (none for Grok exports)."""
 
     def load_bots(self) -> list[tuple[Path, dict[str, Any]]]:
         """(where it came from, normalized bot) for every bot in the sources; problems are recorded."""
@@ -392,12 +396,12 @@ class GrokBotImporter(AgentImporter):
                       f"- Trigger: {r.get('trigger') or 'unknown'}",
                       f"- Details: {r.get('trigger_details') or r.get('schedule_text') or 'n/a'}", "",
                       str(r.get("instruction") or "").strip(), ""]
-        reason = (f"{len(routines)} event-triggered routine(s) have no schedule; "
-                  f"their instructions were saved for you to recreate")
-        if self.execute:
+        def write() -> None:
             destination.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_text(destination, "\n".join(lines))
-        self.record("event-routines", source, destination, "skipped", reason)
+
+        self.apply("event-routines", source, destination,
+                   f"Would save {len(routines)} routine(s) with no schedule as notes to recreate", write)
 
     def _import_apps(self, source: str, apps: list[dict[str, Any]]) -> None:
         if not apps:
@@ -473,20 +477,26 @@ def resolve_export_files(args) -> list[Path]:
     ask for a path."""
     from hermes_cli.cli_output import print_error
     from hermes_constants import get_hermes_home
-    source = Path(args.source).expanduser() if args.source else None
+    source = Path(args.source).expanduser().resolve() if args.source else None
     if source is not None and not source.exists():
         print()
         print_error(f"Export file not found: {source}")
-        return []
+        raise SystemExit(1)
     files = find_export_files(source)
     if files:
         return files
-    prompt_file = get_hermes_home() / "grok-bot-import" / "export-prompt.txt"
-    try:
-        prompt_file.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(prompt_file, EXPORT_PROMPT)
-    except OSError:
-        prompt_file = None
+    if source is not None:
+        print()
+        print_error(f"No Grok Bot export found in {source}")
+        raise SystemExit(1)
+    prompt_file: Optional[Path] = None
+    if not args.dry_run:
+        prompt_file = get_hermes_home() / "grok-bot-import" / "export-prompt.txt"
+        try:
+            prompt_file.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(prompt_file, EXPORT_PROMPT)
+        except OSError:
+            prompt_file = None
     print_export_instructions(prompt_file)
     if args.dry_run or args.yes or not sys.stdin.isatty():
         return []
@@ -501,4 +511,5 @@ def resolve_export_files(args) -> list[Path]:
     found = find_export_files(picked) if picked.exists() else []
     if not found:
         print_error(f"No export found at {picked}")
+        raise SystemExit(1)
     return found

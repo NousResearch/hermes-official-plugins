@@ -58,7 +58,9 @@ def _fixture_openbot(home: Path) -> tuple[Path, sqlite3.Connection]:
     db.executescript(_SCHEMA)
     agent = {"name": "Inbox Keeper", "title": "Email", "description": "Keep the inbox at zero. Ask before sending.",
              "workspacePath": str(workspace)}
-    db.execute("INSERT INTO projection_agents VALUES ('agent-1', NULL, 'm', NULL, 0, ?, 1)", (json.dumps(agent),))
+    db.execute("INSERT INTO projection_agents VALUES ('agent-0', NULL, 'm', NULL, 0, ?, 1)",
+               (json.dumps({"name": "Other", "title": "", "description": "Something else."}),))
+    db.execute("INSERT INTO projection_agents VALUES ('agent-1', NULL, 'm', NULL, 1, ?, 1)", (json.dumps(agent),))
     db.execute("INSERT INTO projection_agent_memories VALUES ('m1', 'agent-1', 'The user files receipts under Finance',"
                " 'x', 'manual', NULL, '2026-10-01', '2026-10-01', 1)")
     for rid, name, active, schedule in (
@@ -68,35 +70,44 @@ def _fixture_openbot(home: Path) -> tuple[Path, sqlite3.Connection]:
                    "'Europe/Berlin', ?, '2026-10-01', 1)", (rid, name, active, f"2026-10-0{rid[1]}"))
         db.execute("INSERT INTO projection_routine_triggers VALUES (?, ?, ?, '2026-11-02', '2026-10-01', '2026-10-01', 1)",
                    (f"t-{rid}", rid, json.dumps(schedule)))
+    # env_json / headers_json hold McpKeyValue[] (OpenBot's ipc-mcp-servers.ts), not objects.
+    env = [{"key": "NOTES_API_KEY", "value": "sk-live-123"}, {"key": "NOTES_DIR", "value": "/n"}]
     db.execute("INSERT INTO projection_mcp_servers VALUES ('s1', 'notes', 'stdio', 1, 'npx', '[\"notes-mcp\"]', "
-               "'{\"NOTES_API_KEY\": \"sk-live-123\", \"NOTES_DIR\": \"/n\"}', '[]', '', '', '{}', 0, 'a', 'b')")
+               "?, '[]', '', '', '[]', 0, 'a', 'b')", (json.dumps(env),))
+    headers = [{"key": "X-Tenant", "value": "acme"}, {"key": "Authorization", "value": "Bearer t0k3n"}]
+    db.execute("INSERT INTO projection_mcp_servers VALUES ('s2', 'remote', 'http', 1, '', '[]', '[]', '[]', '', "
+               "'https://mcp.example.com/mcp', ?, 1, 'a', 'b')", (json.dumps(headers),))
     db.commit()  # the connection stays open below, so the rows are still in the WAL as in a running app
     return user_data, db
 
 
 def test_openbot_agents_become_paused_cron_jobs_skills_memories_and_mcp(tmp_path, capsys):
-    """Read while OpenBot holds the database open: weekday and interval routines become paused cron
-    jobs in the routine's zone, the agent's skill imports once (not the bundled one), the secret MCP env
-    var is stripped, and the role lands in SOUL.md."""
+    """Read while OpenBot holds the database open, importing only the second agent: weekday and
+    interval routines become paused cron jobs on OpenBot's own times, the agent's skill imports once
+    (not the bundled one), the machine-wide MCP servers come along with their plain settings while
+    secrets are stripped, and the role lands in SOUL.md."""
     from hermes_cli.default_soul import DEFAULT_SOUL_MD
     home = tmp_path / ".hermes"
     (home / "SOUL.md").write_text(DEFAULT_SOUL_MD, encoding="utf-8")
     _user_data, live = _fixture_openbot(tmp_path)
 
-    _run(["openbot", "-y"])  # found at ~/.config/OpenBot without --source
+    _run(["openbot", "--bot", "Inbox Keeper", "-y"])  # found at ~/.config/OpenBot without --source
     live.close()
 
     jobs = {j["name"]: j for j in json.loads((home / "cron" / "jobs.json").read_text())["jobs"]}
     sweep, two_hourly = jobs["Inbox Keeper: Morning sweep"], jobs["Inbox Keeper: Every two hours"]
     assert sweep["schedule"]["expr"] == "0 9 * * 1-5" and sweep["enabled"] is False
-    assert two_hourly["schedule"]["minutes"] == 120 and two_hourly["enabled"] is False
+    assert two_hourly["schedule"]["expr"] == "0 0-23/2 * * *" and two_hourly["enabled"] is False  # 00:00Z anchor
     skills = home / "skills" / "openbot-imports"
     assert sorted(p.name for p in skills.iterdir()) == ["triage"]
     assert "Finance" in (home / "memories" / "MEMORY.md").read_text(encoding="utf-8")
     assert "Ask before sending" in (home / "SOUL.md").read_text(encoding="utf-8")
+    assert len(jobs) == 2  # the other agent's nothing, and no duplicate of this one's
     config = (home / "config.yaml").read_text(encoding="utf-8")
     assert "notes-mcp" in config and "NOTES_DIR" in config and "sk-live-123" not in config
-    assert "mcp_servers.notes.env.NOTES_API_KEY" in capsys.readouterr().out
+    assert "X-Tenant" in config and "t0k3n" not in config
+    out = capsys.readouterr().out
+    assert "mcp_servers.notes.env.NOTES_API_KEY" in out and "mcp_servers.remote.headers.Authorization" in out
 
 
 def test_every_openbot_schedule_shape_maps_to_a_hermes_schedule():
@@ -105,13 +116,16 @@ def test_every_openbot_schedule_shape_maps_to_a_hermes_schedule():
         json.dumps({"kind": "daily", "time": "07:05"}): "5 7 * * *",
         json.dumps({"kind": "weekly", "weekday": 0, "time": "18:30"}): "30 18 * * 0",
         json.dumps({"kind": "monthly", "day": 1, "time": "09:00"}): "0 9 1 * *",
-        json.dumps({"kind": "interval", "amount": 30, "unit": "minutes", "anchorAt": "x"}): "every 30m",
+        json.dumps({"kind": "interval", "amount": 15, "unit": "minutes", "anchorAt": "2026-10-01T00:05:00Z"}):
+            "5-59/15 * * * *",
+        json.dumps({"kind": "interval", "amount": 5, "unit": "hours", "anchorAt": "2026-10-01T00:00:00Z"}): "every 5h",
         json.dumps({"kind": "custom", "expression": "0 6 * * 1"}): "0 6 * * 1",
-        json.dumps({"kind": "once", "date": "2027-01-05", "time": "09:30"}): "2027-01-05T09:30",
+        json.dumps({"kind": "custom", "expression": "5/10 * * * *"}): None,  # fires at :05 only in OpenBot
+        json.dumps({"kind": "once", "date": "2027-01-05", "time": "09:30"}): "2027-01-05T09:30:00-05:00",
         json.dumps({"kind": "advanced", "months": [3, 6], "days": {"kind": "days-of-month", "days": [1, 15]},
                     "time": {"kind": "every", "amount": 15, "unit": "minutes"}}): "*/15 * 1,15 3,6 *",
         json.dumps({"kind": "advanced", "months": list(range(1, 13)), "days": {"kind": "days-of-week", "days": [1, 3]},
                     "time": {"kind": "at-time", "time": "08:00"}}): "0 8 * * 1,3",
     }
-    assert {k: schedule_to_cron(json.loads(k)) for k in cases} == cases
+    assert {k: schedule_to_cron(json.loads(k), "America/New_York") for k in cases} == cases
     assert schedule_to_cron({"kind": "lunar"}) is None

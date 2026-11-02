@@ -50,10 +50,8 @@ _SECRET_VALUE_RE = re.compile(
 _SCHEDULE_TRIGGERS = {"schedule", "scheduled", "time", "cron", "interval"}
 # What chat apps and phones do to JSON on the way to a file: curly quotes, and trailing commas.
 _SMART_QUOTES = str.maketrans({"\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'"})
-_TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
-# Per-bot lists merged across documents (an export split over several messages or files), keyed so
-# a repeated export adds nothing twice.
-_LIST_KEYS = {"routines": "name", "skills": "name", "apps": "name", "memories": None, "user_facts": None}
+# Per-bot lists merged across documents (an export split over several messages or files).
+_LIST_KEYS = ("routines", "skills", "apps", "memories", "user_facts")
 
 EXPORT_PROMPT = """\
 I'm moving to another assistant and need a complete, machine-readable copy of your setup. Do not \
@@ -126,8 +124,9 @@ def find_export_files(source: Optional[Path]) -> list[Path]:
     if not folder.is_dir():
         return []
     patterns = ("*.json", "*.md", "*.txt") if source is not None else _EXPORT_GLOBS
+    # Oldest first, so where two files hold the same routine the newer export's copy wins.
     return sorted({p for pattern in patterns for p in folder.glob(pattern)
-                   if p.is_file() and _mentions_export_format(p)})
+                   if p.is_file() and _mentions_export_format(p)}, key=lambda p: (p.stat().st_mtime, p.name))
 
 
 def _mentions_export_format(path: Path) -> bool:
@@ -163,9 +162,10 @@ def parse_export(text: str) -> list[dict[str, Any]]:
     candidates = blocks or [text.strip()]
     if not blocks and "{" in text:
         candidates.append(text[text.index("{"):text.rindex("}") + 1])
-    documents = [d for d in (_load_document(c) for c in candidates) if d is not None]
+    # Inside a reply, only export-shaped blocks count: an example list of routines is not a bot.
+    documents = [d for d in (_load_document(c, bare_ok=not blocks) for c in candidates) if d is not None]
     if blocks and not documents:  # fenced, but none parsed: try the whole text once
-        documents = [d for d in (_load_document(text.strip()),) if d is not None]
+        documents = [d for d in (_load_document(text.strip(), bare_ok=False),) if d is not None]
     if not documents:
         if text.count("{") > text.count("}"):
             raise ExportFormatError("the export looks cut off (more { than }); ask the Bot to send the "
@@ -175,46 +175,69 @@ def parse_export(text: str) -> list[dict[str, Any]]:
     return merge_bots([bot for document in documents for bot in _validated_bots(document)])
 
 
-def _load_document(candidate: str) -> Optional[dict[str, Any]]:
-    """``candidate`` as an export document: the export shape itself, a bare list of bots, or a single
-    bot object; None when it is none of those."""
-    for attempt in (candidate, _TRAILING_COMMA_RE.sub(r"\1", candidate.translate(_SMART_QUOTES))):
+def _load_document(candidate: str, bare_ok: bool) -> Optional[dict[str, Any]]:
+    """``candidate`` as an export document: the export shape itself, or (``bare_ok``, for a file that
+    is only JSON) a bare list of bots or a single bot object; None when it is none of those. Repairs
+    are tried only after a strict parse fails, trailing commas alone before curly quotes."""
+    for attempt in (candidate, _drop_trailing_commas(candidate),
+                    _drop_trailing_commas(candidate.translate(_SMART_QUOTES))):
         try:
             data = json.loads(attempt)
         except (json.JSONDecodeError, ValueError):
             continue
-        if isinstance(data, list) and data and all(isinstance(b, dict) and "name" in b for b in data):
-            return {"format": EXPORT_FORMAT, "version": 1, "bots": data}
         if isinstance(data, dict) and (data.get("format") == EXPORT_FORMAT or "bots" in data):
             return data
+        if not bare_ok:
+            continue
+        if isinstance(data, list) and data and all(isinstance(b, dict) and "name" in b for b in data):
+            return {"format": EXPORT_FORMAT, "version": 1, "bots": data}
         if isinstance(data, dict) and "name" in data and set(data) & {"instructions", *_LIST_KEYS}:
             return {"format": EXPORT_FORMAT, "version": 1, "bots": [data]}
     return None
 
 
+def _drop_trailing_commas(text: str) -> str:
+    """``text`` without commas that directly precede a ``}`` or ``]``, outside string values."""
+    out: list[str] = []
+    in_string = escaped = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch == "," and text[i + 1:].lstrip()[:1] in ("}", "]"):
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
 def merge_bots(bots: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """One bot per name (case-insensitive): lists are unioned (by item name, or by text), scalar
-    fields keep the last non-empty value, so a split or repeated export imports each thing once."""
+    """One bot per name (case-insensitive): lists are unioned, dropping only exact repeats (two
+    different routines may share a name), scalar fields keep the last non-empty value, so a split
+    or repeated export imports each thing once."""
     merged: dict[str, dict[str, Any]] = {}
     for bot in bots:
         key = str(bot["name"]).strip().lower()
         into = merged.setdefault(key, {})
         for field, value in bot.items():
             if field in _LIST_KEYS and isinstance(value, list):
-                into[field] = _union(into.get(field, []), value, _LIST_KEYS[field])
+                into[field] = _union(into.get(field, []), value)
             elif value not in (None, "", [], {}) or field not in into:
                 into[field] = value
     return list(merged.values())
 
 
-def _union(current: list[Any], incoming: list[Any], key: Optional[str]) -> list[Any]:
+def _union(current: list[Any], incoming: list[Any]) -> list[Any]:
     def ident(item: Any) -> str:
-        if key and isinstance(item, dict):
-            return str(item.get(key) or "").strip().lower() or json.dumps(item, sort_keys=True)
-        return json.dumps(item, sort_keys=True) if not isinstance(item, str) else item.strip()
+        return item.strip() if isinstance(item, str) else json.dumps(item, sort_keys=True)
     order = {ident(item): item for item in current}
     for item in incoming:
-        order[ident(item)] = item  # the later copy of a routine/skill wins
+        order.setdefault(ident(item), item)
     return list(order.values())
 
 
@@ -256,8 +279,19 @@ def _dicts(value: Any) -> list[dict[str, Any]]:
     return [v for v in value if isinstance(v, dict)] if isinstance(value, list) else []
 
 
-def _skill_markdown(skill: dict[str, Any]) -> str:
-    name = _slug(str(skill.get("name")))
+_FRONTMATTER_NAME_RE = re.compile(r"\A(---\s*\n(?:.*\n)*?)name:[^\n]*\n", re.MULTILINE)
+
+
+def _rename_skill(skill_md: Path, name: str) -> None:
+    """Make a copied SKILL.md's frontmatter ``name`` its new folder's name: Hermes finds a skill by
+    either, so a copy renamed to ``x-2`` that still says ``name: x`` makes ``x`` ambiguous."""
+    text = read_text(skill_md)
+    renamed = _FRONTMATTER_NAME_RE.sub(lambda m: f"{m.group(1)}name: {name}\n", text, count=1)
+    if renamed != text:
+        atomic_write_text(skill_md, renamed)
+
+
+def _skill_markdown(skill: dict[str, Any], name: str) -> str:
     description = " ".join(str(skill.get("description") or f"Imported Grok Bot skill: {skill.get('name')}").split())
     body = str(skill.get("instructions") or "").strip()
     return (f"---\nname: {name}\ndescription: {json.dumps(description[:300])}\n---\n\n"
@@ -280,7 +314,8 @@ class GrokBotImporter(AgentImporter):
                  bot_names: Sequence[str] = (), pasted: Optional[str] = None) -> None:
         self.agent = self.AGENT
         self.pasted = pasted  # an export read from stdin (``--source -``) instead of a file
-        self.source_root = Path(export_files[0]).parent if export_files else Path.home()
+        self.source_root = (PASTED if pasted is not None else
+                            Path(export_files[0]).parent if export_files else Path.home())
         self.export_files = [Path(p) for p in export_files]
         self.target_root = Path(target_root)
         self.execute = execute
@@ -396,9 +431,10 @@ class GrokBotImporter(AgentImporter):
                     if destination.exists():
                         shutil.rmtree(destination)
                     shutil.copytree(folder, destination, ignore=shutil.ignore_patterns(".openbot-managed.json"))
+                    _rename_skill(destination / "SKILL.md", destination.name)
                     return
                 destination.mkdir(parents=True, exist_ok=True)
-                atomic_write_text(destination / "SKILL.md", _skill_markdown(skill))
+                atomic_write_text(destination / "SKILL.md", _skill_markdown(skill, destination.name))
 
             self.apply("skill", f"{source} / {label}", destination,
                        "Would copy skill directory" if folder else "Would write SKILL.md", write)
@@ -424,9 +460,14 @@ class GrokBotImporter(AgentImporter):
         unscheduled: list[dict[str, Any]] = []
         with cron_jobs.use_cron_store(self.target_root):
             existing = {str(j.get("name")) for j in cron_jobs.load_jobs()}
+            planned: set[str] = set()
             for routine in routines:
                 label = str(routine.get("name") or "").strip() or "routine"
                 job_name = f"{bot_name}: {label}"
+                if job_name not in existing:  # two different routines sharing a name: "X", "X (2)"
+                    base, n = job_name, 2
+                    while job_name in planned:
+                        job_name, n = f"{base} ({n})", n + 1
                 where = f"cron job '{job_name}'"
                 instruction = str(routine.get("instruction") or "").strip()
                 if not instruction:
@@ -440,7 +481,7 @@ class GrokBotImporter(AgentImporter):
                     self.record("routine", f"{source} / {label}", where, "skipped",
                                 "A cron job with this name already exists (imported before?)")
                     continue
-                existing.add(job_name)  # a second routine of the same name in this run is skipped too
+                planned.add(job_name)
                 job_skills = [skills[s.lower()] for s in _strings(routine.get("skills")) if s.lower() in skills]
                 paused = not self.activate_routines or bool(routine.get("paused"))
                 kwargs = _create_job_kwargs(cron_jobs.create_job, routine, paused, self.PRODUCT)

@@ -108,9 +108,10 @@ def test_without_an_export_it_prints_the_prompt_and_failures_exit_non_zero(tmp_p
 
 def test_a_messy_split_reply_pasted_on_stdin_imports_each_thing_once(tmp_path, monkeypatch, capsys):
     """What real chat output looks like: the export split over two code blocks (the second sent
-    twice), curly quotes and a trailing comma from copying, two skills whose names slug alike and an
-    unknown time zone. Piped on stdin, it imports every routine and skill once, keeps both skills,
-    and says which routine runs in the profile's zone."""
+    twice), an example block that is not an export, curly quotes and a trailing comma from copying,
+    two skills whose names slug alike, two different routines sharing a name and an unknown time
+    zone. Piped on stdin, each routine and skill imports once, both skills stay loadable by their own
+    names, the role still lands in SOUL.md, and the job says it runs in the profile's zone."""
     import io
     home = tmp_path / ".hermes"
     bot = EXPORT["bots"][0]
@@ -121,18 +122,24 @@ def test_a_messy_split_reply_pasted_on_stdin_imports_each_thing_once(tmp_path, m
         "name": bot["name"],
         "skills": [{"name": "weekly-account-health", "instructions": "A different skill."}],
         "routines": [{"name": "Friday recap", "instruction": "Recap the week.", "trigger": "schedule",
-                      "schedule_cron": "0 16 * * 5", "timezone": "Mars/Olympus"}]}]}
+                      "schedule_cron": "0 16 * * 5", "timezone": "Mars/Olympus"},
+                     {"name": "Morning watch list", "instruction": "Check the pager.", "trigger": "schedule",
+                      "schedule_cron": "0 9 * * *"}]}]}
     messy = json.dumps(second, indent=1).replace('"Recap the week."', "\u201cRecap the week.\u201d")
     messy = messy.replace('"Mars/Olympus"', '"Mars/Olympus",')
     reply = ("Part 1:\n```json\n" + json.dumps(first) + "\n```\nPart 2:\n```json\n" + messy
-             + "\n```\nAgain, part 2:\n```json\n" + messy + "\n```\n")
+             + "\n```\nAgain, part 2:\n```json\n" + messy + "\n```\nA routine looks like:\n```json\n"
+             + '[{"name": "Example", "schedule": "7am"}]\n```\n')
     monkeypatch.setattr("sys.stdin", io.StringIO(reply))
 
     _run(["grok-bot", "--source", "-", "-y"])
 
     jobs = {j["name"]: j for j in _jobs(home)}
-    assert sorted(jobs) == ["Account Health: Friday recap", "Account Health: Morning watch list"]
+    assert sorted(jobs) == ["Account Health: Friday recap", "Account Health: Morning watch list",
+                            "Account Health: Morning watch list (2)"]
     skills = home / "skills" / "grok-bot-imports"
     assert sorted(p.name for p in skills.iterdir()) == ["weekly-account-health", "weekly-account-health-2"]
-    assert "A different skill" in (skills / "weekly-account-health-2" / "SKILL.md").read_text(encoding="utf-8")
+    second_skill = (skills / "weekly-account-health-2" / "SKILL.md").read_text(encoding="utf-8")
+    assert "A different skill" in second_skill and "name: weekly-account-health-2\n" in second_skill
+    assert "Never contact a customer" in (home / "SOUL.md").read_text(encoding="utf-8")
     assert "unknown time zone 'Mars/Olympus'" in capsys.readouterr().out

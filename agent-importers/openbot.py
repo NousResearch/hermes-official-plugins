@@ -284,8 +284,8 @@ class OpenBotImporter(GrokBotImporter):
         except (sqlite3.Error, OSError, ValueError) as exc:
             self.record("database", database, None, "error", f"Could not read OpenBot's database: {exc}")
             return []
-        for problem in self.data.problems:
-            self.record("database", database, None, "error", problem)
+        for problem in self.data.problems:  # reported; the rest of the import is still good
+            self.record("database", database, None, "skipped", problem)
         if not self.data.agents:
             self.record("agents", database, None, "skipped", "No agents in OpenBot")
         return [(database, agent) for agent in self.data.agents]

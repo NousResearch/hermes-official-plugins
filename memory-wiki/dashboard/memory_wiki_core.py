@@ -92,6 +92,16 @@ _QUOTED_PHRASE_RE = re.compile(r"[\"'“‘]([^\"'”’]{3,80})[\"'”’]")
 _SLASH_COMMAND_RE = re.compile(r"(?<!\S)/[A-Za-z][A-Za-z0-9_-]*\b")
 _TOOL_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
+# Keep Han runs intact: these are bounded literal phrases, not semantic segmentation.
+# Include Extension A and supplementary ideographs (e.g. 𠮷), as well as common Han.
+_HAN_RANGES = "\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002fa1f\U00030000-\U000323af"
+_HAN_RE = re.compile(f"[{_HAN_RANGES}]")
+_MIXED_WORD_RE = re.compile(f"[A-Za-z0-9{_HAN_RANGES}]+")
+_CHINESE_QUOTE_RE = re.compile(r"[\"'“‘「『]([^\"'”’」』]{2,80})[\"'”’」』]")
+_CHINESE_TEXT_LIMIT = 512
+_CHINESE_NAME_LIMIT = 48
+_CHINESE_CANDIDATE_LIMIT = 8
+_CHINESE_QUOTE_LIMIT = 4
 _PACKAGE_RE = re.compile(
     r"\b(?:"
     + "|".join(re.escape(name) for name in sorted(_PACKAGE_NAMES, key=len, reverse=True))
@@ -102,9 +112,14 @@ _REPO_STYLE_RE = re.compile(r"\b[a-z][a-z0-9]+(?:-[a-z0-9]+)+\b")
 
 
 def slugify_subject(name: str) -> str:
-    """Return a stable URL slug for a subject name."""
+    """Return an idempotent URL slug, retaining Han and all legacy ASCII slugs.
 
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    Unicode path segments are percent-encoded by HTTP clients. Retaining the
+    characters avoids merging unrelated Chinese names into ``subject`` (or
+    merging mixed names that happen to share the same Latin suffix).
+    """
+
+    slug = re.sub(f"[^a-z0-9{_HAN_RANGES}]+", "-", name.lower()).strip("-")
     return slug or "subject"
 
 
@@ -118,6 +133,7 @@ def extract_subject_candidates(session: dict, messages: list[dict]) -> list[Subj
     """
 
     candidates: dict[str, SubjectCandidate] = {}
+    chinese_slugs: set[str] = set()
 
     def add(name: str, *, score: int = 1, source: str = "text") -> None:
         cleaned = _clean_candidate_name(name)
@@ -126,6 +142,10 @@ def extract_subject_candidates(session: dict, messages: list[dict]) -> list[Subj
         slug = slugify_subject(cleaned)
         existing = candidates.get(slug)
         if existing is None:
+            if _HAN_RE.search(cleaned):
+                if len(chinese_slugs) >= _CHINESE_CANDIDATE_LIMIT:
+                    return
+                chinese_slugs.add(slug)
             candidates[slug] = SubjectCandidate(cleaned, slug, score, source)
         else:
             candidates[slug] = SubjectCandidate(
@@ -140,12 +160,14 @@ def extract_subject_candidates(session: dict, messages: list[dict]) -> list[Subj
         title_phrase = _keyword_phrase(title)
         if title_phrase:
             add(title_phrase, score=6, source="title")
+        _extract_chinese_quotes(title, add, base_score=4)
 
     preview = str(session.get("preview") or "")
     _extract_from_text(preview, add, base_score=2)
     preview_phrase = _keyword_phrase(preview)
     if preview_phrase:
         add(preview_phrase, score=2, source="preview")
+    _extract_chinese_quotes(preview, add, base_score=2)
 
     first_user_text_seen = False
     for message in messages:
@@ -167,11 +189,13 @@ def extract_subject_candidates(session: dict, messages: list[dict]) -> list[Subj
         content = str(message.get("content") or "")
         is_user = message.get("role") == "user"
         _extract_from_text(content, add, base_score=3 if is_user else 1)
-        if is_user and not first_user_text_seen:
+        if is_user and content.strip() and not first_user_text_seen:
             first_user_text_seen = True
             phrase = _keyword_phrase(content)
             if phrase:
                 add(phrase, score=3, source="user_phrase")
+        if is_user:
+            _extract_chinese_quotes(content, add, base_score=3)
 
     return sorted(candidates.values(), key=lambda c: (-c.score, c.name.lower()))
 
@@ -180,7 +204,9 @@ def _extract_from_text(text: str, add, *, base_score: int) -> None:
     for match in _PATH_RE.findall(text):
         add(match, score=base_score + 3, source="path")
     for match in _QUOTED_PHRASE_RE.findall(text):
-        phrase = _keyword_phrase(match)
+        # Preserve legacy English extraction for all roles. Han quotes are
+        # handled separately, only in metadata and user-authored text.
+        phrase = _keyword_phrase(match, allow_chinese=False)
         if phrase:
             add(phrase, score=base_score + 2, source="quote")
     for match in _SLASH_COMMAND_RE.findall(text):
@@ -197,7 +223,32 @@ def _extract_from_text(text: str, add, *, base_score: int) -> None:
         add(match, score=base_score + 2, source="package")
 
 
-def _keyword_phrase(text: str) -> str:
+def _extract_chinese_quotes(text: str, add, *, base_score: int) -> None:
+    """Only inspect a short prefix and a few explicit quoted Han topics."""
+    count = 0
+    for match in _CHINESE_QUOTE_RE.finditer(text[:_CHINESE_TEXT_LIMIT]):
+        if not _HAN_RE.search(match[1]):
+            continue
+        phrase = _keyword_phrase(match[1])
+        if phrase:
+            add(phrase, score=base_score + 2, source="quote")
+            count += 1
+            if count >= _CHINESE_QUOTE_LIMIT:
+                break
+
+
+def _keyword_phrase(text: str, *, allow_chinese: bool = True) -> str:
+    # No n-grams, dictionary, model, or scanning of assistant/tool/system prose.
+    # Literal Han/Latin/digit runs support the existing substring search; bound
+    # both inspected text and display length so long Chinese prompts stay small.
+    prefix = text[:_CHINESE_TEXT_LIMIT]
+    if allow_chinese and _HAN_RE.search(prefix):
+        words = [word.lower() for word in _MIXED_WORD_RE.findall(prefix)]
+        words = [word for word in words if word not in _STOPWORDS]
+        phrase = " ".join(words[:4])[:_CHINESE_NAME_LIMIT].strip()
+        return phrase if len(phrase) >= 2 else ""
+
+    # Keep the English heuristic (including hyphen aliases and score merging).
     normalized = re.sub(r"(?<=[A-Za-z0-9])[-_](?=[A-Za-z0-9])", " ", text)
     words = [word.lower() for word in _WORD_RE.findall(normalized)]
     words = [word for word in words if word not in _STOPWORDS and len(word) > 1]
@@ -215,8 +266,14 @@ def _clean_candidate_name(name: str) -> str:
     return cleaned
 
 
-def build_memory_subjects(db, *, limit: int = 100, query: str | None = None) -> list[dict]:
-    """Aggregate subject dictionaries from recent ``SessionDB`` sessions."""
+def build_memory_subjects(
+    db, *, limit: int = 100, query: str | None = None, exact_slug: str | None = None,
+) -> list[dict]:
+    """Aggregate recent subjects, optionally restricting to one normalized slug.
+
+    ``exact_slug`` is an internal detail-lookup filter applied before aggregation
+    and ranking; it does not change the session window or list query semantics.
+    """
 
     if limit <= 0:
         return []
@@ -226,6 +283,8 @@ def build_memory_subjects(db, *, limit: int = 100, query: str | None = None) -> 
     for session, messages in sessions:
         session_info = _session_info(session)
         candidates = extract_subject_candidates(session, messages)
+        if exact_slug is not None:
+            candidates = [candidate for candidate in candidates if candidate.slug == exact_slug]
         if not candidates:
             continue
         message_count = len(messages)
@@ -281,7 +340,7 @@ def get_memory_subject(db, slug: str) -> dict | None:
     """Return one aggregated memory subject by slug, or ``None``."""
 
     normalized = slugify_subject(slug)
-    for subject in build_memory_subjects(db, limit=1000):
+    for subject in build_memory_subjects(db, limit=1000, exact_slug=normalized):
         if subject["slug"] == normalized:
             return subject
     return None

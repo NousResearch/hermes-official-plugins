@@ -93,7 +93,14 @@ Bot exports itself:
    replies with one JSON code block. Nothing in Grok Bot changes. Repeat for each Bot.
 3. Download the file (or paste the Bot's whole reply into a text file) and run
    `hermes import-agent grok-bot --source <file>`. Files saved as `~/Downloads/grok-bot-export*`
-   are found without `--source`; `--source` also takes a folder of exports.
+   are found without `--source`; `--source` also takes a folder of exports, and `--source -` reads a
+   pasted reply from stdin (`pbpaste | hermes import-agent grok-bot --source - -y`).
+
+A long export may come in several parts (code blocks or files): they are merged per Bot, and a part
+sent twice adds nothing. When the Grok Bot desktop app is installed on the same computer, the importer
+reads its local cache (Bot names, and routine names from recent chats; never its login files) to list
+the Bots to export and to flag a routine a Bot created but left out of its export. The app keeps no
+routine schedules, skills or memory locally, which is why the Bot still exports itself.
 
 | Grok Bot | Hermes |
 |---|---|
@@ -113,7 +120,7 @@ until you pick a destination: `hermes cron edit <id> --deliver telegram` (or dis
 
 | Flag | Meaning |
 |---|---|
-| `--source <path>` | An export file, a pasted reply, or a folder of them |
+| `--source <path>` | An export file, a pasted reply, a folder of them, or `-` for stdin |
 | `--bot <name>` | Only this Bot from an export holding several (repeatable) |
 | `--activate-routines` | Create the cron jobs running instead of paused |
 

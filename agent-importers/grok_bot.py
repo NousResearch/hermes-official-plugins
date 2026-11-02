@@ -327,6 +327,7 @@ class GrokBotImporter(AgentImporter):
         self.items: list[dict[str, Any]] = []
         self.stripped_secrets: list[str] = []
         self._claimed_slugs: dict[str, str] = {}  # skill folder name → which skill took it this run
+        self._exported: dict[str, set[str]] = {}  # bot name (lowercase) → slugs of its exported routines
 
     def run(self) -> dict[str, Any]:
         bots = self.load_bots()
@@ -341,7 +342,22 @@ class GrokBotImporter(AgentImporter):
         return self.build_report()
 
     def import_shared(self) -> None:
-        """Items that belong to the whole source rather than one bot (none for Grok exports)."""
+        """Check the export against what the Grok Bot app on this computer caches: Bots it lists
+        that no export covered, and routines a Bot announced in its chat that its export left out
+        (a Bot can miss or skip things when it describes itself)."""
+        from .grok_bot_cache import read_cache
+        cache = read_cache()
+        missing_bots = [b for b in cache.bots if b.lower() not in self._exported]
+        if missing_bots and not self.bot_names:
+            self.record("bots", "Grok Bot app", None, "skipped",
+                        "Not in the export, export these Bots too to bring them over: " + ", ".join(missing_bots))
+        for bot, routines in cache.routines.items():
+            have = self._exported.get(bot.lower())
+            left_out = [r for r in routines if have is not None and _slug(r) not in have]
+            if left_out:
+                self.record("routine-check", f"Grok Bot app: {bot}", None, "skipped",
+                            f"{bot} created routine(s) its export did not include: {', '.join(left_out)}. "
+                            "Ask the Bot to export again, naming them")
 
     def load_bots(self) -> list[tuple[Path, dict[str, Any]]]:
         """(where it came from, normalized bot) for every bot in the sources; problems are recorded."""
@@ -362,6 +378,7 @@ class GrokBotImporter(AgentImporter):
 
     def _import_bot(self, path: Path, bot: dict[str, Any], single: bool) -> None:
         name = str(bot["name"]).strip()
+        self._exported[name.lower()] = {_slug(str(r.get("name") or "")) for r in _dicts(bot.get("routines"))}
         source = f"{path.name}: {name}"
         self._import_role(source, bot, single)
         memories = self.target_root / "memories"
@@ -605,11 +622,15 @@ def _zone_note(routine: dict[str, Any], kwargs: dict[str, Any]) -> str:
 
 def print_export_instructions(prompt_file: Optional[Path]) -> None:
     from hermes_cli.cli_output import print_header, print_info
+
+    from .grok_bot_cache import read_cache
     print()
     print_header("Step 1 — ask each Grok Bot to export itself")
     print_info("Grok Bot keeps your routines in its cloud account and has no export button, so each Bot")
     print_info("writes its own export. Open a Bot's chat, paste the message below, and send it.")
     print_info("Do this once per Bot you want to bring over. Nothing in Grok Bot is changed.")
+    if bots := read_cache().bots:
+        print_info(f"Your Bots in the Grok Bot app on this computer: {', '.join(bots)}")
     if prompt_file is not None:
         print_info(f"(The same message is saved in {prompt_file})")
     print()

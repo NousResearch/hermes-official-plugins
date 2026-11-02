@@ -143,3 +143,38 @@ def test_a_messy_split_reply_pasted_on_stdin_imports_each_thing_once(tmp_path, m
     assert "A different skill" in second_skill and "name: weekly-account-health-2\n" in second_skill
     assert "Never contact a customer" in (home / "SOUL.md").read_text(encoding="utf-8")
     assert "unknown time zone 'Mars/Olympus'" in capsys.readouterr().out
+
+
+def _cache_blob(folder: Path, slice_id: str, value) -> None:
+    import base64
+    name = base64.b32encode(slice_id.encode()).decode().rstrip("=").lower()
+    (folder / f"{name}.blob").write_text(json.dumps({"schemaVersion": 1, "value": value}), encoding="utf-8")
+
+
+def test_the_grok_bot_apps_local_cache_flags_bots_and_routines_the_export_missed(tmp_path, capsys):
+    """With the Grok Bot app installed, its cache (the app's own slice files: the Bot roster and a chat
+    that created a routine) lists the Bots to export, and after the import names a routine the
+    Bot announced but left out of its export and a Bot nobody exported. Nothing is read from login
+    files next to it."""
+    cache = tmp_path / "AppData" / "Roaming" / "Grok Bot" / "sand-client-persistence"
+    cache.mkdir(parents=True)
+    (cache.parent / "sand-secrets.json").write_text("{not json, never read")
+    account = "sand.client.slice.account.google-oauth2%7Cuser_01ABC"
+    _cache_blob(cache, f"{account}.roster.last-roster", {"rows": [
+        {"id": "b1", "name": "Account Health", "isGroup": False},
+        {"id": "b2", "name": "Drew", "isGroup": False}]})
+    _cache_blob(cache, f"{account}.transcript.replicas.b1", {"entries": [
+        {"kind": "event", "event": {"type": "automation-changed", "action": "created",
+                                    "automationId": "morning-watch-list", "automationName": "Morning watch list"}},
+        {"kind": "event", "event": {"type": "automation-changed", "action": "created",
+                                    "automationId": "routine-healthcheck", "automationName": "routine-healthcheck"}}]})
+
+    _run(["grok-bot", "--dry-run"])
+    assert "on this computer: Account Health, Drew" in capsys.readouterr().out
+
+    reply = tmp_path / "reply.json"
+    reply.write_text(json.dumps(EXPORT), encoding="utf-8")
+    _run(["grok-bot", "--source", str(reply), "-y"])
+    out = capsys.readouterr().out
+    assert "export these Bots too to bring them over: Drew" in out
+    assert "did not include: routine-healthcheck" in out and "Morning watch list." not in out

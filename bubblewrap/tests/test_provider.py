@@ -119,19 +119,9 @@ class TestDiscovery:
             monkeypatch.setenv("HERMES_NATIVE_FILE_READ", native)
         note = {s.id: s.content for s in manager.render_system_prompt_sections({})}["bubblewrap-sandbox"]
         assert "`search_files` run through this sandbox too" in note
+        assert "they share the commands' scratch directory ($TMPDIR)" in note
         assert "do not run in this sandbox" not in note
-
-    @pytest.mark.parametrize("native,bypasses", [("1", True), ("0", False)])
-    def test_legacy_core_prompt_follows_native_file_setting(self, discovered, monkeypatch, native, bypasses):
-        from tools.environments import base
-
-        manager, _provider = discovered({})
-        monkeypatch.delattr(base, "env_uses_host_filesystem")
-        monkeypatch.setenv("TERMINAL_ENV", "bubblewrap")
-        monkeypatch.setenv("HERMES_NATIVE_FILE_READ", native)
-        note = {s.id: s.content for s in manager.render_system_prompt_sections({})}["bubblewrap-sandbox"]
-        assert ("`search_files` do not run in this sandbox" in note) is bypasses
-        assert ("`search_files` run through this sandbox too" in note) is not bypasses
+        assert "HERMES_NATIVE_FILE_READ" not in note
 
     def test_bad_settings_name_the_setting(self, discovered):
         _manager, provider = discovered({"memory_mb": "lots"})

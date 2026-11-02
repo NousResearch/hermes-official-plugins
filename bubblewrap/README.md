@@ -190,17 +190,17 @@ Unset and missing variables change nothing and log nothing.
 
 ## File tools
 
-With current Hermes core, `read_file`, `write_file`, `patch` and `search_files` run through the
-sandbox even when `HERMES_NATIVE_FILE_READ` is enabled. They see the same hidden paths, read-only
-mounts and scratch directory as terminal commands. Search resolves ripgrep inside the sandbox,
-or uses the `find`/`grep` fallback when it is unavailable; it does not select Hermes's bundled
-ripgrep beneath the hidden Hermes home. File operations incur sandbox spawns, and Hermes' own
-file-safety rules still apply.
+Hermes' file tools run inside the sandbox too (Hermes 0.22.6 and later, which this plugin requires):
+they see the same hidden paths, read-only mounts and scratch directory as terminal commands.
 
-Older cores that do not support the `uses_host_filesystem` backend capability still give every
-`LocalEnvironment` subclass a host fast path. On those versions, file tools can see paths hidden
-from commands and a different scratch directory unless `HERMES_NATIVE_FILE_READ=0` is set. The
-system prompt retains that warning for older cores; update Hermes to use the capability-aware path.
+| Tool | Where it runs |
+|---|---|
+| `read_file` | In the sandbox: hidden paths do not exist, credential paths read empty. |
+| `write_file` | In the sandbox: a path outside the writable set is refused with `Read-only file system`. |
+| `patch` | In the sandbox, read and write-back alike, with the same refusal. |
+| `search_files` | In the sandbox: ripgrep is resolved there (`command -v rg`), with the `find`/`grep` fallback when it is missing; Hermes' own ripgrep under the hidden Hermes home is never used. |
+
+Each file operation costs a sandbox spawn. Hermes' own file-safety rules still apply on top.
 
 ## What it does not isolate
 

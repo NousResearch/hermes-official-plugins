@@ -196,6 +196,21 @@ class TestToolIntegration:
         assert host_file.read_text() == "hello"
         assert "hello" in read_file_tool(str(host_file), task_id=task_id)
 
+    def test_write_file_outside_the_writable_set_is_refused_by_default(self, isolated_tool, tmp_path, monkeypatch):
+        """No HERMES_NATIVE_FILE_READ set: write_file goes through the sandbox and gets its refusal."""
+        from tools.file_tools import write_file_tool
+
+        monkeypatch.delenv("HERMES_NATIVE_FILE_READ", raising=False)
+        outside = tmp_path / "outside-default"
+        outside.mkdir()
+        target = outside / "f.txt"
+        task_id = "outside-default"
+        r = json.loads(isolated_tool.terminal_tool("true", task_id=task_id))
+        assert r["exit_code"] == 0, r
+        w = json.loads(write_file_tool(str(target), "FILE-TOOL\n", task_id=task_id))
+        assert "Read-only file system" in w.get("error", ""), w
+        assert not target.exists()
+
     @pytest.mark.parametrize("native", ["1", "0"])
     def test_file_tools_use_the_sandbox_view_even_with_native_io_enabled(self, isolated_tool, work_dir, tmp_path,
                                                                        monkeypatch, native):

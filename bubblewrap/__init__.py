@@ -13,7 +13,6 @@ to and the system prompt note that tells the model where the boundary is.
 from __future__ import annotations
 
 import logging
-import os
 import shutil
 import subprocess
 import sys
@@ -40,23 +39,6 @@ def _sandbox():
     from . import sandbox
 
     return sandbox
-
-
-def _file_tools_bypass_sandbox() -> bool:
-    """Whether Hermes' file tools skip this sandbox and touch files from the Hermes process itself.
-
-    Current core consults the backend's filesystem capability, so file tools use this sandbox's
-    view even with native file I/O enabled. Older cores classify every ``LocalEnvironment`` as
-    host-backed; retain their ``HERMES_NATIVE_FILE_READ`` switch in the prompt notice.
-    """
-    try:
-        from tools.environments.base import env_uses_host_filesystem
-    except ImportError:
-        pass
-    else:
-        if not env_uses_host_filesystem(_sandbox().BubblewrapEnvironment):
-            return False
-    return os.environ.get("HERMES_NATIVE_FILE_READ", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def _terminal_env(name: str, default: str = "") -> str:
@@ -208,19 +190,10 @@ class BubblewrapProvider(TerminalEnvironmentProvider):
         else:
             writable = "nothing (the working directory is read-only under this profile)"
         network = "the host network" if profile.share_net else "no network (loopback only)"
-        if _file_tools_bypass_sandbox():
-            file_tools = (
-                "`read_file`, `write_file`, `patch` and `search_files` do not run in this sandbox: Hermes performs them "
-                "itself on the host, with the host user's permissions and its own file-safety rules, so they can read "
-                "and change paths that are hidden or read-only for commands. The scratch directory ($TMPDIR) is not "
-                "the same directory for them: a file a command writes there is not visible to `read_file`, and one "
-                "`write_file` puts there is not visible to commands, so hand files over through the working directory."
-            )
-        else:
-            file_tools = (
-                "`read_file`, `write_file`, `patch` and `search_files` run through this sandbox too, so the same paths "
-                "are hidden and read-only for them."
-            )
+        file_tools = (
+            "`read_file`, `write_file`, `patch` and `search_files` run through this sandbox too, so the same paths "
+            "are hidden and read-only for them, and they share the commands' scratch directory ($TMPDIR)."
+        )
         return (
             f"Terminal sandbox: bubblewrap, profile `{profile.name}`. Every `terminal` and `execute_code` call runs "
             f"in its own bwrap sandbox on this host with the same paths: the filesystem is read-only except {writable}; "

@@ -215,6 +215,27 @@ def stable_request_context(payload, queried):
                 if mark is not None and isinstance(previous, list) and previous:
                     previous[-1].setdefault('cache_control', mark)
                 changed = True
+        elif last.get('role') == 'system' and env is not None and isinstance(content, list) and len(content) > 1 \
+                and content[0].get('type') == 'text' and _DATE_LINE.fullmatch(content[0].get('text', '')):
+            # Native 2.1.311 on Fable sends the date line first in the same
+            # trailing system message as a per-step reminder. Moving only
+            # the date into the environment message keeps messages[1]
+            # identical on user turns and tool-result steps alike; the
+            # reminder stays trailing, where later requests never replay it.
+            date_block = content[0]
+            original = env['content']
+            target = {'type': 'text', 'text': original} if isinstance(original, str) else (original[-1] if original else {})
+            if target.get('type') == 'text' and not target['text'].endswith(date_block['text']):
+                if isinstance(original, str):
+                    env['content'] = original + '\n\n' + date_block['text']
+                else:
+                    target['text'] += '\n\n' + date_block['text']
+                del content[0]
+                mark = date_block.get('cache_control')
+                previous = messages[-2]['content'] if len(messages) > 1 else None
+                if mark is not None and isinstance(previous, list) and previous:
+                    previous[-1].setdefault('cache_control', mark)
+                changed = True
         newest = next((m for m in reversed(messages) if m.get('role') == 'user'), {})
         blocks = newest.get('content')
         if queried and any(b.get('type') != 'tool_result' for b in queried) and isinstance(blocks, list) \

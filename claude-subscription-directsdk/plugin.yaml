@@ -31,3 +31,11 @@ config_schema:
       Let Claude Code send its usage telemetry and fetch feature flags. Feature flags unlock newer
       models in the model picker; turn off to keep Claude Code quiet (the picker may then list fewer
       models).
+  block_extra_usage:
+    type: bool
+    default: false
+    label: Block paid extra usage
+    description: >-
+      Once a call reports the subscription is on paid extra usage (overage), refuse later calls
+      with a billing-style error until that window resets, so Hermes can fall back instead of
+      silently spending. Off by default; a missing rate-limit signal never blocks.

@@ -27,13 +27,13 @@ import weakref
 from types import SimpleNamespace
 
 try:
-    from .admission import Admission
+    from .admission import Admission, upstream_from_env
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
-    from .directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy
+    from .directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy, block_extra_usage, overage_blocked, record_overage
 except ImportError:
-    from admission import Admission
+    from admission import Admission, upstream_from_env
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
-    from directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy
+    from directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy, block_extra_usage, overage_blocked, record_overage
 
 
 # Hermes picks retry vs fallback from an error's status_code (main loop and auxiliary ladder alike).
@@ -763,6 +763,15 @@ class Client:
     def _create(self, request=None, **kwargs):
         # Register before preparing, so a cancel during a slow history build reaches this call.
         request = request or self._register()
+        # Opt-in quota guard (#43): a previous call reported paid extra usage and
+        # its window has not reset — refuse BEFORE spawning native, as a billing
+        # error, so Hermes takes its fallback instead of spending silently.
+        if block_extra_usage() and overage_blocked():
+            with self._lock:
+                self._requests.discard(request)
+            raise ClaudeAPIError(
+                'Subscription is on paid extra usage (block_extra_usage is on); '
+                'refusing until the window resets.', 402)
         try:
             body, manifest, names = request_body(kwargs)
             system, frames = prepare_history(kwargs.get('messages', []), names)
@@ -967,6 +976,8 @@ class Client:
                         summary = _rate_limit_summary(event)
                         if summary:
                             rate_limit = summary
+                            if summary['using_overage']:
+                                record_overage(summary['window'])
                     elif kind == 'stream_event':
                         native = event['event']
                         if native['type'] == 'message_stop':

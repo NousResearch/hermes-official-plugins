@@ -73,6 +73,22 @@ def test_pasted_export_becomes_paused_cron_jobs_skills_memories_and_soul(tmp_pat
     assert "hermes cron resume" in capsys.readouterr().out
 
 
+def test_imported_routine_delivers_to_the_configured_home_channel(tmp_path, monkeypatch):
+    """#264: with TELEGRAM_HOME_CHANNEL configured, imported jobs deliver there instead of
+    silently landing in cron/output; with no target they stay local."""
+    from hermes_cli.default_soul import DEFAULT_SOUL_MD
+    home = tmp_path / ".hermes"
+    (home / "SOUL.md").write_text(DEFAULT_SOUL_MD, encoding="utf-8")
+    reply = tmp_path / "reply.md"
+    reply.write_text("```json\n" + json.dumps(EXPORT, indent=2) + "\n```\n", encoding="utf-8")
+
+    monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", "8370408611")
+    _run(["grok-bot", "--source", str(reply), "-y"])
+
+    [job] = _jobs(home)
+    assert job["deliver"] == "telegram"
+
+
 def test_without_an_export_it_prints_the_prompt_and_failures_exit_non_zero(tmp_path, capsys):
     """Nothing to read yet: the user gets the message to paste into the Bot and nothing is written. A
     missing --source or a credential-carrying export fails the command (exit 1) and imports nothing;

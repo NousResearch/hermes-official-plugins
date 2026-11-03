@@ -335,8 +335,19 @@ def _print_routine_next_steps(report: dict[str, Any], product: str) -> None:
         for item in paused:
             print_info(f"  hermes cron resume {item.get('job_id')}    # {item.get('destination')}")
     if jobs:
-        print_info("Results land in Hermes' cron output; to have one sent to Telegram, Discord, Slack, "
-                   "...: hermes cron edit <id> --deliver <platform>")
+        for item in jobs:
+            deliver = str(item.get("deliver") or "local")
+            if deliver != "local":
+                print_info(f"  {item.get('destination')}: results are delivered to {deliver}.")
+        local = [i for i in jobs if str(i.get("deliver") or "local") == "local"]
+        if local:
+            # No delivery target: name where the output actually lands, per job (#264).
+            from hermes_constants import get_hermes_home
+            for item in local:
+                print_info(f"  {item.get('destination')}: results land in "
+                           f"{get_hermes_home() / 'cron' / 'output' / str(item.get('job_id') or '<id>')}/ — "
+                           f"to have them sent somewhere: hermes cron edit {item.get('job_id')} "
+                           f"--deliver <platform>")
 
 
 def _register_for_sync(agent: str, source_dir: Path, hermes_home: Path, overwrite: bool,

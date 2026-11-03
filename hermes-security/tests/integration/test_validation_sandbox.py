@@ -45,7 +45,7 @@ def test_timeout_kills_process_group(tmp_path):
     p=local_plan([[sys.executable,'-c',code],[sys.executable,'-c','print("SAFE")']]);p['timeoutS']=3
     r=run_local(p,target=target,workdir_parent=tmp_path)
     pids=[int(line[4:]) for line in r['outputExcerpt'].splitlines() if line.startswith('PID=')]
-    assert len(pids)==2 and r['positive']['timeout']
+    assert len(pids)==2 and r['positive']['timeout'], r
     for pid in pids:
         assert _gone(pid), pid
 
@@ -120,7 +120,7 @@ def test_timeout_output_and_redaction(tmp_path):
     target=tmp_path/'source';target.mkdir()
     p=local_plan([[sys.executable,'-c','import time;time.sleep(10)'],[sys.executable,'-c','print("SAFE")']]);p['timeoutS']=.15
     started=time.monotonic();r=run_local(p,target=target,workdir_parent=tmp_path)
-    assert time.monotonic()-started<3 and r['positive']['timeout'] and r['status']=='inconclusive' and r['cleanup']['done']
+    assert time.monotonic()-started<3 and r['positive']['timeout'] and r['status']=='inconclusive' and r['cleanup']['done'], r
     p=local_plan([[sys.executable,'-c','print("X"*100000)'],[sys.executable,'-c','print("password=never-record-me")']]);p['maxOutputBytes']=256
     r=run_local(p,target=target,workdir_parent=tmp_path)
     assert r['positive']['truncated'] and len(r['outputExcerpt'])<=4000 and 'never-record-me' not in str(r)

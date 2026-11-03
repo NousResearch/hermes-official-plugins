@@ -37,7 +37,7 @@ def test_registration_is_lazy_and_exact(tmp_path, monkeypatch):
     monkeypatch.setattr(plugin, "get_service", lambda ctx=None: (_ for _ in ()).throw(AssertionError("eager service")))
     ctx = FakeContext(tmp_path)
     plugin.register(ctx)
-    manifest = json.loads((Path(__file__).parents[2] / "plugin.yaml").read_text())
+    manifest = json.loads((Path(__file__).parents[2] / "plugin.yaml").read_text(encoding='utf-8'))
     assert set(ctx.tools) == set(manifest["provides_tools"])
     assert len(ctx.tools) == 9
     for name, (toolset, schema, handler) in ctx.tools.items():

@@ -12,7 +12,7 @@ from hermes_security.reports import finalize_bundle, verify_bundle, render_markd
 
 
 def inputs() -> dict:
-    f = json.loads((Path(__file__).parents[1] / 'fixtures/reports/invoice.json').read_text())
+    f = json.loads((Path(__file__).parents[1] / 'fixtures/reports/invoice.json').read_text(encoding='utf-8'))
     f['codeEvidence'][0]['sha256'] = sha256_hex(f['codeEvidence'][0]['code'])
     scan = 'scan_' + '1' * 24
     def doc(kind, **kw):
@@ -50,7 +50,7 @@ def test_verify_tamper(tmp_path, mutation):
         (tmp_path/'report.md').write_text('changed')
     elif mutation == 'manifest':
         p = tmp_path/'scan-manifest.json'
-        m = json.loads(p.read_text()); m['target']['root'] = '/other'; p.write_text(json.dumps(m))
+        m = json.loads(p.read_text(encoding='utf-8')); m['target']['root'] = '/other'; p.write_text(json.dumps(m))
     elif mutation == 'missing':
         (tmp_path/'coverage.json').unlink()
     elif mutation == 'extra':

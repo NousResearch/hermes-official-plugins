@@ -106,7 +106,7 @@ def test_prompt_injection_is_data_not_workflow(hostile, tmp_path):
     assert service.get_scan(plan['scanId'])['safety_level'] == 'static'
     final = partial_bundle(service, plan)
     assert INJECTION not in service.export(plan['scanId'], 'md')['content']
-    assert INJECTION not in (Path(final['artifactDir']) / 'findings.json').read_text()
+    assert INJECTION not in (Path(final['artifactDir']) / 'findings.json').read_text(encoding='utf-8')
     assert not (root / 'OWNED').exists()
 
 
@@ -158,7 +158,7 @@ def test_hardlinks_remain_read_only_and_are_recorded(hostile, tmp_path):
     entry = next(x for x in service.store.inventory(plan['scanId']) if x['path'] == 'linked.py')
     assert 'nlink=2' in entry['notes']
     partial_bundle(service, plan)
-    assert outside.read_text() == 'outside_value = 123\n'
+    assert outside.read_text(encoding='utf-8') == 'outside_value = 123\n'
 
 
 def test_symlink_swap_between_inventory_and_excerpt_rejected(hostile, tmp_path, monkeypatch):
@@ -193,7 +193,7 @@ def test_hardlink_swap_cannot_forge_snapshot_evidence(hostile, tmp_path, monkeyp
     outside.write_text('forged_first_line\nforged_second_line\n')
     plan = service.start_scan(path=str(root))
     c = candidate_for(root)
-    c['codeEvidence'][0]['code'] = outside.read_text()
+    c['codeEvidence'][0]['code'] = outside.read_text(encoding='utf-8')
     original = target.verify_excerpt
     saved = (root / 'app.py').read_bytes()
     def swapped(*args, **kwargs):

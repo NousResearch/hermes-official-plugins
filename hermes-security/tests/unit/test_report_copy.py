@@ -15,7 +15,7 @@ def test_banned_copy():
 
 
 def test_titles_for_three_readers():
-    fixtures = json.loads((Path(__file__).parents[1] / 'fixtures/reports/copy-readers.json').read_text())
+    fixtures = json.loads((Path(__file__).parents[1] / 'fixtures/reports/copy-readers.json').read_text(encoding='utf-8'))
     assert {f['reader'] for f in fixtures} == {'developer', 'security-engineer', 'non-security'}
     for fixture in fixtures:
         assert title_quality(fixture['good']) == []

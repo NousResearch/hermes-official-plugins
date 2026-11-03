@@ -380,6 +380,19 @@ def current_user_sid():
     return _SID
 
 
+# Windows prints a few well-known account SIDs as two-letter SDDL aliases
+# (the built-in Administrator, RID 500, is "LA"), so a DACL read back from disk
+# never string-matches one built from the full SID.
+_SDDL_RID_ALIASES = {'500': 'LA', '501': 'LG'}
+
+
+def normalize_sddl(sddl):
+    """Spell the current user's SID in full where Windows printed its alias."""
+    sid = current_user_sid()
+    alias = _SDDL_RID_ALIASES.get(sid.rsplit('-', 1)[-1])
+    return sddl.replace(f';;;{alias})', f';;;{sid})') if alias else sddl
+
+
 def private_sddl(directory):
     inherit = 'OICI' if directory else ''
     sid = current_user_sid()
@@ -408,7 +421,7 @@ def make_private(handle, *, directory):
     with _open(handle, '', WRITE_DAC | READ_CONTROL, FILE_OPEN, 0, allow_empty=True) as h:
         # Already exactly private: skip, since SetSecurityInfo re-propagates to
         # every child and repeated calls would grow with the scan directory.
-        if _handle_sddl(h).replace('D:PAI', 'D:P') == private_sddl(directory):
+        if normalize_sddl(_handle_sddl(h)).replace('D:PAI', 'D:P') == private_sddl(directory):
             return
         sd = ctypes.c_void_p()
         if not ConvertStringSecurityDescriptorToSecurityDescriptorW(private_sddl(directory), 1, ctypes.byref(sd), None):

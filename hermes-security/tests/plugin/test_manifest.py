@@ -17,7 +17,7 @@ TOOLS = {
 
 def test_manifest_identity_and_tools():
     # JSON is a YAML subset: keep this contract independent of a YAML package.
-    manifest = json.loads((ROOT / "plugin.yaml").read_text())
+    manifest = json.loads((ROOT / "plugin.yaml").read_text(encoding='utf-8'))
     assert manifest["name"] == "hermes-security"
     assert manifest["version"] == "0.1.0"
     assert manifest["license"] == "Apache-2.0"
@@ -28,12 +28,12 @@ def test_manifest_identity_and_tools():
 
 
 def test_product_brand_and_license():
-    manifest = (ROOT / "plugin.yaml").read_text().lower()
-    title = (ROOT / "README.md").read_text().splitlines()[0].lower()
+    manifest = (ROOT / "plugin.yaml").read_text(encoding='utf-8').lower()
+    title = (ROOT / "README.md").read_text(encoding='utf-8').splitlines()[0].lower()
     for brand in ("openai", "codex"):
         assert brand not in manifest
         assert brand not in title
-    license_text = (ROOT / "LICENSE").read_text()
+    license_text = (ROOT / "LICENSE").read_text(encoding='utf-8')
     assert "Apache License" in license_text
     assert "Version 2.0, January 2004" in license_text
     assert "END OF TERMS AND CONDITIONS" in license_text
@@ -41,7 +41,7 @@ def test_product_brand_and_license():
 
 
 def test_provenance_pins_and_entries():
-    provenance = json.loads((ROOT / "UPSTREAM_PROVENANCE.json").read_text())
+    provenance = json.loads((ROOT / "UPSTREAM_PROVENANCE.json").read_text(encoding='utf-8'))
     assert provenance["upstream"] == {
         "repository": "https://github.com/openai/codex-security",
         "commit": "89aae242136312467790947f3b122ca3f607614f",

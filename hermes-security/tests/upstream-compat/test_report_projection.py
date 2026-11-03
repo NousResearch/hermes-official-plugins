@@ -7,7 +7,7 @@ from hermes_security.reports import render_markdown
 
 
 def test_imported_upstream_sections_map_without_report_parsing():
-    f = json.loads((Path(__file__).parents[1] / 'fixtures/reports/imported-finding.json').read_text())
+    f = json.loads((Path(__file__).parents[1] / 'fixtures/reports/imported-finding.json').read_text(encoding='utf-8'))
     manifest = {'target': {'root': '/example/app', 'revision': 'abcdef'}, 'status': 'partial'}
     coverage = {'completeness': 'partial', 'gaps': ['Proxy policy is unavailable.']}
     findings = {'findings': [f]}

@@ -8,7 +8,7 @@ from hermes_security.domain.identities import finding_id
 SID = 'scan_' + 'a' * 24
 
 def raw():
-    return json.loads((Path(__file__).parents[1] / 'fixtures/domain/candidate.json').read_text())
+    return json.loads((Path(__file__).parents[1] / 'fixtures/domain/candidate.json').read_text(encoding='utf-8'))
 
 def test_normalize_and_promote():
     original = raw()

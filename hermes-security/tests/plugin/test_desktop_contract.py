@@ -6,7 +6,7 @@ SOURCE = Path(__file__).resolve().parents[2] / 'desktop' / 'plugin.js'
 
 
 def test_sdk_imports_and_registration():
-    text = SOURCE.read_text()
+    text = SOURCE.read_text(encoding='utf-8')
     imports = re.findall(r"from\s+['\"]([^'\"]+)", text)
     assert set(imports) <= {'@hermes/plugin-sdk', 'react', 'react/jsx-runtime'}
     assert '@hermes/plugin-sdk' in imports
@@ -19,7 +19,7 @@ def test_sdk_imports_and_registration():
 
 
 def test_theme_safety_and_interactions():
-    text = SOURCE.read_text()
+    text = SOURCE.read_text(encoding='utf-8')
     assert not re.search(r'#[0-9a-fA-F]{3,8}\b|\brgba?\(|gradient\(', text)
     assert not re.search(r'codex|openai', text, re.I)
     assert not re.search(r"type:\s*['\"]file['\"]|showOpenDialog|showDirectoryPicker", text)
@@ -29,7 +29,7 @@ def test_theme_safety_and_interactions():
 
 
 def test_backend_route_builders_are_bounded():
-    text = SOURCE.read_text()
+    text = SOURCE.read_text(encoding='utf-8')
     # Every REST call passes through the one route-checked request helper.
     assert text.count('pluginCtx.rest(') == 1
     for path in ['/scans', '/findings', '/repositories', '/folders', '/exports/']:
@@ -41,7 +41,7 @@ def test_backend_route_builders_are_bounded():
 
 
 def _css_rule(selector):
-    text = SOURCE.read_text()
+    text = SOURCE.read_text(encoding='utf-8')
     match = re.search(re.escape(selector) + r'\{([^}]+)\}', text)
     assert match, f'Missing state rule: {selector}'
     return match.group(1)
@@ -55,7 +55,7 @@ def test_shared_dropdown_chevrons_follow_real_menu_state():
 def test_native_dropdown_chevrons_follow_popup_state_not_focus():
     assert 'translateY(-50%) rotate(-90deg)' in _css_rule('.hs-select-chevron')
     assert 'translateY(-50%) rotate(0deg)' in _css_rule('.hs-native-select:open+.hs-select-chevron')
-    text = SOURCE.read_text()
+    text = SOURCE.read_text(encoding='utf-8')
     assert not re.search(r'[^{}]*:focus[^{}]*\{[^}]*rotate\(', text)
     # Every filter, triage and setup select must go through the same component.
     assert len(re.findall(r"(?:jsx|jsxs)\('select',", text)) == 1

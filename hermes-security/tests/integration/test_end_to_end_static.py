@@ -11,14 +11,14 @@ from hermes_security.canonical import sha256_hex
 
 
 def candidate_for(root):
-    candidate = json.loads((Path(__file__).parents[1] / 'fixtures/reports/invoice.json').read_text())
+    candidate = json.loads((Path(__file__).parents[1] / 'fixtures/reports/invoice.json').read_text(encoding='utf-8'))
     for key in ('findingId', 'occurrenceId', 'fingerprints'):
         candidate.pop(key)
     candidate['evidenceState'] = 'candidate'
     candidate['identity'] = {'anchor': 'app.py/get_invoice'}
     candidate['locations'] = [{'path': 'app.py', 'startLine': 1, 'endLine': 2, 'role': 'sink'}]
     candidate['codeEvidence'] = [{'id': 'ev-1', 'label': 'Unscoped query', 'path': 'app.py', 'startLine': 1, 'endLine': 2,
-                                 'code': ''.join((root / 'app.py').read_text().splitlines(keepends=True)[:2]),
+                                 'code': ''.join((root / 'app.py').read_text(encoding='utf-8').splitlines(keepends=True)[:2]),
                                  'sha256': '0' * 64, 'explanation': 'Invoice selection omits a tenant constraint.'}]
     candidate['validation'] = {'status': 'NOT_RUN', 'level': 'static', 'receiptIds': [], 'summary': 'Source review; runtime NOT RUN.'}
     return candidate

@@ -317,6 +317,19 @@ def _print_banner() -> None:
     print(_color("└─────────────────────────────────────────────────────────┘", "magenta"))
 
 
+def _cron_command(verb: str, job_id: Any) -> str:
+    """The cron command line for the profile this import targeted. The import runs under the
+    target profile's home; the printed hint is usually pasted into a shell sitting on the
+    default profile, where a bare ``hermes cron resume <id>`` finds no such job (#265)."""
+    from hermes_constants import get_hermes_home, profile_name_for_home
+    try:
+        profile = profile_name_for_home(get_hermes_home())
+    except Exception:
+        profile = None
+    selector = f"-p {profile} " if profile and profile != "default" else ""
+    return f"hermes {selector}cron {verb} {job_id}"
+
+
 def _print_routine_next_steps(report: dict[str, Any], product: str) -> None:
     """Grok and OpenBot imports are one-off (not sync sources); say how to switch the routines over."""
     from hermes_cli.cli_output import print_info
@@ -327,10 +340,10 @@ def _print_routine_next_steps(report: dict[str, Any], product: str) -> None:
         print_info(f"{len(paused)} routine(s) were created PAUSED so they don't run twice. Once you turn "
                    f"the routine off in {product}, resume its copy here:")
         for item in paused:
-            print_info(f"  hermes cron resume {item.get('job_id')}    # {item.get('destination')}")
+            print_info(f"  {_cron_command('resume', item.get('job_id'))}    # {item.get('destination')}")
     if jobs:
         print_info("Results land in Hermes' cron output; to have one sent to Telegram, Discord, Slack, "
-                   "...: hermes cron edit <id> --deliver <platform>")
+                   f"...: {_cron_command('edit', '<id>')} --deliver <platform>")
 
 
 def _register_for_sync(agent: str, source_dir: Path, hermes_home: Path, overwrite: bool,

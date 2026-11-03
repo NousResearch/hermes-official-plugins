@@ -19,8 +19,31 @@ from typing import Any, Mapping, Optional, Sequence
 
 # Entry delimiter of the Hermes memory store (memories/MEMORY.md, as MemoryStore writes it).
 ENTRY_DELIMITER = "\n§\n"
-# Character budget for merged memory files.
-MEMORY_CHAR_LIMIT = 20_000
+# Fallback char budget when the live config cannot be read. It MUST match the memory tool's own
+# default (2200), never the old hardcoded 20_000 — see _memory_char_limit below (issue #148472).
+_MEMORY_CHAR_LIMIT_FALLBACK = 2200
+
+
+def _memory_char_limit() -> int:
+    """Live character budget for merged memory files (config ``memory.memory_char_limit``).
+
+    The merge must honor the budget the memory tool actually enforces: import against a larger
+    hardcoded one and the resulting store exceeds what MemoryStore accepts, leaving the imported
+    home with a memory file the tool then refuses to touch (issue #148472). The config is read
+    through the raw (seed-free) path and handed to ``get_builtin_memory_config`` explicitly —
+    its zero-arg form loads config, which materializes a missing home (SOUL.md, dirs), a write
+    even in ``--dry-run``. When the config (or core itself) is unreadable, fall back to the
+    store's own default — never a larger budget.
+    """
+    try:
+        from hermes_cli.config import read_raw_config_readonly
+        from tools.memory_tool import get_builtin_memory_config
+        return int(get_builtin_memory_config(read_raw_config_readonly()).get(
+            "memory_char_limit", _MEMORY_CHAR_LIMIT_FALLBACK))
+    except Exception:
+        return _MEMORY_CHAR_LIMIT_FALLBACK
+
+
 SUPPORTED_AGENTS = ("claude-code", "codex", "cursor")
 AGENT_DEFAULT_DIRS = {"claude-code": ".claude", "codex": ".codex", "cursor": ".cursor"}
 _SKILL_CATEGORY = {"claude-code": "claude-code-imports", "codex": "codex-imports",
@@ -444,7 +467,7 @@ class AgentImporter:
         """Merge ``incoming`` entries into the memory store file ``destination`` (deduplicated,
         within the char budget), backing the old file up first."""
         existing = parse_existing_memory_entries(destination)
-        merged, stats = merge_entries(existing, incoming, MEMORY_CHAR_LIMIT)
+        merged, stats = merge_entries(existing, incoming, _memory_char_limit())
         details = {"existing_entries": stats["existing"], "added_entries": stats["added"],
                    "duplicate_entries": stats["duplicates"],
                    "overflowed_entries": stats["overflowed"]}

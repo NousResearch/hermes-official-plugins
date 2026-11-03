@@ -106,6 +106,35 @@ def _load_cursors() -> Dict[str, str]:
     return {str(k): str(v) for k, v in data.items() if str(v)}
 
 
+def _conversations_path() -> Path:
+    return _state_dir() / "conversations.json"
+
+
+def _load_conversation_ids() -> List[str]:
+    """Conversation ids this account has been seen in, persisted across restarts.
+
+    The conversation LIST endpoint carries its own daily budget, separate from
+    the events endpoint. If every id lives only in memory, a restart while the
+    list budget is spent leaves the adapter with nothing to poll — connected,
+    valid token, no inbound — even though events would still answer (#228)."""
+    try:
+        data = json.loads(_conversations_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [str(c) for c in data if str(c).strip()] if isinstance(data, list) else []
+
+
+def _save_conversation_ids(conversation_ids) -> None:
+    try:
+        path = _conversations_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(sorted(conversation_ids)) + "\n", encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        logger.debug("[xchat] conversation-id persist failed", exc_info=True)
+
+
 def _conv_key(conversation_id: str) -> str:
     """One cache key per conversation: events embed ``A:B``, URL paths and listings use ``A-B``."""
     return str(conversation_id).replace(":", "-")
@@ -291,7 +320,7 @@ class XChatAdapter(BasePlatformAdapter):
         # (~/.hermes/xchat/cursors.json) — they are the primary duplicate /
         # backlog guard; the in-memory dedup set is only a same-session
         # safety net (echo suppression of our own sends).
-        self._conversations: Set[str] = set(self._pinned_conversations)
+        self._conversations: Set[str] = set(self._pinned_conversations) | set(_load_conversation_ids())
         # Conversations that appeared after the first discovery pass: no backlog to skip.
         self._initial_discovery_done = False
         self._live_conversations: Set[str] = set()
@@ -455,7 +484,15 @@ class XChatAdapter(BasePlatformAdapter):
                 # anything newer than our cursor; only those get an events read. Events
                 # are billed per resource returned, so re-reading idle conversations
                 # every cycle is the dominant cost.
-                newest = await self._discover_conversations()
+                # The list and events endpoints carry SEPARATE daily budgets: a spent
+                # list budget must not stop inbound while events would still answer.
+                # Degrade to polling the conversations we already know (#228); only an
+                # events-side throttle reaches the rate-limit sleep below.
+                try:
+                    newest = await self._discover_conversations()
+                except XChatRateLimited:
+                    logger.warning("[xchat] conversation list throttled — polling known conversations")
+                    newest = {}
                 for conv_id in list(self._conversations):
                     if not self._running:
                         return
@@ -500,6 +537,7 @@ class XChatAdapter(BasePlatformAdapter):
         new = found - self._conversations
         if new:
             logger.info("[xchat] discovered %d new conversation(s)", len(new))
+            _save_conversation_ids(found | self._conversations)
             if self._initial_discovery_done:
                 # Started after we were already watching: every event is a live message.
                 self._live_conversations |= new

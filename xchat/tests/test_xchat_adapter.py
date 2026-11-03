@@ -546,6 +546,43 @@ async def test_discovery_adds_conversations(monkeypatch):
     assert adapter._conversations == {"111-222", "g333"}
 
 
+def test_conversation_ids_persist_across_restarts(monkeypatch):
+    """#228: known ids land on disk at discovery and seed the next adapter, so a restart
+    while the list budget is spent still has conversations to poll."""
+    adapter = _make_adapter(monkeypatch)
+    api, _ = _wire(adapter)
+    api.conversations = ["111-222"]
+    asyncio.run(adapter._discover_conversations())
+
+    fresh = _make_adapter(monkeypatch)
+    assert "111-222" in fresh._conversations
+
+
+@pytest.mark.asyncio
+async def test_list_throttle_degrades_to_known_conversations(monkeypatch):
+    """#228: list and events carry separate budgets — a throttled list read skips
+    discovery for the cycle instead of ending all inbound polling."""
+    adapter = _make_adapter(monkeypatch)
+    api, _ = _wire(adapter)
+    adapter._conversations = {"111-222"}
+    adapter._cursors = {"111-222": "e1"}
+    adapter._running = True
+
+    async def throttled(**_kw):
+        raise xchat_adapter.XChatRateLimited("list budget spent", None)
+
+    monkeypatch.setattr(api, "get_conversations", throttled, raising=False)
+    polled: list[str] = []
+
+    async def _poll(conv_id):
+        polled.append(conv_id)
+        adapter._running = False
+
+    adapter._poll_conversation = _poll
+    await adapter._run_poll_loop()
+    assert polled == ["111-222"]
+
+
 def test_dedup_prune_bounds_memory(monkeypatch):
     adapter = _make_adapter(monkeypatch)
     now = time.time()

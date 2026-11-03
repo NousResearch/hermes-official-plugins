@@ -27,6 +27,10 @@ Settings live in ``delegation.backends.model_map`` of config.yaml::
 entry's route; a task without one runs on ``default`` when set, else on the parent's own route
 (in this mode ``delegation.model`` / ``delegation.provider`` are inactive). The raw
 provider/model/endpoint/key never become model-facing parameters.
+
+An entry may instead name a ``profile`` (optionally with a ``model`` override): the subagent then
+runs as that profile — its own credentials, containment and defaults — so one ``model_map`` can
+span providers with different auth without a throwaway profile per model.
 """
 
 from __future__ import annotations
@@ -42,7 +46,10 @@ BACKEND = "model_map"
 SETTINGS_PATH = f"delegation.backends.{BACKEND}"
 PARAMETER = "option"
 #: Entry keys copied into the route (same meaning as the matching core route fields).
-ROUTE_FIELDS = ("provider", "model", "base_url", "api_key", "api_mode", "reasoning_effort", "service_tier")
+#: ``profile`` lets an option resolve to a profile route instead of a bare model+provider
+#: (core's route keys already accept it): the named profile's own credentials, model and
+#: containment apply, so one model_map can span providers with different auth (#260).
+ROUTE_FIELDS = ("provider", "model", "base_url", "api_key", "api_mode", "reasoning_effort", "service_tier", "profile")
 _warned: set[str] = set()
 
 
@@ -64,6 +71,9 @@ def _entry_problem(entry: Any) -> str:
         return "is not a mapping"
     if not _text(entry, "name") or not _text(entry, "description"):
         return "needs a name and a description"
+    if _text(entry, "profile"):
+        # A profile route: the profile supplies its own provider/model unless overridden.
+        return ""
     if not _text(entry, "model"):
         return "needs a model"
     if not (_text(entry, "provider") or _text(entry, "base_url")):

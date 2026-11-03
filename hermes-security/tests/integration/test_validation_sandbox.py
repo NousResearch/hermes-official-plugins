@@ -45,7 +45,8 @@ def test_timeout_kills_process_group(tmp_path):
     p=local_plan([[sys.executable,'-c',code],[sys.executable,'-c','print("SAFE")']]);p['timeoutS']=3
     r=run_local(p,target=target,workdir_parent=tmp_path)
     pids=[int(line[4:]) for line in r['outputExcerpt'].splitlines() if line.startswith('PID=')]
-    assert len(pids)==2 and r['positive']['timeout'], r
+    if not (len(pids)==2 and r['positive']['timeout']):
+        import json; pytest.fail(json.dumps(r, default=str, indent=1))
     for pid in pids:
         assert _gone(pid), pid
 

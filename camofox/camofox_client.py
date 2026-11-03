@@ -338,13 +338,18 @@ def resync_tab(session: dict[str, Any]) -> bool:
     return bool(mine)
 
 
-def ensure_tab(task_id: Optional[str], url: str = "about:blank") -> dict[str, Any]:
-    """The task's session with a tab, creating one at ``url`` if needed."""
+def ensure_tab(task_id: Optional[str], url: str = "about:blank") -> tuple[dict[str, Any], dict]:
+    """The task's session with a tab, creating one at ``url`` if needed.
+
+    Returns ``(session, created)`` — ``created`` is the server's own ``POST /tabs`` payload
+    (which navigates the new tab and reports the landed URL), or ``{}`` when the tab already
+    existed. Never fabricate a success the server did not report."""
     session = get_session(task_id)
     if not session["tab_id"]:
         data = post("/tabs", {"userId": session["user_id"], "listItemId": session["session_key"], "url": url})
         session["tab_id"] = data.get("tabId")
-    return session
+        return session, data
+    return session, {}
 
 
 def drop_session(task_id: Optional[str]) -> Optional[dict[str, Any]]:

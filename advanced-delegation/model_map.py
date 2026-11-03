@@ -40,6 +40,10 @@ plain route and a Daybreak route. Core's other Daybreak rules still hold: the ro
 ``openai-codex``, the account's Codex catalog must list Daybreak for the model, and the delegating
 session must be one of the owner's own surfaces (CLI, TUI, Desktop). Otherwise the task is refused,
 never run without the program.
+
+An entry may instead name a ``profile`` (optionally with a ``model`` override): the subagent then
+runs as that profile — its own credentials, containment and defaults — so one ``model_map`` can
+span providers with different auth without a throwaway profile per model.
 """
 
 from __future__ import annotations
@@ -55,7 +59,10 @@ BACKEND = "model_map"
 SETTINGS_PATH = f"delegation.backends.{BACKEND}"
 PARAMETER = "option"
 #: Entry keys copied into the route (same meaning as the matching core route fields).
-ROUTE_FIELDS = ("provider", "model", "base_url", "api_key", "api_mode", "reasoning_effort", "service_tier")
+#: ``profile`` lets an option resolve to a profile route instead of a bare model+provider
+#: (core's route keys already accept it): the named profile's own credentials, model and
+#: containment apply, so one model_map can span providers with different auth (#260).
+ROUTE_FIELDS = ("provider", "model", "base_url", "api_key", "api_mode", "reasoning_effort", "service_tier", "profile")
 DAYBREAK_KEY = "daybreak"
 _warned: set[str] = set()
 
@@ -78,13 +85,18 @@ def _entry_problem(entry: Any) -> str:
         return "is not a mapping"
     if not _text(entry, "name") or not _text(entry, "description"):
         return "needs a name and a description"
+    daybreak = entry.get(DAYBREAK_KEY)
+    if daybreak not in (None, True, False):
+        return f"has {DAYBREAK_KEY}: {daybreak!r}; use true or false"
+    if _text(entry, "profile"):
+        # A profile route: the profile supplies its own provider/model unless overridden.
+        if daybreak is True:
+            return f"sets {DAYBREAK_KEY}: true, which needs a bare provider/model route, not a profile"
+        return ""
     if not _text(entry, "model"):
         return "needs a model"
     if not (_text(entry, "provider") or _text(entry, "base_url")):
         return "needs a provider or a base_url"
-    daybreak = entry.get(DAYBREAK_KEY)
-    if daybreak not in (None, True, False):
-        return f"has {DAYBREAK_KEY}: {daybreak!r}; use true or false"
     if daybreak is True and not _is_codex(_text(entry, "provider")):
         return f"sets {DAYBREAK_KEY}: true, which needs provider: openai-codex"
     return ""

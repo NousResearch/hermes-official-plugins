@@ -38,6 +38,19 @@ def test_name_matches_the_backend_value_and_the_settings_key(provider):
     assert provider.settings(_config(options=OPTIONS)) == {"options": OPTIONS}
 
 
+def test_option_may_resolve_to_a_profile_route(provider):
+    """#260: an entry naming a profile resolves to that profile (its own credentials and
+    containment), optionally with a model override; no provider/model is required."""
+    config = _config(options=[
+        {"name": "code", "description": "Contained frontier coder.", "profile": "coder"},
+        {"name": "code-big", "description": "Same profile, bigger model.", "profile": "coder",
+         "model": "frontier-large"},
+    ])
+    assert provider.route_task({"option": "code", "index": 0}, config) == {"profile": "coder", "label": "code"}
+    assert provider.route_task({"option": "code-big", "index": 0}, config) == {
+        "profile": "coder", "model": "frontier-large", "label": "code-big"}
+
+
 def test_option_parameter_is_an_enum_of_names_with_their_descriptions(provider):
     config = _config(options=OPTIONS)
     params = provider.task_parameters(config)

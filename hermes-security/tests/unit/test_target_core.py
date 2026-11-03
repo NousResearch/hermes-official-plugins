@@ -87,7 +87,11 @@ def test_hostile_files(tmp_path):
         (tmp_path / 'inside').symlink_to(tmp_path / 'a')
         (tmp_path / 'outside').symlink_to('/etc/passwd')
         os.mkfifo(tmp_path / 'fifo')
-        fd = os.open(os.fsencode(tmp_path) + b'/bad\xff', os.O_CREAT | os.O_WRONLY, 0o600); os.close(fd)
+        try:
+            fd = os.open(os.fsencode(tmp_path) + b'/bad\xff', os.O_CREAT | os.O_WRONLY, 0o600); os.close(fd)
+            bad_name = True
+        except OSError:  # APFS (macOS) refuses file names that are not valid UTF-8
+            bad_name = False
     (tmp_path / 'big').write_bytes(b'x' * 100)
     inv = build_inventory(resolve_target(str(tmp_path)), max_file_bytes=20)
     reasons = {e['path']: e['reason'] for e in inv['excluded']}
@@ -95,7 +99,8 @@ def test_hostile_files(tmp_path):
     assert reasons['big'] == 'too_large'
     if sys.platform != 'win32':
         assert reasons['fifo'] == 'not_regular'
-    assert 'invalid_encoding' in reasons.values()
+    if sys.platform == 'win32' or bad_name:
+        assert 'invalid_encoding' in reasons.values()
 
 
 def test_git_ignore_submodule_and_diff(repo):

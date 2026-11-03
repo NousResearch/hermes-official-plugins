@@ -8,7 +8,7 @@ from hermes_security.domain.models import promote_to_finding
 SID = 'scan_' + 'a' * 24
 
 def raw():
-    return json.loads((Path(__file__).parents[1] / 'fixtures/domain/candidate.json').read_text())
+    return json.loads((Path(__file__).parents[1] / 'fixtures/domain/candidate.json').read_text(encoding='utf-8'))
 
 def worker():
     return {'scanId':SID,'attemptId':'att_a','workerRole':'baseline','snapshotDigest':'sha256:'+'a'*64,'methodologyVersion':'hermes-security/method-1','packetId':None,'candidates':[raw()],'coverage':[],'negativeResults':[],'notes':''}
@@ -82,7 +82,7 @@ def test_schema_documents_use_2020_12_and_closed_objects():
     schemas=list(path.glob('*.schema.json'))
     assert len(schemas)==6
     for p in schemas:
-        s=json.loads(p.read_text())
+        s=json.loads(p.read_text(encoding='utf-8'))
         assert s['$schema'].endswith('/2020-12/schema')
         assert s['additionalProperties'] is False
         assert (s['$comment'].startswith('Modified from Apache-2.0 source')

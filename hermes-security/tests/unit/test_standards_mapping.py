@@ -141,7 +141,7 @@ def test_finding_contradicts_not_applicable_not_silently_clean():
 
 def test_exceptional_case_checklist_and_conflict_order_independence():
     profile = (Path(__file__).resolve().parents[2] /
-               'references/specialist-profiles/exceptional-conditions.md').read_text().lower()
+               'references/specialist-profiles/exceptional-conditions.md').read_text(encoding='utf-8').lower()
     for case in ('fail-open auth', 'partial writes', 'timeout defaults', 'rollback gaps',
                  'retry duplication', 'resource exhaustion'):
         assert case in profile

@@ -5,7 +5,7 @@ SOURCE = Path(__file__).resolve().parents[2] / 'desktop' / 'plugin.js'
 
 
 def test_plain_evidence_labels():
-    text = SOURCE.read_text()
+    text = SOURCE.read_text(encoding='utf-8')
     pairs = {
         'candidate': 'Needs review',
         'source_supported': 'Supported by code',
@@ -20,13 +20,13 @@ def test_plain_evidence_labels():
 
 
 def test_no_marketing_or_ambiguous_validation_copy():
-    text = SOURCE.read_text().lower()
+    text = SOURCE.read_text(encoding='utf-8').lower()
     for banned in ['comprehensive', 'robust', 'seamless', 'delve', 'critical insight', 'security posture', 'validation: recorded']:
         assert banned not in text
 
 
 def test_distinct_sections_and_evidence_limitations():
-    text = SOURCE.read_text()
+    text = SOURCE.read_text(encoding='utf-8')
     for section in ['What’s wrong', 'How it could be abused', 'Why it happens', 'Evidence', 'How to fix it', 'Coverage']:
         assert f"title: '{section}'" in text
     assert 'High confidence was recorded without a code excerpt' in text

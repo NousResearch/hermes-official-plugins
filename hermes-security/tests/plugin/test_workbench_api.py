@@ -158,7 +158,9 @@ def test_scan_actions_policy_and_events(api, tmp_path, monkeypatch):
         response = client.post(PREFIX + '/scans/' + sid + '/' + action)
         assert response.status_code == 200
         assert response.json()['status'] == status
-        assert response.json() == client.get(PREFIX + '/scans/' + sid).json()
+        # A running scan's timing is live (durationSeconds can tick between the two reads).
+        live = {k: v for k, v in client.get(PREFIX + '/scans/' + sid).json().items() if k != 'timing'}
+        assert {k: v for k, v in response.json().items() if k != 'timing'} == live
     assert events == [('hermes-security', 'scan.updated', {'scanId': sid})] * 3
     rows = client.get(PREFIX + '/scans/' + sid + '/activity', params={'limit': 1}).json()['items']
     assert len(rows) == 1
@@ -509,7 +511,7 @@ def test_dashboard_http_grant_runs_bounded_agent_plan(api, tmp_path):
 
 
 def test_manifest_contract():
-    manifest = json.loads((ROOT / 'dashboard/manifest.json').read_text())
+    manifest = json.loads((ROOT / 'dashboard/manifest.json').read_text(encoding='utf-8'))
     assert manifest['name'] == 'hermes-security' and manifest['api'] == 'plugin_api.py'
 
 

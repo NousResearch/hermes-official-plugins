@@ -20,7 +20,7 @@ def test_real_upstream_bundle_is_loss_preserving():
     for filename,doc in result.items():
         assert validate_document(doc['documentType'],doc)==[]
         if filename != 'chains.json':
-            assert doc['provenance']['upstream'] == json.loads((UPSTREAM/filename).read_text())
+            assert doc['provenance']['upstream'] == json.loads((UPSTREAM/filename).read_text(encoding='utf-8'))
     assert result['coverage.json']['completeness']=='partial'
     retained=result['findings.json']['retained'][0]
     assert retained['evidenceState']=='inconclusive'
@@ -36,12 +36,12 @@ def test_untrusted_upstream_rejected(tmp_path, mutation):
     for name in ('findings.json','coverage.json','scan-manifest.json'):
         (tmp_path/name).write_bytes((UPSTREAM/name).read_bytes())
     path=tmp_path/'findings.json'
-    doc=json.loads(path.read_text())
+    doc=json.loads(path.read_text(encoding='utf-8'))
     if mutation=='cross-scan': doc['scanId']='another'
     if mutation=='non-finite': doc['findings'][0]['severity']['score']=float('nan')
     if mutation=='secret': doc['findings'][0]['summary']='AKIA'+'A'*16
     if mutation in ('cross-scan','non-finite','secret'): path.write_text(json.dumps(doc))
-    if mutation=='duplicate': path.write_text(path.read_text().replace('"schemaVersion": "1.0"','"schemaVersion": "1.0", "schemaVersion": "1.0"'))
+    if mutation=='duplicate': path.write_text(path.read_text(encoding='utf-8').replace('"schemaVersion": "1.0"','"schemaVersion": "1.0", "schemaVersion": "1.0"'))
     if mutation=='symlink':
         path.unlink(); make_link(path, UPSTREAM/'findings.json')
     with pytest.raises(ValidationError): import_codex_bundle(tmp_path)

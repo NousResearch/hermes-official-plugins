@@ -41,14 +41,33 @@ def test_timeout_kills_process_group(tmp_path):
     import os
     target=tmp_path/'source';target.mkdir()
     code='import os,time; pid=os.fork(); print("PID="+str(os.getpid()),flush=True); time.sleep(10)'
-    p=local_plan([[sys.executable,'-c',code],[sys.executable,'-c','print("SAFE")']]);p['timeoutS']=.2
+    # Long enough for both processes to start and print on a slow runner, far below their 10 s sleep.
+    p=local_plan([[sys.executable,'-c',code],[sys.executable,'-c','print("SAFE")']]);p['timeoutS']=3
     r=run_local(p,target=target,workdir_parent=tmp_path)
     pids=[int(line[4:]) for line in r['outputExcerpt'].splitlines() if line.startswith('PID=')]
     assert len(pids)==2 and r['positive']['timeout']
     for pid in pids:
+        assert _gone(pid), pid
+
+
+def _gone(pid, wait=5.0):
+    """Dead, or a zombie waiting to be reaped: /proc on Linux, kill(pid, 0) polling elsewhere."""
+    import os, time
+    deadline=time.monotonic()+wait
+    while True:
         status=Path(f'/proc/{pid}/stat')
-        # Reparented dead children may remain zombies briefly until init reaps them.
-        assert not status.exists() or status.read_text().split()[2]=='Z'
+        if Path('/proc/self/stat').exists():
+            # Reparented dead children may remain zombies briefly until init reaps them.
+            if not status.exists() or status.read_text(encoding='utf-8').split()[2]=='Z':
+                return True
+        else:
+            try:
+                os.kill(pid,0)
+            except ProcessLookupError:
+                return True
+        if time.monotonic()>deadline:
+            return False
+        time.sleep(0.05)
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Windows Job Object variant of test_timeout_kills_process_group')
 def test_timeout_kills_job_tree(tmp_path):

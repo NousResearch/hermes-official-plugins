@@ -87,7 +87,7 @@ def test_all_public_tool_names_are_contract_names():
     found = set()
     for directory in (ROOT / "skills", ROOT / "references"):
         for path in directory.rglob("*.md"):
-            found.update(re.findall(r"\bsecurity_scan_[a-z_]+\b", path.read_text()))
+            found.update(re.findall(r"\bsecurity_scan_[a-z_]+\b", path.read_text(encoding='utf-8')))
     assert found == expected, (found - expected, expected - found)
 
 

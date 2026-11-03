@@ -27,7 +27,7 @@ def _assert_private(path, mode):
         assert stat.S_IMODE(path.stat().st_mode) == mode
         return
     from hermes_security import _win32
-    sddl = _win32.dacl_sddl(path)
+    sddl = _win32.normalize_sddl(_win32.dacl_sddl(path))
     aces = re.findall(r"\(([^)]*)\)", sddl)
     assert aces and all(a.split(";")[0] == "A" and a.split(";")[2] == "FA" for a in aces), sddl
     assert {a.split(";")[5] for a in aces} == {_win32.current_user_sid(), "SY"}, sddl
@@ -94,7 +94,7 @@ def test_symlink_components(tmp_path):
             write_artifact(root, rel, b"bad")
         with pytest.raises(ValidationError):
             read_artifact(root, rel)
-    assert (outside / "target").read_text() == "untouched"
+    assert (outside / "target").read_text(encoding='utf-8') == "untouched"
     make_link(root.parent / "bad", outside, directory=True)
     with pytest.raises(ValidationError):
         scan_dir(tmp_path / "data", "bad")
@@ -129,6 +129,6 @@ def test_symlink_parent_swap_cannot_escape(tmp_path, monkeypatch):
     write_artifact(root, "exports/report", "new")
     assert not (outside / "report").exists()
     if swapped == [True]:
-        assert (root / "moved/report").read_text() == "new"
+        assert (root / "moved/report").read_text(encoding='utf-8') == "new"
     else:
-        assert (root / "exports/report").read_text() == "new"
+        assert (root / "exports/report").read_text(encoding='utf-8') == "new"

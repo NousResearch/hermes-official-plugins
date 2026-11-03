@@ -104,3 +104,23 @@ def test_without_an_export_it_prints_the_prompt_and_failures_exit_non_zero(tmp_p
     _run(["grok-bot", "-y"])
     notes = home / "grok-bot-import" / "account-health-event-routines.md"
     assert "Reproduce the ticket in staging" in notes.read_text(encoding="utf-8")
+
+
+def test_multiple_bots_into_one_profile_says_so(tmp_path, capsys):
+    """#265: two Bots imported together merge into one agent — the report must say that
+    plainly and point at the one-profile-per-Bot path instead of merging silently."""
+    from hermes_cli.default_soul import DEFAULT_SOUL_MD
+    home = tmp_path / ".hermes"
+    (home / "SOUL.md").write_text(DEFAULT_SOUL_MD, encoding="utf-8")
+    export = {"format": "grok-bot-export", "version": 1, "bots": [
+        {"name": "Ava", "instructions": "You are Ava.", "routines": []},
+        {"name": "Scout", "instructions": "You are Scout.", "routines": []},
+    ]}
+    reply = tmp_path / "reply.md"
+    reply.write_text("```json\n" + json.dumps(export) + "\n```\n", encoding="utf-8")
+
+    _run(["grok-bot", "--source", str(reply), "-y"])
+    out = capsys.readouterr().out
+
+    assert "2 Bots (Ava, Scout) were imported into ONE profile" in out
+    assert "hermes profile create" in out

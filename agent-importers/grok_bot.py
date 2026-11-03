@@ -243,6 +243,18 @@ class GrokBotImporter(AgentImporter):
                 return self.build_report()  # a mistyped name imports nothing, shared items included
         for path, bot in bots:
             self._import_bot(path, bot, single=len(bots) == 1)
+        if len(bots) > 1:
+            # Several Bots into one profile: no Bot gets SOUL.md, every role
+            # becomes memory entries of the same agent (#265). Say so in the
+            # report instead of letting the merge pass silently, and point at
+            # the per-profile path the docs recommend.
+            names = ", ".join(str(b.get("name") or "Bot").strip() for _p, b in bots)
+            self.record("bots", None, None, "skipped",
+                        f"{len(bots)} Bots ({names}) were imported into ONE profile: their roles "
+                        "became memory entries of a single agent, not separate identities. For one "
+                        "identity per Bot, create a profile per Bot (hermes profile create <name> "
+                        "--clone) and import each export there (hermes -p <name> import-agent "
+                        "grok-bot --bot <Bot>).")
         self.import_shared()
         return self.build_report()
 

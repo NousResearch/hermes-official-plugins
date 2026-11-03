@@ -178,3 +178,32 @@ def test_the_grok_bot_apps_local_cache_flags_bots_and_routines_the_export_missed
     out = capsys.readouterr().out
     assert "export these Bots too to bring them over: Drew" in out
     assert "did not include: routine-healthcheck" in out and "Morning watch list." not in out
+
+def test_schedule_text_only_routine_needs_a_schedule_and_import_is_recorded(tmp_path, capsys):
+    """#266: a scheduled routine whose time is only in words is counted as needing a schedule
+    (not silently filed as an event routine), and the import leaves a memory record naming the
+    paused jobs so the agent does not offer to recreate them."""
+    from hermes_cli.default_soul import DEFAULT_SOUL_MD
+    home = tmp_path / ".hermes"
+    (home / "SOUL.md").write_text(DEFAULT_SOUL_MD, encoding="utf-8")
+    export = {"format": "grok-bot-export", "version": 1, "bots": [{
+        "name": "Account Health",
+        "routines": [
+            {"name": "Morning watch list", "instruction": "Run the review.",
+             "trigger": "schedule", "schedule_cron": "0 8 * * 1-5"},
+            {"name": "VAT reminder", "instruction": "File the VAT return.",
+             "trigger": "schedule", "schedule_cron": "", "schedule_text": "Every month on the 15th at 9:00 AM"},
+        ]}]}
+    reply = tmp_path / "reply.md"
+    reply.write_text("```json\n" + json.dumps(export) + "\n```\n", encoding="utf-8")
+
+    _run(["grok-bot", "--source", str(reply), "-y"])
+    out = capsys.readouterr().out
+
+    [job] = _jobs(home)
+    assert job["name"] == "Account Health: Morning watch list"
+    assert "1 routine(s) need a schedule set: VAT reminder" in out
+    notes = (home / "grok-bot-import" / "account-health-event-routines.md").read_text(encoding="utf-8")
+    assert "# Routines that need a schedule" in notes and "VAT reminder" in notes
+    memory = (home / "memories" / "MEMORY.md").read_text(encoding="utf-8")
+    assert "Do not recreate these routines" in memory and "Morning watch list" in memory

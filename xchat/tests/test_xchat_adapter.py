@@ -557,6 +557,18 @@ def test_dedup_prune_bounds_memory(monkeypatch):
     assert f"e{xchat_adapter.DEDUP_MAX_SIZE + 99}" in adapter._seen_event_ids
 
 
+def test_conversation_keys_persist_across_restarts(monkeypatch):
+    """Verified keys learned from a KeyChange survive a restart, so the next message
+    under a rotated key decrypts without waiting for the KeyChange to page in."""
+    adapter = _make_adapter(monkeypatch)
+    _, crypto = _wire(adapter)
+    adapter._absorb_key_batch("111:999", ["a2V5"])
+    assert adapter._conversation_keys["111-999"] == {"1": b"k"}
+
+    fresh = _make_adapter(monkeypatch)
+    assert fresh._conversation_keys["111-999"] == {"1": b"k"}
+
+
 # ---------------------------------------------------------------------------
 # Outbound
 

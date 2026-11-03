@@ -222,10 +222,15 @@ Catalog entries come in two tiers:
 </tr>
 <tr>
 <td width="50%" valign="top">
-<h3>More on the way</h3>
-<p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
+<a href="unreal-engine/"><img src="assets/unreal-engine.jpg" alt="Unreal Engine plugin"></a>
+<h3><a href="unreal-engine/">Unreal Engine</a></h3>
+<code>hermes plugins install unreal-engine</code>
+<p>Drive a running Unreal Editor 5.8+ through Epic's Unreal MCP server, which runs inside the editor on <code>127.0.0.1:8000</code>, with the unreal-mcp workflow skill: tool discovery, one call at a time on the editor's game thread, scene-craft numbers, worked recipes and pitfalls. Needs the Unreal MCP and AllToolsets editor plugins. Formerly the <code>unreal-engine</code> MCP catalog entry; an existing entry keeps working.</p>
+<p>MCP server + skill · Windows, macOS, Linux</p>
 </td>
 <td width="50%" valign="top">
+<h3>More on the way</h3>
+<p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
 </td>
 </tr>
 </table>

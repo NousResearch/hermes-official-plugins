@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "unreal-engine",
+  "version": "1.0.0",
+  "description": "Drive a running Unreal Editor (5.8+) through Epic's Unreal MCP server on 127.0.0.1:8000, with the unreal-mcp workflow skill (discovery, calling discipline, scene craft, recipes, pitfalls) bundled.",
+  "author": {
+    "name": "Nous Research",
+    "url": "https://github.com/NousResearch"
+  },
+  "homepage": "https://github.com/NousResearch/hermes-official-plugins/tree/main/unreal-engine",
+  "repository": "https://github.com/NousResearch/hermes-official-plugins/tree/main/unreal-engine",
+  "license": "MIT",
+  "keywords": [
+    "unreal",
+    "unreal-engine",
+    "ue5",
+    "mcp",
+    "3d",
+    "gamedev",
+    "local"
+  ]
+}

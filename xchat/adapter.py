@@ -1376,7 +1376,7 @@ async def _initiate_conversation(
         records = await api.get_public_keys(uid)
         if not records:
             raise ValueError(f"user {uid} has no registered X Chat public keys")
-        rec = records[0]
+        rec = max(records, key=lambda r: int(r.get("public_key_version") or 0))
         if not crypto.verify_key_binding(
             str(rec.get("public_key") or ""),
             str(rec.get("signing_public_key") or ""),

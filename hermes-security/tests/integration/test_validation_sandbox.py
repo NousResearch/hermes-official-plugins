@@ -45,8 +45,7 @@ def test_timeout_kills_process_group(tmp_path):
     p=local_plan([[sys.executable,'-c',code],[sys.executable,'-c','print("SAFE")']]);p['timeoutS']=3
     r=run_local(p,target=target,workdir_parent=tmp_path)
     pids=[int(line[4:]) for line in r['outputExcerpt'].splitlines() if line.startswith('PID=')]
-    if not (len(pids)==2 and r['positive']['timeout']):
-        import json; pytest.fail(json.dumps(r, default=str, indent=1))
+    assert len(pids)==2 and r['positive']['timeout'], r['outputExcerpt']
     for pid in pids:
         assert _gone(pid), pid
 
@@ -121,7 +120,7 @@ def test_timeout_output_and_redaction(tmp_path):
     target=tmp_path/'source';target.mkdir()
     p=local_plan([[sys.executable,'-c','import time;time.sleep(10)'],[sys.executable,'-c','print("SAFE")']]);p['timeoutS']=.15
     started=time.monotonic();r=run_local(p,target=target,workdir_parent=tmp_path)
-    assert time.monotonic()-started<3 and r['positive']['timeout'] and r['status']=='inconclusive' and r['cleanup']['done'], r
+    assert time.monotonic()-started<3 and r['positive']['timeout'] and r['status']=='inconclusive' and r['cleanup']['done'], r['outputExcerpt']
     p=local_plan([[sys.executable,'-c','print("X"*100000)'],[sys.executable,'-c','print("password=never-record-me")']]);p['maxOutputBytes']=256
     r=run_local(p,target=target,workdir_parent=tmp_path)
     assert r['positive']['truncated'] and len(r['outputExcerpt'])<=4000 and 'never-record-me' not in str(r)
@@ -158,3 +157,14 @@ def test_http_origin_cap_and_redirect(servers):
     r=run_http(p,grant=g,store=s)
     assert r['status']=='inconclusive' and 'cross-origin redirect refused' in r['notes']
     assert not any(port==other.server_port for port,path in hits)
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='POSIX process groups')
+def test_kill_ignores_a_group_that_is_already_gone(monkeypatch):
+    """macOS raises EPERM, not ESRCH, for a group whose leader is an unreaped zombie."""
+    from hermes_security.validation import runner
+    for exc in (ProcessLookupError(), PermissionError(1, 'Operation not permitted')):
+        def killpg(pid, sig, exc=exc):
+            raise exc
+        monkeypatch.setattr(runner.os, 'killpg', killpg)
+        runner._kill(type('P', (), {'pid': 12345})())

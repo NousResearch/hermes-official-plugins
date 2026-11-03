@@ -50,9 +50,15 @@ class ClaudeCodeLoggedOut(RuntimeError):
 class ClaudeAPIError(RuntimeError):
     """A failed upstream or native-answered request; status_code is None when there is no HTTP equivalent."""
 
-    def __init__(self, message, status_code=None):
+    def __init__(self, message, status_code=None, *, request_id=None):
+        # Only a bounded opaque ID may enter diagnostics, never arbitrary header contents.
+        if not isinstance(request_id, str) or re.fullmatch(r'req_[A-Za-z0-9_-]{1,124}', request_id) is None:
+            request_id = None
+        if request_id:
+            message += f' (request_id={request_id})'
         super().__init__(message)
         self.status_code = status_code
+        self.request_id = request_id
 
 
 # Native's own error codes for errors it answers without a relayed upstream status.
@@ -978,7 +984,8 @@ class Client:
                             first += ', upstream said: ' + admission.error_text()[:500]
                         # The first attempt's real HTTP status; a 200 cut short or a relay failure has none.
                         status = admission.status if isinstance(admission.status, int) and admission.status >= 400 else None
-                        raise ClaudeAPIError(f'Incomplete upstream response ({first})' + (': ' + native_error if native_error else ''), status)
+                        raise ClaudeAPIError(f'Incomplete upstream response ({first})' + (': ' + native_error if native_error else ''),
+                                             status, request_id=admission.request_id)
                     assistants = [admission.capture.message]
                     stopped = True
                 native_failure_handled = admission.denied or (admission.used and assistants[0].get('stop_reason') == 'refusal')

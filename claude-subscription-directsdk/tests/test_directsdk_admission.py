@@ -430,6 +430,85 @@ def test_incomplete_upstream_error_carries_the_first_status(tmp_path, status):
         client.close(); peer.shutdown(); thread.join(); peer.server_close()
 
 
+@pytest.mark.parametrize('streaming', [False, True])
+@pytest.mark.parametrize('reset', [False, True], ids=['eof', 'reset'])
+@pytest.mark.parametrize('headers, expected_id', [
+    ([('request-id', 'req_fixture_01')], 'req_fixture_01'),
+    ([('x-request-id', 'req_fixture-02')], 'req_fixture-02'),
+    ([('request-id', 'req_first'), ('x-request-id', 'req_second')], 'req_first'),
+    ([], None),
+    ([('request-id', 'req_unsafe value')], None),
+    ([('request-id', 'req_' + 'a' * 125)], None),
+])
+def test_incomplete_stream_preserves_only_a_safe_request_id(tmp_path, monkeypatch, streaming, reset, headers, expected_id):
+    """A 200 stream that ends before message_stop keeps its ID without logging other request/response data."""
+    import socket, struct
+    import admission
+    partial_seen = threading.Event()
+    feed = admission.Capture.feed
+    def observe_partial(capture, chunk):
+        feed(capture, chunk)
+        if any(b.get('text') == 'fixture-private-response' for b in (capture.message or {}).get('content', [])):
+            partial_seen.set()
+    monkeypatch.setattr(admission.Capture, 'feed', observe_partial)
+    calls = []
+    class Peer(BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def do_POST(self):
+            calls.append(self.headers.get('Authorization'))
+            self.rfile.read(int(self.headers['Content-Length']))
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream')
+            self.send_header('Set-Cookie', 'fixture-private-cookie')
+            for key, value in headers:
+                self.send_header(key, value)
+            self.end_headers()
+            start = {'type': 'message_start', 'message': {'id': 'partial', 'role': 'assistant', 'content': []}}
+            block = {'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}}
+            text = {'type': 'content_block_delta', 'index': 0,
+                    'delta': {'type': 'text_delta', 'text': 'fixture-private-response'}}
+            self.wfile.write(''.join('data: ' + json.dumps(e) + '\n\n' for e in (start, block, text)).encode())
+            self.wfile.flush()
+            if reset:
+                # Wait until the relay read the headers and partial SSE before resetting the real socket.
+                if partial_seen.wait(5):
+                    self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+                    self.connection.close()
+            # No message_stop, whether the connection ends with EOF or a TCP reset.
+    peer = ThreadingHTTPServer(('127.0.0.1', 0), Peer)
+    thread = threading.Thread(target=peer.serve_forever, daemon=True); thread.start()
+    native = tmp_path / 'native.py'
+    native.write_text(NATIVE.replace("'Content-Type':'application/json'",
+                                    "'Content-Type':'application/json','Authorization':'Bearer fixture-private-token'"))
+    client = directsdk.Client(command=[sys.executable, str(native)],
+                             env={'PATH': os.defpath, 'HOME': str(tmp_path),
+                                  'ANTHROPIC_BASE_URL': f'http://127.0.0.1:{peer.server_port}'})
+    try:
+        with pytest.raises(directsdk.ClaudeAPIError, match=r'status 200, capture incomplete') as raised:
+            result = client.create(model='sonnet', messages=[{'role': 'user', 'content': 'fixture-private-prompt'}],
+                                   stream=streaming)
+            if streaming:
+                list(result)
+        error = raised.value
+        assert partial_seen.is_set()
+        if reset:
+            assert 'relay failure ConnectionResetError' in str(error)
+        else:
+            assert 'relay failure' not in str(error)  # Valid partial SSE, not a parser error.
+        assert error.status_code is None  # The local denied retry must not become the upstream's status.
+        assert calls == ['Bearer fixture-private-token']  # Recovery still cannot issue a second upstream call.
+        if expected_id:
+            assert f'request_id={expected_id}' in str(error)
+        else:
+            assert 'request_id=' not in str(error)
+        assert error.request_id == expected_id
+        for private in ('fixture-private-prompt', 'fixture-private-response', 'fixture-private-token',
+                        'fixture-private-cookie', 'req_unsafe value', 'req_' + 'a' * 125):
+            assert private not in str(error)
+    finally:
+        client.close(); peer.shutdown(); thread.join(); peer.server_close()
+
+
 def test_invalid_stream_json_error_names_the_offending_line(tmp_path):
     """A native that prints a non-JSON stdout line (a shim banner) fails with that line in the error, not a bare label."""
     native=tmp_path/'native.py'; native.write_text("import sys\nprint('mise WARN tool not activated')\nsys.exit(0)\n")

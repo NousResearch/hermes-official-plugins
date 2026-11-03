@@ -13,6 +13,7 @@ import os
 import re
 import uuid
 from typing import Any, Callable, Optional
+from urllib.parse import urlsplit
 
 import requests
 
@@ -72,7 +73,18 @@ def _navigate_tab(task_id: Optional[str], browser_url: str) -> tuple[dict[str, A
             logger.warning("Camofox tab %s returned %s — tab is gone. Creating a fresh tab.",
                            session["tab_id"], e.response.status_code)
             session["tab_id"] = None
-    return client.ensure_tab(task_id, browser_url), {"ok": True, "url": browser_url}
+    session, created = client.ensure_tab(task_id, browser_url)
+    return session, {**created, "tab_created": True}
+
+
+def _blank_after_navigation(requested_url: str, final_url: str) -> bool:
+    """True when a real page was requested but the tab reports no/blank URL — the navigation
+    did not happen, so calling it a success would be a fabricated result."""
+    final = (final_url or "").strip()
+    if not final:
+        return True
+    scheme = urlsplit(requested_url).scheme
+    return scheme in {"http", "https"} and final in {"about:blank", "about:newtab"}
 
 
 _TAB_GONE_ERROR = ("The browser tab is gone (the Camofox server reaped it or restarted). "
@@ -156,8 +168,23 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
     try:
         browser_url, rewrite_info = client.rewrite_loopback_url(url)
         session, data = _navigate_tab(task_id, browser_url)
-        result: dict[str, Any] = {"success": True, "url": data.get("url", browser_url),
+        data = data if isinstance(data, dict) else {}
+        final_url = str(data.get("url") or "")
+        ok = data.get("ok", True) is not False
+        if ok and _blank_after_navigation(browser_url, final_url):
+            return _fail(
+                f"Navigation reported success but the tab is still blank ({final_url or 'no URL'}) "
+                f"after requesting {browser_url}. The page did not load — retry browser_navigate "
+                f"or check the Camofox log.")
+        result: dict[str, Any] = {"success": ok, "url": final_url or browser_url,
                                   "title": _navigate_title(session, data)}
+        if data.get("tab_created"):
+            result["tab_created"] = True
+        if not ok:
+            reason = "Camofox reported ok:false for this navigation"
+            if data.get("googleBlocked"):
+                reason += " (googleBlocked: the search engine served a block/captcha page)"
+            result["error"] = reason
         if rewrite_info:
             result["requested_url"], result["url_rewrite"] = url, rewrite_info
             result["warning"] = ("Rewrote loopback URL for Docker-hosted Camofox: "

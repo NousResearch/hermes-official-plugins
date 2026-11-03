@@ -339,3 +339,22 @@ class TestCleanup:
         t.browser_navigate("https://example.com", task_id="t1")
         t.cleanup_task("t1")
         assert camofox.calls("DELETE") == []
+
+
+class TestNavigateReliability:
+    """The two false-success regressions fixed locally: never report a navigation as succeeded
+    when the server did not confirm it, and name the cause when the server answers ok:false."""
+
+    def test_new_tab_landing_on_blank_url_is_not_success(self, camofox):
+        camofox.overrides[("POST", "/tabs")] = (200, {"tabId": "tab-9", "url": ""})
+        result = _j(t.browser_navigate("https://example.com", task_id="t1"))
+        assert result["success"] is False
+        assert "still blank" in result["error"]
+
+    def test_ok_false_google_block_names_the_cause(self, camofox):
+        t.browser_navigate("https://example.com", task_id="t1")
+        camofox.overrides[("POST", "/tabs/tab-1/navigate")] = (
+            200, {"ok": False, "googleBlocked": True, "url": "https://example.org"})
+        result = _j(t.browser_navigate("https://example.org", task_id="t1"))
+        assert result["success"] is False
+        assert "googleBlocked" in result["error"]

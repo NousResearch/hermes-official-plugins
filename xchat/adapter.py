@@ -294,6 +294,7 @@ class XChatAdapter(BasePlatformAdapter):
         self._conversations: Set[str] = set(self._pinned_conversations)
         # Conversations that appeared after the first discovery pass: no backlog to skip.
         self._initial_discovery_done = False
+        self._last_discovery_at = 0.0
         self._live_conversations: Set[str] = set()
         self._cursors: Dict[str, str] = _load_cursors()
         self._seen_event_ids: Dict[str, float] = {}
@@ -451,11 +452,18 @@ class XChatAdapter(BasePlatformAdapter):
         backoff_idx = 0
         while self._running:
             try:
-                # One conversation-list read per cycle says which conversations have
-                # anything newer than our cursor; only those get an events read. Events
-                # are billed per resource returned, so re-reading idle conversations
-                # every cycle is the dominant cost.
-                newest = await self._discover_conversations()
+                # A conversation-list read says which conversations have anything
+                # newer than our cursor; only those get an events read. But the list
+                # call itself is billed per call against a separate 1,000/day budget:
+                # at a 30 s poll interval, one list read per cycle spends it in ~8
+                # hours (#228). Discovery therefore runs on its own slower cadence;
+                # between discoveries every known conversation is polled (an idle
+                # events page returns no resources, so it stays cheap).
+                if self._discovery_due():
+                    newest = await self._discover_conversations()
+                    self._last_discovery_at = time.monotonic()
+                else:
+                    newest = {}
                 for conv_id in list(self._conversations):
                     if not self._running:
                         return
@@ -479,6 +487,14 @@ class XChatAdapter(BasePlatformAdapter):
                 backoff_idx += 1
                 logger.warning("[xchat] poll error (retry in %ds): %s", delay, e)
                 await asyncio.sleep(delay)
+
+    def _discovery_due(self) -> bool:
+        """Discovery runs at most once per cadence (default 10 min, at least 20 poll
+        cycles): the first pass always runs so startup learns the conversation set."""
+        if not self._initial_discovery_done:
+            return True
+        cadence = max(600.0, self._poll_interval * 20)
+        return (time.monotonic() - self._last_discovery_at) >= cadence
 
     async def _discover_conversations(self) -> Dict[str, str]:
         """List conversations; returns ``{conversation: newest_event_id}`` where reported."""

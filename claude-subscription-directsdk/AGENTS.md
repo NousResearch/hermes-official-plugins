@@ -44,7 +44,7 @@ window and which plans include it; the model table for the minimum CLI version).
    offers it sees it. Pinning must never reveal a gated model to everyone.
 2. `ALIASES` — move the family alias (`opus`, `sonnet`, `fable`, `haiku`) when the docs move it.
 3. `MANDATORY_THINKING` / `NO_ADAPTIVE_THINKING` if the docs say thinking cannot be turned off
-   or adaptive thinking 400s (mandatory: Fable, Opus 5.5, Sonnet 5.5, Haiku 5.5 and Mythos 5.1; no adaptive:
+   or adaptive thinking 400s (mandatory: Fable, Opus 5.5, Sonnet 5.5, Haiku 5.5 and Mythos; no adaptive:
    Haiku 4.5 today). Mirror what `agent/anthropic_adapter.py` in hermes-agent encodes; if the two
    disagree, fix both. Opus 5.5 was settled by #22: the docs say thinking cannot be turned off
    there and the API 400s the disable exactly as on Fable. Core's

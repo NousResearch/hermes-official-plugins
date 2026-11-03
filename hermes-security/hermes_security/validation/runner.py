@@ -69,8 +69,10 @@ def _limits(timeout,nproc):
     if nproc is not None: resource.setrlimit(resource.RLIMIT_NPROC,(nproc,nproc))
 
 def _kill(proc):
+    # macOS answers EPERM (Linux: ESRCH) once the group's leader is an unreaped zombie, which
+    # is the normal state on the second kill after a timeout: the group is already gone.
     try: os.killpg(proc.pid,signal.SIGKILL)
-    except ProcessLookupError: pass
+    except (ProcessLookupError,PermissionError): pass
 
 _SECRET_NAME=('TOKEN','SECRET','PASSWORD','PASSWD','API_KEY','APIKEY','ACCESS_KEY','PRIVATE_KEY','CREDENTIAL','SESSION_KEY')
 

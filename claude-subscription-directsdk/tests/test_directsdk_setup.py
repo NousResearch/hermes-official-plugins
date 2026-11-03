@@ -217,6 +217,13 @@ def test_fable_5_and_5_1_follow_the_documented_plan_rule(profile, tmp_path, plan
     assert rows["claude-fable-5"]["note"] == (note + " · unpinned" if note else "unpinned")
 
 
+def test_a_generic_1m_row_keeps_its_version_in_the_label(profile, tmp_path):
+    """The generic list names only the family in displayName, on the 1M row too ("Opus (1M context)"):
+    the "1" in "1M" is not a version, so the label falls back to the description."""
+    labels = {m["id"]: m["label"] for m in _discover(profile, tmp_path, [PINNED_PICKER[2]])}
+    assert labels["claude-opus-5-5[1m]"] == "Opus 5.5 with 1M context"
+
+
 def test_every_model_the_cli_advertises_is_selectable(profile, tmp_path):
     """The pinned table adds metadata (1M route, window, aliases); it never decides visibility. A model
     it does not know keeps the CLI's own id and label, gains no [1m], and is marked unpinned."""

@@ -248,7 +248,8 @@ def discover_models(command=None, env=None, timeout=40):
         # names the model in displayName ("Opus 5.5"); the generic list names only the family there
         # ("Opus") and the model before the "·" in its description ("Opus 5.5 · Best for ...").
         display = str(row.get("displayName") or "").strip()
-        named = display if any(c.isdigit() for c in display) and not display.lower().startswith("default") else ""
+        # The version precedes any "(...)": "Opus (1M context)" names only the family.
+        named = display if any(c.isdigit() for c in display.split("(")[0]) and not display.lower().startswith("default") else ""
         label = named or str(row.get("description") or "").split("·")[0].strip() or route
         entry = routes.setdefault(route, {"id": route, "label": label, "note": "" if pinned else "unpinned",
                                           "upstream_requests": upstream})

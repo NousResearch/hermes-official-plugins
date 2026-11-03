@@ -25,8 +25,9 @@ ACCESS_GATED = frozenset({'claude-mythos-5-1'})
 # disable too (its lowest setting is `between_tools`); plain Sonnet 5 still accepts it. The docs
 # say thinking cannot be turned off on Haiku 5.5 either; Haiku 4.5 still accepts the disable.
 # Mythos 5.1 documents thinking as "Adaptive (always on)", its picker row says supportsThinkingOff:
-# false, and the disable 400s live; only 5.1 is qualified, so the entry is its full prefix.
-MANDATORY_THINKING = ('claude-fable', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-mythos-5-1')
+# false, and the disable 400s live. Mythos 5 keeps Fable 5's always-on thinking (the 5.1 migration
+# guide), so the entry is the family, as in core.
+MANDATORY_THINKING = ('claude-fable', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-mythos')
 ALIASES = {
     'sonnet': 'claude-sonnet-5-5',
     'haiku': 'claude-haiku-5-5',

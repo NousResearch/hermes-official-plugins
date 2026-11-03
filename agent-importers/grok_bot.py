@@ -388,9 +388,35 @@ class GrokBotImporter(AgentImporter):
         self._merge_list("user-facts", source, memories / "USER.md", _strings(bot.get("user_facts")))
         imported_skills = self._import_skills(source, _dicts(bot.get("skills")))
         self._import_routines(source, name, _dicts(bot.get("routines")), imported_skills)
+        self._record_import(source, name)
         self._import_apps(source, _dicts(bot.get("apps")))
         if isinstance(bot.get("mcp_servers"), dict) and bot["mcp_servers"]:
             self.import_mcp_servers(bot["mcp_servers"], kind="mcp-servers")
+
+    def _record_import(self, source: str, bot_name: str) -> None:
+        """One memory entry per import, so the agent can answer "which routines did I have?"
+        from what actually happened instead of offering to recreate jobs that already exist
+        (#266): date, Bot, the paused job names/ids, and where the left-out routines live."""
+        jobs = [i for i in self.items
+                if i.get("kind") == "routine" and i.get("status") == "imported"
+                and str(i.get("source") or "").startswith(f"{source} /")]
+        if not jobs:
+            return
+        from datetime import date
+
+        rendered = ", ".join(
+            f"{str(i.get('destination') or '').removeprefix('cron job ').strip(chr(39))}"
+            + (f" (id {i['job_id']})" if i.get("job_id") else "")
+            + (" [paused]" if i.get("paused") else "")
+            for i in jobs)
+        notes = self.target_root / f"{self.AGENT}-import" / f"{_slug(bot_name)}-event-routines.md"
+        entry = (f"Imported from {self.PRODUCT} on {date.today().isoformat()}: Bot '{bot_name}' "
+                 f"routines became Hermes cron jobs: {rendered}. Routines the import could not "
+                 f"turn into jobs are in {notes.name} (same folder as this profile's "
+                 f"{self.AGENT}-import notes). Do not recreate these routines — they already "
+                 f"exist as cron jobs; resume or edit them instead.")
+        self.merge_memory_entries("import-record", source,
+                                  self.target_root / "memories" / "MEMORY.md", [entry])
 
     def _merge_list(self, kind: str, source: str, destination: Path, entries: list[str]) -> None:
         if not entries:
@@ -481,6 +507,7 @@ class GrokBotImporter(AgentImporter):
             return
         from cron import jobs as cron_jobs
         unscheduled: list[dict[str, Any]] = []
+        needs_schedule: list[dict[str, Any]] = []
         with cron_jobs.use_cron_store(self.target_root):
             existing = {str(j.get("name")) for j in cron_jobs.load_jobs()}
             planned: set[str] = set()
@@ -498,7 +525,11 @@ class GrokBotImporter(AgentImporter):
                     continue
                 schedule = _routine_schedule(routine, cron_jobs.parse_schedule)
                 if schedule is None:
-                    unscheduled.append(routine)
+                    # A scheduled routine whose time only exists in words is
+                    # NOT an event routine: it needs a schedule, and must be
+                    # counted as such instead of vanishing into the notes (#266).
+                    trigger = str(routine.get("trigger") or "schedule").strip().lower()
+                    (needs_schedule if trigger in _SCHEDULE_TRIGGERS else unscheduled).append(routine)
                     continue
                 if job_name in existing:
                     self.record("routine", f"{source} / {label}", where, "skipped",
@@ -524,12 +555,19 @@ class GrokBotImporter(AgentImporter):
                 self.apply("routine", f"{source} / {label}", where,
                            f"Would create a {'paused ' if paused else ''}cron job ({schedule})",
                            create, details)
-        if unscheduled:
-            self._note_event_routines(source, bot_name, unscheduled)
+        if unscheduled or needs_schedule:
+            self._note_event_routines(source, bot_name, unscheduled, needs_schedule)
+        if needs_schedule:
+            names = ", ".join(str(r.get("name") or "routine").strip() for r in needs_schedule)
+            self.record("needs-schedule", source, None, "skipped",
+                        f"{len(needs_schedule)} routine(s) need a schedule set: {names}")
 
-    def _note_event_routines(self, source: str, bot_name: str, routines: list[dict[str, Any]]) -> None:
+    def _note_event_routines(self, source: str, bot_name: str, routines: list[dict[str, Any]],
+                             needs_schedule: list[dict[str, Any]] | None = None) -> None:
         """Event-triggered routines have no cron equivalent: keep their full text where the user can
-        rebuild them (a webhook subscription, a gateway channel, or a polling cron job)."""
+        rebuild them (a webhook subscription, a gateway channel, or a polling cron job). Scheduled
+        routines whose time did not parse get their own heading — they are not event routines."""
+        needs_schedule = needs_schedule or []
         destination = self.target_root / f"{self.AGENT}-import" / f"{_slug(bot_name)}-event-routines.md"
         lines = [f"# {bot_name}: {self.PRODUCT} routines that run on an event", "",
                  "These start on something happening instead of a schedule, so they were not turned into "
@@ -539,6 +577,15 @@ class GrokBotImporter(AgentImporter):
                       f"- Trigger: {r.get('trigger') or 'unknown'}",
                       f"- Details: {r.get('trigger_details') or r.get('schedule_text') or 'n/a'}", "",
                       str(r.get("instruction") or "").strip(), ""]
+        if needs_schedule:
+            lines += ["# Routines that need a schedule", "",
+                      "These ARE scheduled routines, but their time is only in words Hermes cron "
+                      "could not parse. Give each a schedule (ask Hermes to create the cron job "
+                      "from this file).", ""]
+            for r in needs_schedule:
+                lines += [f"## {str(r.get('name') or 'routine').strip()}", "",
+                          f"- Schedule (unparsed): {r.get('schedule_text') or r.get('schedule_cron') or 'n/a'}",
+                          "", str(r.get("instruction") or "").strip(), ""]
         text = "\n".join(lines)
         if destination.is_file():
             current = read_text(destination)
@@ -554,7 +601,8 @@ class GrokBotImporter(AgentImporter):
             atomic_write_text(destination, text)
 
         self.apply("event-routines", source, destination,
-                   f"Would save {len(routines)} routine(s) with no schedule as notes to recreate", write)
+                   f"Would save {len(routines) + len(needs_schedule)} routine(s) with no cron job "
+                   f"as notes to recreate", write)
 
     def _import_apps(self, source: str, apps: list[dict[str, Any]]) -> None:
         if not apps:

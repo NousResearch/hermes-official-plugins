@@ -1,0 +1,27 @@
+# No [build-system]: Hermes loads the plugin from its folder (relative imports only), and its
+# plugin manager keeps a buildable project's name in one uv workspace, so a buildable plugin
+# cannot be enabled in two profiles served by the same gateway.
+[project]
+name = "hermes-security"
+version = "0.1.0"
+description = "Local repository security review for Hermes"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+authors = [{name = "Nous Research"}]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/hermes-security"
+
+[tool.setuptools.packages.find]
+include = ["hermes_security*"]
+
+[tool.setuptools.package-data]
+hermes_security = ["schemas/*.json", "standards/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "e2e: end-to-end tests requiring a configured host",
+  "slow: longer-running tests",
+]

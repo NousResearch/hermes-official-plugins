@@ -1,0 +1,9 @@
+{
+  "name": "hermes-security",
+  "label": "Security",
+  "description": "Profile-local security scans, evidence, coverage, and triage.",
+  "icon": "Shield",
+  "version": "0.1.0",
+  "tab": {"hidden": true},
+  "api": "plugin_api.py"
+}

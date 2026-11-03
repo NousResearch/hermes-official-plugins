@@ -1,0 +1,1 @@
+"""Canonical security domain contracts."""

@@ -1,0 +1,356 @@
+{
+  "schemaVersion": "1.0",
+  "cases": [
+    {
+      "caseId": "access-control-vulnerable",
+      "family": "access-control",
+      "variant": "vulnerable",
+      "fixture": "tests/fixtures/vulnerable/access-control",
+      "roots": [
+        {
+          "rootCauseId": "access-control",
+          "ruleId": "authz.tenant",
+          "anchor": "app.py/get_invoice",
+          "severity": "high",
+          "description": "Invoice lookup does not bind the caller tenant.",
+          "location": {
+            "path": "app.py",
+            "startLine": 1,
+            "endLine": 2
+          }
+        }
+      ]
+    },
+    {
+      "caseId": "access-control-fixed",
+      "family": "access-control",
+      "variant": "fixed",
+      "fixture": "tests/fixtures/fixed/access-control",
+      "roots": []
+    },
+    {
+      "caseId": "business-logic-vulnerable",
+      "family": "business-logic",
+      "variant": "vulnerable",
+      "fixture": "tests/fixtures/vulnerable/business-logic",
+      "roots": [
+        {
+          "rootCauseId": "business-logic",
+          "ruleId": "logic.replay",
+          "anchor": "app.py/refund",
+          "severity": "high",
+          "description": "Refund may be applied repeatedly after the first transition.",
+          "location": {
+            "path": "app.py",
+            "startLine": 1,
+            "endLine": 3
+          }
+        }
+      ]
+    },
+    {
+      "caseId": "business-logic-fixed",
+      "family": "business-logic",
+      "variant": "fixed",
+      "fixture": "tests/fixtures/fixed/business-logic",
+      "roots": []
+    },
+    {
+      "caseId": "injection-vulnerable",
+      "family": "injection",
+      "variant": "vulnerable",
+      "fixture": "tests/fixtures/vulnerable/injection",
+      "roots": [
+        {
+          "rootCauseId": "injection",
+          "ruleId": "injection.sql",
+          "anchor": "app.py/lookup",
+          "severity": "high",
+          "description": "Untrusted name is concatenated into SQL syntax.",
+          "location": {
+            "path": "app.py",
+            "startLine": 1,
+            "endLine": 2
+          }
+        }
+      ]
+    },
+    {
+      "caseId": "injection-fixed",
+      "family": "injection",
+      "variant": "fixed",
+      "fixture": "tests/fixtures/fixed/injection",
+      "roots": []
+    },
+    {
+      "caseId": "ssrf-vulnerable",
+      "family": "ssrf",
+      "variant": "vulnerable",
+      "fixture": "tests/fixtures/vulnerable/ssrf",
+      "roots": [
+        {
+          "rootCauseId": "ssrf",
+          "ruleId": "ssrf.url",
+          "anchor": "app.py/fetch",
+          "severity": "high",
+          "description": "User selects an arbitrary outbound destination.",
+          "location": {
+            "path": "app.py",
+            "startLine": 1,
+            "endLine": 2
+          }
+        }
+      ]
+    },
+    {
+      "caseId": "ssrf-fixed",
+      "family": "ssrf",
+      "variant": "fixed",
+      "fixture": "tests/fixtures/fixed/ssrf",
+      "roots": []
+    },
+    {
+      "caseId": "traversal-vulnerable",
+      "family": "traversal",
+      "variant": "vulnerable",
+      "fixture": "tests/fixtures/vulnerable/traversal",
+      "roots": [
+        {
+          "rootCauseId": "traversal",
+          "ruleId": "path.escape",
+          "anchor": "app.py/read",
+          "severity": "high",
+          "description": "User path can escape the document directory.",
+          "location": {
+            "path": "app.py",
+            "startLine": 1,
+            "endLine": 3
+          }
+        }
+      ]
+    },
+    {
+      "caseId": "traversal-fixed",
+      "family": "traversal",
+      "variant": "fixed",
+      "fixture": "tests/fixtures/fixed/traversal",
+      "roots": []
+    },
+    {
+      "caseId": "deserialization-vulnerable",
+      "family": "deserialization",
+      "variant": "vulnerable",
+      "fixture": "tests/fixtures/vulnerable/deserialization",
+      "roots": [
+        {
+          "rootCauseId": "deserialization",
+          "ruleId": "deserialize.pickle",
+          "anchor": "app.py/decode",
+          "severity": "critical",
+          "description": "Untrusted serialized data reaches an executable decoder.",
+          "location": {
+            "path": "app.py",
+            "startLine": 1,
+            "endLine": 3
+          }
+        }
+      ]
+    },
+    {
+      "caseId": "deserialization-fixed",
+      "family": "deserialization",
+      "variant": "fixed",
+      "fixture": "tests/fixtures/fixed/deserialization",
+      "roots": []
+    },
+    {
+      "caseId": "upload-vulnerable",
+      "family": "upload",
+      "variant": "vulnerable",
+      "fixture": "tests/fixtures/vulnerable/upload",
+      "roots": [
+        {
+          "rootCauseId": "upload",
+          "ruleId": "upload.executable",
+          "anchor": "app.py/upload",
+          "severity": "high",
+          "description": "User filename selects an executable web-root destination.",
+          "location": {
+            "path": "app.py",
+            "startLine": 1,
+            "endLine": 3
+          }
+        }
+      ]
+    },
+    {
+      "caseId": "upload-fixed",
+      "family": "upload",
+      "variant": "fixed",
+      "fixture": "tests/fixtures/fixed/upload",
+      "roots": []
+    },
+    {
+      "caseId": "crypto-vulnerable",
+      "family": "crypto",
+      "variant": "vulnerable",
+      "fixture": "tests/fixtures/vulnerable/crypto",
+      "roots": [
+        {
+          "rootCauseId": "crypto",
+          "ruleId": "crypto.predictable-token",
+          "anchor": "app.py/token",
+          "severity": "high",
+          "description": "Security token comes from a predictable PRNG.",
+          "location": {
+            "path": "app.py",
+            "startLine": 1,
+            "endLine": 3
+          }
+        }
+      ]
+    },
+    {
+      "caseId": "crypto-fixed",
+      "family": "crypto",
+      "variant": "fixed",
+      "fixture": "tests/fixtures/fixed/crypto",
+      "roots": []
+    },
+    {
+      "caseId": "exceptional-conditions-vulnerable",
+      "family": "exceptional-conditions",
+      "variant": "vulnerable",
+      "fixture": "tests/fixtures/vulnerable/exceptional-conditions",
+      "roots": [
+        {
+          "rootCauseId": "exceptional-conditions",
+          "ruleId": "auth.fail-open",
+          "anchor": "app.py/allowed",
+          "severity": "high",
+          "description": "Authorization exceptions grant access.",
+          "location": {
+            "path": "app.py",
+            "startLine": 1,
+            "endLine": 5
+          }
+        }
+      ]
+    },
+    {
+      "caseId": "exceptional-conditions-fixed",
+      "family": "exceptional-conditions",
+      "variant": "fixed",
+      "fixture": "tests/fixtures/fixed/exceptional-conditions",
+      "roots": []
+    },
+    {
+      "caseId": "secrets-vulnerable",
+      "family": "secrets",
+      "variant": "vulnerable",
+      "fixture": "tests/fixtures/vulnerable/secrets",
+      "roots": [
+        {
+          "rootCauseId": "secrets",
+          "ruleId": "secret.hardcoded",
+          "anchor": "app.py/credential",
+          "severity": "medium",
+          "description": "Credential material is embedded rather than externally supplied; placeholder is deliberately fake.",
+          "location": {
+            "path": "app.py",
+            "startLine": 1,
+            "endLine": 1
+          }
+        }
+      ]
+    },
+    {
+      "caseId": "secrets-fixed",
+      "family": "secrets",
+      "variant": "fixed",
+      "fixture": "tests/fixtures/fixed/secrets",
+      "roots": []
+    },
+    {
+      "caseId": "sca-vulnerable",
+      "family": "sca",
+      "variant": "vulnerable",
+      "fixture": "tests/fixtures/vulnerable/sca",
+      "roots": [
+        {
+          "rootCauseId": "sca",
+          "ruleId": "sca.pinned-vulnerable",
+          "anchor": "requirements.txt/dependency",
+          "severity": "high",
+          "description": "Synthetic advisory EVAL-0001 marks example-eval-lib versions below 2 vulnerable; no real advisory claim.",
+          "location": {
+            "path": "requirements.txt",
+            "startLine": 1,
+            "endLine": 1
+          }
+        }
+      ]
+    },
+    {
+      "caseId": "sca-fixed",
+      "family": "sca",
+      "variant": "fixed",
+      "fixture": "tests/fixtures/fixed/sca",
+      "roots": []
+    },
+    {
+      "caseId": "iac-vulnerable",
+      "family": "iac",
+      "variant": "vulnerable",
+      "fixture": "tests/fixtures/vulnerable/iac",
+      "roots": [
+        {
+          "rootCauseId": "iac",
+          "ruleId": "iac.public-ingress",
+          "anchor": "main.tf/ingress",
+          "severity": "high",
+          "description": "Administrative port is exposed to every IPv4 source.",
+          "location": {
+            "path": "main.tf",
+            "startLine": 1,
+            "endLine": 4
+          }
+        }
+      ]
+    },
+    {
+      "caseId": "iac-fixed",
+      "family": "iac",
+      "variant": "fixed",
+      "fixture": "tests/fixtures/fixed/iac",
+      "roots": []
+    },
+    {
+      "caseId": "ci-supply-chain-vulnerable",
+      "family": "ci-supply-chain",
+      "variant": "vulnerable",
+      "fixture": "tests/fixtures/vulnerable/ci-supply-chain",
+      "roots": [
+        {
+          "rootCauseId": "ci-supply-chain",
+          "ruleId": "ci.untrusted-checkout",
+          "anchor": "workflow.yml/job",
+          "severity": "critical",
+          "description": "Privileged pull_request_target job executes pull request code.",
+          "location": {
+            "path": "workflow.yml",
+            "startLine": 1,
+            "endLine": 9
+          }
+        }
+      ]
+    },
+    {
+      "caseId": "ci-supply-chain-fixed",
+      "family": "ci-supply-chain",
+      "variant": "fixed",
+      "fixture": "tests/fixtures/fixed/ci-supply-chain",
+      "roots": []
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "caseId": "access-control-vulnerable",
+  "matrix": [
+    {
+      "callerTenant": "A",
+      "invoiceTenant": "A",
+      "expected": "allow"
+    },
+    {
+      "callerTenant": "A",
+      "invoiceTenant": "B",
+      "expected": "deny"
+    },
+    {
+      "callerTenant": null,
+      "invoiceTenant": "A",
+      "expected": "deny"
+    }
+  ]
+}

@@ -1,0 +1,1890 @@
+{
+  "version": "2025-ASVS-5.0.0",
+  "source": "https://top10.owasp.org/2025/",
+  "sources": [
+    "https://raw.githubusercontent.com/OWASP/Top10/3a31f35346c3f4e90f350395124382fa53af2afe/2025/docs/en/A01_2025-Broken_Access_Control.md",
+    "https://raw.githubusercontent.com/OWASP/Top10/3a31f35346c3f4e90f350395124382fa53af2afe/2025/docs/en/A02_2025-Security_Misconfiguration.md",
+    "https://raw.githubusercontent.com/OWASP/Top10/3a31f35346c3f4e90f350395124382fa53af2afe/2025/docs/en/A03_2025-Software_Supply_Chain_Failures.md",
+    "https://raw.githubusercontent.com/OWASP/Top10/3a31f35346c3f4e90f350395124382fa53af2afe/2025/docs/en/A04_2025-Cryptographic_Failures.md",
+    "https://raw.githubusercontent.com/OWASP/Top10/3a31f35346c3f4e90f350395124382fa53af2afe/2025/docs/en/A05_2025-Injection.md",
+    "https://raw.githubusercontent.com/OWASP/Top10/3a31f35346c3f4e90f350395124382fa53af2afe/2025/docs/en/A06_2025-Insecure_Design.md",
+    "https://raw.githubusercontent.com/OWASP/Top10/3a31f35346c3f4e90f350395124382fa53af2afe/2025/docs/en/A07_2025-Authentication_Failures.md",
+    "https://raw.githubusercontent.com/OWASP/Top10/3a31f35346c3f4e90f350395124382fa53af2afe/2025/docs/en/A08_2025-Software_or_Data_Integrity_Failures.md",
+    "https://raw.githubusercontent.com/OWASP/Top10/3a31f35346c3f4e90f350395124382fa53af2afe/2025/docs/en/A09_2025-Security_Logging_and_Alerting_Failures.md",
+    "https://raw.githubusercontent.com/OWASP/Top10/3a31f35346c3f4e90f350395124382fa53af2afe/2025/docs/en/A10_2025-Mishandling_of_Exceptional_Conditions.md"
+  ],
+  "attribution": {
+    "holder": "OWASP Foundation and contributors",
+    "license": "CC BY-SA 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0/",
+    "changes": "Curated and paraphrased by hermes-security; surface and cross-standard associations are editorial review aids, not official equivalences or certification."
+  },
+  "mappingPolicy": "OWASP memberships and CWE names are from the official category mapped-CWE lists. ASVS references are curated related controls, not an official equivalence. Empty ASVS arrays mean no curated control association. CWE-829 and CWE-494 officially belong to A08, not A03.",
+  "entries": {
+    "CWE-5": {
+      "name": "J2EE Misconfiguration: Data Transmission Without Encryption",
+      "owasp": [
+        "A02:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-11": {
+      "name": "ASP.NET Misconfiguration: Creating Debug Binary",
+      "owasp": [
+        "A02:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-13": {
+      "name": "ASP.NET Misconfiguration: Password in Configuration File",
+      "owasp": [
+        "A02:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-15": {
+      "name": "External Control of System or Configuration Setting",
+      "owasp": [
+        "A02:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-16": {
+      "name": "Configuration",
+      "owasp": [
+        "A02:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-20": {
+      "name": "Improper Input Validation",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-22": {
+      "name": "Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": [
+        "V5.3.2"
+      ]
+    },
+    "CWE-23": {
+      "name": "Relative Path Traversal",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": [
+        "V5.3.2"
+      ]
+    },
+    "CWE-36": {
+      "name": "Absolute Path Traversal",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": [
+        "V5.3.2"
+      ]
+    },
+    "CWE-59": {
+      "name": "Improper Link Resolution Before File Access ('Link Following')",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-61": {
+      "name": "UNIX Symbolic Link (Symlink) Following",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-65": {
+      "name": "Windows Hard Link",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-73": {
+      "name": "External Control of File Name or Path",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": [
+        "V5.3.2"
+      ]
+    },
+    "CWE-74": {
+      "name": "Improper Neutralization of Special Elements in Output Used by a Downstream Component ('Injection')",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-76": {
+      "name": "Improper Neutralization of Equivalent Special Elements",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-77": {
+      "name": "Improper Neutralization of Special Elements used in a Command ('Command Injection')",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": [
+        "V1.2.5"
+      ]
+    },
+    "CWE-78": {
+      "name": "Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": [
+        "V1.2.5"
+      ]
+    },
+    "CWE-79": {
+      "name": "Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": [
+        "V1.2.1",
+        "V1.3.1"
+      ]
+    },
+    "CWE-80": {
+      "name": "Improper Neutralization of Script-Related HTML Tags in a Web Page (Basic XSS)",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": [
+        "V1.2.1"
+      ]
+    },
+    "CWE-83": {
+      "name": "Improper Neutralization of Script in Attributes in a Web Page",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-86": {
+      "name": "Improper Neutralization of Invalid Characters in Identifiers in Web Pages",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-88": {
+      "name": "Improper Neutralization of Argument Delimiters in a Command ('Argument Injection')",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-89": {
+      "name": "Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": [
+        "V1.2.4"
+      ]
+    },
+    "CWE-90": {
+      "name": "Improper Neutralization of Special Elements used in an LDAP Query ('LDAP Injection')",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": [
+        "V1.2.6"
+      ]
+    },
+    "CWE-91": {
+      "name": "XML Injection (aka Blind XPath Injection)",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": [
+        "V1.5.1"
+      ]
+    },
+    "CWE-93": {
+      "name": "Improper Neutralization of CRLF Sequences ('CRLF Injection')",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-94": {
+      "name": "Improper Control of Generation of Code ('Code Injection')",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": [
+        "V1.3.2"
+      ]
+    },
+    "CWE-95": {
+      "name": "Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": [
+        "V1.3.2"
+      ]
+    },
+    "CWE-96": {
+      "name": "Improper Neutralization of Directives in Statically Saved Code ('Static Code Injection')",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-97": {
+      "name": "Improper Neutralization of Server-Side Includes (SSI) Within a Web Page",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-98": {
+      "name": "Improper Control of Filename for Include/Require Statement in PHP Program ('PHP Remote File Inclusion')",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": [
+        "V5.3.2"
+      ]
+    },
+    "CWE-99": {
+      "name": "Improper Control of Resource Identifiers ('Resource Injection')",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-103": {
+      "name": "Struts: Incomplete validate() Method Definition",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-104": {
+      "name": "Struts: Form Bean Does Not Extend Validation Class",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-112": {
+      "name": "Missing XML Validation",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-113": {
+      "name": "Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Response Splitting')",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-114": {
+      "name": "Process Control",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-115": {
+      "name": "Misinterpretation of Output",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-116": {
+      "name": "Improper Encoding or Escaping of Output",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-117": {
+      "name": "Improper Output Neutralization for Logs",
+      "owasp": [
+        "A09:2025"
+      ],
+      "asvs": [
+        "V16.4.1"
+      ]
+    },
+    "CWE-129": {
+      "name": "Improper Validation of Array Index",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-159": {
+      "name": "Improper Handling of Invalid Use of Special Elements",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-183": {
+      "name": "Permissive List of Allowed Inputs",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-200": {
+      "name": "Exposure of Sensitive Information to an Unauthorized Actor",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": [
+        "V14.2.4"
+      ]
+    },
+    "CWE-201": {
+      "name": "Exposure of Sensitive Information Through Sent Data",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-209": {
+      "name": "Generation of Error Message Containing Sensitive Information",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": [
+        "V16.5.1"
+      ]
+    },
+    "CWE-215": {
+      "name": "Insertion of Sensitive Information Into Debugging Code",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": [
+        "V16.5.1"
+      ]
+    },
+    "CWE-219": {
+      "name": "Storage of File with Sensitive Data Under Web Root",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-221": {
+      "name": "Information Loss of Omission",
+      "owasp": [
+        "A09:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-223": {
+      "name": "Omission of Security-relevant Information",
+      "owasp": [
+        "A09:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-234": {
+      "name": "Failure to Handle Missing Parameter",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-235": {
+      "name": "Improper Handling of Extra Parameters",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-248": {
+      "name": "Uncaught Exception",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": [
+        "V16.5.4"
+      ]
+    },
+    "CWE-252": {
+      "name": "Unchecked Return Value",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-256": {
+      "name": "Unprotected Storage of Credentials",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-258": {
+      "name": "Empty Password in Configuration File",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-259": {
+      "name": "Use of Hard-coded Password",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-260": {
+      "name": "Password in Configuration File",
+      "owasp": [
+        "A02:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-261": {
+      "name": "Weak Encoding for Password",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-266": {
+      "name": "Incorrect Privilege Assignment",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-269": {
+      "name": "Improper Privilege Management",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-274": {
+      "name": "Improper Handling of Insufficient Privileges",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-276": {
+      "name": "Incorrect Default Permissions",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-280": {
+      "name": "Improper Handling of Insufficient Permissions or Privileges",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-281": {
+      "name": "Improper Preservation of Permissions",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-282": {
+      "name": "Improper Ownership Management",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-283": {
+      "name": "Unverified Ownership",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-284": {
+      "name": "Improper Access Control",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-285": {
+      "name": "Improper Authorization",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": [
+        "V8.2.1",
+        "V8.2.2"
+      ]
+    },
+    "CWE-286": {
+      "name": "Incorrect User Management",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-287": {
+      "name": "Improper Authentication",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": [
+        "V6.1.3"
+      ]
+    },
+    "CWE-288": {
+      "name": "Authentication Bypass Using an Alternate Path or Channel",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-289": {
+      "name": "Authentication Bypass by Alternate Name",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-290": {
+      "name": "Authentication Bypass by Spoofing",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-291": {
+      "name": "Reliance on IP Address for Authentication",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-293": {
+      "name": "Using Referer Field for Authentication",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-294": {
+      "name": "Authentication Bypass by Capture-replay",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-295": {
+      "name": "Improper Certificate Validation",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": [
+        "V12.1.3"
+      ]
+    },
+    "CWE-296": {
+      "name": "Improper Following of a Certificate's Chain of Trust",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-297": {
+      "name": "Improper Validation of Certificate with Host Mismatch",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-298": {
+      "name": "Improper Validation of Certificate with Host Mismatch",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-299": {
+      "name": "Improper Validation of Certificate with Host Mismatch",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-300": {
+      "name": "Channel Accessible by Non-Endpoint",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-302": {
+      "name": "Authentication Bypass by Assumed-Immutable Data",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-303": {
+      "name": "Incorrect Implementation of Authentication Algorithm",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-304": {
+      "name": "Missing Critical Step in Authentication",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-305": {
+      "name": "Authentication Bypass by Primary Weakness",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-306": {
+      "name": "Missing Authentication for Critical Function",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-307": {
+      "name": "Improper Restriction of Excessive Authentication Attempts",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-308": {
+      "name": "Use of Single-factor Authentication",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-309": {
+      "name": "Use of Password System for Primary Authentication",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-311": {
+      "name": "Missing Encryption of Sensitive Data",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-312": {
+      "name": "Cleartext Storage of Sensitive Information",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-313": {
+      "name": "Cleartext Storage in a File or on Disk",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-315": {
+      "name": "Cleartext Storage of Sensitive Information in a Cookie",
+      "owasp": [
+        "A02:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-316": {
+      "name": "Cleartext Storage of Sensitive Information in Memory",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-319": {
+      "name": "Cleartext Transmission of Sensitive Information",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": [
+        "V12.2.1"
+      ]
+    },
+    "CWE-320": {
+      "name": "Key Management Errors (Prohibited)",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-321": {
+      "name": "Use of Hard-coded Cryptographic Key",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-322": {
+      "name": "Key Exchange without Entity Authentication",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-323": {
+      "name": "Reusing a Nonce, Key Pair in Encryption",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-324": {
+      "name": "Use of a Key Past its Expiration Date",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-325": {
+      "name": "Missing Required Cryptographic Step",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-326": {
+      "name": "Inadequate Encryption Strength",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": [
+        "V11.2.3"
+      ]
+    },
+    "CWE-327": {
+      "name": "Use of a Broken or Risky Cryptographic Algorithm",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": [
+        "V11.2.3"
+      ]
+    },
+    "CWE-328": {
+      "name": "Reversible One-Way Hash",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": [
+        "V11.2.3"
+      ]
+    },
+    "CWE-329": {
+      "name": "Not Using a Random IV with CBC Mode",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": [
+        "V11.3.4"
+      ]
+    },
+    "CWE-330": {
+      "name": "Use of Insufficiently Random Values",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": [
+        "V11.5.1"
+      ]
+    },
+    "CWE-331": {
+      "name": "Insufficient Entropy",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-332": {
+      "name": "Insufficient Entropy in PRNG",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-334": {
+      "name": "Small Space of Random Values",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-335": {
+      "name": "Incorrect Usage of Seeds in Pseudo-Random Number Generator(PRNG)",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-336": {
+      "name": "Same Seed in Pseudo-Random Number Generator (PRNG)",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-337": {
+      "name": "Predictable Seed in Pseudo-Random Number Generator (PRNG)",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-338": {
+      "name": "Use of Cryptographically Weak Pseudo-Random Number Generator(PRNG)",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": [
+        "V11.5.1"
+      ]
+    },
+    "CWE-340": {
+      "name": "Generation of Predictable Numbers or Identifiers",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-342": {
+      "name": "Predictable Exact Value from Previous Values",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-345": {
+      "name": "Insufficient Verification of Data Authenticity",
+      "owasp": [
+        "A08:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-346": {
+      "name": "Origin Validation Error",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-347": {
+      "name": "Improper Verification of Cryptographic Signature",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-350": {
+      "name": "Reliance on Reverse DNS Resolution for a Security-Critical Action",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-352": {
+      "name": "Cross-Site Request Forgery (CSRF)",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": [
+        "V3.3.2"
+      ]
+    },
+    "CWE-353": {
+      "name": "Missing Support for Integrity Check",
+      "owasp": [
+        "A08:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-359": {
+      "name": "Exposure of Private Personal Information to an Unauthorized Actor",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-362": {
+      "name": "Concurrent Execution using Shared Resource with Improper Synchronization ('Race Condition')",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": [
+        "V15.4.1"
+      ]
+    },
+    "CWE-369": {
+      "name": "Divide By Zero",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-377": {
+      "name": "Insecure Temporary File",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-379": {
+      "name": "Creation of Temporary File in Directory with Insecure Permissions",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-382": {
+      "name": "J2EE Bad Practices: Use of System.exit()",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-384": {
+      "name": "Session Fixation",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": [
+        "V7.2.2"
+      ]
+    },
+    "CWE-390": {
+      "name": "Detection of Error Condition Without Action",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": [
+        "V16.3.4",
+        "V16.5.3"
+      ]
+    },
+    "CWE-391": {
+      "name": "Unchecked Error Condition",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-394": {
+      "name": "Unexpected Status Code or Return Value",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-396": {
+      "name": "Declaration of Catch for Generic Exception",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-397": {
+      "name": "Declaration of Throws for Generic Exception",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-402": {
+      "name": "Transmission of Private Resources into a New Sphere ('Resource Leak')",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-419": {
+      "name": "Unprotected Primary Channel",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-424": {
+      "name": "Improper Protection of Alternate Path",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-425": {
+      "name": "Direct Request ('Forced Browsing')",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-426": {
+      "name": "Untrusted Search Path",
+      "owasp": [
+        "A08:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-427": {
+      "name": "Uncontrolled Search Path Element",
+      "owasp": [
+        "A08:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-434": {
+      "name": "Unrestricted Upload of File with Dangerous Type",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": [
+        "V5.2.2",
+        "V5.3.1"
+      ]
+    },
+    "CWE-436": {
+      "name": "Interpretation Conflict",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-441": {
+      "name": "Unintended Proxy or Intermediary ('Confused Deputy')",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-444": {
+      "name": "Inconsistent Interpretation of HTTP Requests ('HTTP Request Smuggling')",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-447": {
+      "name": "Use of Obsolete Function",
+      "owasp": [
+        "A03:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-451": {
+      "name": "User Interface (UI) Misrepresentation of Critical Information",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-454": {
+      "name": "External Initialization of Trusted Variables or Data Stores",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-460": {
+      "name": "Improper Cleanup on Thrown Exception",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": [
+        "V1.4.3"
+      ]
+    },
+    "CWE-470": {
+      "name": "Use of Externally-Controlled Input to Select Classes or Code ('Unsafe Reflection')",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-472": {
+      "name": "External Control of Assumed-Immutable Web Parameter",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-476": {
+      "name": "NULL Pointer Dereference",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-478": {
+      "name": "Missing Default Case in Multiple Condition Expression",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-484": {
+      "name": "Omitted Break Statement in Switch",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-489": {
+      "name": "Active Debug Code",
+      "owasp": [
+        "A02:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-493": {
+      "name": "Critical Public Variable Without Final Modifier",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-494": {
+      "name": "Download of Code Without Integrity Check",
+      "owasp": [
+        "A08:2025"
+      ],
+      "asvs": [
+        "V15.1.2"
+      ]
+    },
+    "CWE-497": {
+      "name": "Exposure of Sensitive System Information to an Unauthorized Control Sphere",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-500": {
+      "name": "Public Static Field Not Marked Final",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-501": {
+      "name": "Trust Boundary Violation",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-502": {
+      "name": "Deserialization of Untrusted Data",
+      "owasp": [
+        "A08:2025"
+      ],
+      "asvs": [
+        "V1.5.2"
+      ]
+    },
+    "CWE-506": {
+      "name": "Embedded Malicious Code",
+      "owasp": [
+        "A08:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-509": {
+      "name": "Replicating Malicious Code (Virus or Worm)",
+      "owasp": [
+        "A08:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-521": {
+      "name": "Weak Password Requirements",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-522": {
+      "name": "Insufficiently Protected Credentials",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-523": {
+      "name": "Unprotected Transport of Credentials",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-525": {
+      "name": "Use of Web Browser Cache Containing Sensitive Information",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-526": {
+      "name": "Exposure of Sensitive Information Through Environmental Variables",
+      "owasp": [
+        "A02:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-532": {
+      "name": "Insertion of Sensitive Information into Log File",
+      "owasp": [
+        "A09:2025"
+      ],
+      "asvs": [
+        "V16.2.5"
+      ]
+    },
+    "CWE-538": {
+      "name": "Insertion of Sensitive Information into Externally-Accessible File or Directory",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-539": {
+      "name": "Use of Persistent Cookies Containing Sensitive Information",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-540": {
+      "name": "Inclusion of Sensitive Information in Source Code",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-547": {
+      "name": "Use of Hard-coded, Security-relevant Constants",
+      "owasp": [
+        "A02:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-548": {
+      "name": "Exposure of Information Through Directory Listing",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-550": {
+      "name": "Server-generated Error Message Containing Sensitive Information",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": [
+        "V16.5.1"
+      ]
+    },
+    "CWE-552": {
+      "name": "Files or Directories Accessible to External Parties",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-564": {
+      "name": "SQL Injection: Hibernate",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-565": {
+      "name": "Reliance on Cookies without Validation and Integrity Checking",
+      "owasp": [
+        "A08:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-566": {
+      "name": "Authorization Bypass Through User-Controlled SQL Primary Key",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-598": {
+      "name": "Use of GET Request Method With Sensitive Query Strings",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-601": {
+      "name": "URL Redirection to Untrusted Site ('Open Redirect')",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-602": {
+      "name": "Client-Side Enforcement of Server-Side Security",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-610": {
+      "name": "Externally Controlled Reference to a Resource in Another Sphere",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-611": {
+      "name": "Improper Restriction of XML External Entity Reference",
+      "owasp": [
+        "A02:2025"
+      ],
+      "asvs": [
+        "V1.5.1"
+      ]
+    },
+    "CWE-613": {
+      "name": "Insufficient Session Expiration",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-614": {
+      "name": "Sensitive Cookie in HTTPS Session Without 'Secure' Attribute",
+      "owasp": [
+        "A02:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-615": {
+      "name": "Inclusion of Sensitive Information in Source Code Comments",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-620": {
+      "name": "Unverified Password Change",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-628": {
+      "name": "Function Call with Incorrectly Specified Arguments",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-636": {
+      "name": "Not Failing Securely ('Failing Open')",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": [
+        "V16.5.3"
+      ]
+    },
+    "CWE-639": {
+      "name": "Authorization Bypass Through User-Controlled Key",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": [
+        "V8.2.2"
+      ]
+    },
+    "CWE-640": {
+      "name": "Weak Password Recovery Mechanism for Forgotten Password",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-642": {
+      "name": "External Control of Critical State Data",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-643": {
+      "name": "Improper Neutralization of Data within XPath Expressions ('XPath Injection')",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": [
+        "V1.2.7"
+      ]
+    },
+    "CWE-644": {
+      "name": "Improper Neutralization of HTTP Headers for Scripting Syntax",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-646": {
+      "name": "Reliance on File Name or Extension of Externally-Supplied File",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-653": {
+      "name": "Insufficient Compartmentalization",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-656": {
+      "name": "Reliance on Security Through Obscurity",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-657": {
+      "name": "Violation of Secure Design Principles",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-668": {
+      "name": "Exposure of Resource to Wrong Sphere",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-676": {
+      "name": "Use of Potentially Dangerous Function",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-693": {
+      "name": "Protection Mechanism Failure",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-703": {
+      "name": "Improper Check or Handling of Exceptional Conditions",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": [
+        "V16.5.2",
+        "V16.5.3"
+      ]
+    },
+    "CWE-732": {
+      "name": "Incorrect Permission Assignment for Critical Resource",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-749": {
+      "name": "Exposed Dangerous Method or Function",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-754": {
+      "name": "Improper Check for Unusual or Exceptional Conditions",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": [
+        "V16.5.3"
+      ]
+    },
+    "CWE-755": {
+      "name": "Improper Handling of Exceptional Conditions",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": [
+        "V16.5.3"
+      ]
+    },
+    "CWE-756": {
+      "name": "Missing Custom Error Page",
+      "owasp": [
+        "A10:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-757": {
+      "name": "Selection of Less-Secure Algorithm During Negotiation('Algorithm Downgrade')",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-759": {
+      "name": "Use of a One-Way Hash without a Salt",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": [
+        "V11.4.2"
+      ]
+    },
+    "CWE-760": {
+      "name": "Use of a One-Way Hash with a Predictable Salt",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": [
+        "V11.4.2"
+      ]
+    },
+    "CWE-776": {
+      "name": "Improper Restriction of Recursive Entity References in DTDs ('XML Entity Expansion')",
+      "owasp": [
+        "A02:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-778": {
+      "name": "Insufficient Logging",
+      "owasp": [
+        "A09:2025"
+      ],
+      "asvs": [
+        "V16.3.1",
+        "V16.3.2",
+        "V16.3.3"
+      ]
+    },
+    "CWE-780": {
+      "name": "Use of RSA Algorithm without OAEP",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-784": {
+      "name": "Reliance on Cookies without Validation and Integrity Checking in a Security Decision",
+      "owasp": [
+        "A08:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-798": {
+      "name": "Use of Hard-coded Credentials",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-799": {
+      "name": "Improper Control of Interaction Frequency",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-807": {
+      "name": "Reliance on Untrusted Inputs in a Security Decision",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-829": {
+      "name": "Inclusion of Functionality from Untrusted Control Sphere",
+      "owasp": [
+        "A08:2025"
+      ],
+      "asvs": [
+        "V15.1.2",
+        "V15.2.4"
+      ]
+    },
+    "CWE-830": {
+      "name": "Inclusion of Web Functionality from an Untrusted Source",
+      "owasp": [
+        "A08:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-841": {
+      "name": "Improper Enforcement of Behavioral Workflow",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": [
+        "V2.3.1"
+      ]
+    },
+    "CWE-862": {
+      "name": "Missing Authorization",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": [
+        "V8.2.1"
+      ]
+    },
+    "CWE-863": {
+      "name": "Incorrect Authorization",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": [
+        "V8.3.1"
+      ]
+    },
+    "CWE-915": {
+      "name": "Improperly Controlled Modification of Dynamically-Determined Object Attributes",
+      "owasp": [
+        "A08:2025"
+      ],
+      "asvs": [
+        "V15.3.3"
+      ]
+    },
+    "CWE-916": {
+      "name": "Use of Password Hash With Insufficient Computational Effort",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": [
+        "V11.4.2"
+      ]
+    },
+    "CWE-917": {
+      "name": "Improper Neutralization of Special Elements used in an Expression Language Statement ('Expression Language Injection')",
+      "owasp": [
+        "A05:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-918": {
+      "name": "Server-Side Request Forgery (SSRF)",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": [
+        "V1.3.6"
+      ]
+    },
+    "CWE-922": {
+      "name": "Insecure Storage of Sensitive Information",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-926": {
+      "name": "Improper Export of Android Application Components",
+      "owasp": [
+        "A08:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-940": {
+      "name": "Improper Verification of Source of a Communication Channel",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-941": {
+      "name": "Incorrectly Specified Destination in a Communication Channel",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-942": {
+      "name": "Permissive Cross-domain Policy with Untrusted Domains",
+      "owasp": [
+        "A02:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-1004": {
+      "name": "Sensitive Cookie Without 'HttpOnly' Flag",
+      "owasp": [
+        "A02:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-1021": {
+      "name": "Improper Restriction of Rendered UI Layers or Frames",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-1022": {
+      "name": "Use of Web Link to Untrusted Target with window.opener Access",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-1035": {
+      "name": "2017 Top 10 A9: Using Components with Known Vulnerabilities",
+      "owasp": [
+        "A03:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-1104": {
+      "name": "Use of Unmaintained Third Party Components",
+      "owasp": [
+        "A03:2025"
+      ],
+      "asvs": [
+        "V15.2.1"
+      ]
+    },
+    "CWE-1125": {
+      "name": "Excessive Attack Surface",
+      "owasp": [
+        "A06:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-1174": {
+      "name": "ASP.NET Misconfiguration: Improper Model Validation",
+      "owasp": [
+        "A02:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-1240": {
+      "name": "Use of a Cryptographic Primitive with a Risky Implementation",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-1241": {
+      "name": "Use of Predictable Algorithm in Random Number Generator",
+      "owasp": [
+        "A04:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-1275": {
+      "name": "Sensitive Cookie with Improper SameSite Attribute",
+      "owasp": [
+        "A01:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-1329": {
+      "name": "Reliance on Component That is Not Updateable",
+      "owasp": [
+        "A03:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-1357": {
+      "name": "Reliance on Insufficiently Trustworthy Component",
+      "owasp": [
+        "A03:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-1390": {
+      "name": "Weak Authentication",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-1391": {
+      "name": "Use of Weak Credentials",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-1392": {
+      "name": "Use of Default Credentials",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-1393": {
+      "name": "Use of Default Password",
+      "owasp": [
+        "A07:2025"
+      ],
+      "asvs": []
+    },
+    "CWE-1395": {
+      "name": "Dependency on Vulnerable Third-Party Component",
+      "owasp": [
+        "A03:2025"
+      ],
+      "asvs": []
+    }
+  }
+}

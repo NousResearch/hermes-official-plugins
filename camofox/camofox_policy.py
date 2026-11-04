@@ -70,6 +70,28 @@ def redact_output(value: Any, *, _depth: int = 0) -> Any:
     return value
 
 
+def scrub_vault_values(value: Any, *, _depth: int = 0) -> Any:
+    """Exact registered vault secrets out of every page-controlled field of a tool result, strings and
+    JS-coerced numbers alike (the latter when core provides
+    ``redact_registered_vault_number``). Applied once, at the tool-output boundary (``_dumps``)."""
+    from agent import redact
+    if _depth >= _REDACT_WALK_MAX_DEPTH:
+        return _REDACT_WALK_DEPTH_MARKER
+    if isinstance(value, str):
+        return redact.redact_registered_vault_values(value)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        number = getattr(redact, "redact_registered_vault_number", None)  # optional core helper
+        return number(value) if number is not None else value
+    if isinstance(value, (list, tuple)):
+        return type(value)(scrub_vault_values(item, _depth=_depth + 1) for item in value)
+    if isinstance(value, dict):
+        return {scrub_vault_values(k, _depth=_depth + 1): scrub_vault_values(v, _depth=_depth + 1)
+                for k, v in value.items()}
+    return value
+
+
 def redact_typed_text(value: Any, typed_text: Any) -> Any:
     """Replace every occurrence of a secret-looking typed value with its redacted form (servers echo
     the attempted input in errors/metadata)."""

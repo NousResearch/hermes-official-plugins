@@ -295,3 +295,43 @@ def test_a_misconfigured_daybreak_route_is_skipped_with_a_warning(provider, capl
 def test_daybreak_false_is_a_plain_route(provider, daybreak_env):
     route = _pick(provider, _config(options=[{**DAYBREAK, "daybreak": False}]), "daybreak")
     assert "request_overrides" not in route and daybreak_env["calls"] == []
+
+# --- profile routes in model_map -----------------------------------------------------------
+
+def test_profile_route_returns_profile_dict(provider):
+    config = _config(options=[
+        {"name": "code", "description": "Frontier coding.", "profile": "openai"},
+    ])
+    route = provider.route_task({"goal": "g", "index": 0, "option": "code"}, config)
+    assert route == {"profile": "openai", "label": "code"}
+
+
+def test_entry_with_both_profile_and_model_is_skipped(provider, caplog):
+    config = _config(options=[
+        {"name": "bad", "description": "Ambiguous.", "profile": "openai", "provider": "custom", "model": "gpt-6-sol"},
+    ])
+    with caplog.at_level(logging.WARNING):
+        params = provider.task_parameters(config)
+    assert params == {}
+    assert "both" in caplog.text.lower()
+
+
+def test_mixed_config_routes_model_and_profile_entries(provider):
+    config = _config(options=[
+        {"name": "cheap", "description": "Lookups.", "provider": "openrouter", "model": "google/gemini-3-flash-preview"},
+        {"name": "code", "description": "Frontier coding.", "profile": "openai"},
+    ])
+    params = provider.task_parameters(config)
+    assert params["option"]["enum"] == ["cheap", "code"]
+    cheap_route = provider.route_task({"goal": "g", "index": 0, "option": "cheap"}, config)
+    assert cheap_route["model"] == "google/gemini-3-flash-preview" and "profile" not in cheap_route
+    code_route = provider.route_task({"goal": "g", "index": 0, "option": "code"}, config)
+    assert code_route == {"profile": "openai", "label": "code"}
+
+
+def test_profile_route_default_works(provider):
+    config = _config(options=[
+        {"name": "code", "description": "Frontier coding.", "profile": "openai"},
+    ], default="code")
+    route = provider.route_task({"goal": "g", "index": 0}, config)
+    assert route == {"profile": "openai", "label": "code"}

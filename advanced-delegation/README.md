@@ -182,6 +182,25 @@ Model → Subagents) on a Hermes whose editor knows the key this plugin declares
 saving routes from the Desktop editor drops `daybreak`; set it with `hermes delegation config` or
 YAML there and edit those routes outside Desktop.
 
+        - name: contained
+          description: "Frontier coding, Docker-contained."
+          profile: openai                # runs as this Hermes profile (own model, credentials, Docker volumes)
+      default: fast                      # optional: route for tasks that pick none
+```
+
+Route keys: `name` and `description` (required), then either `model` with `provider`
+and/or `base_url`, or `profile` (a Hermes profile name). Optionally `reasoning_effort`,
+`service_tier`, `fallback_providers`, `api_key` and `api_mode`, each meaning the same
+as the matching `delegation.*` key. Prefer `provider:` over `api_key:`: provider
+credentials stay in `.env` / `auth.json`, while an `api_key` here is stored in `config.yaml` in plain
+text. Malformed routes and repeated names are skipped with a warning in `hermes logs`.
+
+A route with `profile` runs the subagent as that Hermes profile, identical to
+`profile_routes`: it uses the profile's own model, credentials, skills and Docker
+volumes. Use this to mix model routes and profile routes in one config. A route
+cannot have both `profile` and `provider`/`model`; entries with both are skipped
+with a warning.
+
 `service_tier` is checked like `/fast` against the route (and, for `ultrafast`, your Codex
 account): a tier the route does not offer refuses the spawn with a tool error instead of silently
 running at another tier. An unknown `reasoning_effort` is refused the same way.

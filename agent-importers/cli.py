@@ -326,17 +326,30 @@ def _print_banner() -> None:
 def _print_routine_next_steps(report: dict[str, Any], product: str) -> None:
     """Grok and OpenBot imports are one-off (not sync sources); say how to switch the routines over."""
     from hermes_cli.cli_output import print_info
+    from hermes_constants import profile_cli_selector
+
     jobs = [i for i in report.get("items", []) if i.get("kind") == "routine" and i.get("status") == "imported"]
     paused = [i for i in jobs if i.get("paused")]
     if paused:
         print()
         print_info(f"{len(paused)} routine(s) were created PAUSED so they don't run twice. Once you turn "
                    f"the routine off in {product}, resume its copy here:")
+        # Pin the hint to the profile the import targeted, so the command works when pasted anywhere
+        # (#265): a resume typed from another profile touches that profile's cron store instead.
+        from hermes_constants import get_hermes_home
+        profile = profile_cli_selector() if _is_named_profile(get_hermes_home()) else ""
         for item in paused:
-            print_info(f"  hermes cron resume {item.get('job_id')}    # {item.get('destination')}")
+            print_info(f"  hermes {profile}cron resume {item.get('job_id')}    # {item.get('destination')}")
     if jobs:
         print_info("Results land in Hermes' cron output; to have one sent to Telegram, Discord, Slack, "
                    "...: hermes cron edit <id> --deliver <platform>")
+
+
+def _is_named_profile(home: Path) -> bool:
+    """True when *home* is a named profile's directory (``<root>/profiles/<name>``), not the default."""
+    from hermes_constants import profile_name_for_home
+    name = profile_name_for_home(home)
+    return bool(name) and name != "default"
 
 
 def _register_for_sync(agent: str, source_dir: Path, hermes_home: Path, overwrite: bool,

@@ -42,7 +42,7 @@ BACKEND = "model_map"
 SETTINGS_PATH = f"delegation.backends.{BACKEND}"
 PARAMETER = "option"
 #: Entry keys copied into the route (same meaning as the matching core route fields).
-ROUTE_FIELDS = ("provider", "model", "base_url", "api_key", "api_mode", "reasoning_effort", "service_tier")
+ROUTE_FIELDS = ("provider", "model", "base_url", "api_key", "api_mode", "reasoning_effort", "service_tier", "profile")
 _warned: set[str] = set()
 
 
@@ -64,6 +64,12 @@ def _entry_problem(entry: Any) -> str:
         return "is not a mapping"
     if not _text(entry, "name") or not _text(entry, "description"):
         return "needs a name and a description"
+    has_profile = bool(_text(entry, "profile"))
+    has_model_fields = bool(_text(entry, "model") or _text(entry, "provider") or _text(entry, "base_url"))
+    if has_profile and has_model_fields:
+        return "has both profile and model/provider fields; use one or the other"
+    if has_profile:
+        return ""
     if not _text(entry, "model"):
         return "needs a model"
     if not (_text(entry, "provider") or _text(entry, "base_url")):
@@ -145,4 +151,7 @@ class ModelMapDelegationProvider(DelegationProvider):
         if not chosen:
             return {}  # the parent's route: delegation.model / delegation.provider are inactive in this mode
         # Core already refused a chosen value outside the enum before calling us.
-        return {**options[chosen]["route"], "label": chosen}
+        route = options[chosen]["route"]
+        if "profile" in route:
+            return {"profile": route["profile"], "label": chosen}
+        return {**route, "label": chosen}

@@ -73,6 +73,27 @@ def test_pasted_export_becomes_paused_cron_jobs_skills_memories_and_soul(tmp_pat
     assert "hermes cron resume" in capsys.readouterr().out
 
 
+def test_the_resume_hint_is_pasteable_from_a_named_profile(tmp_path, monkeypatch, capsys):
+    """Importing into a named profile prints `hermes cron resume` with that profile's `-p` selector,
+    so the hint works when pasted anywhere (#265); the default profile keeps the bare form."""
+    home = tmp_path / ".hermes" / "profiles" / "scout"
+    home.mkdir(parents=True)  # `hermes profile create scout` ran first, as the issue's repro does
+
+    def profiled_home():
+        return home
+
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    import hermes_constants
+    monkeypatch.setattr(hermes_constants, "get_hermes_home", profiled_home)
+    reply = tmp_path / "reply.json"
+    reply.write_text(json.dumps(EXPORT), encoding="utf-8")
+
+    _run(["grok-bot", "--source", str(reply), "-y"])
+    out = capsys.readouterr().out
+    assert "hermes -p scout cron resume" in out and "hermes cron resume" not in out.replace(
+        "hermes -p scout cron resume", "")
+
+
 def test_without_an_export_it_prints_the_prompt_and_failures_exit_non_zero(tmp_path, capsys):
     """Nothing to read yet: the user gets the message to paste into the Bot and nothing is written. A
     missing --source or a credential-carrying export fails the command (exit 1) and imports nothing;

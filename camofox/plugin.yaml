@@ -1,7 +1,7 @@
 name: camofox
 label: Camofox
 kind: standalone
-version: 1.0.0
+version: 1.1.0
 author: NousResearch
 homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/camofox
 description: >
@@ -10,7 +10,8 @@ description: >
   browser_snapshot, browser_click, browser_type, browser_scroll, browser_back, browser_press,
   browser_get_images, browser_vision and browser_console tools (toolset camofox), cookie import
   from a cookies.txt file (browser_import_cookies, with CAMOFOX_API_KEY), plus
-  `hermes camofox setup|status`. Hermes does not install or start the server; set
+  `hermes camofox setup|status`, and lets browser_vault fill saved logins on the Camofox tab.
+  Hermes does not install or start the server; set
   CAMOFOX_URL. Formerly built into Hermes core.
 provides_tools:
   - browser_navigate

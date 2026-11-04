@@ -1,0 +1,63 @@
+name: elevenlabs-music
+label: ElevenLabs Music
+kind: standalone
+version: 1.0.0
+author: NousResearch
+homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/elevenlabs-music
+description: >
+  ElevenLabs Music for Hermes Agent: make songs and instrumentals from a prompt (3 seconds to 10 minutes,
+  vocals in many languages), write exact lyrics and structure with composition plans (a free plan draft,
+  then generate), edit, extend, loop or re-style earlier songs, split any song into stems, and score
+  videos. Long generations run in the background so chat apps are never held. Bundles a music skill, and
+  in Hermes Desktop an inline music card (title, synced lyrics, waveform, play, download per format,
+  follow-up actions) and a music library tab. Uses your ElevenLabs API key (the same `ELEVENLABS_API_KEY`
+  Hermes's ElevenLabs voice uses); the Music API needs a paid ElevenLabs plan.
+requires_hermes: ">=0.22.0"
+provides_tools:
+  - elevenlabs_music_compose
+  - elevenlabs_music_compose_plan
+  - elevenlabs_music_draft_plan
+  - elevenlabs_music_upload
+  - elevenlabs_music_stems
+  - elevenlabs_music_from_video
+  - elevenlabs_music_finetunes
+  - elevenlabs_music_job
+provides_hooks: []
+requires_env:
+  - name: ELEVENLABS_API_KEY
+    description: "ElevenLabs API key (Profile → API keys; a paid plan with Music access). The music tools appear once it is set."
+    url: https://elevenlabs.io/app/settings/api-keys
+    secret: true
+config_schema:
+  api_key:
+    type: secret
+    env: ELEVENLABS_API_KEY
+    label: ElevenLabs API key
+    description: "Shared with Hermes's ElevenLabs voice and the ElevenLabs Sound Effects plugin."
+  music_model:
+    type: str
+    choices: [music_v2_5, music_v2, music_v1]
+    default: music_v2_5
+    label: Model
+    description: "Music v2.5 is ElevenLabs' newest. Composition plans, edits and audio references need v2 or v2.5."
+  output_format:
+    type: str
+    choices: [mp3_44100_128, mp3_44100_192, mp3_48000_192, mp3_48000_320, opus_48000_128, opus_48000_192]
+    default: mp3_44100_128
+    label: Audio format
+    description: "ElevenLabs documents 192 kbps MP3 for Creator plans and up. WAV downloads come from the Desktop card (ffmpeg)."
+  store_for_editing:
+    type: bool
+    default: true
+    label: Keep songs editable
+    description: "Ask ElevenLabs to keep each song so later requests can edit, extend or sample it. No extra cost."
+  chat_app_wait_seconds:
+    type: int
+    default: 20
+    label: Wait in chat apps (seconds)
+    description: "Telegram, Discord, Slack and other chat apps: how long a request waits before Hermes replies 'started' and sends the song when it is done (0-240)."
+  api_base_url:
+    type: str
+    default: https://api.elevenlabs.io
+    label: API base URL
+    description: "Change only for an ElevenLabs data-residency endpoint (e.g. https://api.eu.residency.elevenlabs.io)."

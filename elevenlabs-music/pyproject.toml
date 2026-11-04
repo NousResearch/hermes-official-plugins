@@ -1,0 +1,14 @@
+[project]
+name = "hermes-elevenlabs-music"
+version = "1.0.0"
+description = "ElevenLabs Music tools for Hermes Agent (official plugin)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nous Research" }]
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.27,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/elevenlabs-music"

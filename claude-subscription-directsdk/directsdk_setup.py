@@ -1,8 +1,10 @@
 """Setup-time probes of the user's Claude CLI: login state and its own model picker.
 
 Neither sends a Messages request: ``auth status`` reads the local credential store, and the
-``initialize`` handshake enumerates the picker without one (the admission relay proves it by
-counting upstream calls). With the ``claude_code_telemetry`` setting on (the default) the CLI
+``initialize`` handshake enumerates the picker without one: it writes only ``initialize`` and no
+user turn. The handshake runs first-party, because Claude Code serves the account's own picker only
+then, so no relay counts its upstream calls and each row's ``upstream_requests`` is ``None``
+(unobserved). With an inherited auth/backend override it stays behind the relay, which counts them. With the ``claude_code_telemetry`` setting on (the default) the CLI
 fetches its feature flags for the handshake, which is what makes its picker list every model. Anything unexpected returns ``None``/``False`` so callers
 fall back to the pinned catalog rather than failing setup.
 """
@@ -15,10 +17,10 @@ from collections.abc import Mapping
 
 try:
     from .admission import Admission
-    from .model_catalog import MODEL_METADATA, native_model
+    from .model_catalog import MODEL_METADATA, PICKER_ROUTES, native_model
 except ImportError:
     from admission import Admission
-    from model_catalog import MODEL_METADATA, native_model
+    from model_catalog import MODEL_METADATA, PICKER_ROUTES, native_model
 
 INSTALL_HINT = ("Claude Code is not installed (no `claude` on PATH or in the usual install directories). Install it with "
                 "`npm install -g @anthropic-ai/claude-code` or set CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND to the binary.")
@@ -66,7 +68,17 @@ QUIET_TRAFFIC = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_TELEM
 # also stops native's own session-title request (#116): under an inherited Agent SDK or non-CLI
 # entrypoint, or a server flag, it races the turn for the one upstream request the relay admits.
 ALWAYS_QUIET = {"DISABLE_AUTOUPDATER": "1", "DISABLE_FEEDBACK_COMMAND": "1", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"}
+# Native names its caller on every request (`cc_entrypoint` in the billing header, the user agent).
+# Under `-p` it defaults to `sdk-cli`, and subscriptions draw the 5-hour window about 2x faster per
+# token for `sdk-*` callers than for the interactive CLI or a client's own name (anthropics/claude-code#97074).
+# An inherited host name (`sdk-py`, `claude-desktop`) would reach the child too, so it is overwritten.
+# Off the `sdk-*` names native offers its artifact tool and adds a scratchpad line to every request;
+# CLAUDE_CODE_DISABLE_ARTIFACT keeps the request identical to the `sdk-cli` one apart from the name.
+CALLER_IDENTITY = {"CLAUDE_CODE_ENTRYPOINT": "hermes-agent", "CLAUDE_CODE_DISABLE_ARTIFACT": "1"}
 _OFF = ("false", "0", "no", "off")
+# Inherited auth/backend overrides the request path refuses (directsdk.Client); discovery treats them alike.
+BACKEND_OVERRIDES = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_FOUNDRY_API_KEY")
+BACKEND_SWITCHES = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
 
 # Hermes loads `~/.hermes/.env` into its own process, so a key set there for its `anthropic` provider
 # is inherited here too. Claude Code would sign in with it and bill API usage instead of the
@@ -122,8 +134,9 @@ def apply_traffic_policy(env, telemetry=None):
 
     Never removes anything: a flag the user exported in Hermes' own environment
     (``DISABLE_TELEMETRY``, ``DO_NOT_TRACK``, ...) still reaches the child with the setting on.
+    The caller name is the one value replaced, whatever the parent set.
     """
-    env.update(ALWAYS_QUIET)
+    env.update(ALWAYS_QUIET, **CALLER_IDENTITY)
     if not (telemetry_enabled() if telemetry is None else telemetry):
         env.update(QUIET_TRAFFIC)
     return env
@@ -163,6 +176,12 @@ def setup_status(command=None, env=None, timeout=20):
             "login_command": login_command}
 
 
+def _first_party(env):
+    """No inherited auth or backend override: native talks to Anthropic with the CLI's own login."""
+    return (not any(env.get(key) for key in BACKEND_OVERRIDES)
+            and all(str(env.get(key, "")).strip().lower() in (*_OFF, "") for key in BACKEND_SWITCHES))
+
+
 def discover_models(command=None, env=None, timeout=40):
     """The account's live picker as ``[{id, label, note, upstream_requests}]`` in Hermes route ids,
     or ``None`` when the CLI is missing, logged out, or the handshake fails."""
@@ -173,9 +192,17 @@ def discover_models(command=None, env=None, timeout=40):
     if resolved is None or not setup_status(command=resolved, env=env, timeout=timeout)["logged_in"]:
         return None
     child = _child_env(env)
-    gate = Admission("https://api.anthropic.com", timeout)
+    # The account's own picker (entitlement-gated models such as Mythos, older models it still runs) is
+    # native's served catalog, and native serves it only first-party: behind any ANTHROPIC_BASE_URL,
+    # our relay included, it logs `[servedCatalog] off (not_first_party)` and answers a generic list.
+    # The handshake therefore talks to Anthropic directly. It writes only `initialize` and closes
+    # stdin, so native has no user turn to query; its debug log shows bootstrap, MCP-directory and
+    # telemetry fetches and no Messages request. An inherited auth/backend override keeps the relay,
+    # since the request path refuses those environments anyway and the bearer must not leave for them.
+    gate = None if _first_party(child) else Admission("https://api.anthropic.com", timeout)
     try:
-        child["ANTHROPIC_BASE_URL"] = gate.url
+        if gate is not None:
+            child["ANTHROPIC_BASE_URL"] = gate.url
         argv = resolved + ["-p", "--model", "sonnet", "--input-format", "stream-json", "--output-format", "stream-json",
                            "--verbose", "--tools", "", "--setting-sources", "", "--strict-mcp-config",
                            "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands", "--no-session-persistence"]
@@ -187,17 +214,28 @@ def discover_models(command=None, env=None, timeout=40):
         rows = [json.loads(line) for line in run.stdout.splitlines() if line.startswith("{")]
         response = next(r["response"] for r in rows if r.get("type") == "control_response")
         native = response.get("response", {}).get("models") or []
-        upstream = int(bool(gate.used))
+        # Counted only behind the relay; first-party nothing observes the CLI's traffic, so say so.
+        upstream = None if gate is None else int(bool(gate.used))
     except (OSError, ValueError, StopIteration, KeyError, subprocess.SubprocessError):
         return None
     finally:
-        gate.close()
+        if gate is not None:
+            gate.close()
     if upstream or not native:
         return None
-    # Pro / Team-standard seats bill Fable to usage credits from the first request; the CLI only
-    # says so at request time, so apply the documented plan rule here.
+    # Fable 5 and 5.1 are a standard part of Max and Ultra and of premium Team/Enterprise seats; Pro and
+    # standard seats bill both to usage credits from the first request, and under -p Claude Code bills
+    # without asking. The CLI says so only at request time, so apply the documented rule here
+    # (https://support.claude.com/en/articles/15424964). The handshake names the plan, not the seat
+    # tier, so a Team/Enterprise row says the rule applies to standard seats instead of guessing.
     plan = str((response.get("response", {}).get("account") or {}).get("subscriptionType") or "").lower()
-    credit_billed_on_plan = {"claude-fable-5-1"} if plan and "max" not in plan else set()
+    fable = {"claude-fable-5", "claude-fable-5-1"}
+    if "pro" in plan:
+        credit_billed_on_plan, credit_note = fable, "usage credits"
+    elif "team" in plan or "enterprise" in plan:
+        credit_billed_on_plan, credit_note = fable, "usage credits on standard seats"
+    else:
+        credit_billed_on_plan, credit_note = set(), "usage credits"
     # The pinned table adds metadata (1M route, window, aliases) to the models it knows; it never
     # decides visibility, so a model the CLI ships before the table does is listed the same day.
     announced = [str(row.get("resolvedModel") or row.get("value") or "") for row in native]
@@ -217,24 +255,33 @@ def discover_models(command=None, env=None, timeout=40):
                 continue
             if base in long_context:
                 route = base + "[1m]"
-        # Model names, not the native "Default (recommended)" alias row.
-        label = str(row.get("description") or "").split("·")[0].strip() or route
+        # A model name, never the "Default (recommended)" alias label. The served (first-party) catalog
+        # names the model in displayName ("Opus 5.5"); the generic list names only the family there
+        # ("Opus") and the model before the "·" in its description ("Opus 5.5 · Best for ...").
+        display = str(row.get("displayName") or "").strip()
+        # The version precedes any "(...)": "Opus (1M context)" names only the family.
+        named = display if any(c.isdigit() for c in display.split("(")[0]) and not display.lower().startswith("default") else ""
+        label = named or str(row.get("description") or "").split("·")[0].strip() or route
         entry = routes.setdefault(route, {"id": route, "label": label, "note": "" if pinned else "unpinned",
                                           "upstream_requests": upstream})
-        if "usage credit" in str(row.get("description") or "").lower() or base in credit_billed_on_plan:
-            # The billing warning reads first; an unpinned row keeps its marker after it.
-            entry["note"] = "usage credits" if pinned else "usage credits · unpinned"
+        described = "usage credit" in str(row.get("description") or "").lower()
+        if described or base in credit_billed_on_plan:
+            # The billing warning reads first; an unpinned row keeps its marker after it. The CLI's own
+            # wording is about this account, so it beats the seat-tier caveat.
+            warning = "usage credits" if described else credit_note
+            entry["note"] = warning if pinned else warning + " · unpinned"
     if not routes:
         return None
     # The live picker names only each family's current model, yet the account still runs the older
     # pinned ones (Opus 5, Opus 4.8, ...). Replacing the static catalog with the picker would hide
     # them, so every pinned route the CLI did not announce is appended after the advertised rows.
-    for route, meta in MODEL_METADATA.items():
+    # Access-gated routes (Mythos) are never appended: only an account the CLI offers one to sees it.
+    for route in PICKER_ROUTES:
         if route in routes:
             continue
-        canonical = meta["canonical_model"]
+        canonical = MODEL_METADATA[route]["canonical_model"]
         routes[route] = {"id": route, "label": _catalog_label(canonical),
-                         "note": "usage credits" if canonical in credit_billed_on_plan else "",
+                         "note": credit_note if canonical in credit_billed_on_plan else "",
                          "upstream_requests": upstream}
     return list(routes.values())
 

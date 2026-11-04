@@ -1,6 +1,6 @@
 [project]
 name = "hermes-camofox"
-version = "1.0.0"
+version = "1.1.0"
 description = "Camofox anti-detection browser (camofox-browser REST server) for Hermes Agent (official plugin)"
 readme = "README.md"
 license = { text = "MIT" }

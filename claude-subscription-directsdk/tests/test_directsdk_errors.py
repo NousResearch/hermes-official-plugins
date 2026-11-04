@@ -10,6 +10,25 @@ from test_directsdk import FAKE
 REQUEST = dict(model='sonnet', messages=[{'role': 'user', 'content': 'fixture'}])
 
 
+@pytest.mark.parametrize('request_id, expected', [
+    ('req_01Valid-id', 'req_01Valid-id'),
+    ('req_' + 'a' * 124, 'req_' + 'a' * 124),
+    (None, None),
+    ('', None),
+    (123, None),
+    ('req_', None),
+    ('Bearer fixture-private-token', None),
+    ('req_valid\r\nAuthorization: fixture-private-token', None),
+    ('req_' + 'a' * 125, None),
+    ('req_nonascii_\u00e9', None),
+])
+def test_error_request_id_is_bounded_and_safe(request_id, expected):
+    error = directsdk.ClaudeAPIError('fixture error', 529, request_id=request_id)
+    assert error.request_id == expected
+    assert error.status_code == 529
+    assert str(error) == 'fixture error' + (f' (request_id={expected})' if expected else '')
+
+
 def _native(tmp_path, native_error, create_client=directsdk.Client):
     native = tmp_path / 'native.py'
     native.write_text(FAKE)

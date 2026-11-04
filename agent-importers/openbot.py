@@ -1,0 +1,301 @@
+"""``hermes import-agent openbot``: bring OpenBot desktop agents (nightly-labs/openbot) into Hermes.
+
+OpenBot keeps its agents in a local SQLite database (``openbot.db`` in the Electron user data folder)
+and each agent's skills in its workspace (``~/OpenBot/Agents/<id>/.agents/skills``). This reads both,
+read-only, turns every agent into the normalized bot shape :mod:`.grok_bot` imports, and lets that
+importer do the writing:
+
+- routines → Hermes cron jobs from their schedule (paused, like Grok Bot's: OpenBot keeps running its
+  own copy until the user turns it off), keeping the routine's time zone;
+- the agent's description (its role) → ``SOUL.md`` / memory entries; its memories → ``MEMORY.md``;
+- workspace skills → ``skills/openbot-imports/<name>/`` (OpenBot's bundled skills are left out);
+- MCP servers → ``mcp_servers`` (secret-looking env vars and headers stripped, as for every importer).
+
+Chat history, provider accounts and the browser profile are not read.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import sqlite3
+import tempfile
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from typing import Any, Optional, Sequence
+
+from .grok_bot import GrokBotImporter
+
+AGENT = "openbot"
+# Electron's userData for productName "OpenBot", per OS.
+USER_DATA_DIRS = ("Library/Application Support/OpenBot", ".config/OpenBot", "AppData/Roaming/OpenBot")
+DATABASE = "openbot.db"
+# The seven workspace skill folders OpenBot lists (docs/architecture/skills-and-plugins.md).
+_SKILL_DIRS = (".agents/skills", ".claude/skills", ".opencode/skills", ".gemini/skills", ".cursor/skills",
+               ".cline/skills", ".clinerules/skills")
+# A cron field "N/S" with no range: OpenBot's scheduler fires it at N only, Hermes' at N, N+S, ...
+_BARE_STEP_RE = re.compile(r"^\d+/\d+$")
+_WEEKDAYS = "1-5"
+
+
+def find_user_data(source: Optional[Path] = None) -> Optional[Path]:
+    """The OpenBot user data folder (the one holding ``openbot.db``): ``source`` (that folder or the
+    database file itself), else the OS default."""
+    candidates = ([source.expanduser().resolve()] if source is not None
+                  else [Path.home() / d for d in USER_DATA_DIRS])
+    for candidate in candidates:
+        if candidate.is_file() and candidate.name == DATABASE:
+            return candidate.parent
+        if (candidate / DATABASE).is_file():
+            return candidate
+    return None
+
+
+def schedule_to_cron(schedule: dict[str, Any], timezone: str = "UTC") -> Optional[str]:
+    """An OpenBot routine schedule (``RoutineSchedule`` in its contracts) as a schedule Hermes cron
+    accepts, firing at the same instants; None for a shape with no faithful equivalent. ``timezone``
+    is the routine's own zone (one-time runs and interval anchors are wall-clock there)."""
+    kind = schedule.get("kind")
+    try:
+        zone = ZoneInfo(timezone or "UTC")
+    except (ZoneInfoNotFoundError, ValueError):
+        zone = ZoneInfo("UTC")
+
+    def clock(time: str) -> str:
+        hour, minute = str(time).split(":")
+        return f"{int(minute)} {int(hour)}"
+
+    simple = {
+        "hourly": lambda s: f"{int(s['minute'])} * * * *",
+        "daily": lambda s: f"{clock(s['time'])} * * *",
+        "weekdays": lambda s: f"{clock(s['time'])} * * {_WEEKDAYS}",
+        "weekly": lambda s: f"{clock(s['time'])} * * {int(s['weekday'])}",
+        "monthly": lambda s: f"{clock(s['time'])} {int(s['day'])} * *",
+        "interval": _interval_cron,
+        "custom": _custom_cron,
+        "once": lambda s: datetime.fromisoformat(f"{s['date']}T{s['time']}").replace(tzinfo=zone).isoformat(),
+        "advanced": _advanced_cron,
+    }
+    try:
+        return simple[kind](schedule) if kind in simple else None
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
+def _interval_cron(schedule: dict[str, Any]) -> str:
+    """Keep OpenBot's anchor: a step that divides the hour (or day) becomes a cron on the anchor's
+    phase; anything else falls back to Hermes' interval, which counts from the import. An interval is
+    elapsed time, so the cron is in UTC (the caller pins the job to UTC), never shifted by DST."""
+    amount, unit = int(schedule["amount"]), str(schedule["unit"])
+    anchor = datetime.fromisoformat(str(schedule["anchorAt"]).replace("Z", "+00:00")).astimezone(ZoneInfo("UTC"))
+    if unit == "minutes" and 60 % amount == 0:
+        return f"{anchor.minute % amount}-59/{amount} * * * *" if amount > 1 else "* * * * *"
+    if unit == "hours" and 24 % amount == 0:
+        return f"{anchor.minute} {anchor.hour % amount}-23/{amount} * * *"
+    if unit == "days" and amount == 1:
+        return f"{anchor.minute} {anchor.hour} * * *"
+    return f"every {amount}{unit[0]}"
+
+
+def _custom_cron(schedule: dict[str, Any]) -> Optional[str]:
+    expression = str(schedule["expression"]).strip()
+    return None if any(_BARE_STEP_RE.match(f) for f in expression.split()) else expression
+
+
+def _advanced_cron(schedule: dict[str, Any]) -> Optional[str]:
+    months = ",".join(str(int(m)) for m in schedule["months"])
+    months = "*" if months == ",".join(str(m) for m in range(1, 13)) else months
+    days, time = schedule["days"], schedule["time"]
+    listed = ",".join(str(int(d)) for d in days.get("days", []))
+    dom, dow = {"every-day": ("*", "*"), "days-of-week": ("*", listed),
+                "days-of-month": (listed, "*")}[days["kind"]]
+    if time["kind"] == "at-time":
+        hour, minute = str(time["time"]).split(":")
+        clock = f"{int(minute)} {int(hour)}"
+    elif time["unit"] == "minutes":
+        clock = f"*/{int(time['amount'])} *"
+    else:
+        clock = f"0 */{int(time['amount'])}"
+    return f"{clock} {dom} {months} {dow}"
+
+
+def _open_snapshot(database: Path, scratch: Path) -> sqlite3.Connection:
+    """A private in-memory copy of the live database (OpenBot may be running, in WAL mode). A
+    read-only open first; if SQLite cannot read the WAL that way, copy the files and read the copy."""
+    snapshot = sqlite3.connect(":memory:")
+    try:
+        live = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)
+        try:
+            live.backup(snapshot)
+        finally:
+            live.close()
+    except sqlite3.Error:
+        for suffix in ("", "-wal", "-shm"):
+            part = database.with_name(database.name + suffix)
+            if part.is_file():
+                shutil.copy2(part, scratch / part.name)
+        copy = sqlite3.connect(scratch / database.name)
+        try:
+            copy.backup(snapshot)
+        finally:
+            copy.close()
+    snapshot.row_factory = sqlite3.Row
+    return snapshot
+
+
+def _rows(db: sqlite3.Connection, sql: str, *args) -> list[dict[str, Any]]:
+    """Rows as dicts (a column an older or newer OpenBot lacks reads as missing, not a crash)."""
+    try:
+        return [dict(row) for row in db.execute(sql, args).fetchall()]
+    except sqlite3.OperationalError:  # a table this OpenBot version does not have yet
+        return []
+
+
+def _json(raw: Any, default: Any) -> Any:
+    try:
+        return json.loads(raw) if raw else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _skills(workspace: Path) -> list[dict[str, Any]]:
+    """The agent's own skill folders; OpenBot writes each to both folders, so one per name, and its
+    bundled skills (``.openbot-managed.json``) stay behind."""
+    found: dict[str, dict[str, Any]] = {}
+    for rel in _SKILL_DIRS:
+        root = workspace / rel
+        if not root.is_dir():
+            continue
+        for folder in sorted(root.iterdir()):
+            if (folder / "SKILL.md").is_file() and not (folder / ".openbot-managed.json").exists():
+                found.setdefault(folder.name, {"name": folder.name, "path": str(folder)})
+    return list(found.values())
+
+
+def _pairs(raw: Optional[str]) -> dict[str, str]:
+    """OpenBot stores env vars and headers as ``[{"key": ..., "value": ...}]`` (``McpKeyValue[]``)."""
+    items = _json(raw, [])
+    return ({str(i["key"]): str(i.get("value", "")) for i in items if isinstance(i, dict) and i.get("key")}
+            if isinstance(items, list) else {})
+
+
+@dataclass
+class OpenBotData:
+    """What :func:`read_agents` found: agents as normalized bot dicts, the machine-wide MCP servers,
+    each server's env passthrough names (variables OpenBot hands over from its own environment, which
+    Hermes' MCP config has no field for), and rows it could not read."""
+    agents: list[dict[str, Any]] = field(default_factory=list)
+    mcp_servers: dict[str, Any] = field(default_factory=dict)
+    mcp_passthrough: dict[str, list[str]] = field(default_factory=dict)
+    problems: list[str] = field(default_factory=list)
+
+
+def _read_mcp_servers(db: sqlite3.Connection, data: OpenBotData) -> None:
+    for row in _rows(db, "SELECT * FROM projection_mcp_servers WHERE enabled = 1 ORDER BY position"):
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        if row.get("transport") == "http":
+            entry: dict[str, Any] = {"url": row.get("url") or "", "headers": _pairs(row.get("headers_json"))}
+        else:
+            entry = {"command": row.get("command") or "", "args": _json(row.get("args_json"), []),
+                     "env": _pairs(row.get("env_json"))}
+            if row.get("working_directory"):
+                entry["cwd"] = row["working_directory"]
+        if not (entry.get("url") or entry.get("command")):
+            data.problems.append(f"MCP server {name!r} has no command or URL")
+            continue
+        data.mcp_servers[name] = entry
+        if names := [str(n) for n in _json(row.get("env_passthrough_json"), []) if n]:
+            data.mcp_passthrough[name] = names
+
+
+def _routine(r: dict[str, Any]) -> dict[str, Any]:
+    schedule = _json(r.get("schedule_json"), None)
+    timezone = r.get("timezone") or "UTC"
+    cron = schedule_to_cron(schedule, timezone) if isinstance(schedule, dict) else None
+    interval = isinstance(schedule, dict) and schedule.get("kind") == "interval"
+    return {"name": r.get("name") or "routine", "instruction": r.get("instruction") or "",
+            "timezone": "UTC" if interval else timezone,
+            "paused": not r.get("active", 1), "trigger": "schedule" if cron else "other",
+            "schedule_cron": cron or "",
+            "trigger_details": "" if cron else f"OpenBot schedule {json.dumps(schedule)}" if schedule
+            else "No schedule: run by hand, a script or a webhook in OpenBot"}
+
+
+def read_agents(user_data: Path, scratch_parent: Path) -> OpenBotData:
+    """Read every OpenBot agent and the MCP servers. One unreadable agent or routine is reported and
+    the rest still import; a database without OpenBot's agents table is refused. ``scratch_parent``
+    holds the database copy when a read-only open cannot be used, and only for the duration of the
+    read."""
+    scratch_parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="openbot-import-", dir=scratch_parent) as scratch:
+        db = _open_snapshot(user_data / DATABASE, Path(scratch))
+    try:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'projection_agents'"
+                          ).fetchone():
+            raise ValueError("no agents table: not an OpenBot database, or a version this importer "
+                             "does not know (update the plugin: hermes plugins update agent-importers)")
+        data = OpenBotData()
+        for row in _rows(db, "SELECT * FROM projection_agents ORDER BY sort_order"):
+            agent_id = str(row.get("agent_id") or "")
+            agent = _json(row.get("agent_json"), None)
+            if not isinstance(agent, dict):
+                data.problems.append(f"agent {agent_id or '?'}: unreadable settings, skipped")
+                continue
+            workspace = Path(agent.get("workspacePath") or Path.home() / "OpenBot" / "Agents" / agent_id)
+            routines = [_routine(r) for r in _rows(
+                db, "SELECT r.*, t.schedule_json FROM projection_agent_routines r LEFT JOIN "
+                    "projection_routine_triggers t ON t.routine_id = r.routine_id WHERE r.agent_id = ? "
+                    "ORDER BY r.created_at", agent_id)]
+            memories = [m["text"] for m in _rows(
+                db, "SELECT text FROM projection_agent_memories WHERE agent_id = ? ORDER BY created_at", agent_id)
+                if m.get("text")]
+            data.agents.append({"name": agent.get("name") or agent_id, "title": agent.get("title") or "",
+                                "instructions": agent.get("description") or "", "memories": memories,
+                                "skills": _skills(workspace), "routines": routines})
+        _read_mcp_servers(db, data)
+        return data
+    finally:
+        db.close()
+
+
+class OpenBotImporter(GrokBotImporter):
+    """OpenBot's local agents through the shared bot importer."""
+
+    AGENT = AGENT
+    PRODUCT = "OpenBot"
+    SKILL_CATEGORY = "openbot-imports"
+
+    def __init__(self, user_data: Path, target_root: Path, execute: bool = False, overwrite: bool = False,
+                 activate_routines: bool = False, bot_names: Sequence[str] = ()) -> None:
+        super().__init__([user_data / DATABASE], target_root, execute=execute, overwrite=overwrite,
+                         activate_routines=activate_routines, bot_names=bot_names)
+        self.user_data = user_data
+        self.data = OpenBotData()
+
+    def load_bots(self) -> list[tuple[Path, dict[str, Any]]]:
+        database = self.user_data / DATABASE
+        try:
+            self.data = read_agents(self.user_data, self.target_root / "cache")
+        except (sqlite3.Error, OSError, ValueError) as exc:
+            self.record("database", database, None, "error", f"Could not read OpenBot's database: {exc}")
+            return []
+        for problem in self.data.problems:  # reported; the rest of the import is still good
+            self.record("database", database, None, "skipped", problem)
+        if not self.data.agents:
+            self.record("agents", database, None, "skipped", "No agents in OpenBot")
+        return [(database, agent) for agent in self.data.agents]
+
+    def import_shared(self) -> None:
+        """OpenBot's MCP servers belong to the computer, not an agent: imported whichever agents
+        ``--bot`` picked."""
+        if self.data.mcp_servers:
+            self.import_mcp_servers(self.data.mcp_servers, kind="mcp-servers")
+        for name, variables in self.data.mcp_passthrough.items():
+            self.record("mcp-env-passthrough", name, None, "skipped",
+                        f"OpenBot passed {', '.join(variables)} to this server from its environment; "
+                        f"add them under mcp_servers.{name}.env (secrets in the profile's .env)")

@@ -153,9 +153,9 @@ class TestStateDir:
             local = LocalEnvironment(cwd=str(work_dir), timeout=10)
         prefix = "unset " + " ".join(HOST_SOCKET_VARS) + "; "
         wrapped = env._wrap_command("echo hi", str(work_dir))
-        assert f"eval '{prefix}" in wrapped
-        assert wrapped.index(prefix) < wrapped.index("echo hi'")
-        assert "eval 'echo hi'" in local._wrap_command("echo hi", str(work_dir))
+        # Inside the same eval, right before the command (core may append its own lines after it).
+        assert f"eval '{prefix}echo hi" in wrapped
+        assert "eval 'echo hi" in local._wrap_command("echo hi", str(work_dir))
         assert "unset SSH_AUTH_SOCK" not in local._wrap_command("echo hi", str(work_dir))
 
 

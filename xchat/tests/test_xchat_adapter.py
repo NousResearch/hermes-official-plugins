@@ -7,6 +7,8 @@ network, no gateway process.
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import time
 from typing import Any, Dict, List, Optional
 
@@ -1152,3 +1154,47 @@ def test_send_target_forms():
     assert parse("999") == ("999", None)
     assert parse("g12345") == ("g12345", None)
     assert parse("#general") is None
+
+@pytest.mark.asyncio
+async def test_a_keychange_refreshes_a_known_senders_roster(monkeypatch):
+    """#173: a second device's KeyChange must bring that version's signing key in, even though
+    the sender was already known - otherwise the rotated key never verifies and decryption is
+    wedged for good."""
+    adapter = _make_adapter(monkeypatch)
+    api, crypto = _wire(adapter)
+    adapter._cursors["111-999"] = "e1"
+    api.public_keys["111"] = [
+        {"public_key_version": "3", "signing_public_key": "SPK3", "public_key": "IPK3",
+         "identity_public_key_signature": "SIG3"}
+    ]
+    await adapter._register_signing_keys([{"id": "e0", "sender_id": "111"}])
+    assert [k["public_key_version"] for k in crypto.signing_keys] == ["3"]
+
+    # The phone registers a second identity and rotates the conversation key.
+    api.public_keys["111"].append(
+        {"public_key_version": "4", "signing_public_key": "SPK4", "public_key": "IPK4",
+         "identity_public_key_signature": "SIG4"}
+    )
+    key_change = base64.b64encode(json.dumps({"type": "KeyChange", "sender_id": "111"}).encode()).decode()
+    api.events_pages["111-999"] = {"data": [], "meta": {"conversation_key_events": [key_change]}}
+    await adapter._poll_conversation("111-999")
+
+    assert {k["public_key_version"] for k in crypto.signing_keys} == {"3", "4"}
+    assert crypto.signing_keys[-1]["public_key"] == "SPK4"
+    assert crypto.signing_keys[-1]["public_key_version"] == "4"
+
+
+@pytest.mark.asyncio
+async def test_the_roster_does_not_grow_on_repeat_keychanges(monkeypatch):
+    adapter = _make_adapter(monkeypatch)
+    api, crypto = _wire(adapter)
+    adapter._cursors["111-999"] = "e1"
+    api.public_keys["111"] = [
+        {"public_key_version": "4", "signing_public_key": "SPK4", "public_key": "IPK4",
+         "identity_public_key_signature": "SIG4"}
+    ]
+    key_change = base64.b64encode(json.dumps({"type": "KeyChange", "sender_id": "111"}).encode()).decode()
+    api.events_pages["111-999"] = {"data": [], "meta": {"conversation_key_events": [key_change]}}
+    await adapter._poll_conversation("111-999")
+    await adapter._poll_conversation("111-999")
+    assert [k["public_key_version"] for k in crypto.signing_keys] == ["4"]

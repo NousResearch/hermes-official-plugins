@@ -864,3 +864,7 @@ test('a finished scan opens with a short summary and a link to the Markdown repo
     env.fixtures['/scans/scan_test'].status = 'awaiting_analysis'
   }
 })
+
+test('select values ellipsize through the slot Radix keeps, not the className it drops', () => {
+  assert.match(source, /\.hs-select-trigger>\[data-slot=select-value\]\{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap/)
+})

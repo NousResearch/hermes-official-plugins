@@ -42,35 +42,32 @@ def test_secret_scripts_need_loopback_or_https(url, ok):
 
 
 def test_secret_scripts_allow_plain_http_only_when_explicitly_opted_in(monkeypatch):
-    """Default unchanged (#291): plain HTTP stays loopback-only. An explicit opt-in
-    (CAMOFOX_ALLOW_INSECURE_TRANSPORT / browser.camofox.allow_insecure_transport) admits plain
-    HTTP to any host for a Docker deployment that serves Camofox over its container network —
-    the operator knowingly widens the transport; userinfo/query/fragment stay refused."""
+    # Default unchanged: plain HTTP stays loopback-only. An explicit opt-in admits plain HTTP to any host
     from camofox_plugin.camofox_vault import secret_transport_ok
 
     # Default: unchanged, regardless of what CAMOFOX_URL points at.
-    monkeypatch.setenv("CAMOFOX_URL", "http://browser:9377")
-    assert secret_transport_ok("http://browser:9377") is False
+    monkeypatch.setenv("CAMOFOX_URL", "http://test-browser-host:9377")
+    assert secret_transport_ok("http://test-browser-host:9377") is False
 
     # Opt-in env var.
     monkeypatch.setenv("CAMOFOX_ALLOW_INSECURE_TRANSPORT", "true")
-    assert secret_transport_ok("http://browser:9377") is True
-    assert secret_transport_ok("http://browser:9377/tabs") is True  # a path is fine, as on loopback
-    assert secret_transport_ok("http://browser:9377?x=1") is False  # query stays refused
-    assert secret_transport_ok("http://browser:9377#frag") is False  # fragment stays refused
+    assert secret_transport_ok("http://test-browser-host:9377") is True
+    assert secret_transport_ok("http://test-browser-host:9377/tabs") is True  # a path is fine, as on loopback
+    assert secret_transport_ok("http://test-browser-host:9377?x=1") is False  # query stays refused
+    assert secret_transport_ok("http://test-browser-host:9377#frag") is False  # fragment stays refused
     assert secret_transport_ok("http://10.0.0.5:9377") is True  # any host, the opt-in is explicit
     assert secret_transport_ok("https://u:p@camofox.internal") is False  # userinfo stays refused
     assert secret_transport_ok("https://camofox.internal") is True  # HTTPS keeps working
 
     # The flag can be turned off again.
     monkeypatch.setenv("CAMOFOX_ALLOW_INSECURE_TRANSPORT", "false")
-    assert secret_transport_ok("http://browser:9377") is False
+    assert secret_transport_ok("http://test-browser-host:9377") is False
 
     # Config key wins only when the env var is unset (mirrors the plugin's other toggles).
     monkeypatch.delenv("CAMOFOX_ALLOW_INSECURE_TRANSPORT")
     monkeypatch.setattr("camofox_plugin.camofox_client.get_camofox_config",
                         lambda: {"allow_insecure_transport": True})
-    assert secret_transport_ok("http://browser:9377") is True
+    assert secret_transport_ok("http://test-browser-host:9377") is True
 
 
 def test_secret_scripts_ignore_environment_proxies(camofox, backend, monkeypatch):

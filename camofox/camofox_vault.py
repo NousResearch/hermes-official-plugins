@@ -26,8 +26,12 @@ def _tracked_session(task_id: Optional[str]) -> Optional[dict[str, Any]]:
 
 
 def secret_transport_ok(url: str) -> bool:
-    """A credential may go to this Camofox URL: HTTPS, plain HTTP on loopback, or plain HTTP to the
-    configured Camofox server itself (#291); no userinfo."""
+    """A credential may go to this Camofox URL: HTTPS, or plain HTTP on loopback; no userinfo.
+
+    Plain HTTP to any other host needs an explicit opt-in
+    (``CAMOFOX_ALLOW_INSECURE_TRANSPORT`` / ``browser.camofox.allow_insecure_transport``) — a
+    Docker deployment that serves Camofox over its container network sets it deliberately
+    (#291). Unset, the default stays loopback-only regardless of what ``CAMOFOX_URL`` names."""
     parts = urlsplit(url)
     if parts.username or parts.password or parts.query or parts.fragment:
         return False
@@ -38,11 +42,9 @@ def secret_transport_ok(url: str) -> bool:
     host = (parts.hostname or "").strip().strip("[]").lower()
     if host in _LOOPBACK_HOSTS:
         return True
-    configured = client.get_camofox_url()
-    if not configured:
-        return False
-    configured_host = (urlsplit(configured).hostname or "").strip().strip("[]").lower()
-    return bool(configured_host) and host == configured_host
+    from . import camofox_client as client
+    return client._flag("CAMOFOX_ALLOW_INSECURE_TRANSPORT", client.get_camofox_config(),
+                        "allow_insecure_transport")
 
 
 def make_page_backend():

@@ -339,7 +339,7 @@ details.hs-fold[open]>summary{margin-bottom:8px;border-bottom:1px solid var(--ui
 .hs-workbench .hs-native-select,.hs-workbench .hs-select-trigger{height:34px;min-height:34px;width:100%;min-width:0;margin:0;border:1px solid var(--ui-stroke-secondary);border-radius:6px;background:var(--hs-surface);color:var(--foreground);font:inherit;font-size:12px;line-height:normal;cursor:pointer}
 .hs-workbench .hs-native-select{appearance:none;-webkit-appearance:none;padding:0 34px 0 10px;text-overflow:ellipsis}
 .hs-workbench .hs-select-trigger{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 10px;box-shadow:none}
-.hs-select-trigger>.hs-select-value{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+.hs-select-trigger>.hs-select-value,.hs-select-trigger>[data-slot=select-value]{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
 .hs-select-trigger>.codicon{flex:none;font-size:16px}
 .hs-select-trigger>[aria-hidden=true]{display:inline-block;transform:rotate(-90deg);transform-origin:center}
 .hs-select-trigger[data-state=open]>[aria-hidden=true]{transform:rotate(0deg)}

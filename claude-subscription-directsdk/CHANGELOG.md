@@ -1,6 +1,10 @@
 # Changelog
 
-## [0.3.1] - Unreleased
+## [0.3.5] - Unreleased
+
+### Fixed
+
+- An inherited `ANTHROPIC_API_KEY` (set for Hermes' own `anthropic` provider) no longer fails every subscription turn with `OAuth provider refuses conflicting native auth/backend overrides` (#157): the provider strips `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_BASE_URL`/`ANTHROPIC_FOUNDRY_API_KEY` and Bedrock/Vertex/Foundry toggles from the child env instead of raising, so native keeps the subscription OAuth login and each provider bills what it was configured with. The explicit `env=` path is unchanged and still never guesses.
 
 ### Added
 

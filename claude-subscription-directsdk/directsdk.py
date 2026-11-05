@@ -793,10 +793,16 @@ class Client:
                 mcp = {'mcpServers': {'hermes': {'command': sys.executable, 'args': [str(Path(__file__).with_name('inert_mcp.py')), str(root / 'tools.json')]}}}
                 env = _with_login_identity(_with_windows_essentials(dict(self.env if self.env is not None else os.environ)))
                 if self.env is None:
+                    # A key set for Hermes' own 'anthropic' provider (or a Bedrock/Vertex/Foundry
+                    # toggle) would override the subscription login inside native and silently
+                    # bill API credits instead of the plan (#157). The plugin never forwards such
+                    # overrides, so it removes them from the child env instead of failing the
+                    # turn: Hermes' client path keeps its key, native keeps the OAuth login, and
+                    # each provider bills what it was configured with.
                     conflicts = [key for key in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_FOUNDRY_API_KEY') if env.get(key)]
                     conflicts += [key for key in ('CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY') if env.get(key, '').lower() not in ('', '0', 'false', 'no', 'off')]
-                    if conflicts:
-                        raise ValueError('OAuth provider refuses conflicting native auth/backend overrides: ' + ', '.join(conflicts))
+                    for key in conflicts:
+                        env.pop(key, None)
                 # Fail with the install hint, not a Popen FileNotFoundError, when Claude Code is absent.
                 resolved = resolve_claude(self.command, env)
                 if resolved is None:

@@ -326,9 +326,35 @@ class Contract(unittest.TestCase):
         self.assertEqual(routed.command, ["/native/test"])
         from unittest.mock import patch
 
+        # An inherited ANTHROPIC_API_KEY (e.g. set for Hermes' own 'anthropic'
+        # provider) must not reach native: it would override the subscription
+        # OAuth login and silently bill API credits (#157). The provider strips
+        # it from the child env and the turn proceeds on the subscription.
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "fake-conflicting-key"}):
-            with self.assertRaisesRegex(ValueError, "OAuth"):
-                directsdk.Client(command="/does/not/exist").create(**self.request())
+            with tempfile.TemporaryDirectory() as tmp:
+                client = self.client(tmp)
+                probed = Path(tmp) / "native_env.json"
+
+                class _EnvProbe:
+                    def __init__(self, command, **kwargs):
+                        probed.write_text(
+                            json.dumps(
+                                {
+                                    k: v
+                                    for k, v in (kwargs.get("env") or {}).items()
+                                    if "ANTHROPIC" in k or k == "PATH"
+                                }
+                            )
+                        )
+                        raise RuntimeError("probe: spawn captured, no native run")
+
+                with patch.object(directsdk.subprocess, "Popen", _EnvProbe):
+                    with self.assertRaisesRegex(RuntimeError, "probe: spawn captured"):
+                        client.chat.completions.create(**self.request())
+                captured = json.loads(probed.read_text())
+                self.assertNotIn("ANTHROPIC_API_KEY", captured)
+                self.assertIn("PATH", captured)
+                client.close()
         client = directsdk.Client(command="/does/not/exist", env={})
         with self.assertRaises((FileNotFoundError, RuntimeError)):
             client.chat.completions.create(**self.request())

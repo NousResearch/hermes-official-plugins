@@ -33,9 +33,7 @@ def secret_transport_ok(url: str) -> bool:
     parts = urlsplit(url)
     if parts.username or parts.password or parts.query or parts.fragment:
         return False
-    return parts.scheme == "https" or (
-        parts.scheme == "http" and (parts.hostname or "").strip().strip("[]").lower() in _LOOPBACK_HOSTS
-    ) or allow_insecure
+    return parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in _LOOPBACK_HOSTS) or allow_insecure
 
 
 def make_page_backend():

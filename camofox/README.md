@@ -197,7 +197,9 @@ Vault fill (`browser_vault` filling a login form) reaches the Camofox tab on Her
 the browser page backend seam (`ctx.register_browser_page_backend`): the vault reads the tab's origin,
 inspects the form and writes the password through Camofox's `/tabs/<id>/evaluate`, with the same
 exact-origin checks as on a CDP browser. It only fills a tab `browser_navigate` already opened (it
-never opens one), and sends the password only when `CAMOFOX_URL` is loopback or HTTPS. A value the
+never opens one), and sends the password only when `CAMOFOX_URL` is loopback, HTTPS, or the
+configured Camofox host itself — so a Docker deployment pointing `CAMOFOX_URL` at its container
+(`http://browser:9377`) can fill logins without the `network_mode: service:` workaround (#291). A value the
 vault filled shows as `«redacted-vault-secret»` in `browser_snapshot`. On older cores, type
 credentials with `browser_type`. Snapshots also mask values that look like secrets (API keys,
 tokens), but Camoufox prints every other filled field's value and does not mark which field is a

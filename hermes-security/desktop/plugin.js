@@ -683,8 +683,35 @@ function FindingDrawer({ id, onClose }) {
     onCancel: (event) => { event.preventDefault(); onClose() }, children: content
   })
 }
-function ScanRow({ row, selected, onSelect }) {
+// Right-click menu for a scan row. Older Desktop builds without the shared
+// ContextMenu keep the plain row; Delete stays available in the scan's detail.
+export function ScanRow({ row, onDeleted, ...props }) {
+  const button = jsx(ScanRowButton, { row, ...props })
+  if (![sdk.ContextMenu, sdk.ContextMenuTrigger, sdk.ContextMenuContent, sdk.ContextMenuItem].every(Boolean)) return button
+  const id = scanId(row)
+  // A running scan must be stopped first, so its agent is not left writing to a deleted scan.
+  const running = RUNNING.includes(row.status)
+  const remove = async () => {
+    try {
+      if (await deleteScan(id, repoName(pathOf(row)))) onDeleted?.(id)
+    } catch (e) {
+      host.notify?.({ kind: 'error', message: `Could not delete the scan: ${errorText(e)}` })
+    }
+  }
+  return jsxs(sdk.ContextMenu, { children: [
+    jsx(sdk.ContextMenuTrigger, { asChild: true, children: button }),
+    jsxs(sdk.ContextMenuContent, { className: 'hs-context-menu', children: [
+      jsx(sdk.ContextMenuItem, { onSelect: () => props.onSelect(id), children: 'Open' }),
+      sdk.ContextMenuSeparator ? jsx(sdk.ContextMenuSeparator, {}) : null,
+      jsx(sdk.ContextMenuItem, { variant: 'destructive', disabled: running, onSelect: remove,
+        title: running ? 'Stop the scan before deleting it' : undefined,
+        children: running ? 'Delete (stop the scan first)' : 'Delete' })
+    ] })
+  ] })
+}
+function ScanRowButton({ row, selected, onSelect, ...props }) {
   return jsxs('button', {
+    ...props,
     type: 'button', className: 'hs-item', 'aria-current': selected, onClick: () => onSelect(scanId(row)),
     children: [
       jsxs('span', { className: 'hs-item-top', children: [
@@ -1673,7 +1700,8 @@ export function BrowserView({ kind, selected, setSelected, onFinding, newScan, s
       tools, count, jsx(Fault, { error: q.error }),
       jsxs('div', { className: 'hs-list-body', children: [
         ...rows.map((row) => kind === 'Scans'
-          ? jsx(ScanRow, { row, selected: scanId(row) === selected && !newScan, onSelect: (id) => { setNewScan(false); setSelected(id) } }, scanId(row))
+          ? jsx(ScanRow, { row, selected: scanId(row) === selected && !newScan, onSelect: (id) => { setNewScan(false); setSelected(id) },
+              onDeleted: (id) => { if (id === selected) setSelected(null) } }, scanId(row))
           : jsx(FindingRow, { row, selected: findingId(row) === selected, onSelect: setSelected }, findingId(row))),
         empty ? jsx('p', { className: 'hs-muted', style: { padding: '12px 16px' }, children: noScansYet ? 'No scans yet.' : 'No findings match.' }) : null
       ] }),

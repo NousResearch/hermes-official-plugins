@@ -37,3 +37,6 @@ optional_env:
     description: "Bearer token for a Camofox server started with CAMOFOX_API_KEY"
     prompt: "Camofox API key"
     password: true
+  - name: CAMOFOX_ALLOW_INSECURE_TRANSPORT
+    description: "Allow browser_vault to send the password fill over plain HTTP to a non-loopback Camofox host (e.g. a Docker container network). HTTPS and loopback always work without this."
+    prompt: "Allow insecure transport for vault fills? (true/false)"

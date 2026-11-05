@@ -56,6 +56,7 @@ const reactModule = uri(
 const sdkModule = uri(`
 const e=globalThis.__securityTest;
 export const Button='button', Input='input', Textarea='textarea', Dialog='dialog', DialogContent='div', DialogHeader='header', DialogTitle='h2', DialogDescription='p', DialogFooter='footer';
+export const ContextMenu='context-menu', ContextMenuTrigger='context-menu-trigger', ContextMenuContent='context-menu-content', ContextMenuItem='context-menu-item', ContextMenuSeparator='hr';
 export const ROUTES_AREA='routes', SIDEBAR_NAV_AREA='sidebar.nav', PALETTE_AREA='palette';
 export const host={state:{profile:{get:()=>e.profile},connectionId:{get:()=>e.connectionId||null},focusedSessionOwner:{get:()=>e.owner||null},focusedStoredSessionId:{get:()=>null},activeSessionId:{get:()=>null}},notify:v=>e.notice=v,navigate:p=>e.navigation=p,openSession:async id=>e.session=id,request:async (method,params)=>{(e.rpc=e.rpc||[]).push([method,params]);if(e.noSessions)throw new Error('unsupported');if(e.rpcHandler)return e.rpcHandler(method,params);return method==='session.create'?{session_id:'rt_1',stored_session_id:'st_1'}:{}},onEvent:(type,fn)=>{e.gatewayListener=fn;return ()=>{}},composer:{insertText:async (id,text,options)=>{e.draft={id,text,options};return e.draftReady}}};
 export const queryClient={invalidateQueries:async v=>e.invalidations.push(v),removeQueries:v=>e.removed=v};
@@ -863,6 +864,39 @@ test('a finished scan opens with a short summary and a link to the Markdown repo
     delete env.fixtures['/scans/scan_test/coverage']
     env.fixtures['/scans/scan_test'].status = 'awaiting_analysis'
   }
+})
+
+test('scan rows offer Open and Delete on right-click; running scans cannot be deleted', async () => {
+  const opened = []
+  const deleted = []
+  const done = { scanId: 'scan_done', status: 'completed', target: { root: '/remote/project' } }
+  const row = (r) => nodes(plugin.ScanRow({ row: r, selected: false, onSelect: (id) => opened.push(id), onDeleted: (id) => deleted.push(id) }))
+  const view = row(done)
+  const trigger = view.find((n) => n.type === 'context-menu-trigger')
+  assert.equal(trigger.props.asChild, true)
+  assert.equal(view.filter((n) => n.type === 'button' && n.props.className === 'hs-item').length, 1)
+  const items = view.filter((n) => n.type === 'context-menu-item')
+  assert.deepEqual(items.map((n) => n.props.children), ['Open', 'Delete'])
+  items[0].props.onSelect()
+  assert.deepEqual(opened, ['scan_done'])
+
+  globalThis.window = { confirm: () => false }
+  const before = env.calls.length
+  await items[1].props.onSelect()
+  assert.equal(env.calls.length, before)
+  assert.deepEqual(deleted, [])
+  window.confirm = () => true
+  env.response = { scanId: 'scan_done', deleted: true }
+  await items[1].props.onSelect()
+  assert.equal(env.calls.at(-1).path, '/scans/scan_done/delete')
+  assert.deepEqual(env.calls.at(-1).options.body, { confirm: 'scan_done' })
+  assert.deepEqual(deleted, ['scan_done'])
+  delete env.response
+  delete globalThis.window
+
+  const running = row({ ...done, status: 'running' }).filter((n) => n.type === 'context-menu-item').at(-1)
+  assert.equal(running.props.disabled, true)
+  assert.match(running.props.children, /stop the scan first/)
 })
 
 test('select values ellipsize through the slot Radix keeps, not the className it drops', () => {

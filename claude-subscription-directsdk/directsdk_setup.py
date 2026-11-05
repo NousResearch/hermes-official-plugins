@@ -108,6 +108,59 @@ def telemetry_enabled():
     return value is not False and value != 0
 
 
+def block_extra_usage():
+    """The active profile's ``block_extra_usage`` plugin setting, default off (#43)."""
+    value = _setting("block_extra_usage", False)
+    if isinstance(value, str):
+        return value.strip().lower() not in _OFF
+    return value is True or value == 1
+
+
+_OVERAGE_MARKER = "hermes-directsdk-overage.json"
+# Conservative window lengths: the event carries no reset time, so a marker
+# expires at the longest the named window can run.
+_OVERAGE_EXPIRY = {"five_hour": 5 * 3600, "overage": 7 * 24 * 3600}
+
+
+def _overage_marker_path():
+    from pathlib import Path
+
+    config = _setting(CONFIG_DIR_SETTING)
+    root = (config.strip() if isinstance(config, str) and config.strip() else "") \
+        or os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude"
+    return Path(os.path.expanduser(root)) / _OVERAGE_MARKER
+
+
+def record_overage(window: str) -> None:
+    """Remember that native reported paid extra usage in ``window`` (#43)."""
+    import json
+    import time
+
+    try:
+        path = _overage_marker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"window": window, "seen_at": time.time()}) + "\n", encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        pass
+
+
+def overage_blocked() -> bool:
+    """True while a recorded paid-use marker is inside its window's expiry.
+    No marker (no signal ever seen) never blocks."""
+    import json
+    import time
+
+    try:
+        data = json.loads(_overage_marker_path().read_text(encoding="utf-8"))
+        seen_at = float(data["seen_at"])
+        window = str(data["window"])
+    except Exception:
+        return False
+    return (time.time() - seen_at) < _OVERAGE_EXPIRY.get(window, 7 * 24 * 3600)
+
+
 def apply_config_dir(env):
     """Select the active profile's Claude config directory on a child env, in place."""
     override = env.pop("CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR", None)

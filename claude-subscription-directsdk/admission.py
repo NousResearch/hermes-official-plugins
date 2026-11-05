@@ -649,6 +649,10 @@ class _Server(HTTPServer):
         super().handle_error(request, client_address)
 
 
+def upstream_from_env(env=None):
+    return "https://api.anthropic.com"
+
+
 class Admission:
     def __init__(self, upstream, timeout, queried=None):
         self.upstream = urlsplit(upstream)

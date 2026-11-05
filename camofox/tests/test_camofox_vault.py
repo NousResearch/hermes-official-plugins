@@ -41,6 +41,24 @@ def test_secret_scripts_need_loopback_or_https(url, ok):
     assert secret_transport_ok(url) is ok
 
 
+def test_secret_scripts_ok_on_the_configured_camofox_host(monkeypatch):
+    """A Docker deployment points CAMOFOX_URL at its container (http://browser:9377): the vault
+    fills credentials there too — it is the same host every other Camofox call already trusts.
+    Unrelated plain-HTTP hosts stay refused (#291)."""
+    from camofox_plugin.camofox_vault import secret_transport_ok
+
+    monkeypatch.setenv("CAMOFOX_URL", "http://browser:9377")
+    assert secret_transport_ok("http://browser:9377") is True
+    assert secret_transport_ok("http://browser:9377/tabs") is True  # a path is fine, as on loopback
+    assert secret_transport_ok("http://browser:9377?x=1") is False  # query stays refused
+    assert secret_transport_ok("http://browser:9377#frag") is False  # fragment stays refused
+    assert secret_transport_ok("http://other:9377") is False  # only the configured host, not any host
+    assert secret_transport_ok("https://u:p@browser:9377") is False  # userinfo stays refused
+
+    monkeypatch.setenv("CAMOFOX_URL", "")
+    assert secret_transport_ok("http://browser:9377") is False  # no URL configured: loopback rules only
+
+
 def test_secret_scripts_ignore_environment_proxies(camofox, backend, monkeypatch):
     """HTTP_PROXY would carry the fill script in clear text past the loopback check."""
     from camofox_plugin import camofox_tools as t

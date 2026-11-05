@@ -26,11 +26,23 @@ def _tracked_session(task_id: Optional[str]) -> Optional[dict[str, Any]]:
 
 
 def secret_transport_ok(url: str) -> bool:
-    """A credential may go to this Camofox URL: HTTPS, or plain HTTP only on loopback; no userinfo."""
+    """A credential may go to this Camofox URL: HTTPS, plain HTTP on loopback, or plain HTTP to the
+    configured Camofox server itself (#291); no userinfo."""
     parts = urlsplit(url)
     if parts.username or parts.password or parts.query or parts.fragment:
         return False
-    return parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in _LOOPBACK_HOSTS)
+    if parts.scheme == "https":
+        return True
+    if parts.scheme != "http":
+        return False
+    host = (parts.hostname or "").strip().strip("[]").lower()
+    if host in _LOOPBACK_HOSTS:
+        return True
+    configured = client.get_camofox_url()
+    if not configured:
+        return False
+    configured_host = (urlsplit(configured).hostname or "").strip().strip("[]").lower()
+    return bool(configured_host) and host == configured_host
 
 
 def make_page_backend():

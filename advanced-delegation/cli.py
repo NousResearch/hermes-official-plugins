@@ -5,7 +5,8 @@
 * **Model routes**: a route editor built from ``hermes model``'s own pieces (the curses menus, the
   configured-provider inventory, the model picker with its selection guards, the reasoning picker).
   Each route is a name + description (what the agent reads), a provider or endpoint, a model and an
-  optional reasoning effort and speed tier, validated before it is saved.
+  optional reasoning effort, speed tier and Daybreak switch (where the account's Codex catalog lists
+  it), validated before it is saved.
 * **Profile routes**: a multi-select of your other profiles, an optional line about each, a default.
 
 Every write goes through ``store`` (core's ``atomic_config_write``). ``--show`` prints the current
@@ -226,6 +227,7 @@ def _edit_route(existing: Mapping[str, Any], others: list[dict[str, Any]]) -> Op
             route[key] = value
     _pick_effort(route, _text(existing.get("reasoning_effort")))
     _pick_tier(route, _text(existing.get("service_tier")))
+    _pick_daybreak(route, existing.get("daybreak") is True)
     problems = store.validate_route(route, others)
     if problems:
         for problem in problems:
@@ -300,6 +302,18 @@ def _pick_tier(route: dict[str, Any], current: str) -> None:
     word = current if idx < 0 else ("" if idx == 0 else offered[idx - 1])
     if word in offered:
         route["service_tier"] = word
+
+
+def _pick_daybreak(route: dict[str, Any], current: bool) -> None:
+    """Offer Daybreak only where this account's Codex catalog lists it for the route's model."""
+    if not store.offered_daybreak(route):
+        if current:
+            print("  Daybreak is not offered for this route's model; dropped daybreak.")
+        return
+    idx = _radio("Daybreak for this route (OpenAI trusted access, reduced guardrails):", ["Off", "On"],
+                 selected=1 if current else 0)
+    if (current if idx < 0 else idx == 1):
+        route["daybreak"] = True
 
 
 # --- profile routes ---------------------------------------------------------------------------

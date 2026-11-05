@@ -21,12 +21,25 @@ Settings live in ``delegation.backends.model_map`` of config.yaml::
               description: Private; runs on this machine.
               base_url: http://localhost:8080/v1
               model: qwen3-coder
+            - name: daybreak
+              description: Sol with reduced guardrails; security work.
+              provider: openai-codex        # Daybreak needs the ChatGPT/Codex subscription route
+              model: gpt-6-sol              # the real base model, never a *-daybreak-* alias
+              daybreak: true                # sends access_programs.cyber: daybreak_blue
           default: fast                     # optional: option for tasks that set none
 
 ``delegate_task`` gains a per-task ``option`` enum of those names. A task that sets one runs on that
 entry's route; a task without one runs on ``default`` when set, else on the parent's own route
 (in this mode ``delegation.model`` / ``delegation.provider`` are inactive). The raw
 provider/model/endpoint/key never become model-facing parameters.
+
+``daybreak: true`` runs that route's model with OpenAI's Daybreak trusted-access program
+(``access_programs.cyber: daybreak_blue``), the same request field core sends when the Daybreak switch
+is on. It is the route's own opt-in, independent of ``agent.daybreak``, so one base model can back a
+plain route and a Daybreak route. Core's other Daybreak rules still hold: the route must be on
+``openai-codex``, the account's Codex catalog must list Daybreak for the model, and the delegating
+session must be one of the owner's own surfaces (CLI, TUI, Desktop). Otherwise the task is refused,
+never run without the program.
 """
 
 from __future__ import annotations
@@ -43,6 +56,7 @@ SETTINGS_PATH = f"delegation.backends.{BACKEND}"
 PARAMETER = "option"
 #: Entry keys copied into the route (same meaning as the matching core route fields).
 ROUTE_FIELDS = ("provider", "model", "base_url", "api_key", "api_mode", "reasoning_effort", "service_tier")
+DAYBREAK_KEY = "daybreak"
 _warned: set[str] = set()
 
 
@@ -68,7 +82,19 @@ def _entry_problem(entry: Any) -> str:
         return "needs a model"
     if not (_text(entry, "provider") or _text(entry, "base_url")):
         return "needs a provider or a base_url"
+    daybreak = entry.get(DAYBREAK_KEY)
+    if daybreak not in (None, True, False):
+        return f"has {DAYBREAK_KEY}: {daybreak!r}; use true or false"
+    if daybreak is True and not _is_codex(_text(entry, "provider")):
+        return f"sets {DAYBREAK_KEY}: true, which needs provider: openai-codex"
     return ""
+
+
+def _is_codex(provider: str) -> bool:
+    if not provider:
+        return False
+    from hermes_cli.models import normalize_provider
+    return normalize_provider(provider) == "openai-codex"
 
 
 def configured_options(settings: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
@@ -96,8 +122,36 @@ def configured_options(settings: Mapping[str, Any]) -> dict[str, dict[str, Any]]
                  if isinstance(entry.get(key), str) and entry[key].strip()}
         if isinstance(entry.get("fallback_providers"), list):
             route["fallback_providers"] = list(entry["fallback_providers"])
-        options[name] = {"description": _text(entry, "description"), "route": route}
+        options[name] = {"description": _text(entry, "description"), "route": route,
+                         "daybreak": entry.get(DAYBREAK_KEY) is True}
     return options
+
+
+def _daybreak_route(name: str, route: Mapping[str, Any]) -> dict[str, Any]:
+    """``route`` plus the Daybreak request field, or :class:`DelegationRouteError` when core's Daybreak rules
+    do not allow it here. Refusing (not dropping the field) keeps a task off a route it did not ask for."""
+    from agent.delegation_provider import DelegationRouteError
+    try:
+        from agent.codex_service_tiers import DAYBREAK_PROGRAM, daybreak_offered
+        from agent.session_source import DAYBREAK_SOURCES, session_source_for
+        from gateway.session_context import get_session_env
+    except ImportError as exc:
+        raise DelegationRouteError(
+            f"Option {name!r} needs Daybreak, which this Hermes does not support ({exc.name}). Update Hermes or "
+            f"pick another option.") from exc
+    source = session_source_for(get_session_env("HERMES_SESSION_PLATFORM", "") or None)
+    if source not in DAYBREAK_SOURCES:
+        raise DelegationRouteError(
+            f"Option {name!r} uses Daybreak, which only runs from the owner's own CLI, TUI or Desktop chats "
+            f"(this session is {source!r}). Pick another option.")
+    if not daybreak_offered(route.get("model"), provider=route.get("provider"), base_url=route.get("base_url")):
+        raise DelegationRouteError(
+            f"Option {name!r} uses Daybreak, but this account's Codex catalog does not list Daybreak for "
+            f"{route.get('model')!r} (or the catalog could not be read). Pick another option.")
+    overrides = dict(route.get("request_overrides") or {})
+    extra_body = dict(overrides.get("extra_body") or {})
+    extra_body["access_programs"] = {**dict(extra_body.get("access_programs") or {}), "cyber": DAYBREAK_PROGRAM}
+    return {**route, "request_overrides": {**overrides, "extra_body": extra_body}}
 
 
 class ModelMapDelegationProvider(DelegationProvider):
@@ -115,6 +169,12 @@ class ModelMapDelegationProvider(DelegationProvider):
     @property
     def summary(self) -> str:
         return "The agent picks a named model route for each subagent."
+
+    @property
+    def route_keys(self) -> tuple[str, ...]:
+        # Route keys beyond core's that settings editors may write and must keep; the Desktop route editor offers
+        # its Daybreak control only when this backend declares it. Older cores never read this.
+        return (DAYBREAK_KEY,)
 
     def task_parameters(self, config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
         options = configured_options(self.settings(config))
@@ -145,4 +205,7 @@ class ModelMapDelegationProvider(DelegationProvider):
         if not chosen:
             return {}  # the parent's route: delegation.model / delegation.provider are inactive in this mode
         # Core already refused a chosen value outside the enum before calling us.
-        return {**options[chosen]["route"], "label": chosen}
+        route = options[chosen]["route"]
+        if options[chosen]["daybreak"]:
+            route = _daybreak_route(chosen, route)
+        return {**route, "label": chosen}

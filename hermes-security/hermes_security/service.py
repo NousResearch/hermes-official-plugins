@@ -15,7 +15,7 @@ import shlex
 import sys
 import threading
 
-from . import target, validation, reports, chains, dependencies, timing
+from . import PRODUCER, target, validation, reports, chains, dependencies, timing
 from .canonical import canonical_json, sha256_hex, stable_id, utcnow
 from .domain.models import normalize_candidate, promote_to_finding
 from .domain.identities import finding_id
@@ -905,7 +905,7 @@ class SecurityService:
             chain_inputs = [{**f, 'scanId': scan_id, 'snapshotDigest': scan['snapshot_digest']} for f in findings]
             chains_doc = chains.build_chains_doc(scan_id, chain_inputs, snapshot_digest=scan['snapshot_digest'], explanations=explanations)
             manifest = {'documentType': 'hermes-security.scan-manifest', 'schemaVersion': '1.0', 'scanId': scan_id,
-                        'producer': {'name': 'hermes-security', 'version': '0.1.0'}, 'methodologyVersion': METHODOLOGY_VERSION,
+                        'producer': dict(PRODUCER), 'methodologyVersion': METHODOLOGY_VERSION,
                         'mode': scan['mode'], 'safetyLevel': scan['safety_level'], 'status': 'completed' if coverage['completeness'] == 'complete' else 'partial',
                         'target': scan['target'], 'runtime': {'provider': scan['options'].get('provider'), 'model': scan['options'].get('model'), 'profile': self.profile, 'fallbacks': []},
                         'startedAt': scan['created_at'], 'finishedAt': self._now(), 'counts': {}, 'artifacts': {}, 'supersedes': None}

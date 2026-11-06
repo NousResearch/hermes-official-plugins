@@ -159,7 +159,7 @@ def test_the_grok_bot_apps_local_cache_flags_bots_and_routines_the_export_missed
     cache = tmp_path / "AppData" / "Roaming" / "Grok Bot" / "sand-client-persistence"
     cache.mkdir(parents=True)
     (cache.parent / "sand-secrets.json").write_text("{not json, never read")
-    account = "sand.client.slice.account.google-oauth2%7Cuser_01ABC"
+    account = "sand.client.slice.account.u1"
     _cache_blob(cache, f"{account}.roster.last-roster", {"rows": [
         {"id": "b1", "name": "Account Health", "isGroup": False},
         {"id": "b2", "name": "Drew", "isGroup": False}]})

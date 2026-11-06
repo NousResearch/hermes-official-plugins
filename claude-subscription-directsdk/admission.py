@@ -785,6 +785,7 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(error, dict) or error.get('type') != 'authentication_error':
             return False
         gate.auth_retry_used = True
+        gate.error_body = b''  # The retry's own answer is the one Hermes reports.
         return True
 
     def do_POST(self):

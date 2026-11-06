@@ -4,6 +4,10 @@ Originally ``hermes_cli/memory_wiki.py`` by Abdullah Raja (@Araja119, hermes-age
 salvaged in #89940 and moved into this standalone plugin. Stays stdlib-only: the helpers are
 deterministic heuristics over the session/message dictionaries ``hermes_state.SessionDB``
 returns (``list_sessions_rich`` / ``get_messages``); no LLM calls, no writes.
+
+The per-session extraction is memoized by the sibling ``memory_wiki_cache`` module (#49):
+aggregators accept an optional ``cache`` and skip re-reading sessions whose cheap
+sessions-table fingerprint is unchanged; ``cache=None`` keeps the original uncached path.
 """
 
 from __future__ import annotations
@@ -11,7 +15,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import importlib.util
 import re
+import sys
+import threading
 
 
 @dataclass(frozen=True)
@@ -215,23 +222,35 @@ def _clean_candidate_name(name: str) -> str:
     return cleaned
 
 
-def build_memory_subjects(db, *, limit: int = 100, query: str | None = None) -> list[dict]:
-    """Aggregate subject dictionaries from recent ``SessionDB`` sessions."""
+def build_memory_subjects(
+    db,
+    *,
+    limit: int = 100,
+    query: str | None = None,
+    cache=None,
+) -> list[dict]:
+    """Aggregate subject dictionaries from recent ``SessionDB`` sessions.
+
+    ``cache`` is an optional :class:`memory_wiki_cache.SessionUnitCache`; when
+    given, only sessions whose cheap fingerprint changed are re-scanned and
+    every other session reuses its memoized per-session aggregation unit.
+    """
 
     if limit <= 0:
         return []
-    sessions = _load_memory_sessions(db, limit=max(limit * 5, limit, 100))
+    sessions = _recent_sessions(db, limit=max(limit * 5, limit, 100))
+    units = _session_units(db, sessions, cache)
     subjects: dict[str, dict] = {}
 
-    for session, messages in sessions:
-        session_info = _session_info(session)
-        candidates = extract_subject_candidates(session, messages)
+    for unit in units:
+        candidates = [SubjectCandidate(**candidate) for candidate in unit["candidates"]]
         if not candidates:
             continue
-        message_count = len(messages)
-        first_seen = _first_timestamp(session, messages)
-        last_seen = _last_timestamp(session, messages)
-        snippets_by_slug = _snippets_for_candidates(session, messages, candidates)
+        session_info = unit["session"]
+        first_seen = unit["first_seen"]
+        last_seen = unit["last_seen"]
+        message_count = unit["message_count"]
+        snippets_by_slug = unit["snippets_by_slug"]
 
         for candidate in candidates:
             subject = subjects.setdefault(
@@ -277,28 +296,30 @@ def build_memory_subjects(db, *, limit: int = 100, query: str | None = None) -> 
     return results[:limit]
 
 
-def get_memory_subject(db, slug: str) -> dict | None:
+def get_memory_subject(db, slug: str, *, cache=None) -> dict | None:
     """Return one aggregated memory subject by slug, or ``None``."""
 
     normalized = slugify_subject(slug)
-    for subject in build_memory_subjects(db, limit=1000):
+    for subject in build_memory_subjects(db, limit=1000, cache=cache):
         if subject["slug"] == normalized:
             return subject
     return None
 
 
-def build_daily_logs(db, *, limit_days: int = 60) -> list[dict]:
+def build_daily_logs(db, *, limit_days: int = 60, cache=None) -> list[dict]:
     """Aggregate recent sessions into API-ready day log dictionaries."""
 
     if limit_days <= 0:
         return []
-    sessions = _load_memory_sessions(db, limit=max(limit_days * 25, 100))
+    sessions = _recent_sessions(db, limit=max(limit_days * 25, 100))
+    units = _session_units(db, sessions, cache)
     days: dict[str, dict] = {}
 
-    for session, messages in sessions:
-        day_key = _date_key(float(session.get("started_at") or _first_timestamp(session, messages)))
-        started = float(session.get("started_at") or _first_timestamp(session, messages))
-        last_active = _last_timestamp(session, messages)
+    for unit in units:
+        session_info = unit["session"]
+        day_key = unit["day_key"]
+        started = unit["started_at"]
+        last_active = unit["last_seen"]
         day = days.setdefault(
             day_key,
             {
@@ -316,17 +337,17 @@ def build_daily_logs(db, *, limit_days: int = 60) -> list[dict]:
         day["started_at_min"] = min(day["started_at_min"], started)
         day["last_active_max"] = max(day["last_active_max"], last_active)
         day["session_count"] += 1
-        day["message_count"] += len(messages)
-        day["sessions"].append(_session_info(session))
+        day["message_count"] += unit["message_count"]
+        day["sessions"].append(session_info)
 
-        for candidate in extract_subject_candidates(session, messages):
+        for candidate in (SubjectCandidate(**candidate) for candidate in unit["candidates"]):
             entry = day["_subjects"].setdefault(
                 candidate.slug,
                 {"slug": candidate.slug, "name": candidate.name, "count": 0},
             )
             entry["count"] += 1
 
-        day["work_items"].extend(_work_items_for_session(session, messages))
+        day["work_items"].extend(unit["work_items"])
 
     logs = []
     for day in days.values():
@@ -341,12 +362,12 @@ def build_daily_logs(db, *, limit_days: int = 60) -> list[dict]:
     return logs[:limit_days]
 
 
-def get_daily_log(db, date: str) -> dict | None:
+def get_daily_log(db, date: str, *, cache=None) -> dict | None:
     """Return one daily memory log by ``YYYY-MM-DD`` date, or ``None``."""
 
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date or ""):
         return None
-    for day in build_daily_logs(db, limit_days=1000):
+    for day in build_daily_logs(db, limit_days=1000, cache=cache):
         if day["date"] == date:
             return day
     return None
@@ -386,29 +407,139 @@ def _read_memory_entries(path: Path, delimiter: str) -> list[str]:
     return [entry for entry in (chunk.strip() for chunk in raw.split(delimiter)) if entry]
 
 
-def build_memory_overview(db, *, subject_limit: int = 50, day_limit: int = 30) -> dict:
+def build_memory_overview(
+    db,
+    *,
+    subject_limit: int = 50,
+    day_limit: int = 30,
+    cache=None,
+) -> dict:
     """Return overview payload for Memory Wiki dashboard/API consumers."""
 
-    recent = db.list_sessions_rich(
-        limit=10,
-        include_children=False,
-        order_by_last_active=True,
-    )
+    recent = _recent_sessions(db, limit=10)
     return {
-        "subjects": build_memory_subjects(db, limit=subject_limit),
-        "daily_logs": build_daily_logs(db, limit_days=day_limit),
+        "subjects": build_memory_subjects(db, limit=subject_limit, cache=cache),
+        "daily_logs": build_daily_logs(db, limit_days=day_limit, cache=cache),
         "recent_sessions": [_session_info(session) for session in recent],
         "notes": build_memory_notes(),
     }
 
 
-def _load_memory_sessions(db, *, limit: int) -> list[tuple[dict, list[dict]]]:
-    sessions = db.list_sessions_rich(
+_CORE_CACHE_MODULE = "hermes_dashboard_plugin_memory_wiki_cache"
+_CACHE_LOAD_LOCK = threading.Lock()
+
+
+def _cache_module():
+    """The sibling ``memory_wiki_cache`` module, loaded by path the same way the host
+    loads this file (``spec_from_file_location`` with no package)."""
+
+    mod = sys.modules.get(_CORE_CACHE_MODULE)
+    if mod is not None:
+        return mod
+    with _CACHE_LOAD_LOCK:  # double-checked: concurrent first requests must not exec twice
+        mod = sys.modules.get(_CORE_CACHE_MODULE)
+        if mod is not None:
+            return mod
+        path = Path(__file__).with_name("memory_wiki_cache.py")
+        spec = importlib.util.spec_from_file_location(_CORE_CACHE_MODULE, path)
+        if spec is None or spec.loader is None:  # pragma: no cover
+            raise ImportError(f"cannot load memory-wiki cache module from {path}")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[_CORE_CACHE_MODULE] = mod
+        try:
+            spec.loader.exec_module(mod)
+        except Exception:
+            sys.modules.pop(_CORE_CACHE_MODULE, None)
+            raise
+        return mod
+
+
+def _recent_sessions(db, *, limit: int) -> list[dict]:
+    """Recent sessions in the aggregation order every wiki view relies on."""
+
+    return db.list_sessions_rich(
         limit=limit,
         include_children=False,
         order_by_last_active=True,
     )
-    return [(session, db.get_messages(session["id"])) for session in sessions]
+
+
+def _session_units(db, sessions: list[dict], cache) -> list[dict]:
+    """Per-session aggregation units in ``sessions`` order.
+
+    With ``cache`` given, only sessions whose fingerprint changed (or that are
+    unseen so far) trigger a ``get_messages`` scan; everything else comes from
+    memoized units, which makes warm dashboard requests milliseconds cheap.
+    The fingerprint is stamped only in this cached branch — the uncached path
+    stays exactly the pre-cache aggregation with no cache-module dependency.
+    """
+
+    if cache is None:
+        return [
+            _materialize_unit(_build_session_unit(session, db.get_messages(session["id"])))
+            for session in sessions
+        ]
+
+    session_fingerprint = _cache_module().session_fingerprint
+    units_by_id: dict[str, dict] = {}
+    stale: list[dict] = []
+    for session in sessions:
+        cached = cache.lookup(session)
+        if cached is None:
+            stale.append(session)
+        else:
+            units_by_id[str(session["id"])] = _materialize_unit(cached)
+    for session in stale:
+        unit = _build_session_unit(session, db.get_messages(session["id"]))
+        unit["fingerprint"] = session_fingerprint(session)
+        cache.store(unit)
+        units_by_id[str(session["id"])] = _materialize_unit(unit)
+    return [units_by_id[str(session["id"])] for session in sessions]
+
+
+def _build_session_unit(session: dict, messages: list[dict]) -> dict:
+    """Everything the aggregators derive from one session and its messages.
+
+    Pure function of the session row plus its messages, so it is safe to
+    memoize under ``memory_wiki_cache.session_fingerprint(session)`` and reuse
+    across both the subject and the daily-log aggregations. ``day_key`` is
+    derived here in local time; cached units keep their day bucket until the
+    session's next write, which is an acceptable staleness window.
+    """
+
+    candidates = extract_subject_candidates(session, messages)
+    first_ts = _first_timestamp(session, messages)
+    # Snippets the aggregation actually has are stored per slug; the "no
+    # snippets at all" fallback snippet is stored once — materializing it into
+    # every empty slug at aggregation time keeps cached units small.
+    fallback = None
+    for message in messages:
+        text = _message_text(message)
+        if text:
+            fallback = _snippet(session, message, text)
+            break
+    return {
+        "session": _session_info(session),
+        "candidates": [
+            {
+                "name": candidate.name,
+                "slug": candidate.slug,
+                "score": candidate.score,
+                "source": candidate.source,
+            }
+            for candidate in candidates
+        ],
+        "fallback_snippet": fallback,
+        "first_seen": first_ts,
+        "last_seen": _last_timestamp(session, messages),
+        "message_count": len(messages),
+        "snippets_by_slug": (
+            _snippets_for_candidates(session, messages, candidates) if candidates else {}
+        ),
+        "started_at": float(session.get("started_at") or first_ts),
+        "day_key": _date_key(float(session.get("started_at") or first_ts)),
+        "work_items": _work_items_for_session(session, messages),
+    }
 
 
 def _session_info(session: dict) -> dict:
@@ -449,6 +580,10 @@ def _message_text(message: dict) -> str:
     return " ".join(str(content).split())
 
 
+_SNIPPETS_PER_SLUG = 5  # _finalize_subject keeps the top 5 of the merged, sorted list,
+# and the top-5 of a union always equals the top-5 of merging the per-part top-5s.
+
+
 def _snippets_for_candidates(
     session: dict,
     messages: list[dict],
@@ -467,17 +602,35 @@ def _snippets_for_candidates(
                 snippets[slug].append(_snippet(session, message, text))
                 break
 
-    fallback = None
-    for message in messages:
-        text = _message_text(message)
-        if text:
-            fallback = _snippet(session, message, text)
-            break
-    if fallback:
-        for slug in snippets:
-            if not snippets[slug]:
-                snippets[slug].append(dict(fallback))
+    # Keep only the snippets the aggregation can actually surface: per slug the
+    # finalize step sorts by (timestamp, session_id, message_id) and keeps the
+    # first 5, so storing each session's 5 smallest makes units small without
+    # changing any output — this is what keeps the cached units bounded.
+    for slug, items in snippets.items():
+        if len(items) > _SNIPPETS_PER_SLUG:
+            items.sort(key=lambda s: (s["timestamp"], s.get("message_id") or 0))
+            snippets[slug] = items[:_SNIPPETS_PER_SLUG]
     return snippets
+
+
+def _materialize_unit(unit: dict) -> dict:
+    """Fill empty slugs with the unit's fallback snippet, the way the aggregators read them.
+
+    Units store the fallback once (it is identical for every slug of a session
+    and can number hundreds of slugs); this expands it back to the exact shape
+    the pre-cache aggregation consumed. The shared snippet dict is safe to
+    share: aggregators only read snippets, never mutate them.
+    """
+
+    fallback = unit.get("fallback_snippet")
+    if fallback is None:
+        return unit
+    out = dict(unit)
+    out["snippets_by_slug"] = {
+        slug: items if items else [fallback]
+        for slug, items in unit["snippets_by_slug"].items()
+    }
+    return out
 
 
 def _snippet(session: dict, message: dict, text: str) -> dict:

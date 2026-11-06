@@ -469,6 +469,28 @@ def test_save_downloads_a_file_once_and_a_retry_finishes_failed_companions(api, 
     assert not list(folder.glob("*.part"))  # no staging file left behind
 
 
+def test_concurrent_saves_publish_the_task_sidecar_once(api, monkeypatch):
+    """Windows denies a rename onto a file another rename (or a reader) holds: overlapping saves of one task must
+    not both replace .meshy-task, and a later save leaves the correct sidecar alone."""
+    from concurrent.futures import ThreadPoolExecutor
+    a = "https://assets.meshy.ai/"
+    monkeypatch.setattr(api, "_task", lambda _t, _k: {"id": _TASK, "model_urls": {"fbx": a + "m.fbx", "stl": a + "m.stl"}})
+    _fake_assets(monkeypatch, api, {"m.fbx": b"FBX", "m.stl": b"STL"}, delay=0.2)
+    sidecar = api.data / "meshy_output" / _TASK / ".meshy-task"
+    real_replace, onto_sidecar = os.replace, []
+
+    def replace(src, dst):
+        if Path(dst) == sidecar:
+            onto_sidecar.append(src)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(api.os, "replace", replace)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(lambda f: api.save({"task": _TASK, "format": f}), ["fbx", "stl"]))
+    api.save({"task": _TASK, "format": "fbx"})
+    assert len(onto_sidecar) == 1 and sidecar.read_text(encoding="utf-8") == _TASK
+
+
 def test_a_beside_export_is_reused_only_for_the_task_that_saved_it(api, monkeypatch):
     """A project file regenerated as a new task keeps its name; the old task's robot.stl beside it is never
     served or listed as the new task's export, and a file the user made or edited there is never overwritten."""

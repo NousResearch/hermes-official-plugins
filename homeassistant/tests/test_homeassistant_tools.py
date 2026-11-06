@@ -503,7 +503,9 @@ class TestObjectData:
         '{"volume_level": 0.3}',        # JSON string, XML tool-calling mode
     ])
     def test_advertised_schema_accepts_object_and_json_string(self, data):
-        from jsonschema.validators import validator_for
+        # Core only validates deferred-tool arguments when jsonschema is importable; CI's
+        # plain core install does not pull it in.
+        validator_for = pytest.importorskip("jsonschema.validators").validator_for
 
         params = ha_tool.HA_CALL_SERVICE_SCHEMA["parameters"]
         validator = validator_for(params)(params)

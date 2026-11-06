@@ -174,6 +174,9 @@ def test_a_second_401_keeps_the_gate_closed(tmp_path):
             assert exc_info.value.status_code == 401
             assert 'OAuth access token has been revoked.' in str(exc_info.value)
             assert 'native retries denied: 1' in str(exc_info.value)  # only the third attempt was denied
+            # The retry's error alone, parsed to its message, not both bodies' raw JSON.
+            assert str(exc_info.value).count('OAuth access token has been revoked.') == 1
+            assert '"authentication_error"' not in str(exc_info.value)
         finally:
             client.close()
         assert not peer.answers

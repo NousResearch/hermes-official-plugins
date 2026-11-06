@@ -149,12 +149,15 @@ def _write_owner_only(path: Path, payload: bytes) -> None:
     ``write_bytes`` creates the key world-readable before an after-the-fact ``chmod`` narrows it.
     """
     tmp = path.with_name(f"{path.name}.{os.getpid()}.part")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    tmp.unlink(missing_ok=True)  # O_EXCL: a leftover tmp would keep its old, wider mode
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        os.write(fd, payload)
-    finally:
-        os.close(fd)
-    os.replace(tmp, path)  # atomic, so a reader never sees the half-written file
+        with os.fdopen(fd, "wb") as handle:  # write() loops over short writes; os.write does not
+            handle.write(payload)
+        os.replace(tmp, path)  # atomic, so a reader never sees the half-written file
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _generate_loopback_pair(cert_path: Path, key_path: Path) -> None:

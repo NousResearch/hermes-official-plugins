@@ -8,6 +8,7 @@ IP literal (RFC 8252).
 
 from __future__ import annotations
 
+import os
 import socket
 import sys
 import threading
@@ -174,3 +175,30 @@ def test_a_corrupt_cached_pair_is_regenerated():
     assert spotify_auth._loopback_tls_context() is not None
     assert b"BEGIN CERTIFICATE" in cert.read_bytes()
     assert b"PRIVATE KEY" in key.read_bytes()
+
+
+def test_a_failed_write_leaves_no_partial_file(monkeypatch, tmp_path):
+    out = tmp_path / "pair"
+    out.mkdir()
+    target = out / "key.pem"
+
+    def boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(spotify_auth.os, "replace", boom)
+    with pytest.raises(OSError):
+        spotify_auth._write_owner_only(target, b"secret")
+    assert list(out.iterdir()) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes only")
+def test_a_stale_partial_file_does_not_widen_the_key_mode(tmp_path):
+    target = tmp_path / "key.pem"
+    stale = tmp_path / f"key.pem.{os.getpid()}.part"
+    stale.write_bytes(b"old")
+    stale.chmod(0o644)
+
+    spotify_auth._write_owner_only(target, b"secret")
+
+    assert target.read_bytes() == b"secret"
+    assert target.stat().st_mode & 0o077 == 0, oct(target.stat().st_mode)

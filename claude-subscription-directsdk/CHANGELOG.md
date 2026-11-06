@@ -7,6 +7,10 @@
 - Mythos 5.1 (`claude-mythos-5-1[1m]`, 1M) for organizations Anthropic has verified. It is listed only when the account's own picker offers it, never from the pinned catalog, so accounts without access do not see it. Reasoning-off requests ask for the lowest effort instead of a disable Mythos rejects.
 - Per-profile `claude_config_dir` setting selects the Claude login for every native spawn in a multiplexed gateway (#34).
 
+### Changed
+
+- A tool-less request no longer starts the inert MCP helper or writes its manifest: titles, summaries and other tool-less calls skip ~0.6 s of Python start plus one server handshake per call (#42).
+
 ### Fixed
 
 - An Anthropic API key in Hermes' environment (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_FOUNDRY_API_KEY`), set for Hermes' own `anthropic` provider, no longer blocks this provider: it is dropped from every Claude Code child instead of failing the turn (an explicit `Client(env=...)` keeps it, like the other inherited-environment guards), so both providers work from the same Hermes and a subscription turn never bills API usage. Setup and model discovery no longer pass it to `claude auth status` either.
@@ -21,6 +25,7 @@
 - Restore gzip compression for large direct Anthropic requests, with a process-wide latch and one uncompressed resend when request encoding is rejected.
 - A reasoning-off request (`reasoning.enabled: false` or effort `none`) on a route that cannot disable thinking (Haiku 5.5, Sonnet 5.5, Opus 5.5, Fable) now asks for `effort: low` instead of sending no effort, where native thought at its default effort. Routes that accept the disable still receive it.
 - Structured output no longer 400s upstream on schema keywords native rejects: `minimum`/`maximum`/`exclusiveMinimum`/`exclusiveMaximum`/`multipleOf` on integer and number, `maxItems`/`uniqueItems` on array, `minProperties`/`maxProperties` on object, and `type` beside `enum` (a nullable enum) are dropped from the wire schema only, and an array `minItems` above 1 is sent as 1. Hermes still validates the reply against the full schema, so the constraints hold, and core no longer retries without a schema (a doubled call).
+- Tell the host the request is alive while native streams events that carry no text (tool-call arguments as `input_json_delta`, thinking signatures, block boundaries). Hermes' stale detector only sees chunks, so a long tool call used to look like a stall and the host cancelled a healthy request at its stale budget, then replayed it (#35). Each such event now yields a content-free chunk; pings do not, since they show an open connection and not model work. Final responses are unchanged.
 - Keep one native session per conversation (`--session-id` from the system prompt and first frame): with feature flags on, native names a per-session scratchpad directory in the environment message after the first user turn, so a new session per spawn changed it on every request and each round re-wrote the conversation to the prompt cache.
 - Short model names such as `sonnet-5-5`, `sonnet-5.5`, `opus-4.8` and `haiku-4-5` resolve to their pinned routes (and thinking policy) instead of reaching Claude Code verbatim and 404ing into the fallback chain (#103).
 - `/usage` asks Claude Code for the plan limits (`get_usage` control request) instead of reading its login: it now works with `auth.adopt_external_logins: false`, follows the per-profile `claude_config_dir`, and the plugin never holds the CLI's token (#82).
@@ -30,3 +35,4 @@
 - Continue rejecting arbitrary headers, credential overrides, and malformed header containers at the transport boundary.
 - Carry the login identity Claude Code's local check reads (`USER`/`LOGNAME`, `USERNAME` on Windows) into the child env, derived from the parent process or the running uid: without it a perfectly logged-in CLI reports `loggedIn: false` instantly, with no stderr and no upstream request — the confirmed mechanism behind gateway-only `ClaudeCodeLoggedOut` failures (#44).
 - Capture native stderr (bounded, drained off-thread) and include its first lines in `ClaudeCodeLoggedOut` and native-failure errors, so a gateway-only failure is diagnosable instead of vanishing into `DEVNULL` (#44).
+- A `ClaudeCodeLoggedOut` error names the Claude Code binary it ran and the login directory that spawn used (its `CLAUDE_CONFIG_DIR`, else its own `HOME`'s `.claude`), so a gateway that resolves a different CLI or login than your shell is visible in the error itself (#47).

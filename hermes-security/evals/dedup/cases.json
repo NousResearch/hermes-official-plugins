@@ -1,0 +1,6 @@
+{"cases":[
+{"id":"same-cwe-distinct-control","candidates":[{"candidateId":"a","ruleId":"auth.tenant","identity":{"anchor":"a/get"},"taxonomy":{"cwe":["CWE-862"]},"evidenceState":"source_supported"},{"candidateId":"b","ruleId":"auth.tenant","identity":{"anchor":"b/get"},"taxonomy":{"cwe":["CWE-862"]},"evidenceState":"source_supported"}],"allowedAbsorptions":[]},
+{"id":"same-anchor-different-rule","candidates":[{"candidateId":"a","ruleId":"auth.tenant","identity":{"anchor":"a/get"},"evidenceState":"source_supported"},{"candidateId":"b","ruleId":"injection.sql","identity":{"anchor":"a/get"},"evidenceState":"source_supported"}],"allowedAbsorptions":[]},
+{"id":"duplicate-observation","candidates":[{"candidateId":"a","ruleId":"auth.tenant","identity":{"anchor":"a/get"},"evidenceState":"source_supported"},{"candidateId":"b","ruleId":"auth.tenant","identity":{"anchor":"a/get"},"evidenceState":"candidate"}],"allowedAbsorptions":[["b","a"]]},
+{"id":"rejected-not-erased","candidates":[{"candidateId":"a","ruleId":"auth.tenant","identity":{"anchor":"a/get"},"evidenceState":"source_supported"},{"candidateId":"b","ruleId":"auth.tenant","identity":{"anchor":"b/get"},"evidenceState":"rejected"},{"candidateId":"c","ruleId":"auth.tenant","identity":{"anchor":"c/get"},"evidenceState":"inconclusive"}],"allowedAbsorptions":[]}
+]}

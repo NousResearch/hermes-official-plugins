@@ -1,0 +1,57 @@
+{
+  "ruleId": "authz.missing-check",
+  "identity": {
+    "anchor": "src/a.py/get"
+  },
+  "title": "A user can read another account",
+  "summary": "An authenticated user can fetch records owned by another account.",
+  "rootCause": "The query filters by record ID without checking the owner.",
+  "attackPath": {
+    "source": "Request identifier",
+    "sink": "Database query",
+    "steps": [
+      "Log in as a regular user, request another account record, and receive its contents."
+    ],
+    "controls": [],
+    "assumptions": []
+  },
+  "severity": {
+    "level": "high",
+    "rationale": "Cross-account private record disclosure has substantial confidentiality impact.",
+    "reachability": "Authenticated users",
+    "impact": "Private record disclosure",
+    "likelihood": "Direct request",
+    "prerequisites": []
+  },
+  "confidence": {
+    "level": "high",
+    "rationale": "Source traces the request to an unscoped lookup."
+  },
+  "evidenceState": "source_supported",
+  "taxonomy": {
+    "category": "broken-access-control",
+    "cwe": [
+      "CWE-639"
+    ],
+    "owasp": [
+      "A01:2025"
+    ],
+    "asvs": [
+      "V8.2.2"
+    ]
+  },
+  "locations": [
+    {
+      "path": "src/a.py",
+      "startLine": 1,
+      "endLine": 2,
+      "role": "sink"
+    }
+  ],
+  "remediation": {
+    "summary": "Scope every record lookup to the authenticated account.",
+    "regressionTests": [
+      "Reject a request for another account record."
+    ]
+  }
+}

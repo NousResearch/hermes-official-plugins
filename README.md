@@ -222,10 +222,15 @@ Catalog entries come in two tiers:
 </tr>
 <tr>
 <td width="50%" valign="top">
-<h3>More on the way</h3>
-<p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
+<a href="hermes-security/"><img src="assets/hermes-security.jpg" alt="Security plugin"></a>
+<h3><a href="hermes-security/">Security</a></h3>
+<code>hermes plugins install hermes-security</code>
+<p>Security review for a local repository. Parallel subagents read the code in chunks, check each candidate against the code, and trace whether an attacker can reach it. Optional tests confirm findings in a temporary copy, and an optional grant lets the agent test your running app for an hour. Reports keep evidence, coverage gaps and rejected candidates, export to Markdown, JSON, CSV and SARIF, and get a Security page in Hermes Desktop.</p>
+<p><code>security_scan_start</code> and 8 more · <code>/security</code> · <code>hermes security-review</code></p>
 </td>
 <td width="50%" valign="top">
+<h3>More on the way</h3>
+<p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
 </td>
 </tr>
 </table>

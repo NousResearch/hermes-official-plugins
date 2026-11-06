@@ -1,0 +1,14 @@
+{
+  "title": "An anonymous caller can read files outside the export directory",
+  "summary": "An export request can return files belonging to the server when the caller chooses a parent path.",
+  "rootCause": "The export handler joins a caller-controlled path without checking the resolved directory.",
+  "attackPath": {"source": "Export filename", "sink": "File response", "steps": ["Send a parent-directory filename to the export route.", "The handler resolves the path outside the export directory.", "The response returns the selected server file."], "controls": [], "assumptions": ["The server account can read the selected file."]},
+  "severity": {"level": "high", "rationale": "Server configuration files may contain credentials usable against other services."},
+  "validation": {"status": "NOT_RUN", "level": "static", "summary": "Inspected path construction and file response; no runtime test was performed.", "receiptIds": []},
+  "remediation": {"summary": "Resolve the requested path and require it to remain inside the export directory.", "regressionTests": ["Reject parent-directory and absolute-path export requests."]},
+  "counterEvidence": ["A reverse proxy might reject traversal sequences."], "proofGaps": ["Proxy normalization was not inspected."],
+  "codeEvidence": [{"id": "import-ev", "label": "File read", "path": "app/export.py", "startLine": 17, "code": "return send_file(root / filename)", "explanation": "The joined path reaches the file response."}],
+  "evidenceState": "source_supported",
+  "taxonomy": {"category": "path-traversal", "cwe": ["CWE-22"], "owasp": ["A01:2025"], "asvs": []},
+  "extensions": {"reportId": "path-traversal-1", "candidateId": "upstream-candidate-1"}
+}

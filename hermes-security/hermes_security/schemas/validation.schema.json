@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hermes-security.local/schemas/validation.schema.json",
+  "$comment": "Original to hermes-security (no upstream counterpart).",
+  "$defs": {
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checked",
+        "notes"
+      ],
+      "properties": {
+        "checked": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 20000
+        }
+      }
+    }
+  },
+  "type": "object",
+  "properties": {
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "control",
+        "sink",
+        "boundary",
+        "counterevidence"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/check"
+        },
+        "control": {
+          "$ref": "#/$defs/check"
+        },
+        "sink": {
+          "$ref": "#/$defs/check"
+        },
+        "boundary": {
+          "$ref": "#/$defs/check"
+        },
+        "counterevidence": {
+          "$ref": "#/$defs/check"
+        }
+      }
+    },
+    "receiptId": {
+      "type": "string",
+      "maxLength": 20000,
+      "minLength": 1
+    },
+    "candidateId": {
+      "type": "string",
+      "maxLength": 20000,
+      "minLength": 1,
+      "pattern": "^cand_[a-f0-9]{24}$(?![\\s\\S])"
+    },
+    "level": {
+      "enum": [
+        "static",
+        "local-safe",
+        "active-authorized"
+      ]
+    },
+    "kind": {
+      "enum": [
+        "static",
+        "local-command",
+        "http-probe"
+      ]
+    },
+    "status": {
+      "enum": [
+        "NOT_RUN",
+        "passed",
+        "failed",
+        "inconclusive"
+      ]
+    },
+    "positive": {
+      "type": "object"
+    },
+    "negative": {
+      "type": "object"
+    },
+    "commandsDigest": {
+      "type": "string",
+      "maxLength": 20000
+    },
+    "startedAt": {
+      "type": "string",
+      "maxLength": 20000,
+      "minLength": 1,
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$(?![\\s\\S])"
+    },
+    "finishedAt": {
+      "type": "string",
+      "maxLength": 20000,
+      "minLength": 1,
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$(?![\\s\\S])"
+    },
+    "cleanup": {
+      "type": "object",
+      "properties": {
+        "done": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 20000
+        }
+      },
+      "required": [
+        "done",
+        "detail"
+      ],
+      "additionalProperties": false
+    },
+    "outputExcerpt": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "notes": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 20000
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 20000
+          }
+        }
+      ]
+    }
+  },
+  "required": [
+    "receiptId",
+    "candidateId",
+    "level",
+    "kind",
+    "status",
+    "positive",
+    "negative",
+    "commandsDigest",
+    "startedAt",
+    "finishedAt",
+    "cleanup",
+    "outputExcerpt",
+    "notes"
+  ],
+  "additionalProperties": false
+}

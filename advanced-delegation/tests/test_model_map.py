@@ -157,3 +157,96 @@ def test_pickers_show_the_user_facing_name_and_one_line_summary(provider):
     # /delegation and core's backend list read these; the model never sees them.
     assert provider.display_name == "Model routes"
     assert provider.summary and "\n" not in provider.summary
+
+
+
+# --- daybreak ---------------------------------------------------------------------------------
+
+DAYBREAK = {"name": "daybreak", "description": "Sol, reduced guardrails.", "provider": "openai-codex",
+            "model": "gpt-6-sol", "service_tier": "fast", "daybreak": True}
+SOL = {"name": "sol", "description": "Sol.", "provider": "openai-codex", "model": "gpt-6-sol"}
+CYBER = {"extra_body": {"access_programs": {"cyber": "daybreak_blue"}}}
+
+
+@pytest.fixture
+def daybreak_env(monkeypatch):
+    """An owner's Desktop session whose Codex catalog lists Daybreak for every model; tests flip either half."""
+    offered = {"value": True}
+    calls = []
+
+    def fake_offered(model, *, provider=None, base_url=None, access_token=None):
+        calls.append((model, provider, base_url))
+        return offered["value"]
+
+    monkeypatch.setattr("agent.codex_service_tiers.daybreak_offered", fake_offered)
+    monkeypatch.setenv("HERMES_SESSION_SOURCE", "desktop")
+    return {"offered": offered, "calls": calls, "monkeypatch": monkeypatch}
+
+
+def _pick(provider, config, option):
+    return provider.route_task({"goal": "g", "index": 0, "option": option}, config)
+
+
+def test_a_daybreak_route_runs_the_base_model_with_the_daybreak_access_program(provider, daybreak_env):
+    config = _config(options=[SOL, DAYBREAK])
+    assert _pick(provider, config, "daybreak") == {
+        "provider": "openai-codex", "model": "gpt-6-sol", "service_tier": "fast", "request_overrides": CYBER,
+        "label": "daybreak"}
+    assert daybreak_env["calls"] == [("gpt-6-sol", "openai-codex", None)]
+    # The same base model without daybreak is a plain route: no catalog lookup, no access program.
+    assert _pick(provider, config, "sol") == {"provider": "openai-codex", "model": "gpt-6-sol", "label": "sol"}
+    assert len(daybreak_env["calls"]) == 1
+
+
+def test_the_backend_declares_daybreak_for_settings_editors(provider):
+    assert provider.route_keys == ("daybreak",)
+
+
+def test_daybreak_never_reaches_the_schema(provider):
+    text = json.dumps(provider.task_parameters(_config(options=[SOL, DAYBREAK])))
+    assert "daybreak_blue" not in text and "access_programs" not in text and "gpt-6-sol" not in text
+
+
+@pytest.mark.parametrize("source", ["cli", "tui", "desktop"])
+def test_daybreak_runs_from_the_owners_own_surfaces(provider, daybreak_env, source):
+    daybreak_env["monkeypatch"].setenv("HERMES_SESSION_SOURCE", source)
+    assert _pick(provider, _config(options=[DAYBREAK]), "daybreak")["request_overrides"] == CYBER
+
+
+@pytest.mark.parametrize("source", ["telegram", "discord", "cron", "a2a"])
+def test_daybreak_is_refused_outside_the_owners_own_surfaces(provider, daybreak_env, source):
+    from agent.delegation_provider import DelegationRouteError
+    daybreak_env["monkeypatch"].setenv("HERMES_SESSION_SOURCE", source)
+    with pytest.raises(DelegationRouteError, match=f"owner's own.*{source}"):
+        _pick(provider, _config(options=[DAYBREAK]), "daybreak")
+
+
+def test_daybreak_is_refused_when_the_catalog_does_not_list_it(provider, daybreak_env):
+    from agent.delegation_provider import DelegationRouteError
+    daybreak_env["offered"]["value"] = False
+    with pytest.raises(DelegationRouteError, match="catalog does not list Daybreak for 'gpt-6-sol'"):
+        _pick(provider, _config(options=[DAYBREAK]), "daybreak")
+
+
+def test_a_default_daybreak_route_is_gated_too(provider, daybreak_env):
+    from agent.delegation_provider import DelegationRouteError
+    daybreak_env["monkeypatch"].setenv("HERMES_SESSION_SOURCE", "telegram")
+    with pytest.raises(DelegationRouteError):
+        provider.route_task({"goal": "g", "index": 0}, _config(options=[DAYBREAK], default="daybreak"))
+
+
+@pytest.mark.parametrize("change, problem", [
+    ({"provider": "openrouter"}, "needs provider: openai-codex"),
+    ({"provider": None, "base_url": "https://chatgpt.com/backend-api/codex"}, "needs provider: openai-codex"),
+    ({"daybreak": "yes"}, "use true or false"),
+])
+def test_a_misconfigured_daybreak_route_is_skipped_with_a_warning(provider, caplog, change, problem):
+    with caplog.at_level(logging.WARNING):
+        params = provider.task_parameters(_config(options=[SOL, {**DAYBREAK, **change}]))
+    assert params["option"]["enum"] == ["sol"]
+    assert problem in caplog.text
+
+
+def test_daybreak_false_is_a_plain_route(provider, daybreak_env):
+    route = _pick(provider, _config(options=[{**DAYBREAK, "daybreak": False}]), "daybreak")
+    assert "request_overrides" not in route and daybreak_env["calls"] == []

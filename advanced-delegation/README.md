@@ -152,14 +152,33 @@ delegation:
           description: "Private: runs on this machine."
           base_url: http://localhost:8080/v1
           model: qwen3-coder
+        - name: daybreak
+          description: "Sol with reduced guardrails: security work."
+          provider: openai-codex
+          model: gpt-6-sol               # the real base model
+          daybreak: true                 # OpenAI Daybreak trusted access for this route only
       default: fast                      # optional: route for tasks that pick none
 ```
 
 Route keys: `name` and `description` (required), `model` (required), `provider` and/or `base_url`
-(at least one), and optionally `reasoning_effort`, `service_tier`, `fallback_providers`, `api_key`
-and `api_mode`, each meaning the same as the matching `delegation.*` key. Prefer `provider:` over `api_key:`: provider
+(at least one), and optionally `daybreak` (below), `reasoning_effort`, `service_tier`, `fallback_providers`, `api_key`
+and `api_mode`, the last five each meaning the same as the matching `delegation.*` key. Prefer `provider:` over `api_key:`: provider
 credentials stay in `.env` / `auth.json`, while an `api_key` here is stored in `config.yaml` in plain
 text. Malformed routes and repeated names are skipped with a warning in `hermes logs`.
+
+`daybreak: true` runs the route with OpenAI's Daybreak trusted-access program
+(`access_programs.cyber: daybreak_blue`), the request field Hermes sends when the Daybreak switch is
+on. Name the real base model (`gpt-6-sol`, `gpt-6-luna`, ...), not a `*-daybreak-*` alias, so the same
+model can back a plain route (`sol`) and a Daybreak route (`daybreak`). The route's own `daybreak`
+is its opt-in; `agent.daybreak` (the main chat's switch) does not affect it. Hermes's Daybreak rules
+still apply to every spawn: the route must be `provider: openai-codex`, your account's Codex catalog
+must list Daybreak for that model, and the delegating chat must be your own CLI, TUI or Desktop chat
+(not a messaging platform, cron or another person's session). A spawn that breaks a rule is refused
+with a tool error, never run without the program. `hermes delegation config` offers the Daybreak
+switch only for models your catalog lists it for, and so does the Desktop route editor (Settings →
+Model → Subagents) on a Hermes whose editor knows the key this plugin declares. On an older Hermes,
+saving routes from the Desktop editor drops `daybreak`; set it with `hermes delegation config` or
+YAML there and edit those routes outside Desktop.
 
 `service_tier` is checked like `/fast` against the route (and, for `ultrafast`, your Codex
 account): a tier the route does not offer refuses the spawn with a tool error instead of silently

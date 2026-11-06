@@ -1,0 +1,810 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hermes-security.local/schemas/worker-result.schema.json",
+  "$comment": "Original to hermes-security (no upstream counterpart).",
+  "type": "object",
+  "properties": {
+    "scanId": {
+      "type": "string",
+      "maxLength": 20000,
+      "minLength": 1,
+      "pattern": "^scan_[a-f0-9]{24}$(?![\\s\\S])"
+    },
+    "attemptId": {
+      "type": "string",
+      "maxLength": 20000,
+      "minLength": 1,
+      "pattern": "^att_[a-z0-9_-]{1,64}$(?![\\s\\S])"
+    },
+    "workerRole": {
+      "enum": [
+        "baseline",
+        "investigator",
+        "deep-pass",
+        "diff",
+        "validator"
+      ]
+    },
+    "snapshotDigest": {
+      "type": "string",
+      "maxLength": 20000,
+      "minLength": 1,
+      "pattern": "^sha256:[a-f0-9]{64}$(?![\\s\\S])"
+    },
+    "methodologyVersion": {
+      "const": "hermes-security/method-1"
+    },
+    "packetId": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 20000,
+          "minLength": 1,
+          "pattern": "^pkt_[a-zA-Z0-9_-]+$(?![\\s\\S])"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/candidate"
+      },
+      "maxItems": 200
+    },
+    "coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "unit": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1,
+            "pattern": "^(?:file:.+|lane:A(?:0[1-9]|10):2025|asvs:V[0-9]+(?:\\.[0-9]+)+)$(?![\\s\\S])"
+          },
+          "state": {
+            "enum": [
+              "reviewed",
+              "not_applicable",
+              "deferred",
+              "unsupported",
+              "unknown",
+              "failed"
+            ]
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 20000
+          }
+        },
+        "required": [
+          "unit",
+          "state",
+          "note"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "negativeResults": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "hypothesis": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1
+          },
+          "control": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1
+          },
+          "locations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/location"
+            }
+          }
+        },
+        "required": [
+          "hypothesis",
+          "control",
+          "locations"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "notes": {
+      "type": "string",
+      "maxLength": 4000
+    }
+  },
+  "required": [
+    "scanId",
+    "attemptId",
+    "workerRole",
+    "snapshotDigest",
+    "methodologyVersion",
+    "packetId",
+    "candidates",
+    "coverage",
+    "negativeResults",
+    "notes"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "properties": {
+        "ruleId": {
+          "type": "string",
+          "maxLength": 20000,
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9._/-]*$(?![\\s\\S])"
+        },
+        "identity": {
+          "type": "object",
+          "properties": {
+            "anchor": {
+              "type": "string",
+              "maxLength": 20000,
+              "minLength": 1
+            },
+            "instance": {
+              "type": "string",
+              "maxLength": 20000,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "anchor"
+          ],
+          "additionalProperties": false
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 20000,
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 20000,
+          "minLength": 1
+        },
+        "rootCause": {
+          "type": "string",
+          "maxLength": 20000,
+          "minLength": 1
+        },
+        "attackPath": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string",
+              "maxLength": 20000
+            },
+            "sink": {
+              "type": "string",
+              "maxLength": 20000
+            },
+            "steps": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 20000,
+                "minLength": 1
+              },
+              "minItems": 1
+            },
+            "controls": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 20000
+              }
+            },
+            "assumptions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 20000
+              }
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "severity": {
+          "type": "object",
+          "properties": {
+            "level": {
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "informational"
+              ]
+            },
+            "rationale": {
+              "type": "string",
+              "maxLength": 20000,
+              "minLength": 1
+            },
+            "reachability": {
+              "type": "string",
+              "maxLength": 20000
+            },
+            "impact": {
+              "type": "string",
+              "maxLength": 20000
+            },
+            "likelihood": {
+              "type": "string",
+              "maxLength": 20000
+            },
+            "prerequisites": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 20000
+              }
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "confidence": {
+          "type": "object",
+          "properties": {
+            "level": {
+              "enum": [
+                "high",
+                "medium",
+                "low"
+              ]
+            },
+            "rationale": {
+              "type": "string",
+              "maxLength": 20000,
+              "minLength": 1
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "evidenceState": {
+          "enum": [
+            "candidate",
+            "source_supported",
+            "rejected",
+            "inconclusive"
+          ]
+        },
+        "taxonomy": {
+          "type": "object",
+          "properties": {
+            "category": {
+              "type": "string",
+              "maxLength": 20000,
+              "minLength": 1
+            },
+            "cwe": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 20000,
+                "minLength": 1,
+                "pattern": "^CWE-[1-9][0-9]*$(?![\\s\\S])"
+              }
+            },
+            "owasp": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 20000,
+                "minLength": 1,
+                "pattern": "^A(?:0[1-9]|10):2025$(?![\\s\\S])"
+              }
+            },
+            "asvs": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 20000,
+                "minLength": 1,
+                "pattern": "^V[0-9]+(?:\\.[0-9]+)+$(?![\\s\\S])"
+              }
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "locations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/location"
+          },
+          "minItems": 1
+        },
+        "codeEvidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 20000,
+                "minLength": 1
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 20000,
+                "minLength": 1
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 20000,
+                "minLength": 1
+              },
+              "startLine": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "endLine": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "code": {
+                "type": "string",
+                "maxLength": 4000
+              },
+              "sha256": {
+                "type": "string",
+                "maxLength": 20000,
+                "minLength": 1,
+                "pattern": "^[a-f0-9]{64}$(?![\\s\\S])"
+              },
+              "explanation": {
+                "type": "string",
+                "maxLength": 20000,
+                "minLength": 1
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "counterEvidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 20000
+          }
+        },
+        "proofGaps": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 20000
+          }
+        },
+        "validation": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "enum": [
+                "NOT_RUN",
+                "passed",
+                "failed",
+                "inconclusive"
+              ]
+            },
+            "level": {
+              "enum": [
+                "static",
+                "local-safe",
+                "active-authorized"
+              ]
+            },
+            "receiptIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 20000,
+                "minLength": 1
+              }
+            },
+            "summary": {
+              "type": "string",
+              "maxLength": 20000
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "remediation": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "string",
+              "maxLength": 20000,
+              "minLength": 1
+            },
+            "regressionTests": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 20000
+              }
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "capabilities": {
+          "type": "object",
+          "properties": {
+            "preconditions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "network-access",
+                      "authenticated-session",
+                      "role",
+                      "tenant-membership",
+                      "user-interaction",
+                      "config-enabled",
+                      "component-reachable",
+                      "credential",
+                      "file-write",
+                      "internal-network"
+                    ]
+                  },
+                  "actor": {
+                    "enum": [
+                      "anonymous",
+                      "authenticated",
+                      "same-tenant",
+                      "cross-tenant",
+                      "admin",
+                      "local-user",
+                      "internal-network",
+                      "any"
+                    ]
+                  },
+                  "tenant": {
+                    "enum": [
+                      "same",
+                      "cross",
+                      "any"
+                    ]
+                  },
+                  "deployment": {
+                    "type": "string",
+                    "maxLength": 20000,
+                    "minLength": 1
+                  },
+                  "detail": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 20000
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "summary": {
+                            "type": "string",
+                            "maxLength": 20000
+                          },
+                          "yieldsCredential": {
+                            "type": "boolean"
+                          },
+                          "yieldsActor": {
+                            "enum": [
+                              "anonymous",
+                              "authenticated",
+                              "same-tenant",
+                              "cross-tenant",
+                              "admin",
+                              "local-user",
+                              "internal-network",
+                              "any"
+                            ]
+                          }
+                        },
+                        "required": [],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "yieldsCredential": {
+                    "type": "boolean"
+                  },
+                  "yieldsActor": {
+                    "enum": [
+                      "anonymous",
+                      "authenticated",
+                      "same-tenant",
+                      "cross-tenant",
+                      "admin",
+                      "local-user",
+                      "internal-network",
+                      "any"
+                    ]
+                  },
+                  "defeatedBy": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 20000
+                    }
+                  },
+                  "brokenBy": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 20000
+                    }
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            },
+            "effects": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "data-read",
+                      "data-write",
+                      "credential-acquire",
+                      "identity-change",
+                      "privilege-gain",
+                      "internal-network-reach",
+                      "file-write",
+                      "code-exec",
+                      "integrity-impact",
+                      "availability-impact"
+                    ]
+                  },
+                  "actor": {
+                    "enum": [
+                      "anonymous",
+                      "authenticated",
+                      "same-tenant",
+                      "cross-tenant",
+                      "admin",
+                      "local-user",
+                      "internal-network",
+                      "any"
+                    ]
+                  },
+                  "tenant": {
+                    "enum": [
+                      "same",
+                      "cross",
+                      "any"
+                    ]
+                  },
+                  "deployment": {
+                    "type": "string",
+                    "maxLength": 20000,
+                    "minLength": 1
+                  },
+                  "detail": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 20000
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "summary": {
+                            "type": "string",
+                            "maxLength": 20000
+                          },
+                          "yieldsCredential": {
+                            "type": "boolean"
+                          },
+                          "yieldsActor": {
+                            "enum": [
+                              "anonymous",
+                              "authenticated",
+                              "same-tenant",
+                              "cross-tenant",
+                              "admin",
+                              "local-user",
+                              "internal-network",
+                              "any"
+                            ]
+                          }
+                        },
+                        "required": [],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "yieldsCredential": {
+                    "type": "boolean"
+                  },
+                  "yieldsActor": {
+                    "enum": [
+                      "anonymous",
+                      "authenticated",
+                      "same-tenant",
+                      "cross-tenant",
+                      "admin",
+                      "local-user",
+                      "internal-network",
+                      "any"
+                    ]
+                  }
+                },
+                "required": [],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "secret": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "maxLength": 20000,
+                  "minLength": 1
+                },
+                "fingerprint": {
+                  "type": "string",
+                  "maxLength": 20000,
+                  "minLength": 1,
+                  "pattern": "^sha256:[a-f0-9]{16}$(?![\\s\\S])"
+                }
+              },
+              "required": [],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "diffAttribution": {
+          "enum": [
+            null,
+            "introduced",
+            "inherited"
+          ]
+        },
+        "provenance": {
+          "type": "object",
+          "properties": {
+            "methodologyVersion": {
+              "const": "hermes-security/method-1"
+            },
+            "workerAttemptIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 20000,
+                "minLength": 1,
+                "pattern": "^att_[a-z0-9_-]{1,64}$(?![\\s\\S])"
+              }
+            },
+            "sourceCandidateIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 20000,
+                "minLength": 1,
+                "pattern": "^cand_[a-f0-9]{24}$(?![\\s\\S])"
+              }
+            },
+            "subsumes": {
+              "type": "array",
+              "maxItems": 200,
+              "items": {
+                "type": "string",
+                "pattern": "^cand_[a-f0-9]{24}$(?![\\s\\S])"
+              }
+            },
+            "supersedes": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 20000,
+                      "minLength": 1
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 20000,
+                        "minLength": 1
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "upstream": {
+              "type": "object",
+              "required": []
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "candidateId": {
+          "type": "string",
+          "maxLength": 20000,
+          "minLength": 1,
+          "pattern": "^cand_[a-f0-9]{24}$(?![\\s\\S])"
+        },
+        "source": {
+          "enum": [
+            "worker"
+          ]
+        }
+      },
+      "required": [
+        "ruleId",
+        "identity",
+        "locations"
+      ],
+      "additionalProperties": false
+    },
+    "location": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "maxLength": 20000,
+          "minLength": 1
+        },
+        "startLine": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "endLine": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "role": {
+          "type": "string",
+          "maxLength": 20000,
+          "minLength": 1
+        }
+      },
+      "required": [
+        "path",
+        "startLine"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

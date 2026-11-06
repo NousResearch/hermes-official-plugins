@@ -1,0 +1,1 @@
+Vendored verbatim from openai/codex-security commit 89aae242136312467790947f3b122ca3f607614f, path plugins/codex-security/examples/completed-scan (Apache-2.0, see LICENSE in this directory). Used by tests/upstream-compat.

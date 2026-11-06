@@ -1,0 +1,349 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hermes-security.local/schemas/coverage.schema.json",
+  "$comment": "Modified from Apache-2.0 source schemas/coverage.schema.json (see NOTICE).",
+  "type": "object",
+  "properties": {
+    "documentType": {
+      "const": "hermes-security.coverage"
+    },
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "scanId": {
+      "type": "string",
+      "maxLength": 20000,
+      "minLength": 1,
+      "pattern": "^scan_[a-f0-9]{24}$(?![\\s\\S])"
+    },
+    "completeness": {
+      "enum": [
+        "complete",
+        "partial"
+      ]
+    },
+    "files": {
+      "type": "object",
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reviewed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "notApplicable": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deferred": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unsupported": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "excluded": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "maxLength": 20000,
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 20000
+              }
+            },
+            "required": [
+              "path",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "total",
+        "reviewed",
+        "deferred",
+        "unsupported",
+        "excluded"
+      ],
+      "additionalProperties": false
+    },
+    "units": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "unitId": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1
+          },
+          "kind": {
+            "enum": [
+              "file",
+              "lane",
+              "asvs",
+              "worker"
+            ]
+          },
+          "state": {
+            "enum": [
+              "reviewed",
+              "not_applicable",
+              "deferred",
+              "unsupported",
+              "unknown",
+              "failed"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 20000
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 20000
+            }
+          }
+        },
+        "required": [
+          "unitId",
+          "kind",
+          "state",
+          "reason",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "standards": {
+      "type": "object",
+      "properties": {
+        "owaspTop10": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "const": "2025"
+            },
+            "categories": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "maxLength": 20000,
+                    "minLength": 1,
+                    "pattern": "^A(?:0[1-9]|10):2025$(?![\\s\\S])"
+                  },
+                  "state": {
+                    "enum": [
+                      "reviewed",
+                      "not_applicable",
+                      "deferred",
+                      "unsupported",
+                      "unknown",
+                      "failed"
+                    ]
+                  },
+                  "evidence": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 20000
+                    }
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 20000
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 20000
+                  }
+                },
+                "required": [
+                  "id",
+                  "state",
+                  "evidence",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "version",
+            "categories"
+          ],
+          "additionalProperties": false
+        },
+        "asvs": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "const": "5.0.0"
+            },
+            "controls": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "maxLength": 20000,
+                    "minLength": 1,
+                    "pattern": "^V[0-9]+(?:\\.[0-9]+)+$(?![\\s\\S])"
+                  },
+                  "state": {
+                    "enum": [
+                      "reviewed",
+                      "not_applicable",
+                      "deferred",
+                      "unsupported",
+                      "unknown",
+                      "failed"
+                    ]
+                  },
+                  "evidence": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 20000
+                    }
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 20000
+                  }
+                },
+                "required": [
+                  "id",
+                  "state",
+                  "evidence",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "version",
+            "controls"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "owaspTop10",
+        "asvs"
+      ],
+      "additionalProperties": false
+    },
+    "workers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "attemptId": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1,
+            "pattern": "^att_[a-z0-9_-]{1,64}$(?![\\s\\S])"
+          },
+          "role": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "rejected",
+              "missing",
+              "late"
+            ]
+          }
+        },
+        "required": [
+          "attemptId",
+          "role",
+          "status"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "standardPlan": {
+      "type": "object",
+      "properties": {
+        "readLines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "totalLines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 20000
+        }
+      },
+      "required": [
+        "readLines",
+        "totalLines",
+        "skipped"
+      ],
+      "additionalProperties": false
+    },
+    "gaps": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 20000
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "upstream": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "upstream"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "documentType",
+    "schemaVersion",
+    "scanId",
+    "completeness",
+    "files",
+    "units",
+    "standards",
+    "workers",
+    "gaps"
+  ],
+  "additionalProperties": false
+}

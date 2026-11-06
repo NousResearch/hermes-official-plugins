@@ -1095,6 +1095,63 @@ async def test_standalone_new_conversation_handshake(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_handshake_wraps_the_newest_identity_version():
+    """An account keeps every identity it has ever registered, oldest first,
+    and X refuses a conversation key built on a superseded one ("one or more
+    participant keys do not use the latest public key version"). The handshake
+    must wrap the newest version, whatever order the API returns."""
+    api = FakeApi()
+    api.public_keys["999"] = [
+        {"public_key_version": "1793189036676", "public_key": "BOT-IPK",
+         "signing_public_key": "BOT-SPK", "identity_public_key_signature": "BOT-SIG"}
+    ]
+    api.public_keys["111"] = [
+        {"public_key_version": "1787584059885", "public_key": "OLDEST-IPK",
+         "signing_public_key": "OLDEST-SPK", "identity_public_key_signature": "OLDEST-SIG"},
+        {"public_key_version": "1793107625688", "public_key": "MIDDLE-IPK",
+         "signing_public_key": "MIDDLE-SPK", "identity_public_key_signature": "MIDDLE-SIG"},
+        {"public_key_version": "1793191919524", "public_key": "NEWEST-IPK",
+         "signing_public_key": "NEWEST-SPK", "identity_public_key_signature": "NEWEST-SIG"},
+    ]
+
+    class HandshakeCrypto(FakeCrypto):
+        def __init__(self):
+            super().__init__()
+            self.participants: List[Dict[str, Any]] = []
+
+        def load_keys(self, blob, version="1"):
+            pass
+
+        def set_identity(self, user_id):
+            pass
+
+        def set_cache_keys(self, enabled=True):
+            pass
+
+        def verify_key_binding(self, ipk, spk, sig):
+            return True
+
+        def prepare_conversation_key_change(self, public_keys, *, conversation_id=None):
+            self.participants = list(public_keys)
+            return {
+                "body": {"conversation_key_version": "1",
+                         "conversation_participant_keys": [], "action_signatures": []},
+                "conversation_key": b"fresh-key",
+                "conversation_key_version": "1",
+            }
+
+    crypto = HandshakeCrypto()
+    await xchat_adapter._initiate_conversation(api, crypto, "999", "111")
+
+    by_user = {p["user_id"]: p for p in crypto.participants}
+    assert by_user["111"]["key_version"] == "1793191919524"
+    assert by_user["111"]["public_key"] == "NEWEST-IPK"
+    # Control: the first record the API returns is a superseded one, so the
+    # previous records[0] rule selected exactly the version X rejects.
+    assert api.public_keys["111"][0]["public_key_version"] != by_user["111"]["key_version"]
+
+
+@pytest.mark.asyncio
 async def test_conversation_started_while_running_is_not_backlog(monkeypatch):
     """A DM that opens a new conversation after startup gets a reply; only conversations
     present at startup have a backlog to skip."""

@@ -8,6 +8,7 @@ IP literal (RFC 8252).
 
 from __future__ import annotations
 
+import os
 import socket
 import sys
 import threading
@@ -140,3 +141,64 @@ def test_default_redirect_uri_stays_http_on_the_loopback_literal():
     in "Invalid redirect URI" for anyone logging in on a new machine.
     """
     assert spotify_auth.DEFAULT_REDIRECT_URI == "http://127.0.0.1:43827/spotify/callback"
+
+# --- the cached pair itself: owner-only, atomic, and regenerated when corrupt -------------------
+
+def _cache_pair():
+    from hermes_constants import get_hermes_home
+    cache = get_hermes_home() / "cache" / "spotify-loopback"
+    return cache, cache / "cert.pem", cache / "key.pem"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes only")
+def test_the_cached_key_is_owner_only():
+    """The pair is a secret private key: it may not be readable by another local account."""
+    assert spotify_auth._loopback_tls_context() is not None
+    _cache, _cert, key = _cache_pair()
+    assert key.stat().st_mode & 0o077 == 0, oct(key.stat().st_mode)
+
+
+def test_no_partial_write_is_left_behind():
+    spotify_auth._loopback_tls_context()
+    cache, _cert, _key = _cache_pair()
+    assert [p.name for p in cache.glob("*.part")] == []
+
+
+def test_a_corrupt_cached_pair_is_regenerated():
+    """A truncated pair (an old crash, a swapped key/cert) used to wedge every login until the
+    cache was deleted by hand: the exists-check accepted it and load_cert_chain kept failing."""
+    cache, cert, key = _cache_pair()
+    cache.mkdir(parents=True, exist_ok=True)
+    cert.write_bytes(b"-----BEGIN CERTIFICATE-----\ntruncated")
+    key.write_bytes(b"-----BEGIN PRIVATE KEY-----\ntruncated")
+
+    assert spotify_auth._loopback_tls_context() is not None
+    assert b"BEGIN CERTIFICATE" in cert.read_bytes()
+    assert b"PRIVATE KEY" in key.read_bytes()
+
+
+def test_a_failed_write_leaves_no_partial_file(monkeypatch, tmp_path):
+    out = tmp_path / "pair"
+    out.mkdir()
+    target = out / "key.pem"
+
+    def boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(spotify_auth.os, "replace", boom)
+    with pytest.raises(OSError):
+        spotify_auth._write_owner_only(target, b"secret")
+    assert list(out.iterdir()) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes only")
+def test_a_stale_partial_file_does_not_widen_the_key_mode(tmp_path):
+    target = tmp_path / "key.pem"
+    stale = tmp_path / f"key.pem.{os.getpid()}.part"
+    stale.write_bytes(b"old")
+    stale.chmod(0o644)
+
+    spotify_auth._write_owner_only(target, b"secret")
+
+    assert target.read_bytes() == b"secret"
+    assert target.stat().st_mode & 0o077 == 0, oct(target.stat().st_mode)

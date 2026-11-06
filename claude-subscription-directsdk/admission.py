@@ -80,6 +80,36 @@ def _rejection_kind(response, body):
     return None
 
 
+def is_title_request(payload: bytes) -> bool:
+    """Recognise Claude Code's session-title side request.
+
+    It carries no tools, asks for a JSON-schema answer whose properties are
+    exactly {title}, and is not the user's turn. Answering it locally keeps it
+    from taking the single admission slot.
+    """
+    try:
+        body = json.loads(payload)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(body, dict):
+        return False
+    if body.get('tools'):
+        return False
+    output_config = body.get('output_config')
+    if not isinstance(output_config, dict):
+        return False
+    fmt = output_config.get('format')
+    if not isinstance(fmt, dict) or fmt.get('type') != 'json_schema':
+        return False
+    schema = fmt.get('schema')
+    if not isinstance(schema, dict):
+        return False
+    props = schema.get('properties')
+    if not isinstance(props, dict) or set(props) != {'title'}:
+        return False
+    return True
+
+
 class UpstreamIdle(OSError):
     """The upstream sent headers, then nothing for UPSTREAM_IDLE_SECONDS."""
 
@@ -771,6 +801,21 @@ class Handler(BaseHTTPRequestHandler):
         if path.path != gate.prefix + '/v1/messages' or self.headers.get('Origin'):
             self.send_error(404)
             return
+        # Read the body before touching the gate so a session-title side request can
+        # be answered locally without consuming the single admission slot (#39).
+        try:
+            content_length = int(self.headers.get('Content-Length') or 0)
+        except ValueError:
+            content_length = 0
+        payload = self.rfile.read(content_length) if content_length > 0 else b''
+        if payload and is_title_request(payload):
+            body = b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_MODEL_ADMISSION_TITLE"}}'
+            self.send_response(400)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         with gate.lock:
             if gate.cancelled or gate.used:
                 gate.denied += 1
@@ -786,7 +831,8 @@ class Handler(BaseHTTPRequestHandler):
         upstream_socket = None
         try:
             self.connection.settimeout(gate.timeout)
-            payload = self.rfile.read(int(self.headers['Content-Length']))
+            if not payload:
+                payload = self.rfile.read(int(self.headers.get('Content-Length') or 0))
             if getattr(gate, 'one_shot', False):
                 payload = drop_message_breakpoints(payload)
             try:

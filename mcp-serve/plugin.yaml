@@ -8,7 +8,7 @@ description: >
   Run Hermes as an MCP server: `hermes mcp-serve` lets any MCP client (Claude
   Code, Claude Desktop, Cursor, Codex) list and read your messaging
   conversations, poll live events, send messages and answer approvals over
-  stdio. `--tools` (off by default) also exposes Hermes' web, browser, vision,
+  stdio. `--tools` (off by default) also exposes Hermes' web, vision,
   image generation, skills and TTS tools under your profile's credentials;
   terminal, file and kanban tools are never exposed. Formerly built into
   Hermes core as `hermes mcp serve`.

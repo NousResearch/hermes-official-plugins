@@ -721,8 +721,10 @@ def _handle_get_state(args: dict, **kw) -> str:
     entity_id = args.get("entity_id", "")
     if not entity_id:
         return tool_error("Missing required parameter: entity_id")
-    if not _ENTITY_ID_RE.match(entity_id):
-        return tool_error(f"Invalid entity_id format: {entity_id}")
+    # fullmatch: a terminal LF passes match(), misses an exact denylist entry, and is
+    # dropped from the request URL, so the denied entity would be read.
+    if not _ENTITY_ID_RE.fullmatch(entity_id):
+        return tool_error(f"Invalid entity_id format: {entity_id!r}")
     violation = _operator_filter_violation(entity_id)
     if violation:
         return tool_error(
@@ -748,8 +750,8 @@ def _handle_call_service(args: dict, **kw) -> str:
             f"Service domain '{domain}' is blocked for security. "
             f"Blocked domains: {', '.join(sorted(_BLOCKED_DOMAINS))}")
     entity_id = args.get("entity_id")
-    if entity_id and not _ENTITY_ID_RE.match(entity_id):
-        return tool_error(f"Invalid entity_id format: {entity_id}")
+    if entity_id and not _ENTITY_ID_RE.fullmatch(entity_id):
+        return tool_error(f"Invalid entity_id format: {entity_id!r}")
     data = args.get("data")
     if isinstance(data, str):  # XML tool-calling mode delivers data as a JSON string
         try:

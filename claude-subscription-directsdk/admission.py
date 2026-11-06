@@ -225,6 +225,33 @@ def stable_request_context(payload, queried):
         if queried is not None and (not isinstance(queried, list) or any(not isinstance(b, dict) for b in queried)):
             return payload
         changed = False
+        # Normalize native's injected system context so it is byte-stable across
+        # requests (#38): on the first request native packs all reminders (including
+        # the date line) into one list block at messages[1]; on later requests it
+        # splits the date into a trailing system message and leaves messages[1] as a
+        # plain string. Unify to the later shape on every request.
+        if len(messages) >= 2 and messages[1].get('role') == 'system':
+            m1 = messages[1]
+            c1 = m1.get('content')
+            if isinstance(c1, list) and len(c1) == 1 and isinstance(c1[0], dict) and c1[0].get('type') == 'text':
+                text1 = c1[0].get('text', '')
+                # Split off a trailing date reminder if present.
+                date_marker = '\n\n<system-reminder>Today\'s date is '
+                idx = text1.rfind(date_marker)
+                if idx != -1:
+                    non_date = text1[:idx]
+                    date_part = text1[idx + 2:]  # skip the leading \n\n
+                    m1['content'] = non_date
+                    # Append the date as a trailing system message if not already there.
+                    if not (messages and messages[-1].get('role') == 'system'
+                            and isinstance(messages[-1].get('content'), list)
+                            and any(_DATE_LINE.search(b.get('text', '')) for b in messages[-1]['content'] if isinstance(b, dict))):
+                        messages.append({'role': 'system', 'content': [{'type': 'text', 'text': date_part}]})
+                    changed = True
+                else:
+                    # No date line: still normalize list -> string for shape stability.
+                    m1['content'] = text1
+                    changed = True
         last = messages[-1] if messages else {}
         env = next((m for m in messages[:-1] if m.get('role') == 'system'), None)
         content = last.get('content')

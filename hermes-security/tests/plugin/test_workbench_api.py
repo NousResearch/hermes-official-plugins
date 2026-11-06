@@ -59,6 +59,15 @@ def test_browse_lists_folders_on_the_gateway_machine(api, tmp_path):
         assert client.get(PREFIX + '/browse', params={'path': str(missing)}).status_code == 400
 
 
+def settled(module, scan_id, timeout=10):
+    """Wait out the background inventory and dependency check a Workbench start launches, so a test
+    acting on the scan doesn't race it (the thread flips status and options under the test's reads)."""
+    thread = module.get_service()._dependency_threads.get(scan_id)
+    if thread:
+        thread.join(timeout)
+    return scan_id
+
+
 def test_standalone_health_and_real_scan(api, tmp_path):
     module, client = api
     assert client.get(PREFIX + '/health').json() == {'ok': True, 'plugin': 'hermes-security'}
@@ -153,7 +162,7 @@ def test_scan_actions_policy_and_events(api, tmp_path, monkeypatch):
     # The "Run tests to confirm findings" checkbox is the only consent needed.
     response = client.post(PREFIX + '/scans', json={'path': str(root), 'allow_tests': True})
     assert response.status_code == 200
-    sid = response.json()['scanId']
+    sid = settled(module, response.json()['scanId'])
     assert response.json()['safety_level'] == 'local-safe'
     for action, status in [('cancel', 'canceled'), ('resume', 'awaiting_analysis')]:
         response = client.post(PREFIX + '/scans/' + sid + '/' + action)
@@ -400,7 +409,7 @@ def test_tests_allowed_scan_runs_local_controls_from_dashboard_and_agent(api, tm
     module, client = api
     root = tmp_path / 'repo'; root.mkdir()
     (root / 'app.py').write_text('def get_invoice(invoice_id):\n    return invoices.get(invoice_id)\n')
-    sid = client.post(PREFIX + '/scans', json={'path': str(root), 'allow_tests': True}).json()['scanId']
+    sid = settled(module, client.post(PREFIX + '/scans', json={'path': str(root), 'allow_tests': True}).json()['scanId'])
     service = module.get_service()
     assert service.get_scan(sid)['options']['authorizationSource'] == 'dashboard'
     spec = importlib.util.spec_from_file_location('local_helpers', ROOT / 'tests/integration/test_end_to_end_static.py')

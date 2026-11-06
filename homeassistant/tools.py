@@ -624,8 +624,8 @@ async def _async_call_service(
     out = _parse_service_response(domain, service, result, entity_id)
     if out.get("success") is False and entity_id:
         # HA returns only states that actually changed: an empty result can mean the target
-        # is missing from this domain, OR the entity already had the requested state. Check
-        # which, so the agent gets an actionable answer instead of a guess.
+        # is missing from this domain, OR the entity already had the requested state, OR the
+        # service is async and the state has not settled yet.
         import aiohttp
         try:
             state = await _api_json("GET", f"/api/states/{entity_id}", 10)
@@ -651,10 +651,27 @@ async def _async_call_service(
                 f"of their own domain — call {actual_domain}.{service} instead."
             )
             return out
-        # Exists in the right domain: the state was already as requested — intent satisfied.
-        out["success"] = True
-        del out["error"]
-        out["note"] = f"{entity_id} was already in state '{state['state']}' — nothing to change."
+        # Exists in the right domain: HA returned an empty changed_states list, which can
+        # mean the entity was already in the requested state OR the service is async and the
+        # state has not settled yet. Only report "already in state" when the current state
+        # actually matches what the service would set; otherwise the call was accepted and
+        # the state may still be changing.
+        _on_services = {"turn_on", "open_cover", "lock", "arm_away", "arm_home", "arm_night", "arm_vacation"}
+        _off_services = {"turn_off", "close_cover", "unlock", "disarm"}
+        requested_state = None
+        if service in _on_services:
+            requested_state = "on"
+        elif service in _off_services:
+            requested_state = "off"
+        if requested_state is not None and state.get("state") == requested_state:
+            out["success"] = True
+            del out["error"]
+            out["note"] = f"{entity_id} was already in state '{state['state']}' — nothing to change."
+        else:
+            # Service call was accepted; HA did not report a state change (possibly async).
+            out["success"] = True
+            del out["error"]
+            out["note"] = f"{entity_id} service call accepted; state may still be settling."
     return out
 
 

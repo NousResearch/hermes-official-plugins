@@ -67,8 +67,9 @@ def test_standalone_health_and_real_scan(api, tmp_path):
     response = client.post(PREFIX + '/scans', json={'path': str(root)})
     assert response.status_code == 200, response.text
     scan = response.json()
-    # The route answers before the inventory; the scan is ready once the background thread finishes.
-    assert scan['status'] == 'created'
+    # The route answers once the background inventory has started; on a fast runner that thread can
+    # finish a one-file repo before the response is built, so either status is correct here.
+    assert scan['status'] in {'created', 'awaiting_analysis'}
     thread = module.get_service()._dependency_threads.get(scan['scanId'])
     if thread:
         thread.join(10)

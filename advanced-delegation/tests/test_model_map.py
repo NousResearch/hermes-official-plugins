@@ -221,28 +221,49 @@ def test_daybreak_is_refused_outside_the_owners_own_surfaces(provider, daybreak_
         _pick(provider, _config(options=[DAYBREAK]), "daybreak")
 
 
-@pytest.mark.parametrize("owner_chat, allowed", [(True, True), (False, False), (None, False)])
-def test_a_gateway_hosted_chat_follows_the_gateways_owner_verdict(provider, daybreak_env, owner_chat, allowed):
-    """Desktop, Webapp and TUI chats hosted by the gateway run on the ``local`` transport; the gateway's
-    launch-policy verdict on the turn's agent decides (a hosted room or an A2A peer is not the owner)."""
+# (session source, the gateway's verdict on the bound agent, allowed on a core that reports verdicts)
+GATEWAY_TURNS = {
+    "owner's gateway chat": ("local", True, True),
+    "hosted room or A2A peer": ("local", False, False),
+    "unjudged local agent": ("local", None, False),
+    "/bg task from a non-owner chat": ("cli", False, False),
+    "/bg task from the owner's chat": ("cli", True, True),
+    "classic CLI or TUI backend": ("cli", None, True),
+}
+
+
+@pytest.mark.parametrize("case", list(GATEWAY_TURNS))
+def test_the_gateways_verdict_decides_and_a_refusal_beats_the_session_source(provider, daybreak_env, case):
+    """A gateway-hosted chat runs on the ``local`` transport and a ``/bg`` task binds no session (it reads as
+    ``cli``), so the gateway's verdict on the turn's agent decides; only an unjudged agent falls back to the source."""
     from types import SimpleNamespace
 
     import agent.session_source
     from agent.delegation_provider import DelegationRouteError
     from agent.subagent_lifecycle import bind_subagent_parent
-    allowed = allowed and hasattr(agent.session_source, "turn_daybreak_surface")  # older cores refuse
+    platform, verdict, allowed = GATEWAY_TURNS[case]
+    if not hasattr(agent.session_source, "turn_daybreak_surface"):  # older cores: the session source alone
+        allowed = platform in agent.session_source.DAYBREAK_SOURCES
     daybreak_env["monkeypatch"].delenv("HERMES_SESSION_SOURCE")
-    daybreak_env["monkeypatch"].setenv("HERMES_SESSION_PLATFORM", "local")
-    # An unjudged agent is one the gateway built outside a chat turn: a ``/bg`` task runs as ``cli``.
-    parent = SimpleNamespace(platform="local" if owner_chat is not None else "cli")
-    if owner_chat is not None:
-        parent.daybreak_surface = owner_chat
+    daybreak_env["monkeypatch"].setenv("HERMES_SESSION_PLATFORM", platform)
+    parent = SimpleNamespace(platform=platform)
+    if verdict is not None:
+        parent.daybreak_surface = verdict
     with bind_subagent_parent(parent):
         if allowed:
             assert _pick(provider, _config(options=[DAYBREAK]), "daybreak")["request_overrides"] == CYBER
         else:
-            with pytest.raises(DelegationRouteError, match="owner's own.*'local'"):
+            with pytest.raises(DelegationRouteError, match="owner's own"):
                 _pick(provider, _config(options=[DAYBREAK]), "daybreak")
+
+
+def test_a_cron_job_is_refused_though_it_binds_no_platform(provider, daybreak_env):
+    """A cron job binds an empty platform, which the session source reads as ``cli``; the README says cron is refused."""
+    from agent.delegation_provider import DelegationRouteError
+    daybreak_env["monkeypatch"].delenv("HERMES_SESSION_SOURCE")
+    daybreak_env["monkeypatch"].setenv("HERMES_CRON_SESSION", "1")
+    with pytest.raises(DelegationRouteError, match="this session is 'cron'"):
+        _pick(provider, _config(options=[DAYBREAK]), "daybreak")
 
 
 def test_daybreak_is_refused_when_the_catalog_does_not_list_it(provider, daybreak_env):

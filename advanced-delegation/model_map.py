@@ -45,7 +45,7 @@ never run without the program.
 from __future__ import annotations
 
 import logging
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional
 
 from agent.delegation_provider import DelegationProvider
 
@@ -127,14 +127,17 @@ def configured_options(settings: Mapping[str, Any]) -> dict[str, dict[str, Any]]
     return options
 
 
-def _gateway_owner_chat() -> bool:
-    """A gateway-hosted Desktop, Webapp or TUI chat runs on the ``local`` transport; the gateway records on the
-    turn's agent whether its launch policy is the owner's own. Cores without that record refuse, as before."""
+def _gateway_owner_chat() -> Optional[bool]:
+    """The gateway's verdict on the turn's chat: ``True`` for the owner's own, ``False`` for any other chat it judged
+    (a hosted room, an A2A peer, a ``/bg`` task from one), ``None`` when nothing judged it (classic CLI, the TUI
+    backend) or the core predates the verdict. A gateway-hosted chat runs on the ``local`` transport and a ``/bg``
+    task binds no session at all, so the session source alone cannot tell them apart."""
     try:
         from agent.session_source import turn_daybreak_surface
     except ImportError:
-        return False
-    return turn_daybreak_surface() is True
+        return None
+    verdict = turn_daybreak_surface()
+    return verdict if isinstance(verdict, bool) else None
 
 
 def _daybreak_route(name: str, route: Mapping[str, Any]) -> dict[str, Any]:
@@ -150,10 +153,15 @@ def _daybreak_route(name: str, route: Mapping[str, Any]) -> dict[str, Any]:
             f"Option {name!r} needs Daybreak, which this Hermes does not support ({exc.name}). Update Hermes or "
             f"pick another option.") from exc
     source = session_source_for(get_session_env("HERMES_SESSION_PLATFORM", "") or None)
-    if source not in DAYBREAK_SOURCES and not _gateway_owner_chat():
+    if str(get_session_env("HERMES_CRON_SESSION", "") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        source = "cron"  # a cron job binds no platform, so the fallback would read it as ``cli``
+    verdict = _gateway_owner_chat()
+    if verdict is False or (verdict is None and source not in DAYBREAK_SOURCES) or source == "cron":
+        where = "the gateway does not count this chat as the owner's" if verdict is False and source != "cron" \
+            else f"this session is {source!r}"
         raise DelegationRouteError(
             f"Option {name!r} uses Daybreak, which only runs from the owner's own CLI, TUI or Desktop chats "
-            f"(this session is {source!r}). Pick another option.")
+            f"({where}). Pick another option.")
     if not daybreak_offered(route.get("model"), provider=route.get("provider"), base_url=route.get("base_url")):
         raise DelegationRouteError(
             f"Option {name!r} uses Daybreak, but this account's Codex catalog does not list Daybreak for "

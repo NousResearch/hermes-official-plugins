@@ -173,7 +173,9 @@ model can back a plain route (`sol`) and a Daybreak route (`daybreak`). The rout
 is its opt-in; `agent.daybreak` (the main chat's switch) does not affect it. Hermes's Daybreak rules
 still apply to every spawn: the route must be `provider: openai-codex`, your account's Codex catalog
 must list Daybreak for that model, and the delegating chat must be your own CLI, TUI or Desktop chat
-(not a messaging platform, cron or another person's session). A spawn that breaks a rule is refused
+(not a messaging platform, cron, a hosted room, an A2A peer or another person's session). Chats the
+gateway hosts for Desktop, the Webapp or the TUI qualify on a Hermes core that reports them as the
+owner's; on older cores only chats that run outside the gateway do. A spawn that breaks a rule is refused
 with a tool error, never run without the program. `hermes delegation config` offers the Daybreak
 switch only for models your catalog lists it for, and so does the Desktop route editor (Settings →
 Model → Subagents) on a Hermes whose editor knows the key this plugin declares. On an older Hermes,

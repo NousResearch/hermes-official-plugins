@@ -127,6 +127,16 @@ def configured_options(settings: Mapping[str, Any]) -> dict[str, dict[str, Any]]
     return options
 
 
+def _gateway_owner_chat() -> bool:
+    """A gateway-hosted Desktop, Webapp or TUI chat runs on the ``local`` transport; the gateway records on the
+    turn's agent whether its launch policy is the owner's own. Cores without that record refuse, as before."""
+    try:
+        from agent.session_source import turn_daybreak_surface
+    except ImportError:
+        return False
+    return turn_daybreak_surface() is True
+
+
 def _daybreak_route(name: str, route: Mapping[str, Any]) -> dict[str, Any]:
     """``route`` plus the Daybreak request field, or :class:`DelegationRouteError` when core's Daybreak rules
     do not allow it here. Refusing (not dropping the field) keeps a task off a route it did not ask for."""
@@ -140,7 +150,7 @@ def _daybreak_route(name: str, route: Mapping[str, Any]) -> dict[str, Any]:
             f"Option {name!r} needs Daybreak, which this Hermes does not support ({exc.name}). Update Hermes or "
             f"pick another option.") from exc
     source = session_source_for(get_session_env("HERMES_SESSION_PLATFORM", "") or None)
-    if source not in DAYBREAK_SOURCES:
+    if source not in DAYBREAK_SOURCES and not _gateway_owner_chat():
         raise DelegationRouteError(
             f"Option {name!r} uses Daybreak, which only runs from the owner's own CLI, TUI or Desktop chats "
             f"(this session is {source!r}). Pick another option.")

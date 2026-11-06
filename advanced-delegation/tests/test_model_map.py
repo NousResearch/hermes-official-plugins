@@ -221,6 +221,30 @@ def test_daybreak_is_refused_outside_the_owners_own_surfaces(provider, daybreak_
         _pick(provider, _config(options=[DAYBREAK]), "daybreak")
 
 
+@pytest.mark.parametrize("owner_chat, allowed", [(True, True), (False, False), (None, False)])
+def test_a_gateway_hosted_chat_follows_the_gateways_owner_verdict(provider, daybreak_env, owner_chat, allowed):
+    """Desktop, Webapp and TUI chats hosted by the gateway run on the ``local`` transport; the gateway's
+    launch-policy verdict on the turn's agent decides (a hosted room or an A2A peer is not the owner)."""
+    from types import SimpleNamespace
+
+    import agent.session_source
+    from agent.delegation_provider import DelegationRouteError
+    from agent.subagent_lifecycle import bind_subagent_parent
+    allowed = allowed and hasattr(agent.session_source, "turn_daybreak_surface")  # older cores refuse
+    daybreak_env["monkeypatch"].delenv("HERMES_SESSION_SOURCE")
+    daybreak_env["monkeypatch"].setenv("HERMES_SESSION_PLATFORM", "local")
+    # An unjudged agent is one the gateway built outside a chat turn: a ``/bg`` task runs as ``cli``.
+    parent = SimpleNamespace(platform="local" if owner_chat is not None else "cli")
+    if owner_chat is not None:
+        parent.daybreak_surface = owner_chat
+    with bind_subagent_parent(parent):
+        if allowed:
+            assert _pick(provider, _config(options=[DAYBREAK]), "daybreak")["request_overrides"] == CYBER
+        else:
+            with pytest.raises(DelegationRouteError, match="owner's own.*'local'"):
+                _pick(provider, _config(options=[DAYBREAK]), "daybreak")
+
+
 def test_daybreak_is_refused_when_the_catalog_does_not_list_it(provider, daybreak_env):
     from agent.delegation_provider import DelegationRouteError
     daybreak_env["offered"]["value"] = False

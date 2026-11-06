@@ -204,6 +204,21 @@ tokens), but Camoufox prints every other filled field's value and does not mark 
 password: a plain password typed into the page (by the agent, or by you over VNC) shows up in
 `browser_snapshot` and the navigate result.
 
+A Camofox in its own container is reached by container name over plain HTTP, which the loopback
+rule above would refuse. Name that host in the profile's config to allow it:
+
+```yaml
+# ~/.hermes/config.yaml
+browser:
+  camofox:
+    allowed_plain_http_hosts:
+      - camofox          # the container name
+```
+
+`CAMOFOX_ALLOWED_PLAIN_HTTP_HOSTS` (comma-separated) does the same from the environment. Only the
+named hosts are affected: every other host still needs HTTPS, and userinfo, query and fragment are
+refused on every host.
+
 ## License
 
 MIT

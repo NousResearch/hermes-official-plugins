@@ -993,7 +993,9 @@ class Client:
                     if native_error_code == 'authentication_failed' and not admission.used:
                         # No usable login where Hermes runs native: it refuses before any upstream request; only its /api/hello pre-flight reaches the relay.
                         # Name what was tried: bot surfaces resolve a different environment than the user's shell (#47).
-                        login = env.get('CLAUDE_CONFIG_DIR') or str(Path.home() / '.claude')
+                        # The child's own HOME, not Hermes': that is where native looked for ~/.claude.
+                        home = env.get('HOME') or env.get('USERPROFILE')
+                        login = env.get('CLAUDE_CONFIG_DIR') or str((Path(home) if home else Path.home()) / '.claude')
                         raise ClaudeCodeLoggedOut(f'{LOGGED_OUT_HINT} (native: {native_error}; cli: {resolved[0]}; login: {login}){_stderr_tail(native_stderr)}')
                     raise ClaudeAPIError('Native API error: ' + native_error, NATIVE_ERROR_STATUS.get(str(native_error_code)))
                 if len(results) != 1 or not assistants or not stopped:

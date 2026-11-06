@@ -37,7 +37,7 @@ def _tab_creates(camofox):
 
 def test_cold_start_500_is_retried_once_and_tab_created(camofox):
     _cold_then_warm(camofox)
-    session = client.ensure_tab("t1")
+    session, _created = client.ensure_tab("t1")
     assert session["tab_id"]
     assert len(_tab_creates(camofox)) == 2
 
@@ -58,7 +58,7 @@ def test_4xx_on_tab_create_is_not_retried(camofox):
 
 
 def test_warm_create_unchanged_single_post(camofox):
-    session = client.ensure_tab("t1")
+    session, _created = client.ensure_tab("t1")
     assert session["tab_id"]
     assert len(_tab_creates(camofox)) == 1
 
@@ -77,7 +77,7 @@ def test_client_timeout_is_retried_with_raised_budget(monkeypatch, camofox):
         return real_post(url, **kwargs)
 
     monkeypatch.setattr(client.requests, "post", flaky_post)
-    session = client.ensure_tab("t1")
+    session, _created = client.ensure_tab("t1")
     assert session["tab_id"]
     assert len(calls) == 2
     assert calls[1] >= 60

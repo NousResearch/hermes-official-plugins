@@ -12,7 +12,7 @@ What is never exposed, whatever the profile enables:
   included), so it is the shell by another route.
 * delegate_task / memory / session_search / todo / clarify: they need a running agent.
 
-The exposed tools stay off this machine's files: ``browser_navigate`` / ``web_extract`` take only web
+The exposed tools stay off this machine's files: ``web_extract`` takes only web
 URLs (no ``file:``), ``vision_analyze`` only web or ``data:`` images (no local paths), and
 ``text_to_speech`` writes only into Hermes' own cache (``output_path`` is not offered). Web URLs include
 local-network addresses, as they do for the Hermes model.
@@ -35,8 +35,6 @@ logger = logging.getLogger("hermes.mcp_serve.tools")
 # Each name must be a registered Hermes tool ``model_tools.handle_function_call`` can dispatch.
 EXPOSED_TOOLS: tuple[str, ...] = (
     "web_search", "web_extract",
-    "browser_navigate", "browser_click", "browser_type", "browser_press", "browser_snapshot", "browser_scroll",
-    "browser_back", "browser_get_images", "browser_console", "browser_vision",
     "vision_analyze", "image_generate", "skill_view", "skills_list", "text_to_speech",
 )
 
@@ -44,7 +42,7 @@ EXPOSED_TOOLS: tuple[str, ...] = (
 _DROPPED_ARGS: dict[str, tuple[str, ...]] = {"text_to_speech": ("output_path",)}
 # (argument, data: URLs allowed) that must be web URLs, never local paths or file:/javascript: URLs.
 _URL_ARGS: dict[str, tuple[str, bool]] = {
-    "browser_navigate": ("url", False), "web_extract": ("urls", False), "vision_analyze": ("image_url", True),
+    "web_extract": ("urls", False), "vision_analyze": ("image_url", True),
 }
 _SCHEME_RE = re.compile(r"^\s*([a-zA-Z][a-zA-Z0-9+.-]*):(?!\d)")
 _JSON_TO_PY = {"string": str, "integer": int, "number": float, "boolean": bool, "array": list, "object": dict}

@@ -27,7 +27,7 @@ def real_tools(monkeypatch, require_mcp_2_sdk):
         "limit": {"type": "integer"}, "url": {"type": "string"}, "image_url": {"type": "string"},
         "output_path": {"type": "string"}}, "required": ["query"]}
     defs = [{"type": "function", "function": {"name": n, "description": f"{n} desc", "parameters": params}}
-            for n in ("web_search", "skills_list", "browser_navigate", "vision_analyze", "text_to_speech",
+            for n in ("web_search", "skills_list", "web_extract", "vision_analyze", "text_to_speech",
                       "terminal", "kanban_create")]
     calls = []
     monkeypatch.setattr(model_tools, "get_tool_definitions", lambda **_: defs)
@@ -44,7 +44,7 @@ def test_default_server_exposes_only_the_bridge(real_tools):
 def test_tools_mode_adds_only_allowlisted_available_tools(real_tools):
     server = bridge.create_mcp_server(event_bridge=bridge.EventBridge(), include_tools=True)
     listed = _listed(server)
-    assert set(listed) == _BRIDGE_TOOLS | {"web_search", "skills_list", "browser_navigate", "vision_analyze",
+    assert set(listed) == _BRIDGE_TOOLS | {"web_search", "skills_list", "web_extract", "vision_analyze",
                                            "text_to_speech"}
     assert "terminal" not in listed and "kanban_create" not in listed
     schema = listed["web_search"].input_schema  # Hermes' own schema, descriptions included
@@ -66,8 +66,8 @@ def _call(server, name, args):
 
 
 @pytest.mark.parametrize(("tool", "args"), [
-    ("browser_navigate", {"query": "q", "url": "file:///home/me/notes.txt"}),
-    ("browser_navigate", {"query": "q", "url": "javascript:alert(1)"}),
+    ("vision_analyze", {"query": "q", "image_url": "file:///home/me/notes.txt"}),
+    ("vision_analyze", {"query": "q", "image_url": "javascript:alert(1)"}),
     ("vision_analyze", {"query": "q", "image_url": "/home/me/.hermes/.env"}),
     ("vision_analyze", {"query": "q", "image_url": "~/secret.png"}),
 ])
@@ -79,13 +79,13 @@ def test_tools_mode_refuses_local_files_before_dispatch(real_tools, tool, args):
 
 def test_tools_mode_passes_web_urls_and_drops_output_path(real_tools):
     server = bridge.create_mcp_server(event_bridge=bridge.EventBridge(), include_tools=True)
-    _call(server, "browser_navigate", {"query": "q", "url": "https://example.com"})
-    _call(server, "browser_navigate", {"query": "q", "url": "localhost:8080"})
+    _call(server, "vision_analyze", {"query": "q", "image_url": "https://example.com/image.png"})
+    _call(server, "vision_analyze", {"query": "q", "image_url": "localhost:8080/img.png"})
     _call(server, "vision_analyze", {"query": "q", "image_url": "data:image/png;base64,AAAA"})
     _call(server, "text_to_speech", {"query": "q", "output_path": "/home/me/notes.mp3"})
     assert real_tools == [
-        ("browser_navigate", {"query": "q", "url": "https://example.com"}),
-        ("browser_navigate", {"query": "q", "url": "localhost:8080"}),
+        ("vision_analyze", {"query": "q", "image_url": "https://example.com/image.png"}),
+        ("vision_analyze", {"query": "q", "image_url": "localhost:8080/img.png"}),
         ("vision_analyze", {"query": "q", "image_url": "data:image/png;base64,AAAA"}),
         ("text_to_speech", {"query": "q"}),
     ]

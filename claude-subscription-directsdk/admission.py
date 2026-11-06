@@ -404,13 +404,26 @@ def drop_message_breakpoints(payload):
         return payload
 
 
-def stream_tool_input(payload):
+def _eager_input_streaming_enabled() -> bool:
+    return os.environ.get("CLAUDE_SUBSCRIPTION_DIRECTSDK_EAGER_INPUT_STREAMING", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def stream_tool_input(payload, enabled=None):
     """Ask the API to stream every tool's arguments as the model writes them (``eager_input_streaming``).
 
     Native turns fine-grained tool streaming on only for a first-party base URL, so behind this relay its
     tools go out without the flag and the API holds a large argument (a whole file in one ``write_file``)
     until it is complete. Hermes' stall detector then sees minutes of silence and cancels a healthy call.
-    A value native already set wins, and a payload with no tools or that does not parse forwards as is."""
+    A value native already set wins, and a payload with no tools or that does not parse forwards as is.
+
+    Opt-in only (``CLAUDE_SUBSCRIPTION_DIRECTSDK_EAGER_INPUT_STREAMING=1``): streamed tool input is not
+    validated by the API, and a complete ``tool_use`` reply whose arguments are not valid JSON fails the
+    turn deterministically on every retry (#221). The unstreamed path validates before delivery."""
+    if enabled is None:
+        enabled = _eager_input_streaming_enabled()
+    if not enabled:
+        return payload
     try:
         body = json.loads(payload)
         tools = [t for t in body.get('tools') or () if isinstance(t, dict) and 'eager_input_streaming' not in t]

@@ -1,6 +1,6 @@
 name: bubblewrap
 label: Bubblewrap
-version: 1.3.0
+version: 1.4.0
 manifest_version: 2
 kind: backend
 author: NousResearch

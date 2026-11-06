@@ -1301,7 +1301,6 @@ class TestLocalTimestampTwins:
         monkeypatch.setattr(ha_tool, "_api_json", fake_api_json)
         monkeypatch.setattr(ha_tool, "_HASS_TIMEZONE", "")
         monkeypatch.setattr(ha_tool, "_TZ_CACHE", {"ts": 0.0, "name": ""})
-        monkeypatch.setenv("HASS_TIMEZONE", "")
         return asyncio.run(ha_tool._async_get_state("sensor.front_door"))
 
     def test_the_local_twin_is_the_instance_timezone(self, monkeypatch):
@@ -1334,6 +1333,24 @@ class TestLocalTimestampTwins:
 
         monkeypatch.setattr(ha_tool, "_api_json", fake_api_json)
         monkeypatch.setattr(ha_tool, "_HASS_TIMEZONE", "America/Los_Angeles")
+        monkeypatch.setattr(ha_tool, "_TZ_CACHE", {"ts": 0.0, "name": ""})
+        result = asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        assert result["last_changed_local"] == "2026-10-21T18:42:27.349875-07:00"
+
+    def test_the_override_comes_from_the_profile_config(self, monkeypatch, tmp_path):
+        """A behaviour setting: read from config.yaml (platforms.homeassistant.extra.timezone), not .env."""
+        (tmp_path / "config.yaml").write_text(
+            "platforms:\n  homeassistant:\n    extra:\n      timezone: America/Los_Angeles\n")
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("HASS_TIMEZONE", "Asia/Tokyo")  # an env var is no longer a setting
+
+        async def fake_api_json(method, path, timeout, payload=None):
+            if path.startswith("/api/states/"):
+                return _state_payload()
+            raise AssertionError(f"the override must win without asking the instance: {path}")
+
+        monkeypatch.setattr(ha_tool, "_api_json", fake_api_json)
+        monkeypatch.setattr(ha_tool, "_HASS_TIMEZONE", "")
         monkeypatch.setattr(ha_tool, "_TZ_CACHE", {"ts": 0.0, "name": ""})
         result = asyncio.run(ha_tool._async_get_state("sensor.front_door"))
         assert result["last_changed_local"] == "2026-10-21T18:42:27.349875-07:00"

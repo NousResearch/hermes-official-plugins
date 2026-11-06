@@ -572,16 +572,24 @@ async def _async_list_entities(
 # ── Local-time twins for the timestamps Home Assistant answers in UTC (#155) ──────
 # HA reports every timestamp in UTC, so the agent has to convert it by hand - which is where the
 # wrong dates come from (a security device's last trigger read as the wrong evening). The instance's
-# own zone is the one its frontend shows, so the local twin is computed with that; HASS_TIMEZONE
-# overrides it, and an unknown zone falls back to the machine's local time.
+# own zone is the one its frontend shows, so the local twin is computed with that;
+# platforms.homeassistant.extra.timezone in config.yaml overrides it, and an unknown zone falls back
+# to the machine's local time.
 _HASS_TIMEZONE: str = ""
 _TZ_CACHE: Dict[str, Any] = {"ts": 0.0, "name": "", "url": ""}
 _TZ_TTL = 3600.0  # the instance's zone changes with its configuration, not with the minute
 
 
 def _get_timezone_config() -> str:
-    """The operator's timezone override (HASS_TIMEZONE), empty when unset."""
-    return (_HASS_TIMEZONE or (get_secret("HASS_TIMEZONE", "") or "")).strip()
+    """The operator's timezone override (``platforms.homeassistant.extra.timezone``), empty when unset.
+
+    A behaviour setting, so it lives in the active profile's config.yaml, not in ``.env``.
+    """
+    if _HASS_TIMEZONE:
+        return _HASS_TIMEZONE.strip()
+    from hermes_cli.config import cfg_get, read_raw_config_readonly
+    value = cfg_get(read_raw_config_readonly(), "platforms", "homeassistant", "extra", "timezone")
+    return value.strip() if isinstance(value, str) else ""
 
 
 async def _instance_timezone() -> str:

@@ -323,7 +323,7 @@ class HomeAssistantAdapter(BasePlatformAdapter):
             user_id="homeassistant", user_name="Home Assistant")
         await self.handle_message(MessageEvent(
             text=message, message_type=MessageType.TEXT, source=source,
-            message_id=f"ha_{entity_id}_{int(now)}", timestamp=datetime.now()))
+            message_id=f"ha_{entity_id}_{event['time_fired']}", timestamp=datetime.now()))
 
     @staticmethod
     def _format_state_change(entity_id: str, old_state: Dict[str, Any], new_state: Dict[str, Any]) -> Optional[str]:

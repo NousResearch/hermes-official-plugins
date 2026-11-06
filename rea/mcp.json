@@ -9,6 +9,7 @@
         "rea-agents@6.7.0",
         "mcp"
       ],
+      "timeout": 1000,
       "env": {
         "REA_GHIDRA_STARTUP_TIMEOUT_MS": "900000",
         "REA_PWNTOOLS_PYTHON": "${REA_PWNTOOLS_PYTHON}"

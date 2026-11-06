@@ -456,7 +456,8 @@ def dot_link_entries(home_root: str, name: str) -> list[str]:
     host, so the walk stops there.
     """
     entries: list[str] = []
-    current = home_root
+    # *name* may be nested (.config/nvim): a relative target starts at the link's own directory.
+    current = os.path.dirname(os.path.join(home_root, name))
     try:
         pending = os.readlink(os.path.join(home_root, name)).split(os.sep)
     except OSError:
@@ -1707,13 +1708,21 @@ class BubblewrapEnvironment(LocalEnvironment):
                 profile_home = os.path.realpath(candidate)
         if not sources and profile_home is None:
             return
-        try:
-            names = sorted(
-                name for name in os.listdir(root)
-                if name.startswith(".") and os.path.islink(os.path.join(root, name))
+        # The top of HOME and each default-deny directory (a stow-style
+        # ~/.config/nvim link counts as much as ~/.bashrc).
+        names: list[str] = []
+        for parent in ("", *bubblewrap_home.DEFAULT_DENY_DIRS):
+            directory = os.path.join(root, parent)
+            if parent and (os.path.islink(directory) or not os.path.isdir(directory)):
+                continue
+            try:
+                listing = os.listdir(directory)
+            except OSError:
+                continue
+            names += sorted(
+                os.path.join(parent, name) for name in listing
+                if (parent or name.startswith(".")) and os.path.islink(os.path.join(directory, name))
             )
-        except OSError:
-            return
 
         def writable(entry: str, last: bool) -> bool:
             if profile_home is not None and _is_within(entry, profile_home) and (last or entry != profile_home):
@@ -1736,6 +1745,10 @@ class BubblewrapEnvironment(LocalEnvironment):
             return False
 
         def exposed(name: str) -> bool:
+            parent = os.path.dirname(os.path.join(root, name))
+            if parent != root and writable(parent, True):
+                # The link itself is writable through the bind that holds it: the operator chose that.
+                return False
             entries = dot_link_entries(root, name)
             return any(writable(entry, index == len(entries) - 1) for index, entry in enumerate(entries))
 

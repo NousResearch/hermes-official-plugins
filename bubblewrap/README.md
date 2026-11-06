@@ -125,7 +125,8 @@ its target is visible. A dotfiles repository in a dot directory (`~/.gitconfig` 
 directory in `home_allow` (`[".dotfiles"]`, `[".certs"]`): it then shows read-only, with the credential
 stores below it still hidden. A repository in a non-dot directory (`~/dotfiles`) needs nothing.
 
-A dot entry that is a symlink is also checked when the backend starts. When the link, any directory
+A dot entry that is a symlink (at the top of the home directory or in `.config`, `.local` or
+`.local/share`) is also checked when the backend starts. When the link, any directory
 on the way or its final target lies in the working directory, in a read-write bind or in the profile
 home, a command could rewrite a file your next login shell reads, so the backend refuses to start and
 names the entry. Use a project directory as the working directory, or make the bind read-only.

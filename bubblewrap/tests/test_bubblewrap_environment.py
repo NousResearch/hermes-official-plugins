@@ -1021,6 +1021,16 @@ class TestWritableDotLinkGuard:
         assert ".zz-link" not in str(exc.value)
         assert "terminal.cwd" in str(exc.value)
 
+    def test_link_in_a_default_deny_directory_is_refused(self, sandbox_root, fake_home):
+        # A stow-style ~/.config/nvim link: the host reads it like a top-level one.
+        (fake_home / ".config").mkdir()
+        (fake_home / ".config" / "nvim").symlink_to("../dotfiles/rc")
+        (fake_home / ".config" / "pip").symlink_to("../.zz-real")
+        with pytest.raises(ValueError, match="redirect or rewrite") as exc:
+            self._construct(fake_home)
+        assert os.path.join(".config", "nvim") in str(exc.value)
+        assert os.path.join(".config", "pip") not in str(exc.value)
+
     def test_target_in_a_project_cwd_is_refused(self, sandbox_root, fake_home, work_dir):
         (work_dir / "rc").write_text("x")
         (fake_home / ".bashrc").symlink_to(work_dir / "rc")

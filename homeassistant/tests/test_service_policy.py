@@ -124,3 +124,26 @@ def test_custom_script_without_entity_filters_preserves_dispatch(monkeypatch):
 
     assert result["result"]["success"] is True
     dispatch.assert_awaited_once_with("script", "unrestricted", "sensor.allowed", None)
+
+
+@pytest.mark.parametrize("suffix", ["\n", "\r", " "])
+def test_denied_entity_with_trailing_whitespace_is_never_read(monkeypatch, suffix):
+    set_policy(monkeypatch, deny=["lock.front_door"])
+    fetch = AsyncMock(return_value={"state": "unlocked"})
+    monkeypatch.setattr(ha_tool, "_async_get_state", fetch)
+
+    result = json.loads(ha_tool._handle_get_state({"entity_id": "lock.front_door" + suffix}))
+
+    assert "Invalid entity_id format" in result["error"]
+    fetch.assert_not_called()
+
+
+def test_call_service_entity_id_with_terminal_linefeed_never_dispatches(monkeypatch):
+    dispatch = AsyncMock(return_value={"success": True})
+    monkeypatch.setattr(ha_tool, "_async_call_service", dispatch)
+
+    result = json.loads(ha_tool._handle_call_service({
+        "domain": "light", "service": "turn_on", "entity_id": "light.test\n"}))
+
+    assert "Invalid entity_id format" in result["error"]
+    dispatch.assert_not_called()

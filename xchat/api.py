@@ -345,10 +345,9 @@ class XChatApi:
 
         The body is read under the gateway's inbound-media cap rather than
         buffered whole: a lying (or absent) ``Content-Length`` must not be able
-        to hold an oversized attachment in the gateway's memory. The same
-        streaming read core's own platform plugins use.
+        to hold an oversized attachment in the gateway's memory.
         """
-        from gateway.platforms.base import get_inbound_media_max_bytes, validate_inbound_media_size
+        from gateway.platforms.base import get_inbound_media_max_bytes
 
         max_bytes = get_inbound_media_max_bytes()
         await self.ensure_token()

@@ -88,6 +88,31 @@ The relay opens the upstream connection itself, so it applies native's proxy var
 
 ## Settings
 
+**Claude Code caller** (`claude_code_entrypoint`, `hermes-agent` by default). Choose either
+`hermes-agent` or `sdk-cli` for the active profile. The existing default is unchanged. In an
+Enterprise account comparison for [#296](https://github.com/NousResearch/hermes-official-plugins/issues/296),
+a full Hermes request was rejected with an extra-usage HTTP 400 under `hermes-agent`; the same
+prompt completed a real tool call under `sdk-cli`, with no provider fallback. This is an
+account-specific observation, not a guarantee for other accounts or CLI versions.
+
+Choose **Claude Code caller** in the plugin's settings, or set it from the CLI:
+
+```sh
+hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.claude_code_entrypoint sdk-cli
+```
+
+The setting is read from the active profile on every native spawn, including inference, auth
+status, model discovery, and `/usage`, so changes apply to the next spawn without a restart.
+It overrides any inherited `CLAUDE_CODE_ENTRYPOINT` only in the child environment. Only the two
+exact values are accepted; other values are rejected before spawning Claude Code. Remove the
+setting or set it to `hermes-agent` to restore the default. Artifact and session-title suppression
+remain enabled with either choice.
+
+`CLAUDE_CODE_ENTRYPOINT` is an internal Claude Code variable, not a documented public configuration
+contract. Upstream account eligibility and usage metering can differ between callers and change
+over time. This setting does not guarantee subscription coverage or authorize extra usage; check
+your account's usage and organization policy.
+
 **Claude login config directory** (`claude_config_dir`, string, empty by default). Select a separately logged-in Claude config directory for the active Hermes profile, including profiles served by one multiplexed gateway:
 
 ```sh

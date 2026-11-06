@@ -58,6 +58,7 @@ def _resolve(command, env):
 PLUGIN_ID = "claude-subscription-directsdk-experimental"
 TELEMETRY_SETTING = "claude_code_telemetry"
 CONFIG_DIR_SETTING = "claude_config_dir"
+ENTRYPOINT_SETTING = "claude_code_entrypoint"
 # Any one of these turns off Claude Code's feature-flag fetch, and with it every model its picker
 # only offers through a flag (#86: 11 models become 5). Off only when the user turns the setting off.
 QUIET_TRAFFIC = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1"}
@@ -69,9 +70,9 @@ QUIET_TRAFFIC = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_TELEM
 # entrypoint, or a server flag, it races the turn for the one upstream request the relay admits.
 ALWAYS_QUIET = {"DISABLE_AUTOUPDATER": "1", "DISABLE_FEEDBACK_COMMAND": "1", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"}
 # Native names its caller on every request (`cc_entrypoint` in the billing header, the user agent).
-# Under `-p` it defaults to `sdk-cli`, and subscriptions draw the 5-hour window about 2x faster per
-# token for `sdk-*` callers than for the interactive CLI or a client's own name (anthropics/claude-code#97074).
-# An inherited host name (`sdk-py`, `claude-desktop`) would reach the child too, so it is overwritten.
+# Keep the existing `hermes-agent` default; a profile can explicitly choose `sdk-cli` for accounts
+# that reject full Hermes turns under that default (#296). Caller-dependent eligibility and metering
+# are upstream behavior, not guaranteed by this setting. Never inherit another host's caller name.
 # Off the `sdk-*` names native offers its artifact tool and adds a scratchpad line to every request;
 # CLAUDE_CODE_DISABLE_ARTIFACT keeps the request identical to the `sdk-cli` one apart from the name.
 CALLER_IDENTITY = {"CLAUDE_CODE_ENTRYPOINT": "hermes-agent", "CLAUDE_CODE_DISABLE_ARTIFACT": "1"}
@@ -134,9 +135,13 @@ def apply_traffic_policy(env, telemetry=None):
 
     Never removes anything: a flag the user exported in Hermes' own environment
     (``DISABLE_TELEMETRY``, ``DO_NOT_TRACK``, ...) still reaches the child with the setting on.
-    The caller name is the one value replaced, whatever the parent set.
+    The caller name follows the active profile's setting, whatever the parent set.
     """
+    entrypoint = _setting(ENTRYPOINT_SETTING, CALLER_IDENTITY["CLAUDE_CODE_ENTRYPOINT"])
+    if entrypoint not in ("hermes-agent", "sdk-cli"):
+        raise ValueError(f"{ENTRYPOINT_SETTING} must be 'hermes-agent' or 'sdk-cli'")
     env.update(ALWAYS_QUIET, **CALLER_IDENTITY)
+    env["CLAUDE_CODE_ENTRYPOINT"] = entrypoint
     if not (telemetry_enabled() if telemetry is None else telemetry):
         env.update(QUIET_TRAFFIC)
     return env
@@ -163,8 +168,9 @@ def setup_status(command=None, env=None, timeout=20):
     if resolved is None:
         return {"available": False, "logged_in": False, "plan": "", "detail": INSTALL_HINT, "login_command": None}
     login_command = resolved + ["auth", "login"]
+    child = _child_env(env)  # Invalid profile settings must not look like a logged-out CLI.
     try:
-        run = subprocess.run(resolved + ["auth", "status"], env=_child_env(env), stdin=subprocess.DEVNULL,
+        run = subprocess.run(resolved + ["auth", "status"], env=child, stdin=subprocess.DEVNULL,
                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
         auth = json.loads(run.stdout) if run.stdout.strip().startswith("{") else {}
     except (OSError, ValueError, subprocess.SubprocessError):

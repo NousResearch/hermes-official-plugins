@@ -133,6 +133,43 @@ def apply_config_dir(env):
     return env
 
 
+OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
+
+
+def _profile_token():
+    """The active profile's ``CLAUDE_CODE_OAUTH_TOKEN`` from core's secret scope, else ``None``.
+
+    A multiplexed gateway never loads a served profile's ``.env`` into ``os.environ``; core binds it
+    per turn as the secret scope instead. Outside multiplexing ``get_secret`` reads ``os.environ``,
+    the value the child inherits anyway. An older core without the scope, or a read with no scope
+    bound (``UnscopedSecretError``), counts as no profile token.
+    """
+    try:
+        from agent.secret_scope import get_secret
+        token = get_secret(OAUTH_TOKEN_ENV)
+    except Exception:
+        return None
+    return token if isinstance(token, str) and token.strip() else None
+
+
+def apply_profile_credential(env):
+    """Give a child ``env`` (in place) the active profile's Claude login, never another profile's.
+
+    Claude Code prefers ``CLAUDE_CODE_OAUTH_TOKEN`` over the login in ``CLAUDE_CONFIG_DIR``, so:
+    the profile's own token is set on the child; else a nonempty ``claude_config_dir`` setting
+    removes an inherited token so the selected login is used; else ``env`` is left as it is.
+    ``os.environ`` is never changed and the token is never logged.
+    """
+    token = _profile_token()
+    if token:
+        env[OAUTH_TOKEN_ENV] = token
+    else:
+        setting = _setting(CONFIG_DIR_SETTING)
+        if isinstance(setting, str) and setting.strip():
+            env.pop(OAUTH_TOKEN_ENV, None)
+    return env
+
+
 def apply_traffic_policy(env, telemetry=None):
     """Set the plugin's Claude Code traffic flags on a child ``env`` (in place) and return it.
 
@@ -151,6 +188,7 @@ def _child_env(env, *, flag_fetch=False):
     and usage fetches (``FLAG_FETCH_BLOCKERS``), except one the user exported in ``env``."""
     child = drop_api_credentials(dict(env))
     apply_config_dir(child)
+    apply_profile_credential(child)
     apply_traffic_policy(child)
     if flag_fetch:
         for key in FLAG_FETCH_BLOCKERS:

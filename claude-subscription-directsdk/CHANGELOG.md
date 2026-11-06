@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- A multiplexed gateway (`gateway.multiplex_profiles: true`) runs each profile's Claude Code on that profile's own login. `CLAUDE_CODE_OAUTH_TOKEN` in a served profile's `.env` now reaches its Claude Code children (read from core's per-turn secret scope; multiplexing never loads it into the process environment). A profile with `claude_config_dir` set and no token of its own no longer inherits the gateway process's token, which Claude Code prefers over the selected login directory, so that setting no longer runs a profile on another profile's account. Single-profile installs and an explicit `Client(env=...)` are unchanged, and the process environment is never modified (#34, #313).
 - `/usage` shows the extra-usage state, usage credits spent, this week's share per surface and the per-model limits beside the plan limits. They were dropped whenever Claude Code answered with `limits`, which current versions always do.
 - `/usage` shows the plan limits with `claude_code_telemetry: false`: the CLI skips its `get_usage` fetch under `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, so the zero-inference usage probe no longer sets that one flag (telemetry and error reporting stay off; a flag the user exported is kept).
 

@@ -56,11 +56,11 @@ Messages come from the profile's `state.db`. Events start when the server starts
 
 Adds these Hermes tools next to the bridge, using this profile's configured providers and credentials:
 
-`web_search` · `web_extract` · `browser_navigate` · `browser_click` · `browser_type` · `browser_press` · `browser_snapshot` · `browser_scroll` · `browser_back` · `browser_get_images` · `browser_console` · `browser_vision` · `vision_analyze` · `image_generate` · `skill_view` · `skills_list` · `text_to_speech`
+`web_search` · `web_extract` · `vision_analyze` · `image_generate` · `skill_view` · `skills_list` · `text_to_speech`
 
 - **Off by default.** Without `--tools` the server exposes only the conversation bridge.
 - **A fixed allowlist.** Terminal, file, code execution, process, kanban and delegation tools are never exposed, whatever the profile enables: they would hand the client a shell on your machine outside Hermes' approval prompts (kanban tasks run as full agents).
-- **No local files.** `browser_navigate` and `web_extract` take only web URLs (no `file:`), `vision_analyze` only `http(s):` or `data:` images (no local paths, including bare names such as `shot.png`), and `text_to_speech` writes only into Hermes' own cache (its `output_path` is not offered). Web URLs include local-network addresses such as `localhost:3000`, as they do for the Hermes model.
+- **No local files.** `web_extract` takes only web URLs (no `file:`), `vision_analyze` only `http(s):` or `data:` images (no local paths, including bare names such as `shot.png`), and `text_to_speech` writes only into Hermes' own cache (its `output_path` is not offered). Web URLs include local-network addresses such as `localhost:3000`, as they do for the Hermes model.
 - **Your profile's choices apply.** Only toolsets enabled for the CLI in `hermes tools` are offered, and a tool whose backend is not configured (no web provider, no image key, no local browser) is left out, the same availability rules the Hermes model sees.
 - **Your hooks still apply.** Shell hooks and plugin `pre_tool_call` hooks run around every call; `--accept-hooks` skips the first-use consent check for shell hooks, as it does for the gateway.
 - Tool output is secret-redacted (`HERMES_REDACT_SECRETS`), and calls cost whatever the configured provider charges.

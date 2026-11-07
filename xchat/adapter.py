@@ -35,6 +35,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -69,9 +70,28 @@ REPLY_CACHE_MAX = 200
 # Cap inbound attachments processed per message.
 MAX_INBOUND_ATTACHMENTS = 5
 # Message ids Hermes sent, kept so self-chat echoes are never answered.
-SENT_IDS_MAX = 500
+# Cross-process locking primitives for the shared sent-id file.
+try:
+    import msvcrt as _msvcrt  # type: ignore
 
-# Group-chat mention wake words — same defaults as the other Hermes channels
+    def _lock_fd(fd: int) -> None:
+        _msvcrt.locking(fd, _msvcrt.LK_LOCK, 1)
+
+    def _unlock_fd(fd: int) -> None:
+        try:
+            _msvcrt.locking(fd, _msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+except ImportError:  # pragma: no cover - Unix
+    import fcntl as _fcntl  # type: ignore
+
+    def _lock_fd(fd: int) -> None:
+        _fcntl.flock(fd, _fcntl.LOCK_EX)
+
+    def _unlock_fd(fd: int) -> None:
+        _fcntl.flock(fd, _fcntl.LOCK_UN)
+
+SENT_IDS_MAX = 500
 # so group gating behaves identically everywhere.
 _DEFAULT_MENTION_PATTERNS = [
     r"(?<![\w@])@?hermes\s+agent\b[,:\-]?",
@@ -135,18 +155,50 @@ def _remember_sent(message_id: str) -> None:
     The gateway and out-of-process senders (cron, ``hermes send``) share this file, so in the
     self-chat the poll loop can tell Hermes' own messages from ones the owner typed. Ids are the
     SDK-generated message UUIDs, which the decrypted event carries back as ``id``.
+
+    The read-modify-write is serialized with a lock file and the temp file gets a unique name, so
+    two concurrent writers cannot clobber each other's id (or each other's temp file).
     """
     if not message_id:
         return
-    ids = [m for m in _load_sent_ids() if m != message_id] + [message_id]
     try:
-        path = _sent_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(ids[-SENT_IDS_MAX:]) + "\n", encoding="utf-8")
-        tmp.replace(path)
+        lock_path = _sent_path().with_suffix(".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        logger.debug("[xchat] sent-id lock open failed", exc_info=True)
+        return
+    try:
+        try:
+            _lock_fd(fd)
+        except OSError:
+            logger.debug("[xchat] sent-id lock acquire failed", exc_info=True)
+            return
+        try:
+            ids = [m for m in _load_sent_ids() if m != message_id] + [message_id]
+            path = _sent_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + f".{uuid.uuid4().hex}.tmp")
+            tmp.write_text(json.dumps(ids[-SENT_IDS_MAX:]) + "\n", encoding="utf-8")
+            # Windows can raise sharing violations if another process is replacing
+            # concurrently; retry briefly.
+            for attempt in range(5):
+                try:
+                    tmp.replace(path)
+                    break
+                except OSError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
+        finally:
+            _unlock_fd(fd)
     except OSError:
         logger.debug("[xchat] sent-id persist failed", exc_info=True)
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def _event_id_newer(a: str, b: str) -> bool:

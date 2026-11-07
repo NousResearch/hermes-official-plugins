@@ -546,6 +546,20 @@ async def test_discovery_adds_conversations(monkeypatch):
     assert adapter._conversations == {"111-222", "g333"}
 
 
+def test_discovery_runs_on_a_slower_cadence_than_polling(monkeypatch):
+    """#228: one list read per poll cycle spends the separate 1,000/day list budget in
+    ~8 hours at a 30 s interval; discovery is due at startup, then on its own cadence."""
+    adapter = _make_adapter(monkeypatch)
+    assert adapter._discovery_due() is True  # first pass always runs
+
+    adapter._initial_discovery_done = True
+    adapter._last_discovery_at = xchat_adapter.time.monotonic()
+    assert adapter._discovery_due() is False
+
+    adapter._last_discovery_at -= 601
+    assert adapter._discovery_due() is True
+
+
 def test_dedup_prune_bounds_memory(monkeypatch):
     adapter = _make_adapter(monkeypatch)
     now = time.time()

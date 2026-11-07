@@ -9,6 +9,13 @@
 //     synchronously at boot, so it survives restarts and plugin reloads).
 //  3. A Colors tab: every palette slot (sidebar, card, popover, border, ...)
 //     can be recolored with the same OKLCH field, in the active mode's palette.
+//  4. Surface squares in the first menu: one square per slot; hovering one
+//     outlines (glows) every UI region that slot paints; click opens the
+//     editor; per-slot copy/paste (button or right-click to copy).
+//  5. Share: copy the whole theme record as JSON, import one from the
+//     clipboard (menu buttons + command-palette entries).
+//  6. A Glass tab: window transparency controls — glass/clear mode, intensity,
+//     fade, material and scope, written to the app's own translucency book.
 import {
   $accentOverride,
   PALETTE_AREA,
@@ -662,6 +669,80 @@ var SLOTS = [
   ["destructive", "Destructive"]
 ];
 
+// ── hover glow: highlight the UI a slot paints ───────────────────────────────
+// Hovering a slot square outlines every region that slot recolors, on the real
+// UI. One <style> is injected once; the active slot is a data-attribute on
+// <html>, so entering/leaving a square is one attribute write — no reflow of
+// the rule set, no listeners left behind.
+
+var GLOW_RULES = {
+  background: ["[data-contrib-shell]"],
+  foreground: [
+    "[data-slot='aui_assistant-message-root']",
+    "[data-slot='aui_user-message-root']",
+    "[data-slot='composer-rich-input']"
+  ],
+  sidebarBackground: ["[data-slot='sidebar-wrapper'] [data-slot='sidebar']", "[data-slot='sidebar-wrapper'][data-collapsible='icon'] [data-slot='sidebar']"],
+  sidebarBorder: ["[data-slot='sidebar']"],
+  card: ["[data-slot='card']"],
+  popover: ["[data-slot='popover-content']", "[data-radix-popper-content-wrapper] > *"],
+  muted: ["[data-slot='muted']", "[data-slot='empty']"],
+  border: ["[data-slot='composer-rich-input']", "[data-slot='sidebar']"],
+  input: ["[data-slot='composer-rich-input']", "[data-slot='input']"],
+  primary: ["[data-slot='button']", "[data-slot='toggle']"],
+  secondary: ["[data-slot='toggle']"],
+  accent: ["[data-slot='button']"],
+  userBubble: ["[data-slot='aui_user-message-root']", "[data-role='user']"],
+  destructive: ["[class*='destructive']"]
+};
+
+function ensureGlowStyle() {
+  if (typeof document === "undefined" || document.getElementById("ap-glow-style")) {
+    return;
+  }
+  const el = document.createElement("style");
+  el.id = "ap-glow-style";
+  const rules = [];
+  for (const key in GLOW_RULES) {
+    rules.push(
+      "html[data-apglow='" + key + "'] " + GLOW_RULES[key].join(", ") +
+      " { outline: 2px solid var(--dt-ring, #8ab4ff) !important; outline-offset: -2px !important;" +
+      " box-shadow: 0 0 14px 2px var(--dt-ring, #8ab4ff) !important; }"
+    );
+  }
+  el.textContent = rules.join("\n");
+  document.head.appendChild(el);
+}
+
+function setGlow(slotKey) {
+  ensureGlowStyle();
+  const root = document.documentElement;
+  if (!slotKey) {
+    root.removeAttribute("data-apglow");
+  } else if (GLOW_RULES[slotKey]) {
+    root.setAttribute("data-apglow", slotKey);
+  }
+}
+
+// ── clipboard: per-slot copy/paste + whole-theme share ───────────────────────
+
+function copyText(text) {
+  try {
+    void navigator.clipboard?.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readClipboardText() {
+  try {
+    return await navigator.clipboard?.readText();
+  } catch {
+    return null;
+  }
+}
+
 function SlotEditor({ baseTheme, palette, slotKey, resolvedMode, onApply, onBack }) {
   const start = hexToOklch(palette[slotKey]) ?? { l: 0.5, c: 0.1, h: 260 };
   const lchRef = useRef(start);
@@ -709,6 +790,12 @@ function SlotEditor({ baseTheme, palette, slotKey, resolvedMode, onApply, onBack
   useEffect(() => () => {
     liveRef2.current.cancel();
   }, []);
+  // Keep the glow on the region this editor paints for as long as it is open,
+  // not only while a square is hovered — the field IS the hover target here.
+  useEffect(() => {
+    setGlow(slotKey);
+    return () => setGlow(null);
+  }, [slotKey]);
   const defaults = readDefaults();
   const defaultHex = defaults ? (resolvedMode === "dark" ? (defaults.dark ?? defaults.light) : (defaults.light ?? defaults.dark))?.[slotKey] : null;
   const revertEntry = peekUndo(slotKey);
@@ -745,6 +832,41 @@ function SlotEditor({ baseTheme, palette, slotKey, resolvedMode, onApply, onBack
         "button",
         {
           className: "flex-1 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px] hover:bg-(--chrome-action-hover)",
+          onClick: () => copyText(palette[slotKey]),
+          title: "Copy this slot's hex to the clipboard",
+          type: "button",
+          children: "Copy"
+        }
+      ),
+      /* @__PURE__ */ jsx(
+        "button",
+        {
+          className: "flex-1 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px] hover:bg-(--chrome-action-hover)",
+          onClick: () => {
+            void readClipboardText().then((text) => {
+              const hex = typeof text === "string" ? text.trim().match(/^#?([0-9a-f]{6})$/i) : null;
+              if (!hex) {
+                notify("Clipboard has no #rrggbb color.");
+                return;
+              }
+              const value = "#" + hex[1];
+              armUndo();
+              onApply(slotKey, value, baseRef.current, true);
+              const l = hexToOklch(value) ?? start;
+              lchRef.current = l;
+              setLch(l);
+              notify(`${slotKey} pasted from clipboard.`);
+            });
+          },
+          title: "Paste a #rrggbb color from the clipboard into this slot",
+          type: "button",
+          children: "Paste"
+        }
+      ),
+      /* @__PURE__ */ jsx(
+        "button",
+        {
+          className: "flex-1 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px] hover:bg-(--chrome-action-hover)",
           onClick: () => { if (defaultHex) { armUndo(); onApply(slotKey, defaultHex, baseRef.current, true); const l = hexToOklch(defaultHex) ?? start; lchRef.current = l; setLch(l); } },
           title: defaultHex ? `Base theme default: ${defaultHex}` : "No default captured",
           type: "button",
@@ -764,6 +886,55 @@ function SlotEditor({ baseTheme, palette, slotKey, resolvedMode, onApply, onBack
       )
     ] }),
     /* @__PURE__ */ jsx("p", { className: "h-3 font-mono text-[10px] leading-tight text-(--ui-text-tertiary)", children: "live while you drag \xB7 saved with the theme" })
+  ] });
+}
+
+// ── surface squares: the whole palette at a glance, in the first menu ────────
+// One square per slot. Hover previews the region it paints (glow), click opens
+// the editor, the badge buttons copy/paste that slot's hex directly.
+
+function SlotSquares({ onOpen, palette }) {
+  return jsxs("div", { className: "flex flex-col gap-1", children: [
+    jsxs("div", { className: "mt-1 flex items-baseline justify-between", children: [
+      jsx("span", { className: "text-[9px] font-medium uppercase tracking-wide text-(--ui-text-tertiary)", children: "Surfaces" }),
+      jsx("span", { className: "font-mono text-[8px] text-(--ui-text-quaternary)", children: "hover = locate \xB7 click = edit" })
+    ] }),
+    jsx("div", { className: "grid grid-cols-2 gap-1", children: SLOTS.filter((s) => typeof palette[s[0]] === "string").map((s) => jsx(
+      "div",
+      {
+        className: "group flex min-w-0 cursor-pointer items-center gap-1 rounded-sm border border-(--dt-border) px-1 py-0.5 hover:bg-(--chrome-action-hover)",
+        onClick: () => onOpen(s[0]),
+        onContextMenu: (e) => {
+          e.preventDefault();
+          copyText(palette[s[0]]);
+          notify(`${s[1]} hex copied.`);
+        },
+        onPointerEnter: () => setGlow(s[0]),
+        onPointerLeave: () => setGlow(null),
+        role: "button",
+        title: `${s[1]} \xB7 ${palette[s[0]]} \xB7 click to edit \xB7 right-click to copy`,
+        children: [
+          jsx("span", { className: "size-4 shrink-0 rounded-sm border border-(--dt-border)", style: { background: palette[s[0]] } }),
+          jsx("span", { className: "min-w-0 flex-1 truncate text-[10px] leading-tight", children: s[1] }),
+          jsx("span", { className: "font-mono text-[8px] text-(--ui-text-tertiary)", children: palette[s[0]] }),
+          jsx(
+            "button",
+            {
+              className: "shrink-0 rounded-sm border border-(--dt-border) px-1 text-[8px] opacity-0 group-hover:opacity-100",
+              onClick: (e) => {
+                e.stopPropagation();
+                copyText(palette[s[0]]);
+                notify(`${s[1]} hex copied.`);
+              },
+              title: `Copy ${palette[s[0]]}`,
+              type: "button",
+              children: "copy"
+            }
+          )
+        ]
+      },
+      s[0]
+    )) })
   ] });
 }
 
@@ -838,6 +1009,202 @@ function ThemePresets({ availableThemes, currentAccent, mode, onApply, resolvedM
     }) }),
     /* @__PURE__ */ jsx("p", { className: "h-3 font-mono text-[10px] leading-tight text-(--ui-text-tertiary)", children: `${resolvedMode} preset accent dots \u00B7 click to switch` })
   ] });
+}
+
+// ── window transparency (glass/clear, intensity, fade, material, scope) ──────
+// Writes the app's own translucency book (`hermes.desktop.translucency.v2` —
+// the same key Settings ▸ Appearance writes). The renderer paints glass from
+// its nanostores atom, which only re-reads storage on a sibling window's
+// storage event, so the panel ends with an Apply · reload button.
+
+var TRANSLUCENCY_KEY = "hermes.desktop.translucency.v2";
+var GLASS_MATERIALS = ["under-window", "popover", "titlebar", "header"];
+var GLASS_SCOPES = ["sidebar", "window"];
+var GLASS_DEFAULTS = { fade: 0, intensity: 29, material: "under-window", scope: "sidebar" };
+
+function readTranslucencyBook() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TRANSLUCENCY_KEY) || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistTranslucencyBook(book) {
+  const serialized = JSON.stringify(book);
+  try {
+    localStorage.setItem(TRANSLUCENCY_KEY, serialized);
+  } catch {}
+  const bridge = typeof window !== "undefined" && window.hermesDesktop && window.hermesDesktop.uiPreferences;
+  if (bridge && typeof bridge.write === "function") {
+    try {
+      void Promise.resolve(bridge.write({ values: { [TRANSLUCENCY_KEY]: serialized } })).catch(() => {});
+    } catch {}
+  }
+}
+
+function GlassPanel({ resolvedMode }) {
+  const [book, setBook] = useState(readTranslucencyBook);
+  const [dirty, setDirty] = useState(false);
+  const persistRef = useRef(null);
+  if (!persistRef.current) {
+    persistRef.current = throttleLatest((next) => {
+      persistTranslucencyBook(next);
+      setDirty(false);
+    }, 150);
+  }
+  useEffect(() => () => {
+    persistRef.current.cancel();
+  }, []);
+  const slotKey = resolvedMode === "dark" ? "dark" : "light";
+  const mode = book.mode === "clear" ? "clear" : "glass";
+  const slot = book[slotKey] || {};
+  const base = book.base || {};
+  const pick = (key) => slot[key] ?? base[key] ?? GLASS_DEFAULTS[key];
+  const values = { fade: pick("fade"), intensity: pick("intensity"), material: pick("material"), scope: pick("scope") };
+  const write = (patch) => {
+    const next = { ...readTranslucencyBook() };
+    next.mode = patch.mode ?? mode;
+    const merged = {
+      fade: patch.fade ?? values.fade,
+      intensity: patch.intensity ?? values.intensity,
+      material: patch.material ?? values.material,
+      scope: patch.scope ?? values.scope
+    };
+    // Write the overlay into BOTH layers: the appearance slot (what the store
+    // resolves first) and base (so the other appearance inherits the choice
+    // instead of reviving a stale default).
+    next.base = { ...(next.base || {}), ...merged };
+    next[slotKey] = { ...(next[slotKey] || {}), ...merged };
+    setBook(next);
+    setDirty(true);
+    persistRef.current(next);
+  };
+  const reset = () => {
+    write({ fade: GLASS_DEFAULTS.fade, intensity: GLASS_DEFAULTS.intensity, material: GLASS_DEFAULTS.material, mode: "glass", scope: GLASS_DEFAULTS.scope });
+  };
+  const btn = (active) => active ? "rounded-sm border border-(--dt-border) bg-(--chrome-action-hover) px-1.5 py-0.5 text-[10px]" : "rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[10px] hover:bg-(--chrome-action-hover)";
+  const row = (label, node, hint) => jsxs("div", { className: "flex flex-col gap-0.5", children: [
+    jsx("div", { className: "flex items-baseline justify-between", children: [
+      jsx("span", { className: "text-[10px] text-(--ui-text-tertiary)", children: label }),
+      jsx("span", { className: "font-mono text-[9px] tabular-nums text-(--ui-text-tertiary)", children: hint })
+    ] }),
+    node
+  ] });
+  const slider = (key, max) => jsx(
+    "input",
+    {
+      max,
+      min: 0,
+      onChange: (event) => write({ [key]: Number(event.target.value) }),
+      style: { accentColor: "var(--ui-accent, var(--dt-ring, #8ab4ff))" },
+      type: "range",
+      value: values[key],
+      className: "w-full"
+    }
+  );
+  return jsxs("div", { className: "flex flex-col gap-2", children: [
+    jsxs("div", { className: "flex gap-1", children: [
+      jsx("button", { className: btn(mode === "glass"), onClick: () => write({ mode: "glass" }), title: "Glass: translucent tinted panes", type: "button", children: "Glass" }),
+      jsx("button", { className: btn(mode === "clear"), onClick: () => write({ mode: "clear" }), title: "Clear: plain window opacity fade", type: "button", children: "Clear" })
+    ] }),
+    row("Glass intensity", slider("intensity", 100), `${values.intensity}%`),
+    row("Fade (window opacity)", slider("fade", 100), `${values.fade}%`),
+    jsxs("div", { className: "flex flex-col gap-0.5", children: [
+      jsx("span", { className: "text-[10px] text-(--ui-text-tertiary)", children: "Material" }),
+      jsx("div", { className: "grid grid-cols-2 gap-1", children: GLASS_MATERIALS.map((m) => jsx("button", { className: btn(values.material === m), onClick: () => write({ material: m }), type: "button", children: m }, m)) })
+    ] }),
+    jsxs("div", { className: "flex flex-col gap-0.5", children: [
+      jsx("span", { className: "text-[10px] text-(--ui-text-tertiary)", children: "Scope" }),
+      jsx("div", { className: "grid grid-cols-2 gap-1", children: GLASS_SCOPES.map((sc) => jsx("button", { className: btn(values.scope === sc), onClick: () => write({ scope: sc }), type: "button", children: sc === "sidebar" ? "Sidebar only" : "Whole window" }, sc)) })
+    ] }),
+    jsxs("div", { className: "flex gap-1.5", children: [
+      jsx(
+        "button",
+        {
+          className: "flex-1 rounded-sm border border-(--dt-border) px-1.5 py-1 text-[11px] hover:bg-(--chrome-action-hover)",
+          onClick: () => {
+            persistRef.current.flush();
+            location.reload();
+          },
+          title: "The app re-reads translucency on window load",
+          type: "button",
+          children: "Apply \xB7 reload"
+        }
+      ),
+      jsx(
+        "button",
+        {
+          className: "flex-1 rounded-sm border border-(--dt-border) px-1.5 py-1 text-[11px] hover:bg-(--chrome-action-hover)",
+          onClick: reset,
+          title: "Back to the app defaults (glass, 29% tint, no fade, under-window, sidebar scope)",
+          type: "button",
+          children: "Reset"
+        }
+      )
+    ] }),
+    jsx("p", { className: "h-3 font-mono text-[10px] leading-tight text-(--ui-text-tertiary)", children: dirty ? "unsaved \xB7 Apply reloads to paint it" : `${mode} \xB7 ${resolvedMode} \xB7 applies on reload` })
+  ] });
+}
+
+// ── share: export/import the theme record as JSON ────────────────────────────
+
+function uniqueThemeName(base) {
+  const themes = readThemes();
+  let name = typeof base === "string" && base.trim() ? base.trim() : "Imported theme";
+  if (!themes[name]) {
+    return name;
+  }
+  let i = 2;
+  while (themes[`${name} (${i})`]) {
+    i += 1;
+  }
+  return `${name} (${i})`;
+}
+
+async function importThemeFromClipboard() {
+  const text = await readClipboardText();
+  if (!text) {
+    notify("Clipboard is empty.");
+    return false;
+  }
+  let record;
+  try {
+    record = JSON.parse(text);
+  } catch {
+    notify("Clipboard is not theme JSON.");
+    return false;
+  }
+  if (!record || typeof record !== "object" || !record.colors || typeof record.colors !== "object") {
+    notify("Clipboard is not theme JSON.");
+    return false;
+  }
+  const label = typeof record.label === "string" && record.label ? record.label : typeof record.name === "string" && record.name ? record.name : "Imported theme";
+  const name = uniqueThemeName(label);
+  const next = {
+    ...record,
+    accentOf: typeof record.accentOf === "string" ? record.accentOf : record.name,
+    description: typeof record.description === "string" && record.description ? `${record.description} (imported)` : "Imported via Accent Picker+",
+    label,
+    name
+  };
+  let ok = true;
+  try {
+    persistUserThemeRecord(next);
+  } catch {
+    ok = false;
+  }
+  try {
+    ctxRef.current.register({ id: "custom-theme", area: THEMES_AREA, data: next });
+  } catch {}
+  const resolved = requestTheme(name);
+  if (ok && resolved !== false) {
+    notify(`Imported \u201C${label}\u201D and applied it.`);
+  } else {
+    notify("Imported, but could not apply it live \u2014 pick it in Settings \u25B8 Appearance.");
+  }
+  return true;
 }
 
 // ── main picker ──────────────────────────────────────────────────────────────
@@ -956,7 +1323,7 @@ function AccentPicker() {
           children: "Colors"
         }
       ),
-      /* @__PURE__ */ jsx(
+      /* @__PURE__ */      jsx(
         "button",
         {
           className: tab === "themes" ? "flex-1 rounded-sm border border-(--dt-border) bg-(--chrome-action-hover) px-1.5 py-0.5 text-[11px]" : "flex-1 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px]",
@@ -964,6 +1331,16 @@ function AccentPicker() {
           title: "Switch a built-in UI preset from Settings \u25B8 Appearance",
           type: "button",
           children: "Presets"
+        }
+      ),
+      jsx(
+        "button",
+        {
+          className: tab === "glass" ? "flex-1 rounded-sm border border-(--dt-border) bg-(--chrome-action-hover) px-1.5 py-0.5 text-[11px]" : "flex-1 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px]",
+          onClick: () => setTab("glass"),
+          title: "Window transparency: glass/clear, intensity, fade, material, scope",
+          type: "button",
+          children: "Glass"
         }
       )
     ] }),
@@ -995,8 +1372,9 @@ function AccentPicker() {
           }
         )
       ] }),
-      /* @__PURE__ */ jsx(ValueGrid, { hex: text && /^#?[0-9a-f]{6}$/i.test(text) ? text : oklchToHex(lch) }),
-      /* @__PURE__ */ jsx(PopularAccents, { onPick: seedAccent }),
+      jsx(ValueGrid, { hex: text && /^#?[0-9a-f]{6}$/i.test(text) ? text : oklchToHex(lch) }),
+      jsx(SlotSquares, { onOpen: openSlot, palette }),
+      jsx(PopularAccents, { onPick: seedAccent }),
       /* @__PURE__ */ jsx(
         "button",
         {
@@ -1006,6 +1384,36 @@ function AccentPicker() {
           children: saved ? "Re-save theme with this accent" : "Save as theme (persists across restarts)"
         }
       ),
+      jsxs("div", { className: "flex gap-1.5", children: [
+        jsx(
+          "button",
+          {
+            className: "flex-1 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px] hover:bg-(--chrome-action-hover)",
+            onClick: () => {
+              if (copyText(JSON.stringify(theme))) {
+                notify("Theme JSON copied \u2014 paste it on any machine to share.");
+              } else {
+                notify("Could not reach the clipboard.");
+              }
+            },
+            title: "Copy this theme's full JSON \u2014 share it, then import it anywhere",
+            type: "button",
+            children: "Copy theme JSON"
+          }
+        ),
+        jsx(
+          "button",
+          {
+            className: "flex-1 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px] hover:bg-(--chrome-action-hover)",
+            onClick: () => {
+              void importThemeFromClipboard();
+            },
+            title: "Import a theme from theme JSON on the clipboard",
+            type: "button",
+            children: "Paste theme JSON"
+          }
+        )
+      ] }),
       /* @__PURE__ */ jsxs("div", { className: "flex items-center justify-between font-mono text-[10px] tabular-nums text-(--ui-text-tertiary)", children: [
         /* @__PURE__ */ jsxs("span", { children: [
           "H",
@@ -1023,7 +1431,7 @@ function AccentPicker() {
         ] })
       ] }),
       /* @__PURE__ */ jsx("p", { className: "h-3 font-mono text-[10px] leading-tight text-(--ui-text-tertiary)", children: saved ? "theme saved \u2014 active across restarts" : override && override.toLowerCase() !== painted.toLowerCase() ? `previewing ${override} \u2192 not saved yet` : "\xA0" })
-    ] }) : tab === "themes" ? /* @__PURE__ */ jsx(ThemePresets, { availableThemes, currentAccent: painted, mode, onApply: applyPreset, resolvedMode, setMode, themeName }) : /* @__PURE__ */ jsxs("div", { className: "flex flex-col gap-1", children: [
+    ] }) : tab === "themes" ? /* @__PURE__ */ jsx(ThemePresets, { availableThemes, currentAccent: painted, mode, onApply: applyPreset, resolvedMode, setMode, themeName }) : tab === "glass" ? /* @__PURE__ */ jsx(GlassPanel, { resolvedMode }) : /* @__PURE__ */ jsxs("div", { className: "flex flex-col gap-1", children: [
       SLOTS.filter((s) => typeof palette[s[0]] === "string").map((s) => /* @__PURE__ */ jsxs(
         "button",
         {
@@ -1096,6 +1504,13 @@ if (typeof window !== "undefined") {
         return "no theme context";
       }
       return installSlotHex(live.theme, live.resolvedMode, key, hex, finalize);
+    },
+    glass: {
+      read: () => readTranslucencyBook(),
+      write: (book) => persistTranslucencyBook(book)
+    },
+    setLive: (theme, resolvedMode) => {
+      liveRef.current = { theme, resolvedMode };
     }
   };
 }
@@ -1103,7 +1518,7 @@ if (typeof window !== "undefined") {
 var plugin = {
   id: "accent",
   name: "Accent Picker+",
-  description: "OKLCH accent picker that can SAVE the accent as a real theme (survives restarts) and recolor every palette slot (sidebar, card, popover, ...).",
+  description: "OKLCH accent picker that can SAVE the accent as a real theme (survives restarts), recolor every palette slot (sidebar, card, popover, ...) with hover-to-locate surface squares, share themes as JSON, and tune window transparency (glass/clear, intensity, fade, material, scope).",
   defaultEnabled: false,
   register(ctx) {
     ctxRef.current = ctx;
@@ -1196,6 +1611,35 @@ var plugin = {
             }
           }
         }
+      },
+      {
+        id: "exportTheme",
+        area: PALETTE_AREA,
+        data: {
+          id: "accent.export",
+          label: "Accent+: copy the theme as JSON (share)",
+          keywords: ["accent", "theme", "export", "share", "copy", "json"],
+          run: () => {
+            const live = liveRef.current;
+            if (live && live.theme && copyText(JSON.stringify(live.theme))) {
+              notify("Theme JSON copied \u2014 paste it on any machine to share.");
+            } else {
+              notify("No theme context to export.");
+            }
+          }
+        }
+      },
+      {
+        id: "importTheme",
+        area: PALETTE_AREA,
+        data: {
+          id: "accent.import",
+          label: "Accent+: import a theme from clipboard JSON",
+          keywords: ["accent", "theme", "import", "paste", "json"],
+          run: () => {
+            void importThemeFromClipboard();
+          }
+        }
       }
     ]);
   }
@@ -1206,3 +1650,6 @@ export {
 };
 
 // touched 1793213868
+
+// Test harness exports (unused by the loader, which imports only the default).
+export { AccentPicker, GlassPanel, SlotEditor, SlotSquares };

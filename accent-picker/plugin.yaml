@@ -1,11 +1,13 @@
 name: accent-picker
 label: Accent Picker
-version: 1.0.0
+version: 1.1.0
 author: NousResearch
 homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/accent-picker
 description: >
-  OKLCH accent colour picker for the Hermes Desktop status bar. Drag it and the
-  whole theme retints live; the palette re-derives from the one colour you pick.
-  A theme-authoring tool: the colour is scratch state and is never persisted.
-  Desktop-only (desktop/plugin.js); no agent tools, hooks or env vars.
+  OKLCH accent picker and theme authoring for the Hermes Desktop status bar.
+  Every palette slot (sidebar, card, popover, ...) is editable from surface
+  squares that glow over the region they repaint on hover; per-slot and
+  whole-theme copy/paste; themes can be saved, exported and imported as JSON;
+  a Glass tab tunes window transparency (glass/clear, intensity, fade,
+  material, scope). Desktop-only (desktop/plugin.js); no agent tools.
 tags: [desktop, theme, appearance]

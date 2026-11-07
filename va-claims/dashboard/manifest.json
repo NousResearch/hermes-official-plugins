@@ -1,0 +1,1 @@
+{"name":"va-claims","label":"VA benefits","description":"Veteran benefits tracker backend (claims, GI Bill, health, CHAMPVA)","api":"plugin_api.py","tab":{"hidden":true}}

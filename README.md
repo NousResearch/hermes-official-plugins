@@ -229,6 +229,13 @@ Catalog entries come in two tiers:
 <p><code>security_scan_start</code> and 8 more · <code>/security</code> · <code>hermes security-review</code></p>
 </td>
 <td width="50%" valign="top">
+<a href="va-claims/"><img src="assets/va-claims.jpg" alt="VA Benefits plugin"></a>
+<h3><a href="va-claims/">VA Benefits</a></h3>
+<code>hermes plugins install va-claims</code>
+<p>File and track VA disability claims (21-526EZ) the way 38 CFR actually works, plus every other VA benefit in one tracker: Post-9/11 GI Bill, VA health enrollment, CHAMPVA, SGLI/VGLI, pension, VR&amp;E. Live claim status via the VA Lighthouse Benefits Claims API, intent-to-file with the 12-month effective-date clock, deadline countdowns, and a desktop VA Benefits page. Only the veteran's ICN leaves the machine, and only to api.va.gov. Also ships a standalone MCP server for non-Hermes clients.</p>
+<p><code>va_claim_status</code> · <code>va_claim_track</code> · <code>va_intent_to_file</code> · <code>va_benefit_track</code> · <code>va_claim_guide</code></p>
+</td>
+<td width="50%" valign="top">
 <h3>More on the way</h3>
 <p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
 </td>

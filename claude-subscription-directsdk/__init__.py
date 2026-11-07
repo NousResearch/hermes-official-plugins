@@ -79,6 +79,7 @@ def usage_windows(payload):
 
 
 class ClaudeOAuthDirectSDKProfile(ProviderProfile):
+    app_owned_login_contract = "wizard.app-owned-claude/1"
     model_metadata = MODEL_METADATA
 
     def get_model_context_length(self, model):

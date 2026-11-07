@@ -75,11 +75,12 @@ def _write(mutate: Callable[[dict[str, Any]], None]) -> None:
     """Raises RuntimeError (with the user-facing reason) when the config must not be written: a
     package-manager-managed install, or an unreadable / would-lose-settings file."""
     from hermes_cli.config import (atomic_config_write, format_managed_message, get_config_path, is_managed,
-                                   require_readable_config_before_write)
+                                   read_raw_config, require_readable_config_before_write)
     if is_managed():
         raise RuntimeError(format_managed_message("change delegation settings"))
     path = get_config_path()
-    data = require_readable_config_before_write(path)
+    require_readable_config_before_write(path)
+    data = read_raw_config()
     section = data.get("delegation")
     if not isinstance(section, dict):
         section = data["delegation"] = {}

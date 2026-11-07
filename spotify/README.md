@@ -74,6 +74,12 @@ Over SSH, forward the callback port first (`ssh -N -L 43827:127.0.0.1:43827 user
 | `HERMES_SPOTIFY_CLIENT_ID` | Your Spotify app's Client ID (the login wizard sets it) |
 | `HERMES_SPOTIFY_REDIRECT_URI` | Redirect URI, if you registered something other than the default |
 
+## Gateway slash commands
+
+In a messaging gateway (Discord, Telegram, Slack, ...) five commands answer one terse line instead of spending a full agent turn: `/play [query]` (no query resumes), `/pause`, `/skip`, `/nowplaying` (alias `/np`) and `/queue <query>`. They call the same tools the model does and format the result, so playback state, device selection and Premium restrictions behave identically.
+
+The handlers live in `gateway_commands.py`. Until core wires the dispatch, the commands are reachable through it directly; availability should gate on the `spotify` toolset being enabled *and* a stored login (two-factor), which needs core's `gateway_availability_fn` hook.
+
 ## Free vs Premium
 
 Search, playlists, albums, library, queue reads, device lists and playback state work on a Free

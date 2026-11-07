@@ -213,6 +213,35 @@ class TestCooldown:
         assert adapter.handle_message.call_count == 2
 
 
+class TestMessageId:
+
+    @pytest.mark.asyncio
+    async def test_two_changes_in_one_second_get_distinct_ids(self, monkeypatch):
+        monkeypatch.setattr(time, "time", lambda: 1793928031.5)
+        adapter = _make_adapter(watch_all=True, cooldown_seconds=0)
+        first = _make_event("lock.back_door", "locked", "unlocking")
+        first["time_fired"] = "2026-11-06T00:50:16.081375+00:00"
+        second = _make_event("lock.back_door", "unlocking", "unlocked")
+        second["time_fired"] = "2026-11-06T00:50:16.162449+00:00"
+        await adapter._handle_ha_event(first)
+        await adapter._handle_ha_event(second)
+        ids = [call.args[0].message_id for call in adapter.handle_message.call_args_list]
+        assert len(ids) == 2 and ids[0] != ids[1]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("time_fired", ["missing", None, ""])
+    async def test_without_time_fired_ids_stay_distinct(self, monkeypatch, time_fired):
+        monkeypatch.setattr(time, "time", lambda: 1793928031.5)
+        adapter = _make_adapter(watch_all=True, cooldown_seconds=0)
+        for old, new in (("locked", "unlocking"), ("unlocking", "unlocked")):
+            event = _make_event("lock.back_door", old, new)
+            if time_fired != "missing":
+                event["time_fired"] = time_fired
+            await adapter._handle_ha_event(event)
+        ids = [call.args[0].message_id for call in adapter.handle_message.call_args_list]
+        assert len(ids) == 2 and ids[0] != ids[1]
+
+
 # ---------------------------------------------------------------------------
 # Env enablement (replaces core's HASS_TOKEN/HASS_URL env row)
 # ---------------------------------------------------------------------------

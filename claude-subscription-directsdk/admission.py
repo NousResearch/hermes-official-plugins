@@ -670,6 +670,25 @@ class _Server(HTTPServer):
         super().handle_error(request, client_address)
 
 
+UPSTREAM_ENV = "CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM"
+DEFAULT_UPSTREAM = "https://api.anthropic.com"
+
+
+def upstream_from_env(env=None) -> str:
+    """The relay upstream: Anthropic, or the operator's explicit gateway opt-in.
+
+    ``CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM`` is the one supported way to
+    route the relay through an organizational gateway (access control,
+    attribution, policy) that preserves the native subscription OAuth
+    bearer. It is deliberately a plugin-specific name: an inherited generic
+    ``ANTHROPIC_BASE_URL`` stays refused by the provider guard, so an
+    accidental value can never redirect native credentials. The returned
+    value is validated by ``Admission`` (HTTPS, or loopback HTTP for
+    fixtures; no userinfo, query or fragment)."""
+    value = (env if env is not None else os.environ).get(UPSTREAM_ENV, "")
+    return value.strip() or DEFAULT_UPSTREAM
+
+
 class Admission:
     def __init__(self, upstream, timeout, queried=None):
         self.upstream = urlsplit(upstream)

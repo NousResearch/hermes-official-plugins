@@ -703,8 +703,10 @@ function ensureGlowStyle() {
   el.id = "ap-glow-style";
   const rules = [];
   for (const key in GLOW_RULES) {
+    // Scope EVERY selector: a bare "html[data-apglow='k'] a, b { }" would
+    // leave "b" matching unconditionally, glowing the whole app at rest.
     rules.push(
-      "html[data-apglow='" + key + "'] " + GLOW_RULES[key].join(", ") +
+      GLOW_RULES[key].map((sel) => "html[data-apglow='" + key + "'] " + sel).join(", ") +
       " { outline: 2px solid var(--dt-ring, #8ab4ff) !important; outline-offset: -2px !important;" +
       " box-shadow: 0 0 14px 2px var(--dt-ring, #8ab4ff) !important; }"
     );
@@ -1608,4 +1610,4 @@ export {
 // touched 1793213868
 
 // Test harness exports (unused by the loader, which imports only the default).
-export { AccentPicker, GlassPanel, SlotEditor };
+export { AccentPicker, GlassPanel, SlotEditor, setGlow, ensureGlowStyle };

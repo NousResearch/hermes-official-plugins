@@ -6,6 +6,7 @@
 
 - Mythos 5.1 (`claude-mythos-5-1[1m]`, 1M) for organizations Anthropic has verified. It is listed only when the account's own picker offers it, never from the pinned catalog, so accounts without access do not see it. Reasoning-off requests ask for the lowest effort instead of a disable Mythos rejects.
 - Per-profile `claude_config_dir` setting selects the Claude login for every native spawn in a multiplexed gateway (#34).
+- Optional `skills_nudge` setting: a one-line reminder to load a matching skill rides the final user frame, because Claude stops acting on the system prompt's skills rule deep into a session and after compaction. Off by default; only the uncached tail grows (#41).
 
 ### Changed
 

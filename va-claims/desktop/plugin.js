@@ -202,8 +202,9 @@ function OverviewTab({ icn, summary, reload }) {
       jsx(DeadlineForm, { onDone: reload }),
     ] }),
     (s.intents || []).length ? jsxs('div', { className: 'flex flex-col gap-1', children: [
-      jsx('div', { className: 'text-xs font-medium uppercase text-(--ui-text-tertiary)', children: 'Intents to file' }),
-      ...s.intents.map((it, i) => jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children: `${it.filed_on}: ${(it.conditions || []).join(', ')} (expires ${it.expires_on})` }, String(i))),
+      jsx('div', { className: 'text-xs font-medium uppercase text-(--ui-text-tertiary)', children: 'Local intent-to-file plans (not submitted to VA)' }),
+      jsx('div', { className: 'text-xs text-(--ui-text-secondary)', children: s.intent_notice || 'Local records only. Confirm VA receipt and the applicable deadline separately.' }),
+      ...s.intents.map((it, i) => jsx('div', { className: 'text-xs text-(--ui-text-tertiary)', children: `Recorded locally ${it.recorded_on || 'date unknown'}: ${(it.conditions || []).join(', ')}${it.legacy_record ? ' (legacy record; filing date not verified)' : ''}` }, String(i))),
     ] }) : null,
   ] })
 }

@@ -4,6 +4,7 @@ dashboard API read one source. Citations verified against eCFR/govinfo 2026-11."
 GUIDE = {
     "file": """Filing a VA disability claim (VA Form 21-526EZ)
 The legal basis: 38 CFR 3.151 requires a specific claim on the form prescribed by the Secretary before any benefit is paid. 38 CFR 3.155 says how to file.
+Plugin limitation: va_intent_to_file saves only a local planning note. It never submits to VA or starts a filing period. Confirm VA receipt and the applicable deadline separately.
 1. Intent to file (38 CFR 3.155(b)). If you need time for evidence, submit an intent to file first. It must identify the general benefit (compensation) and identify you, but it does NOT need to name conditions. Valid routes: a saved electronic application on va.gov, a signed written intent on the prescribed form, or an oral intent recorded by a VA employee. A complete claim filed within 1 year of the intent is treated as filed on the intent date.
 2. File the claim: va.gov (Login.gov, ID.me, or DS Logon), by mail to the Claims Intake Center, PO Box 4444, Janesville, WI 53547-4444, or through an accredited representative.
 3. List each condition. VA calls these contentions. Match official names with va_disability_lookup.

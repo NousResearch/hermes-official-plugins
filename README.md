@@ -232,7 +232,7 @@ Catalog entries come in two tiers:
 <a href="va-claims/"><img src="assets/va-claims.jpg" alt="VA Benefits plugin"></a>
 <h3><a href="va-claims/">VA Benefits</a></h3>
 <code>hermes plugins install va-claims</code>
-<p>File and track VA disability claims (21-526EZ) the way 38 CFR actually works, plus every other VA benefit in one tracker: Post-9/11 GI Bill, VA health enrollment, CHAMPVA, SGLI/VGLI, pension, VR&amp;E. Live claim status via the VA Lighthouse Benefits Claims API, intent-to-file with the 12-month effective-date clock, deadline countdowns, and a desktop VA Benefits page. Only the veteran's ICN leaves the machine, and only to api.va.gov. Also ships a standalone MCP server for non-Hermes clients.</p>
+<p>Filing guidance and tracking for VA disability claims (21-526EZ) the way 38 CFR actually works, plus every other VA benefit in one tracker: Post-9/11 GI Bill, VA health enrollment, CHAMPVA, SGLI/VGLI, pension, VR&amp;E. Live claim status via the VA Lighthouse Benefits Claims API, local intent-to-file planning notes (not submitted to VA), deadline countdowns, and a desktop VA Benefits page. Only the veteran's ICN leaves the machine, and only to api.va.gov. Also ships a standalone MCP server for non-Hermes clients.</p>
 <p><code>va_claim_status</code> · <code>va_claim_track</code> · <code>va_intent_to_file</code> · <code>va_benefit_track</code> · <code>va_claim_guide</code></p>
 </td>
 <td width="50%" valign="top">

@@ -261,24 +261,22 @@ def va_intent_to_file(ctx, args: dict[str, Any]) -> str:
     icn = args.get("icn") or _env_or_cfg(ctx, "default_icn", "VA_CLAIMS_ICN") or "default"
     conditions = args.get("conditions") or []
     entry = {
-        "filed_on": datetime.now(timezone.utc).date().isoformat(),
+        "recorded_on": datetime.now(timezone.utc).date().isoformat(),
+        "status": "local_plan_only",
+        "submitted_to_va": False,
         "conditions": conditions,
         "note": args.get("note") or "",
-        "expires_on": None,
     }
-    # Intent to file preserves the effective date for 12 months.
-    today = datetime.now(timezone.utc)
-    entry["expires_on"] = today.replace(year=today.year + 1).date().isoformat()
     store_data = store.load(icn)
     store_data["intent_to_file"].append(entry)
-    path = store.save(icn, store_data)
-    store_data = store.add_deadline(icn, f"Complete claim for intent filed {entry['filed_on']}", entry["expires_on"], "disability", "38 CFR 3.155(b): miss this and the effective date is lost")
     path = store.save(icn, store_data)
     return _json(
         {
             "success": True,
+            "operation": "local_record_saved",
+            "submitted_to_va": False,
             "recorded": entry,
-            "reminder": "An intent to file preserves your effective date for 12 months. The actual claim (21-526EZ) must be submitted before it expires.",
+            "reminder": store.INTENT_NOTICE,
             "history_file": path,
         }
     )

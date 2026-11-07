@@ -76,11 +76,11 @@ VA_DISABILITY_LOOKUP = {
 VA_INTENT_TO_FILE = {
     "name": "va_intent_to_file",
     "description": (
-        "Record an intent-to-file for a VA disability claim. An intent-to-file locks "
-        "the effective date for up to a year while evidence is gathered. In sandbox "
-        "mode this records locally and exercises the API shape; real submission via "
-        "the Claims API needs production credentials. Also useful as a plain local "
-        "reminder: stores the date, condition(s), and a note in the claim file."
+        "Save a LOCAL planning note about an intent to file. This tool NEVER submits "
+        "an intent or claim to VA, in sandbox or production, even with credentials. "
+        "It does not establish an effective date or start a 12-month filing period. "
+        "Submit separately through VA's official channels and confirm VA receipt "
+        "and the applicable deadline. Success means only that the local note was saved."
     ),
     "parameters": {
         "type": "object",
@@ -129,7 +129,7 @@ VA_BENEFIT_SUMMARY = {
     "description": (
         "One-screen summary of everything tracked for a veteran: all benefit programs "
         "(disability, GI Bill, health, CHAMPVA, insurance, pension, VR&E), open and "
-        "closed claims with latest status, intents to file, and upcoming deadlines "
+        "closed claims with latest status, local intent-to-file plans, and upcoming deadlines "
         "with days remaining. The starting point for 'where am I with my VA benefits'."
     ),
     "parameters": {

@@ -19,7 +19,7 @@ Seven agent tools (toolset `va_claims`):
 | Tool | Purpose |
 |---|---|
 | `va_claim_guide` | Filing playbook: intent-to-file rules, the service-connection triangle, the "at least as likely as not" standard, combined-ratings math, duty to assist, AMA appeal lanes, accreditation law, and a programs topic covering GI Bill, CHAMPVA, and VGLI deadlines |
-| `va_intent_to_file` | Records an intent to file and starts the 12-month effective-date clock (38 CFR 3.155(b)) with an automatic deadline |
+| `va_intent_to_file` | Saves a local planning note only; never submits to VA, establishes an effective date, or starts a filing period |
 | `va_claim_status` | Live claim status from the VA Lighthouse Benefits Claims API (sandbox or production) |
 | `va_claim_track` | Snapshots claim status over time and reports what changed: phase moves, documents-needed flags, decision letters, date shifts |
 | `va_disability_lookup` | Searches VA's official contention list so claims use names VA recognizes |
@@ -28,6 +28,19 @@ Seven agent tools (toolset `va_claims`):
 
 Desktop app page (Settings → Plugins enables it): a **VA Benefits** page with a
 benefits grid, claim phase trackers, deadline countdowns, and the full guide.
+
+## Intent-to-file tracking is local only
+
+`va_intent_to_file` does **not submit an intent or claim to VA**, with or without
+production credentials. A successful response means only that a local plan was
+saved. It records `recorded_on`, not a VA filing date, and creates no automatic
+filing deadline. Submit separately through VA's official channels and confirm
+VA receipt and the applicable deadline before relying on effective-date protection.
+
+Earlier versions labeled local dates `filed_on` and generated an expiry. These
+are not proof of VA receipt. Historical records remain on disk, but the summary
+and desktop label them as local plans and suppress their automatically generated
+filing deadlines. Other manually entered deadlines remain unchanged.
 
 ## Setup
 
@@ -66,7 +79,7 @@ tracking, and deadlines. Live VA data needs free credentials:
 Preparing, presenting, or prosecuting a VA claim for someone else for a fee
 requires VA Office of General Counsel accreditation (38 USC 5902, 38 CFR Part
 14). This plugin gives information and tracking, which needs no accreditation.
-It never files a claim on anyone's behalf by itself.
+It never submits a claim or intent to file to VA, including with production credentials.
 
 ## Development
 

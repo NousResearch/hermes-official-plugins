@@ -71,4 +71,4 @@ def deadline(payload: dict):
         raise HTTPException(status_code=422, detail="label and due are required")
     data = store.add_deadline(payload.get("icn"), payload["label"], payload["due"], payload.get("program", "disability"), payload.get("note", ""))
     store.save(payload.get("icn"), data)
-    return {"ok": True, "deadlines": data["deadlines"]}
+    return {"ok": True, "deadlines": store.intent_tracking_view(data)[1]}

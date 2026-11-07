@@ -13,6 +13,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+INTENT_NOTICE = (
+    "Local planning record only: NOT submitted to VA. Saving this record does not "
+    "establish an effective date or start a 12-month filing period. Submit separately "
+    "through VA's official channels and confirm VA receipt and the applicable deadline."
+)
+
 PROGRAMS = ("disability", "education", "health", "champva", "life_insurance", "pension", "voc_rehab")
 
 
@@ -61,6 +67,40 @@ def save(icn: str | None, data: dict[str, Any]) -> str:
     return str(p)
 
 
+def intent_tracking_view(data: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Project local plans safely without rewriting historical records on disk.
+
+    Older versions manufactured filed_on/expires_on and a matching deadline.
+    Those dates are not VA receipt evidence; keep the raw history but do not
+    present its generated deadline as a confirmed filing period.
+    """
+    intents = []
+    legacy_deadlines = set()
+    for entry in data.get("intent_to_file", []):
+        if "filed_on" in entry:
+            legacy_deadlines.add((
+                f"Complete claim for intent filed {entry['filed_on']}",
+                entry.get("expires_on"),
+            ))
+        intents.append({
+            "recorded_on": entry.get("recorded_on") or entry.get("filed_on"),
+            "conditions": entry.get("conditions", []),
+            "note": entry.get("note", ""),
+            "status": "local_plan_only",
+            "submitted_to_va": False,
+            "legacy_record": "filed_on" in entry,
+        })
+    deadlines = [
+        d for d in data.get("deadlines", [])
+        if not (
+            (d.get("label"), d.get("due")) in legacy_deadlines
+            and d.get("program") == "disability"
+            and d.get("note") == "38 CFR 3.155(b): miss this and the effective date is lost"
+        )
+    ]
+    return intents, deadlines
+
+
 def list_people() -> list[dict[str, Any]]:
     out = []
     for p in sorted(_root().glob("claim-*.json")):
@@ -74,7 +114,7 @@ def list_people() -> list[dict[str, Any]]:
                 "icn": d.get("icn", p.stem),
                 "programs": sorted(benefits.keys()),
                 "open_claims": sum(1 for s in d.get("snapshots", []) if (s.get("status") or "").upper() not in ("COMPLETE", "CANCELED", "ERRORED")),
-                "deadlines": len(d.get("deadlines", [])),
+                "deadlines": len(intent_tracking_view(d)[1]),
                 "updated": max([s.get("taken_at", "") for s in d.get("snapshots", [])] or [""]),
             }
         )
@@ -103,6 +143,7 @@ def add_deadline(icn: str | None, label: str, due: str, program: str = "disabili
 
 def summary(icn: str | None) -> dict[str, Any]:
     data = load(icn)
+    intents, deadlines = intent_tracking_view(data)
     snaps = data.get("snapshots", [])
     latest: dict[str, Any] = {}
     for s in snaps:
@@ -110,7 +151,7 @@ def summary(icn: str | None) -> dict[str, Any]:
     open_claims = [s for s in latest.values() if (s.get("status") or "").upper() not in ("COMPLETE", "CANCELED", "ERRORED")]
     today = datetime.now(timezone.utc).date()
     upcoming = []
-    for d in data.get("deadlines", []):
+    for d in deadlines:
         try:
             due = datetime.strptime(str(d.get("due"))[:10], "%Y-%m-%d").date()
             d = {**d, "days_left": (due - today).days}
@@ -123,7 +164,8 @@ def summary(icn: str | None) -> dict[str, Any]:
         "benefits": data.get("benefits", {}),
         "open_claims": open_claims,
         "closed_claims": [s for s in latest.values() if s not in open_claims],
-        "intents": data.get("intent_to_file", []),
+        "intents": intents,
+        "intent_notice": INTENT_NOTICE if intents else None,
         "deadlines": upcoming,
         "file": str(claim_file(icn)),
     }

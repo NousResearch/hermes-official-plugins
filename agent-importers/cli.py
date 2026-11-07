@@ -326,14 +326,17 @@ def _print_banner() -> None:
 def _print_routine_next_steps(report: dict[str, Any], product: str) -> None:
     """Grok and OpenBot imports are one-off (not sync sources); say how to switch the routines over."""
     from hermes_cli.cli_output import print_info
+    from hermes_constants import get_hermes_home, profile_name_for_home
     jobs = [i for i in report.get("items", []) if i.get("kind") == "routine" and i.get("status") == "imported"]
     paused = [i for i in jobs if i.get("paused")]
     if paused:
         print()
         print_info(f"{len(paused)} routine(s) were created PAUSED so they don't run twice. Once you turn "
                    f"the routine off in {product}, resume its copy here:")
+        profile = profile_name_for_home(get_hermes_home())
+        profile_flag = f" -p {profile}" if profile and profile != "default" else ""
         for item in paused:
-            print_info(f"  hermes cron resume {item.get('job_id')}    # {item.get('destination')}")
+            print_info(f"  hermes{profile_flag} cron resume {item.get('job_id')}    # {item.get('destination')}")
     if jobs:
         print_info("Results land in Hermes' cron output; to have one sent to Telegram, Discord, Slack, "
                    "...: hermes cron edit <id> --deliver <platform>")

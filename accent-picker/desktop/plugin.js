@@ -895,12 +895,18 @@ function SlotEditor({ baseTheme, palette, slotKey, resolvedMode, onApply, onBack
 
 function SlotSquares({ defaultOpen, onOpen, palette, theme }) {
   const [open, setOpen] = useState(!!defaultOpen);
+  // If the popover unmounts while a square is hovered (or the row is replaced
+  // under a still pointer), the browser never fires pointerleave and the glow
+  // would stay on forever — always drop it when this section goes away, and
+  // also when the pointer exits the grid between rows.
+  useEffect(() => () => setGlow(null), []);
   return jsxs("div", { className: "flex flex-col gap-1", children: [
     jsx(
       "button",
       {
         className: "mt-1 flex items-center justify-between rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[10px] hover:bg-(--chrome-action-hover)",
         onClick: () => setOpen(!open),
+        onPointerEnter: () => setGlow(null),
         title: "Surface squares: hover locates what a slot paints, click edits it \u2014 also theme JSON sharing",
         type: "button",
         children: [
@@ -910,7 +916,7 @@ function SlotSquares({ defaultOpen, onOpen, palette, theme }) {
       }
     ),
     open && jsxs("div", { className: "flex flex-col gap-1", children: [
-      jsx("div", { className: "grid max-h-[150px] grid-cols-2 gap-1 overflow-y-auto pr-0.5", children: SLOTS.filter((s) => typeof palette[s[0]] === "string").map((s) => jsx(
+      jsx("div", { className: "grid max-h-[150px] grid-cols-2 gap-1 overflow-y-auto pr-0.5", onPointerLeave: () => setGlow(null), children: SLOTS.filter((s) => typeof palette[s[0]] === "string").map((s) => jsx(
         "div",
         {
           className: "group flex min-w-0 cursor-pointer items-center gap-1 rounded-sm border border-(--dt-border) px-1 py-0.5 hover:bg-(--chrome-action-hover)",

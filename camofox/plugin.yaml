@@ -37,3 +37,7 @@ optional_env:
     description: "Bearer token for a Camofox server started with CAMOFOX_API_KEY"
     prompt: "Camofox API key"
     password: true
+  - name: CAMOFOX_ALLOWED_PLAIN_HTTP_HOSTS
+    description: "Comma-separated hosts allowed to receive a vault secret over plain HTTP (a self-hosted Camofox in its own container). Hostnames only; userinfo, query and fragment are refused on every host."
+    prompt: "Camofox plain-HTTP hosts allowed to receive vault secrets"
+    password: false

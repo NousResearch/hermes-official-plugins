@@ -13,6 +13,8 @@ class _FakeClient:
 
     def request(self, method, path, *, params=None, json_body=None, **kw):
         self.calls.append((method, path, params, json_body))
+        if path == "/me/player/devices":
+            return {"devices": [{"id": "dev", "is_active": True}]}
         if path.startswith("/tracks/"):
             return {"uri": "spotify:track:relinked", "album": {"uri": "spotify:album:alb"}}
         return {"success": True, "status_code": 204, "empty": True}
@@ -38,5 +40,9 @@ def test_uris_start_first_track_in_its_album_and_queue_the_rest(monkeypatch):
 
 def test_context_uri_requests_pass_through_unchanged(monkeypatch):
     client, _ = _play(monkeypatch, context_uri="spotify:album:xyz", offset={"position": 2})
-    assert client.calls == [("PUT", "/me/player/play", {"device_id": None},
-                             {"context_uri": "spotify:album:xyz", "uris": None, "offset": {"position": 2}, "position_ms": None})]
+    # The device lookup comes first: without a device_id the guard asks for one.
+    assert client.calls == [
+        ("GET", "/me/player/devices", None, None),
+        ("PUT", "/me/player/play", {"device_id": None},
+         {"context_uri": "spotify:album:xyz", "uris": None, "offset": {"position": 2}, "position_ms": None}),
+    ]

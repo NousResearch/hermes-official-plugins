@@ -14,6 +14,7 @@ from tools.registry import tool_error, tool_result
 from .spotify_auth import auth_status
 from .spotify_client import (
     SpotifyClient, SpotifyError, normalize_spotify_id, normalize_spotify_uri, normalize_spotify_uris)
+from .spotify_device import resolve_default_device
 
 _Handler = Callable[[SpotifyClient, dict, str], str]
 
@@ -80,12 +81,14 @@ def _limit(args: dict, default: int = 20) -> int:
 _ok = lambda action, result, **extra: tool_result({"success": True, "action": action, **extra, "result": result})
 
 
-def _dispatcher(tool_name: str, default: str, table: dict[str, _Handler], prepare: Optional[Callable[[dict], dict]] = None):
+def _dispatcher(tool_name: str, default: str, table: dict[str, _Handler], prepare: Optional[Callable[[dict], dict]] = None,
+                prepare_with_client: Optional[Callable[[SpotifyClient, dict], dict]] = None):
     """Build a tool handler that routes ``args['action']`` through *table*.
 
     The client is constructed outside the error boundary (auth failures propagate
     as exceptions, as they always have). *prepare* runs inside the boundary before
     the action lookup, so its validation errors surface even for unknown actions.
+    *prepare_with_client* is the same, for a step that has to call the API.
     """
     def handle(args: dict, **kw) -> str:
         action = str(args.get("action") or default).strip().lower()
@@ -93,6 +96,8 @@ def _dispatcher(tool_name: str, default: str, table: dict[str, _Handler], prepar
         try:
             if prepare is not None:
                 args = prepare(args)
+            if prepare_with_client is not None:
+                args = prepare_with_client(client, args)
             handler = table.get(action)
             if handler is None:
                 return tool_error(f"Unknown {tool_name} action: {action}")
@@ -101,6 +106,29 @@ def _dispatcher(tool_name: str, default: str, table: dict[str, _Handler], prepar
             return _spotify_tool_error(exc)
     handle.__name__ = handle.__qualname__ = f"_handle_{tool_name}"
     return handle
+
+
+# Playback and queue actions that target a device, and so honour the configured default.
+_DEVICE_ACTIONS = {
+    "spotify_playback": {"play", "pause", "next", "previous", "seek", "set_repeat", "set_shuffle", "set_volume"},
+    "spotify_queue": {"add"},
+}
+
+
+def _prepare_default_device(tool_name: str) -> Callable[[SpotifyClient, dict], dict]:
+    """Resolve the configured default device for the actions that target one.
+
+    Read-only actions keep their current behaviour: they do not name a device,
+    so there is nothing to resolve and no device list to fetch.
+    """
+    targeted = _DEVICE_ACTIONS[tool_name]
+
+    def prepare(client: SpotifyClient, args: dict) -> dict:
+        action = str(args.get("action") or "").strip().lower()
+        if action not in targeted:
+            return args
+        return resolve_default_device(client, args)
+    return prepare
 
 
 # -- spotify_playback ---------------------------------------------------------
@@ -196,7 +224,7 @@ _handle_spotify_playback = _dispatcher("spotify_playback", "get_state", {
     "set_shuffle": lambda c, a, act: _pb_cmd(c, a, act, "PUT", "/me/player/shuffle", state=str(_coerce_bool(a.get("state"))).lower()),
     "set_volume": _pb_required_param("/me/player/volume", "volume_percent", lambda v: max(0, min(100, int(v)))),
     "recently_played": _pb_recently_played,
-})
+}, prepare_with_client=_prepare_default_device("spotify_playback"))
 
 
 # -- spotify_devices / spotify_queue / spotify_search ---------------------------
@@ -215,7 +243,8 @@ def _queue_add(client: SpotifyClient, args: dict, action: str) -> str:
 
 
 _handle_spotify_queue = _dispatcher("spotify_queue", "get", {
-    "get": lambda c, a, act: tool_result(c.request("GET", "/me/player/queue")), "add": _queue_add})
+    "get": lambda c, a, act: tool_result(c.request("GET", "/me/player/queue")), "add": _queue_add},
+    prepare_with_client=_prepare_default_device("spotify_queue"))
 
 _SEARCH_TYPES = {"album", "artist", "playlist", "track", "show", "episode", "audiobook"}
 

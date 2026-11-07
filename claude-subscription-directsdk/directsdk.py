@@ -30,14 +30,14 @@ try:
     from .admission import Admission
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from .directsdk_setup import (
-        INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy,
-        drop_api_credentials)
+        INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
+        apply_traffic_policy, drop_api_credentials)
 except ImportError:
     from admission import Admission
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from directsdk_setup import (
-        INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy,
-        drop_api_credentials)
+        INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
+        apply_traffic_policy, drop_api_credentials)
 
 
 # Hermes picks retry vs fallback from an error's status_code (main loop and auxiliary ladder alike).
@@ -812,6 +812,9 @@ class Client:
                 if resolved is None:
                     raise ClaudeCodeMissing(INSTALL_HINT)
                 apply_config_dir(env)
+                if self.env is None:
+                    # The serving profile's own token, or none when its claude_config_dir picks the login.
+                    apply_profile_credential(env)
                 # An inherited effort level would override the --effort Hermes passes below.
                 for key in ('CLAUDE_CODE_EXTRA_BODY', 'CLAUDE_CODE_EFFORT_LEVEL'):
                     env.pop(key, None)

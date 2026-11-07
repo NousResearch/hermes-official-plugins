@@ -974,6 +974,54 @@ var GLASS_MATERIALS = ["under-window", "popover", "titlebar", "header"];
 var GLASS_SCOPES = ["sidebar", "window"];
 var GLASS_DEFAULTS = { fade: 0, intensity: 29, material: "under-window", scope: "sidebar" };
 
+// ── glass-aware body painter ─────────────────────────────────────────────────
+// Under glass the app makes <body> the one field painter: the sidebar-scope
+// gradient mixes --ui-bg-chrome on BOTH columns and the field tokens go
+// transparent, so the theme's sidebar slot never paints and the two-tone look
+// (lighter rail over darker content) collapses into one color. Mirror the
+// app's own gradient but mix the SIDEBAR slot into the glass column; var()
+// references for the keep/rail edge keep it live with the sliders. Stock
+// behavior is restored by removing the inline style whenever glass goes off.
+function paintGlassBody() {
+  try {
+    if (typeof document === "undefined" || !document.body) return;
+    var root = document.documentElement;
+    var body = document.body;
+    var glass = root.hasAttribute("data-hermes-glass");
+    var scope = root.getAttribute("data-hermes-glass-scope");
+    var sidebar = "";
+    if (glass && scope === "sidebar" && typeof getComputedStyle === "function") {
+      // The app resolves the active theme's sidebar slot into this var, so the
+      // paint follows the theme wherever it comes from.
+      sidebar = getComputedStyle(root).getPropertyValue("--ui-bg-sidebar").trim();
+    }
+    if (!glass || scope !== "sidebar" || !sidebar) {
+      body.style.removeProperty("background");
+      return;
+    }
+    body.style.setProperty(
+      "background",
+      "linear-gradient(to right," +
+        " color-mix(in srgb, " + sidebar + " var(--translucency-glass-keep, 100%), transparent) var(--glass-rail-edge, 0px)," +
+        " var(--ui-bg-chrome) var(--glass-rail-edge, 0px))"
+    );
+  } catch {}
+}
+var glassPaintObserver = null;
+function startGlassPainter() {
+  if (glassPaintObserver || typeof MutationObserver === "undefined" || typeof document === "undefined") return;
+  paintGlassBody();
+  glassPaintObserver = new MutationObserver(paintGlassBody);
+  glassPaintObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-hermes-glass", "data-hermes-glass-scope", "data-hermes-mode"]
+  });
+  // The glass attributes are set by the store at boot on an unpredictable
+  // side of the picker's first render (and of register): re-check a few times
+  // before settling on the observer + theme-effect hooks.
+  [1000, 3000, 8000].forEach((delay) => setTimeout(paintGlassBody, delay));
+}
+
 function readTranslucencyBook() {
   try {
     const parsed = JSON.parse(localStorage.getItem(TRANSLUCENCY_KEY) || "{}");
@@ -1217,6 +1265,7 @@ function AccentPicker() {
   useEffect(() => {
     liveRef.current = { theme, resolvedMode };
     if (!isOurs(theme.name)) captureDefaults(theme, resolvedMode);
+    paintGlassBody();
   }, [theme, resolvedMode]);
   const saveAccent = () => {
     const hex = oklchToHex(lch);
@@ -1469,6 +1518,7 @@ if (typeof window !== "undefined") {
     },
     setLive: (theme, resolvedMode) => {
       liveRef.current = { theme, resolvedMode };
+      paintGlassBody();
     }
   };
 }
@@ -1481,6 +1531,7 @@ var plugin = {
   register(ctx) {
     ctxRef.current = ctx;
     ctx.onDispose(() => setAccentOverride(null));
+    startGlassPainter();
     // A live tick may have survived in the selection store if the app was
     // killed mid-drag; the variant name isn't in the durable record, so the
     // next boot would silently fall back. Re-register the durable record and
@@ -1610,4 +1661,4 @@ export {
 // touched 1793213868
 
 // Test harness exports (unused by the loader, which imports only the default).
-export { AccentPicker, GlassPanel, SlotEditor, setGlow, ensureGlowStyle };
+export { AccentPicker, GlassPanel, SlotEditor, setGlow, ensureGlowStyle, paintGlassBody };

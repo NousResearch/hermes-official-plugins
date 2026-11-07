@@ -893,48 +893,90 @@ function SlotEditor({ baseTheme, palette, slotKey, resolvedMode, onApply, onBack
 // One square per slot. Hover previews the region it paints (glow), click opens
 // the editor, the badge buttons copy/paste that slot's hex directly.
 
-function SlotSquares({ onOpen, palette }) {
+function SlotSquares({ defaultOpen, onOpen, palette, theme }) {
+  const [open, setOpen] = useState(!!defaultOpen);
   return jsxs("div", { className: "flex flex-col gap-1", children: [
-    jsxs("div", { className: "mt-1 flex items-baseline justify-between", children: [
-      jsx("span", { className: "text-[9px] font-medium uppercase tracking-wide text-(--ui-text-tertiary)", children: "Surfaces" }),
-      jsx("span", { className: "font-mono text-[8px] text-(--ui-text-quaternary)", children: "hover = locate \xB7 click = edit" })
-    ] }),
-    jsx("div", { className: "grid grid-cols-2 gap-1", children: SLOTS.filter((s) => typeof palette[s[0]] === "string").map((s) => jsx(
-      "div",
+    jsx(
+      "button",
       {
-        className: "group flex min-w-0 cursor-pointer items-center gap-1 rounded-sm border border-(--dt-border) px-1 py-0.5 hover:bg-(--chrome-action-hover)",
-        onClick: () => onOpen(s[0]),
-        onContextMenu: (e) => {
-          e.preventDefault();
-          copyText(palette[s[0]]);
-          notify(`${s[1]} hex copied.`);
-        },
-        onPointerEnter: () => setGlow(s[0]),
-        onPointerLeave: () => setGlow(null),
-        role: "button",
-        title: `${s[1]} \xB7 ${palette[s[0]]} \xB7 click to edit \xB7 right-click to copy`,
+        className: "mt-1 flex items-center justify-between rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[10px] hover:bg-(--chrome-action-hover)",
+        onClick: () => setOpen(!open),
+        title: "Surface squares: hover locates what a slot paints, click edits it \u2014 also theme JSON sharing",
+        type: "button",
         children: [
-          jsx("span", { className: "size-4 shrink-0 rounded-sm border border-(--dt-border)", style: { background: palette[s[0]] } }),
-          jsx("span", { className: "min-w-0 flex-1 truncate text-[10px] leading-tight", children: s[1] }),
-          jsx("span", { className: "font-mono text-[8px] text-(--ui-text-tertiary)", children: palette[s[0]] }),
-          jsx(
-            "button",
-            {
-              className: "shrink-0 rounded-sm border border-(--dt-border) px-1 text-[8px] opacity-0 group-hover:opacity-100",
-              onClick: (e) => {
-                e.stopPropagation();
-                copyText(palette[s[0]]);
-                notify(`${s[1]} hex copied.`);
-              },
-              title: `Copy ${palette[s[0]]}`,
-              type: "button",
-              children: "copy"
-            }
-          )
+          jsx("span", { className: "min-w-0 flex-1 text-left font-medium uppercase tracking-wide text-(--ui-text-tertiary)", children: "Surfaces" }),
+          jsx("span", { className: "font-mono text-[8px] text-(--ui-text-quaternary)", children: open ? "close \u25BE" : "open \u25B8" })
         ]
-      },
-      s[0]
-    )) })
+      }
+    ),
+    open && jsxs("div", { className: "flex flex-col gap-1", children: [
+      jsx("div", { className: "grid max-h-[150px] grid-cols-2 gap-1 overflow-y-auto pr-0.5", children: SLOTS.filter((s) => typeof palette[s[0]] === "string").map((s) => jsx(
+        "div",
+        {
+          className: "group flex min-w-0 cursor-pointer items-center gap-1 rounded-sm border border-(--dt-border) px-1 py-0.5 hover:bg-(--chrome-action-hover)",
+          onClick: () => onOpen(s[0]),
+          onContextMenu: (e) => {
+            e.preventDefault();
+            copyText(palette[s[0]]);
+            notify(`${s[1]} hex copied.`);
+          },
+          onPointerEnter: () => setGlow(s[0]),
+          onPointerLeave: () => setGlow(null),
+          role: "button",
+          title: `${s[1]} \xB7 ${palette[s[0]]} \xB7 click to edit \xB7 right-click to copy`,
+          children: [
+            jsx("span", { className: "size-4 shrink-0 rounded-sm border border-(--dt-border)", style: { background: palette[s[0]] } }),
+            jsx("span", { className: "min-w-0 flex-1 truncate text-[10px] leading-tight", children: s[1] }),
+            jsx("span", { className: "font-mono text-[8px] text-(--ui-text-tertiary)", children: palette[s[0]] }),
+            jsx(
+              "button",
+              {
+                className: "shrink-0 rounded-sm border border-(--dt-border) px-1 text-[8px] opacity-0 group-hover:opacity-100",
+                onClick: (e) => {
+                  e.stopPropagation();
+                  copyText(palette[s[0]]);
+                  notify(`${s[1]} hex copied.`);
+                },
+                title: `Copy ${palette[s[0]]}`,
+                type: "button",
+                children: "copy"
+              }
+            )
+          ]
+        },
+        s[0]
+      )) }),
+      jsxs("div", { className: "flex gap-1.5", children: [
+        jsx(
+          "button",
+          {
+            className: "flex-1 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px] hover:bg-(--chrome-action-hover)",
+            onClick: () => {
+              if (copyText(JSON.stringify(theme))) {
+                notify("Theme JSON copied \u2014 paste it on any machine to share.");
+              } else {
+                notify("Could not reach the clipboard.");
+              }
+            },
+            title: "Copy this theme's full JSON \u2014 share it, then import it anywhere",
+            type: "button",
+            children: "Copy theme JSON"
+          }
+        ),
+        jsx(
+          "button",
+          {
+            className: "flex-1 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px] hover:bg-(--chrome-action-hover)",
+            onClick: () => {
+              void importThemeFromClipboard();
+            },
+            title: "Import a theme from theme JSON on the clipboard",
+            type: "button",
+            children: "Paste theme JSON"
+          }
+        )
+      ] })
+    ] })
   ] });
 }
 
@@ -1373,7 +1415,7 @@ function AccentPicker() {
         )
       ] }),
       jsx(ValueGrid, { hex: text && /^#?[0-9a-f]{6}$/i.test(text) ? text : oklchToHex(lch) }),
-      jsx(SlotSquares, { onOpen: openSlot, palette }),
+      jsx(SlotSquares, { onOpen: openSlot, palette, theme }),
       jsx(PopularAccents, { onPick: seedAccent }),
       /* @__PURE__ */ jsx(
         "button",
@@ -1384,36 +1426,6 @@ function AccentPicker() {
           children: saved ? "Re-save theme with this accent" : "Save as theme (persists across restarts)"
         }
       ),
-      jsxs("div", { className: "flex gap-1.5", children: [
-        jsx(
-          "button",
-          {
-            className: "flex-1 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px] hover:bg-(--chrome-action-hover)",
-            onClick: () => {
-              if (copyText(JSON.stringify(theme))) {
-                notify("Theme JSON copied \u2014 paste it on any machine to share.");
-              } else {
-                notify("Could not reach the clipboard.");
-              }
-            },
-            title: "Copy this theme's full JSON \u2014 share it, then import it anywhere",
-            type: "button",
-            children: "Copy theme JSON"
-          }
-        ),
-        jsx(
-          "button",
-          {
-            className: "flex-1 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px] hover:bg-(--chrome-action-hover)",
-            onClick: () => {
-              void importThemeFromClipboard();
-            },
-            title: "Import a theme from theme JSON on the clipboard",
-            type: "button",
-            children: "Paste theme JSON"
-          }
-        )
-      ] }),
       /* @__PURE__ */ jsxs("div", { className: "flex items-center justify-between font-mono text-[10px] tabular-nums text-(--ui-text-tertiary)", children: [
         /* @__PURE__ */ jsxs("span", { children: [
           "H",

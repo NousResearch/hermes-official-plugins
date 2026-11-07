@@ -296,37 +296,51 @@ def build_daily_logs(db, *, limit_days: int = 60) -> list[dict]:
     days: dict[str, dict] = {}
 
     for session, messages in sessions:
-        day_key = _date_key(float(session.get("started_at") or _first_timestamp(session, messages)))
-        started = float(session.get("started_at") or _first_timestamp(session, messages))
-        last_active = _last_timestamp(session, messages)
-        day = days.setdefault(
-            day_key,
-            {
-                "date": day_key,
-                "started_at_min": started,
-                "last_active_max": last_active,
-                "session_count": 0,
-                "message_count": 0,
-                "subjects": [],
-                "sessions": [],
-                "work_items": [],
-                "_subjects": {},
-            },
-        )
-        day["started_at_min"] = min(day["started_at_min"], started)
-        day["last_active_max"] = max(day["last_active_max"], last_active)
-        day["session_count"] += 1
-        day["message_count"] += len(messages)
-        day["sessions"].append(_session_info(session))
+        session_started = float(session.get("started_at") or _first_timestamp(session, messages))
+        messages_by_day: dict[str, list[dict]] = {}
+        for message in messages:
+            timestamp = message.get("timestamp")
+            day_key = _date_key(float(timestamp) if timestamp is not None else session_started)
+            messages_by_day.setdefault(day_key, []).append(message)
+        if not messages_by_day:
+            messages_by_day[_date_key(session_started)] = []
 
-        for candidate in extract_subject_candidates(session, messages):
-            entry = day["_subjects"].setdefault(
-                candidate.slug,
-                {"slug": candidate.slug, "name": candidate.name, "count": 0},
+        for day_key, day_messages in messages_by_day.items():
+            timestamps = [
+                float(message["timestamp"])
+                for message in day_messages
+                if message.get("timestamp") is not None
+            ]
+            started = min(timestamps) if timestamps else session_started
+            last_active = max(timestamps) if timestamps else _last_timestamp(session, day_messages)
+            day = days.setdefault(
+                day_key,
+                {
+                    "date": day_key,
+                    "started_at_min": started,
+                    "last_active_max": last_active,
+                    "session_count": 0,
+                    "message_count": 0,
+                    "subjects": [],
+                    "sessions": [],
+                    "work_items": [],
+                    "_subjects": {},
+                },
             )
-            entry["count"] += 1
+            day["started_at_min"] = min(day["started_at_min"], started)
+            day["last_active_max"] = max(day["last_active_max"], last_active)
+            day["session_count"] += 1
+            day["message_count"] += len(day_messages)
+            day["sessions"].append(_session_info(session))
 
-        day["work_items"].extend(_work_items_for_session(session, messages))
+            for candidate in extract_subject_candidates(session, day_messages):
+                entry = day["_subjects"].setdefault(
+                    candidate.slug,
+                    {"slug": candidate.slug, "name": candidate.name, "count": 0},
+                )
+                entry["count"] += 1
+
+            day["work_items"].extend(_work_items_for_session(session, day_messages))
 
     logs = []
     for day in days.values():
@@ -403,11 +417,13 @@ def build_memory_overview(db, *, subject_limit: int = 50, day_limit: int = 30) -
 
 
 def _load_memory_sessions(db, *, limit: int) -> list[tuple[dict, list[dict]]]:
-    sessions = db.list_sessions_rich(
-        limit=limit,
-        include_children=False,
-        order_by_last_active=True,
-    )
+    kwargs = dict(limit=limit, include_children=False, order_by_last_active=True)
+    try:
+        sessions = db.list_sessions_rich(include_hidden=True, **kwargs)
+    except TypeError as exc:
+        if "include_hidden" not in str(exc) or "unexpected keyword" not in str(exc):
+            raise
+        sessions = db.list_sessions_rich(**kwargs)
     return [(session, db.get_messages(session["id"])) for session in sessions]
 
 

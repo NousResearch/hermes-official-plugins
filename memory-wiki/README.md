@@ -9,6 +9,8 @@ a browsable **session-history wiki** (subject pages and daily logs derived deter
 your local `state.db`) plus a read-only **Persistent Memory audit panel** showing the `MEMORY.md` /
 `USER.md` entries the agent actually carries into every session.
 
+Hidden sessions are included, and daily logs bucket activity by each message’s day.
+
 No LLM calls, no writes: the plugin opens `state.db` read-only through the public
 `hermes_state.SessionDB` API and only reads memory files. Editing memory stays with the `memory`
 tool (prompt-cache safe).

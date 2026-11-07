@@ -496,6 +496,34 @@ async def test_self_chat_answers_owner_never_own_replies(monkeypatch):
     assert off.resolved_allowlist_user_ids() == set()
 
 
+def test_remember_sent_survives_concurrent_writers(monkeypatch, tmp_path):
+    """Two processes (gateway + cron/hermes send) writing at once must not clobber each other's id."""
+    import threading
+    from xchat_plugin import adapter as xchat_adapter
+
+    ids = [f"uuid-{i}" for i in range(20)]
+    errors = []
+
+    def worker(mid):
+        try:
+            for _ in range(5):
+                xchat_adapter._remember_sent(mid)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(m,)) for m in ids]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors
+    loaded = set(xchat_adapter._load_sent_ids())
+    # Every writer's id must have survived (at least one record per id).
+    missing = [m for m in ids if m not in loaded]
+    assert not missing, f"lost ids: {missing}"
+
+
 @pytest.mark.asyncio
 async def test_keychange_routes_through_batch(monkeypatch):
     adapter = _make_adapter(monkeypatch)

@@ -9,9 +9,8 @@
 //     synchronously at boot, so it survives restarts and plugin reloads).
 //  3. A Colors tab: every palette slot (sidebar, card, popover, border, ...)
 //     can be recolored with the same OKLCH field, in the active mode's palette.
-//  4. Surface squares in the first menu: one square per slot; hovering one
-//     outlines (glows) every UI region that slot paints; click opens the
-//     editor; per-slot copy/paste (button or right-click to copy).
+//  4. Hover-locate glow: editing the accent outlines what it paints, and the
+//     Colors tab's slot rows glow the region they recolor on hover.
 //  5. Share: copy the whole theme record as JSON, import one from the
 //     clipboard (menu buttons + command-palette entries).
 //  6. A Glass tab: window transparency controls — glass/clear mode, intensity,
@@ -889,103 +888,6 @@ function SlotEditor({ baseTheme, palette, slotKey, resolvedMode, onApply, onBack
   ] });
 }
 
-// ── surface squares: the whole palette at a glance, in the first menu ────────
-// One square per slot. Hover previews the region it paints (glow), click opens
-// the editor, the badge buttons copy/paste that slot's hex directly.
-
-function SlotSquares({ defaultOpen, onOpen, palette, theme }) {
-  const [open, setOpen] = useState(!!defaultOpen);
-  // If the popover unmounts while a square is hovered (or the row is replaced
-  // under a still pointer), the browser never fires pointerleave and the glow
-  // would stay on forever — always drop it when this section goes away, and
-  // also when the pointer exits the grid between rows.
-  useEffect(() => () => setGlow(null), []);
-  return jsxs("div", { className: "flex flex-col gap-1", children: [
-    jsx(
-      "button",
-      {
-        className: "mt-1 flex items-center justify-between rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[10px] hover:bg-(--chrome-action-hover)",
-        onClick: () => setOpen(!open),
-        onPointerEnter: () => setGlow(null),
-        title: "Surface squares: hover locates what a slot paints, click edits it \u2014 also theme JSON sharing",
-        type: "button",
-        children: [
-          jsx("span", { className: "min-w-0 flex-1 text-left font-medium uppercase tracking-wide text-(--ui-text-tertiary)", children: "Surfaces" }),
-          jsx("span", { className: "font-mono text-[8px] text-(--ui-text-quaternary)", children: open ? "close \u25BE" : "open \u25B8" })
-        ]
-      }
-    ),
-    open && jsxs("div", { className: "flex flex-col gap-1", children: [
-      jsx("div", { className: "grid max-h-[150px] grid-cols-2 gap-1 overflow-y-auto pr-0.5", onPointerLeave: () => setGlow(null), children: SLOTS.filter((s) => typeof palette[s[0]] === "string").map((s) => jsx(
-        "div",
-        {
-          className: "group flex min-w-0 cursor-pointer items-center gap-1 rounded-sm border border-(--dt-border) px-1 py-0.5 hover:bg-(--chrome-action-hover)",
-          onClick: () => onOpen(s[0]),
-          onContextMenu: (e) => {
-            e.preventDefault();
-            copyText(palette[s[0]]);
-            notify(`${s[1]} hex copied.`);
-          },
-          onPointerEnter: () => setGlow(s[0]),
-          onPointerLeave: () => setGlow(null),
-          role: "button",
-          title: `${s[1]} \xB7 ${palette[s[0]]} \xB7 click to edit \xB7 right-click to copy`,
-          children: [
-            jsx("span", { className: "size-4 shrink-0 rounded-sm border border-(--dt-border)", style: { background: palette[s[0]] } }),
-            jsx("span", { className: "min-w-0 flex-1 truncate text-[10px] leading-tight", children: s[1] }),
-            jsx("span", { className: "font-mono text-[8px] text-(--ui-text-tertiary)", children: palette[s[0]] }),
-            jsx(
-              "button",
-              {
-                className: "shrink-0 rounded-sm border border-(--dt-border) px-1 text-[8px] opacity-0 group-hover:opacity-100",
-                onClick: (e) => {
-                  e.stopPropagation();
-                  copyText(palette[s[0]]);
-                  notify(`${s[1]} hex copied.`);
-                },
-                title: `Copy ${palette[s[0]]}`,
-                type: "button",
-                children: "copy"
-              }
-            )
-          ]
-        },
-        s[0]
-      )) }),
-      jsxs("div", { className: "flex gap-1.5", children: [
-        jsx(
-          "button",
-          {
-            className: "flex-1 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px] hover:bg-(--chrome-action-hover)",
-            onClick: () => {
-              if (copyText(JSON.stringify(theme))) {
-                notify("Theme JSON copied \u2014 paste it on any machine to share.");
-              } else {
-                notify("Could not reach the clipboard.");
-              }
-            },
-            title: "Copy this theme's full JSON \u2014 share it, then import it anywhere",
-            type: "button",
-            children: "Copy theme JSON"
-          }
-        ),
-        jsx(
-          "button",
-          {
-            className: "flex-1 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px] hover:bg-(--chrome-action-hover)",
-            onClick: () => {
-              void importThemeFromClipboard();
-            },
-            title: "Import a theme from theme JSON on the clipboard",
-            type: "button",
-            children: "Paste theme JSON"
-          }
-        )
-      ] })
-    ] })
-  ] });
-}
-
 // ── curated accent strip + UI presets ───────────────────────────────────────
 
 function PopularAccents({ onPick }) {
@@ -1285,6 +1187,9 @@ function AccentPicker() {
   useEffect(() => () => {
     accentLive.current.cancel();
   }, []);
+  // A hover left on an accent control or a Colors row when the popover closes
+  // (or the tab switches) never sees its pointerleave — drop the glow here.
+  useEffect(() => () => setGlow(null), []);
   const commit = (next, final) => {
     dragging.current = true;
     setLch(next);
@@ -1393,8 +1298,8 @@ function AccentPicker() {
       )
     ] }),
     tab === "accent" ? /* @__PURE__ */ jsxs(Fragment, { children: [
-      /* @__PURE__ */ jsx(ChromaLightnessField, { hue: lch.h, lch, onEnd: () => accentLive.current.flush(lastHex.current), onPick: (l, c) => commit({ ...lch, c, l }) }),
-      /* @__PURE__ */ jsx(HueRail, { lch, onEnd: () => accentLive.current.flush(lastHex.current), onPick: (h) => commit({ ...lch, h }) }),
+      jsx("div", { onPointerEnter: () => setGlow("primary"), onPointerLeave: () => setGlow(null), children: jsx(ChromaLightnessField, { hue: lch.h, lch, onEnd: () => accentLive.current.flush(lastHex.current), onPick: (l, c) => commit({ ...lch, c, l }) }) }),
+      jsx("div", { onPointerEnter: () => setGlow("primary"), onPointerLeave: () => setGlow(null), children: jsx(HueRail, { lch, onEnd: () => accentLive.current.flush(lastHex.current), onPick: (h) => commit({ ...lch, h }) }) }),
       /* @__PURE__ */ jsxs("div", { className: "flex items-center gap-1.5", children: [
         /* @__PURE__ */ jsx("span", { className: "size-5 shrink-0 rounded-sm border border-(--dt-border)", style: { background: painted } }),
         /* @__PURE__ */ jsx(
@@ -1405,6 +1310,8 @@ function AccentPicker() {
               setText(event.target.value);
               setAccentOverride(event.target.value);
             },
+            onPointerEnter: () => setGlow("primary"),
+            onPointerLeave: () => setGlow(null),
             spellCheck: false,
             value: text
           }
@@ -1421,7 +1328,6 @@ function AccentPicker() {
         )
       ] }),
       jsx(ValueGrid, { hex: text && /^#?[0-9a-f]{6}$/i.test(text) ? text : oklchToHex(lch) }),
-      jsx(SlotSquares, { onOpen: openSlot, palette, theme }),
       jsx(PopularAccents, { onPick: seedAccent }),
       /* @__PURE__ */ jsx(
         "button",
@@ -1449,12 +1355,14 @@ function AccentPicker() {
         ] })
       ] }),
       /* @__PURE__ */ jsx("p", { className: "h-3 font-mono text-[10px] leading-tight text-(--ui-text-tertiary)", children: saved ? "theme saved \u2014 active across restarts" : override && override.toLowerCase() !== painted.toLowerCase() ? `previewing ${override} \u2192 not saved yet` : "\xA0" })
-    ] }) : tab === "themes" ? /* @__PURE__ */ jsx(ThemePresets, { availableThemes, currentAccent: painted, mode, onApply: applyPreset, resolvedMode, setMode, themeName }) : tab === "glass" ? /* @__PURE__ */ jsx(GlassPanel, { resolvedMode }) : /* @__PURE__ */ jsxs("div", { className: "flex flex-col gap-1", children: [
+    ] }) : tab === "themes" ? /* @__PURE__ */ jsx(ThemePresets, { availableThemes, currentAccent: painted, mode, onApply: applyPreset, resolvedMode, setMode, themeName }) : tab === "glass" ? /* @__PURE__ */ jsx(GlassPanel, { resolvedMode }) : /* @__PURE__ */ jsxs("div", { className: "flex flex-col gap-1", onPointerLeave: () => setGlow(null), children: [
       SLOTS.filter((s) => typeof palette[s[0]] === "string").map((s) => /* @__PURE__ */ jsxs(
         "button",
         {
           className: "flex items-center gap-1.5 rounded-sm border border-(--dt-border) px-1.5 py-1 text-left text-[11px] hover:bg-(--chrome-action-hover)",
           onClick: () => openSlot(s[0]),
+          onPointerEnter: () => setGlow(s[0]),
+          onPointerLeave: () => setGlow(null),
           type: "button",
           children: [
             /* @__PURE__ */ jsx("span", { className: "min-w-0 flex-1 truncate", children: s[1] }),
@@ -1476,6 +1384,36 @@ function AccentPicker() {
           children: "Restore base theme"
         }
       ),
+      /* @__PURE__ */ jsxs("div", { className: "flex gap-1.5", children: [
+        jsx(
+          "button",
+          {
+            className: "flex-1 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px] hover:bg-(--chrome-action-hover)",
+            onClick: () => {
+              if (copyText(JSON.stringify(theme))) {
+                notify("Theme JSON copied \u2014 paste it on any machine to share.");
+              } else {
+                notify("Could not reach the clipboard.");
+              }
+            },
+            title: "Copy this theme's full JSON \u2014 share it, then import it anywhere",
+            type: "button",
+            children: "Copy theme JSON"
+          }
+        ),
+        jsx(
+          "button",
+          {
+            className: "flex-1 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px] hover:bg-(--chrome-action-hover)",
+            onClick: () => {
+              void importThemeFromClipboard();
+            },
+            title: "Import a theme from theme JSON on the clipboard",
+            type: "button",
+            children: "Paste theme JSON"
+          }
+        )
+      ] }),
       /* @__PURE__ */ jsx("p", { className: "h-3 font-mono text-[10px] leading-tight text-(--ui-text-tertiary)", children: `${resolvedMode} palette \xB7 edits save into the theme` })
     ] })
   ] });
@@ -1670,4 +1608,4 @@ export {
 // touched 1793213868
 
 // Test harness exports (unused by the loader, which imports only the default).
-export { AccentPicker, GlassPanel, SlotEditor, SlotSquares };
+export { AccentPicker, GlassPanel, SlotEditor };

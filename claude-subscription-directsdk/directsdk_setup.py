@@ -112,8 +112,8 @@ def _setting(key, default=None):
 
 
 def telemetry_enabled():
-    """The active profile's ``claude_code_telemetry`` plugin setting, default on."""
-    value = _setting(TELEMETRY_SETTING, True)
+    """The active profile's ``claude_code_telemetry`` plugin setting, default off."""
+    value = _setting(TELEMETRY_SETTING, False)
     if isinstance(value, str):
         return value.strip().lower() not in _OFF
     return value is not False and value != 0

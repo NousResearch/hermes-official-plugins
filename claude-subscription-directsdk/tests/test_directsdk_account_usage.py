@@ -92,7 +92,9 @@ def test_works_with_adopt_external_logins_off_and_follows_the_profile_login(cli,
 
 @pytest.mark.parametrize('reply, reason', [
     (_answer(None, available=False), 'no Claude subscription login found (run `claude` and log in)'),
-    (_answer(None), 'Claude Code returned no plan limits'),
+    # Telemetry is off by default, so the CLI runs with nonessential traffic off and answers
+    # rate_limits: null — that is what the missing-limits reason names.
+    (_answer(None), 'Claude Code skips the usage fetch with nonessential traffic off (claude_code_telemetry)'),
     (_answer(None, subtype='error'), 'Claude Code refused the usage request (needs a version with get_usage)'),
     ('not json', 'Claude Code gave no usage answer (needs a version with get_usage)'),
     (subprocess.TimeoutExpired('claude', 8), 'Claude Code did not answer in time'),
@@ -102,6 +104,16 @@ def test_failures_name_the_reason(cli, reply, reason):
     cli.reply = reply
     snapshot, lines = _usage()
     assert snapshot.windows == () and lines[-1] == f'Unavailable: {reason}'
+
+
+def test_with_telemetry_on_a_reply_without_limits_is_named_as_such(cli, monkeypatch):
+    """With the setting on the CLI keeps its feature flags, so a reply that carries no plan
+    limits is a genuinely empty answer rather than the telemetry-off shape."""
+    import directsdk_setup
+    monkeypatch.setattr(directsdk_setup, 'telemetry_enabled', lambda: True)
+    cli.reply = _answer(None)
+    limits, reason = directsdk_setup.fetch_usage()
+    assert limits is None and reason == 'Claude Code returned no plan limits'
 
 
 def test_quiet_mode_says_why_limits_are_missing(cli, monkeypatch):

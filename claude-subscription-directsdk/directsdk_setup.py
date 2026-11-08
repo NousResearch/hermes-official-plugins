@@ -35,12 +35,22 @@ LOGGED_OUT_HINT = ("Claude Code is installed but has no usable login in the envi
 # LaunchAgent, Desktop-spawned backend) inherits a bare PATH that carries none of them.
 _HOME_PREFIXES = (".local/bin", ".claude/local", "bin", ".npm-global/bin", ".bun/bin", ".volta/bin")
 _SYSTEM_PREFIXES = ("/opt/homebrew/bin", "/usr/local/bin")
+_WINDOWS_PREFIXES = (
+    os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Claude"),
+    os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Claude"),
+    os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "claude"),
+    os.path.join(os.environ.get("APPDATA", ""), "npm"),
+)
 
 
 def _install_prefixes(env):
     home = env.get("USERPROFILE" if os.name == "nt" else "HOME")
     prefixes = [os.path.join(home, prefix) for prefix in _HOME_PREFIXES] if home else []
-    return prefixes + ([] if os.name == "nt" else list(_SYSTEM_PREFIXES))
+    if os.name == "nt":
+        prefixes += [p for p in _WINDOWS_PREFIXES if p]
+    else:
+        prefixes += list(_SYSTEM_PREFIXES)
+    return prefixes
 
 
 def _resolve(command, env):

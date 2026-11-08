@@ -61,6 +61,10 @@ class ClaudeAPIError(RuntimeError):
         self.request_id = request_id
 
 
+class RequestRejected(ValueError):
+    """A request this transport cannot serve, refused before Claude Code starts: the same input fails every time."""
+
+
 # Native's own error codes for errors it answers without a relayed upstream status.
 NATIVE_ERROR_STATUS = {
     'rate_limit': 429,  # plan/session limit ("You've hit your session limit")
@@ -123,13 +127,13 @@ def content_blocks(content):
                                'Call vision_analyze with this URL to see it.]'})
                 continue
             if not url.startswith('data:') or ';base64,' not in url:
-                raise ValueError('Only base64 data image_url inputs are supported')
+                raise RequestRejected('Only base64 data image_url inputs are supported')
             media, data = url[5:].split(';base64,', 1)
             result.append({'type': 'image', 'source': {'type': 'base64', 'media_type': media, 'data': data}})
         elif kind in ('image', 'document', 'tool_result'):
             result.append(copy.deepcopy(block))
         else:
-            raise ValueError(f'Unsupported content block: {kind}')
+            raise RequestRejected(f'Unsupported content block: {kind}')
     return result
 
 
@@ -159,7 +163,7 @@ def _normalize_history_tool_ids(frames):
                 continue
             tool_id = block.get(field)
             if not isinstance(tool_id, str) or not tool_id:
-                raise ValueError('Tool call/result IDs must be nonempty strings')
+                raise RequestRejected('Tool call/result IDs must be nonempty strings')
             references.append((block, field, tool_id))
     original_ids = {tool_id for _, _, tool_id in references}
     used = {tool_id for tool_id in original_ids if re.fullmatch(r'[a-zA-Z0-9_-]+', tool_id)}
@@ -183,9 +187,9 @@ def prepare_history(messages, names=None):
         role = message.get('role')
         if role in ('system', 'developer'):
             if frames:
-                raise ValueError('System/developer messages must precede conversation history')
+                raise RequestRejected('System/developer messages must precede conversation history')
             if not isinstance(message.get('content'), str):
-                raise ValueError('System content must be text')
+                raise RequestRejected('System content must be text')
             system.append(message['content'])
             continue
         if role == 'assistant':
@@ -193,7 +197,7 @@ def prepare_history(messages, names=None):
             carriers = [d for d in details if isinstance(d, dict) and d.get('type') == CARRIER]
             if carriers:
                 if len(carriers) != 1 or carriers[0].get('version') != 1:
-                    raise ValueError('Unsupported native assistant carrier version')
+                    raise RequestRejected('Unsupported native assistant carrier version')
                 carrier = carriers[0]
                 expected = {**carrier['projection'], 'content': carrier['projection']['content'].strip()}
                 if projection(message) == expected:
@@ -224,13 +228,13 @@ def prepare_history(messages, names=None):
         elif role == 'user':
             blocks = content_blocks(message.get('content'))
         else:
-            raise ValueError(f'Unsupported message role: {role}')
+            raise RequestRejected(f'Unsupported message role: {role}')
         if frames and frames[-1]['type'] == role and role == 'user':
             frames[-1]['message']['content'].extend(blocks)
         else:
             frames.append({'type': role, 'message': {'role': role, 'content': blocks}})
     if not frames or frames[-1]['type'] != 'user' or not frames[-1]['message']['content']:
-        raise ValueError('History must end in a nonempty user/tool-result message; assistant prefill is unsupported')
+        raise RequestRejected('History must end in a nonempty user/tool-result message; assistant prefill is unsupported')
     _normalize_history_tool_ids(frames)
     return '\n\n'.join(system), frames
 
@@ -293,39 +297,39 @@ def request_body(kwargs):
                'hermes_auxiliary'}
     unknown = set(kwargs) - allowed
     if unknown:
-        raise ValueError('Unsupported request parameters: ' + ', '.join(sorted(unknown)))
+        raise RequestRejected('Unsupported request parameters: ' + ', '.join(sorted(unknown)))
     # Hermes Relay attaches host tracing to chat-completions clients. Keep it host-local:
     # never project it into generation fields or override the official CLI's identity.
     headers = kwargs.get('extra_headers')
     if headers is not None and (not isinstance(headers, dict) or any(
             not isinstance(key, str) or key.lower() != 'traceparent' or not isinstance(value, str)
             for key, value in headers.items())):
-        raise ValueError('extra_headers supports host traceparent metadata only')
+        raise RequestRejected('extra_headers supports host traceparent metadata only')
     if kwargs.get('n', 1) != 1 or kwargs.get('tool_choice', 'auto') not in ('auto', None):
-        raise ValueError('Only n=1 and tool_choice=auto are supported')
+        raise RequestRejected('Only n=1 and tool_choice=auto are supported')
     if kwargs.get('parallel_tool_calls') is False:
-        raise ValueError('parallel_tool_calls=False is unsupported')
+        raise RequestRejected('parallel_tool_calls=False is unsupported')
     if kwargs.get('stream_options') not in (None, {}, {'include_usage': True}, {'include_usage': False}):
-        raise ValueError('Unsupported stream_options')
+        raise RequestRejected('Unsupported stream_options')
     extra = kwargs.get('extra_body')
     if extra is None:
         extra = {}
     if not isinstance(extra, dict):
-        raise ValueError('extra_body must be an object')
+        raise RequestRejected('extra_body must be an object')
     unknown_extra = set(extra) - {'max_tokens', 'temperature', 'top_p', 'stop_sequences', 'reasoning', 'response_format'}
     if unknown_extra:
-        raise ValueError('Unsupported extra_body fields: ' + ', '.join(sorted(unknown_extra)))
+        raise RequestRejected('Unsupported extra_body fields: ' + ', '.join(sorted(unknown_extra)))
     body = copy.deepcopy(extra)
     reasoning = body.pop('reasoning', None)
     if reasoning is not None:
         if not isinstance(reasoning, dict) or set(reasoning) - {'enabled', 'effort'}:
-            raise ValueError('reasoning supports enabled and effort only')
+            raise RequestRejected('reasoning supports enabled and effort only')
         if 'enabled' in reasoning and type(reasoning['enabled']) is not bool:
-            raise ValueError('reasoning.enabled must be boolean')
+            raise RequestRejected('reasoning.enabled must be boolean')
         from agent.reasoning_effort import clamp_effort
         effort = clamp_effort(reasoning.get('effort'), ('none', 'low', 'medium', 'high', 'xhigh', 'max'))
         if effort not in (None, 'none', 'low', 'medium', 'high', 'xhigh', 'max'):
-            raise ValueError('Unsupported native reasoning effort')
+            raise RequestRejected('Unsupported native reasoning effort')
         if reasoning.get('enabled') is False or effort == 'none':
             if accepts_thinking_disable(kwargs.get('model')):
                 body['thinking'] = {'type': 'disabled'}
@@ -348,50 +352,50 @@ def request_body(kwargs):
     response_format = kwargs.get('response_format', body.pop('response_format', None))
     if response_format and response_format.get('type') != 'text':
         if response_format.get('type') != 'json_schema':
-            raise ValueError('Only json_schema structured output is supported')
+            raise RequestRejected('Only json_schema structured output is supported')
         schema = response_format.get('json_schema', {}).get('schema')
         if not isinstance(schema, dict):
-            raise ValueError('response_format requires a JSON Schema object')
+            raise RequestRejected('response_format requires a JSON Schema object')
         body.setdefault('output_config', {})['format'] = {'type': 'json_schema', 'schema': native_format_schema(schema)}
     for key in ('max_tokens', 'temperature', 'top_p'):
         if kwargs.get(key) is not None:
             body[key] = kwargs[key]
     if kwargs.get('max_completion_tokens') is not None:
         if 'max_tokens' in body:
-            raise ValueError('Specify only one output-token limit')
+            raise RequestRejected('Specify only one output-token limit')
         body['max_tokens'] = kwargs['max_completion_tokens']
     if kwargs.get('stop') is not None:
         stop = kwargs['stop']
         body['stop_sequences'] = [stop] if isinstance(stop, str) else stop
     for key in ('temperature', 'top_p'):
         if key in body and (isinstance(body[key], bool) or not isinstance(body[key], (int, float)) or not math.isfinite(body[key]) or not 0 <= body[key] <= 1):
-            raise ValueError(f'{key} must be finite and between zero and one')
+            raise RequestRejected(f'{key} must be finite and between zero and one')
         # Subscription models reject sampling controls, including Hermes' title
         # generator default. Match the host's sampling-forbidden model behavior.
         body.pop(key, None)
     if 'max_tokens' in body and (type(body['max_tokens']) is not int or body['max_tokens'] < 1):
-        raise ValueError('max_tokens must be a positive integer')
+        raise RequestRejected('max_tokens must be a positive integer')
     if 'stop_sequences' in body and (not isinstance(body['stop_sequences'], list) or not all(isinstance(x, str) and x for x in body['stop_sequences'])):
-        raise ValueError('stop_sequences must be a list of nonempty strings')
+        raise RequestRejected('stop_sequences must be a list of nonempty strings')
     manifest, tools, names = [], [], {}
     native_names = {}
     for tool in kwargs.get('tools') or []:
         if tool.get('type') != 'function':
-            raise ValueError('Only function tools are supported')
+            raise RequestRejected('Only function tools are supported')
         f = tool['function']
         name = f['name']
         if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', name) or name in names:
-            raise ValueError('Tool names must be unique ASCII identifiers of at most 64 characters')
+            raise RequestRejected('Tool names must be unique ASCII identifiers of at most 64 characters')
         if f.get('strict'):
-            raise ValueError('Strict function schemas are unsupported')
+            raise RequestRejected('Strict function schemas are unsupported')
         native_name = name if len(name) <= 50 else name[:41] + '_' + hashlib.sha256(name.encode()).hexdigest()[:8]
         if native_name in native_names:
-            raise ValueError(f'Tool name collision: {name!r} and {native_names[native_name]!r} map to {native_name!r}')
+            raise RequestRejected(f'Tool name collision: {name!r} and {native_names[native_name]!r} map to {native_name!r}')
         names[name] = native_name
         native_names[native_name] = name
         schema, description = f.get('parameters', {'type': 'object'}), f.get('description', '')
         if not isinstance(schema, dict) or not isinstance(description, str):
-            raise ValueError('Tool schema must be an object and description a string')
+            raise RequestRejected('Tool schema must be an object and description a string')
         # The manifest (inert MCP server) and the request body must advertise the same shape.
         schema = normalize_input_schema(schema)
         manifest.append({'name': native_name, 'description': description, 'inputSchema': schema})
@@ -772,7 +776,7 @@ class Client:
             body, manifest, names = request_body(kwargs)
             system, frames = prepare_history(kwargs.get('messages', []), names)
             if not isinstance(kwargs.get('model'), str) or not kwargs['model']:
-                raise ValueError('model is required')
+                raise RequestRejected('model is required')
         except BaseException:
             with self._lock:
                 self._requests.discard(request)
@@ -798,7 +802,7 @@ class Client:
             timeout = kwargs.get('timeout', self.timeout)
             timeout = getattr(timeout, 'read', timeout)
             if not isinstance(timeout, (int, float)) or timeout <= 0:
-                raise ValueError('timeout must be positive seconds')
+                raise RequestRejected('timeout must be positive seconds')
             # Per-request files only; native runs in the stable cwd from _workdir. Windows stragglers
             # can still hold these open for a moment, and cleanup must not fail the request.
             with tempfile.TemporaryDirectory(prefix='claude-directsdk-', ignore_cleanup_errors=True) as tmp:
@@ -816,7 +820,7 @@ class Client:
                     conflicts = [key for key in ('ANTHROPIC_BASE_URL',) if env.get(key)]
                     conflicts += [key for key in ('CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY') if env.get(key, '').lower() not in ('', '0', 'false', 'no', 'off')]
                     if conflicts:
-                        raise ValueError('OAuth provider refuses conflicting native auth/backend overrides: ' + ', '.join(conflicts))
+                        raise RequestRejected('OAuth provider refuses conflicting native auth/backend overrides: ' + ', '.join(conflicts))
                 # Fail with the install hint, not a Popen FileNotFoundError, when Claude Code is absent.
                 resolved = resolve_claude(self.command, env)
                 if resolved is None:

@@ -405,22 +405,9 @@ def drop_message_breakpoints(payload):
 
 
 def stream_tool_input(payload):
-    """Ask the API to stream every tool's arguments as the model writes them (``eager_input_streaming``).
-
-    Native turns fine-grained tool streaming on only for a first-party base URL, so behind this relay its
-    tools go out without the flag and the API holds a large argument (a whole file in one ``write_file``)
-    until it is complete. Hermes' stall detector then sees minutes of silence and cancels a healthy call.
-    A value native already set wins, and a payload with no tools or that does not parse forwards as is."""
-    try:
-        body = json.loads(payload)
-        tools = [t for t in body.get('tools') or () if isinstance(t, dict) and 'eager_input_streaming' not in t]
-        if not tools:
-            return payload
-        for tool in tools:
-            tool['eager_input_streaming'] = True
-        return json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-    except (ValueError, TypeError, AttributeError):
-        return payload
+    """Do not request ``eager_input_streaming``: the API does not validate streamed tool arguments,
+    so a complete ``tool_use`` can carry invalid JSON and break the turn (#221)."""
+    return payload
 
 
 def restore_queried_turn(payload, queried):

@@ -35,8 +35,6 @@ logger = logging.getLogger("hermes.mcp_serve.tools")
 # Each name must be a registered Hermes tool ``model_tools.handle_function_call`` can dispatch.
 EXPOSED_TOOLS: tuple[str, ...] = (
     "web_search", "web_extract",
-    "browser_navigate", "browser_click", "browser_type", "browser_press", "browser_snapshot", "browser_scroll",
-    "browser_back", "browser_get_images", "browser_console", "browser_vision",
     "vision_analyze", "image_generate", "skill_view", "skills_list", "text_to_speech",
 )
 
@@ -46,7 +44,7 @@ _DROPPED_ARGS: dict[str, tuple[str, ...]] = {"text_to_speech": ("output_path",)}
 # file:/javascript: URLs. vision_analyze reads any scheme-less source (``pic.png``, ``shots/a.png``) as a
 # file path, so it needs an explicit scheme.
 _URL_ARGS: dict[str, tuple[str, bool, bool]] = {
-    "browser_navigate": ("url", False, True), "web_extract": ("urls", False, True),
+    "web_extract": ("urls", False, True),
     "vision_analyze": ("image_url", True, False),
 }
 _SCHEME_RE = re.compile(r"^\s*([a-zA-Z][a-zA-Z0-9+.-]*):(?!\d)")

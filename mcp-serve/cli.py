@@ -7,9 +7,9 @@ def setup_cli(parser) -> None:
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging on stderr")
     parser.add_argument(
         "--tools", action="store_true",
-        help="Also expose Hermes' web, browser, vision, image generation, skills and TTS tools to the "
-             "MCP client, under this profile's credentials (off by default; never terminal, file or "
-             "kanban tools)")
+        help="Also expose Hermes' web, vision, image generation, skills and TTS tools to the "
+              "MCP client, under this profile's credentials (off by default; never terminal, file or "
+              "kanban tools)")
     parser.add_argument(
         "--accept-hooks", action="store_true",
         help="With --tools: run the shell hooks in config.yaml without the first-use consent check")

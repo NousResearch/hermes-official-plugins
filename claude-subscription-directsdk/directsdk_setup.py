@@ -22,6 +22,11 @@ try:
 except ImportError:
     from admission import Admission
     from model_catalog import MODEL_METADATA, PICKER_ROUTES, native_model
+try:
+    from agent.secret_scope import UnscopedSecretError
+except ImportError:  # a core without per-profile secret scopes never raises it
+    class UnscopedSecretError(RuntimeError):
+        pass
 
 INSTALL_HINT = ("Claude Code is not installed (no `claude` on PATH or in the usual install directories). Install it with "
                 "`npm install -g @anthropic-ai/claude-code` or set CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND to the binary.")
@@ -134,39 +139,59 @@ def apply_config_dir(env):
 
 
 OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
+# Per-profile secrets a child may carry: the login, and gateway auth headers native sends upstream.
+PROFILE_SECRETS = (OAUTH_TOKEN_ENV, "ANTHROPIC_CUSTOM_HEADERS")
+_CONFIG_DIR_ENV = ("CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR", "CLAUDE_CONFIG_DIR")
 
 
-def _profile_token():
-    """The active profile's ``CLAUDE_CODE_OAUTH_TOKEN`` from core's secret scope, else ``None``.
-
-    A multiplexed gateway never loads a served profile's ``.env`` into ``os.environ``; core binds it
-    per turn as the secret scope instead. Outside multiplexing ``get_secret`` reads ``os.environ``,
-    the value the child inherits anyway. An older core without the scope, or a read with no scope
-    bound (``UnscopedSecretError``), counts as no profile token.
-    """
+def _secret_scope():
+    """``(get_secret or None, routed)``: core's scoped reader and whether this task serves a profile other than
+    the process's own. A routed task with no scope bound outside multiplexing (a HERMES_HOME override alone)
+    would read the launch environment, so it gets no reader. A core without the scope API: ``(None, False)``."""
     try:
-        from agent.secret_scope import get_secret
-        token = get_secret(OAUTH_TOKEN_ENV)
-    except Exception:
-        return None
-    return token if isinstance(token, str) and token.strip() else None
+        from agent.secret_scope import current_secret_scope, get_secret, is_multiplex_active, serves_routed_profile
+    except ImportError:
+        return None, False
+    routed = serves_routed_profile()
+    if routed and current_secret_scope() is None and not is_multiplex_active():
+        return None, True
+    return get_secret, routed
+
+
+def _scoped(get_secret, name):
+    value = get_secret(name)
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def apply_profile_credential(env):
     """Give a child ``env`` (in place) the active profile's Claude login, never another profile's.
 
-    Claude Code prefers ``CLAUDE_CODE_OAUTH_TOKEN`` over the login in ``CLAUDE_CONFIG_DIR``, so:
-    the profile's own token is set on the child; else a nonempty ``claude_config_dir`` setting
-    removes an inherited token so the selected login is used; else ``env`` is left as it is.
-    ``os.environ`` is never changed and the token is never logged.
+    Claude Code prefers ``CLAUDE_CODE_OAUTH_TOKEN`` over the login in ``CLAUDE_CONFIG_DIR``. The profile's
+    own value (core's secret scope: a multiplexed gateway never loads a served profile's ``.env`` into
+    ``os.environ``) is set on the child. A profile served by a process launched for another one never
+    inherits that process's token, gateway headers or config directory (#313); a nonempty
+    ``claude_config_dir`` setting also drops an inherited token so the selected login is used. With
+    multiplexing on and no scope bound, ``UnscopedSecretError`` propagates: no child starts on a guess.
+    ``os.environ`` is never changed and no value is logged.
     """
-    token = _profile_token()
-    if token:
-        env[OAUTH_TOKEN_ENV] = token
-    else:
-        setting = _setting(CONFIG_DIR_SETTING)
-        if isinstance(setting, str) and setting.strip():
-            env.pop(OAUTH_TOKEN_ENV, None)
+    get_secret, routed = _secret_scope()
+    for name in PROFILE_SECRETS:
+        value = _scoped(get_secret, name) if get_secret else None
+        if value:
+            env[name] = value
+        elif routed:
+            env.pop(name, None)
+    setting = _setting(CONFIG_DIR_SETTING)
+    selected = setting.strip() if isinstance(setting, str) else ""
+    if selected and not (get_secret and _scoped(get_secret, OAUTH_TOKEN_ENV)):
+        env.pop(OAUTH_TOKEN_ENV, None)
+    if routed and not selected:
+        # apply_config_dir read the launch environment; only this profile's own .env may choose.
+        own = next(filter(None, (_scoped(get_secret, name) for name in _CONFIG_DIR_ENV)), None)
+        if own:
+            env["CLAUDE_CONFIG_DIR"] = os.path.expanduser(own)
+        else:
+            env.pop("CLAUDE_CONFIG_DIR", None)
     return env
 
 
@@ -213,7 +238,11 @@ def setup_status(command=None, env=None, timeout=20):
         return {"available": False, "logged_in": False, "plan": "", "detail": INSTALL_HINT, "login_command": None}
     login_command = resolved + ["auth", "login"]
     try:
-        run = subprocess.run(resolved + ["auth", "status"], env=_child_env(env), stdin=subprocess.DEVNULL,
+        child = _child_env(env)
+    except UnscopedSecretError as error:
+        return {"available": True, "logged_in": False, "plan": "", "detail": str(error), "login_command": login_command}
+    try:
+        run = subprocess.run(resolved + ["auth", "status"], env=child, stdin=subprocess.DEVNULL,
                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
         auth = json.loads(run.stdout) if run.stdout.strip().startswith("{") else {}
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -240,7 +269,10 @@ def discover_models(command=None, env=None, timeout=40):
     # account's picker reflects its entitlements.
     if resolved is None or not setup_status(command=resolved, env=env, timeout=timeout)["logged_in"]:
         return None
-    child = _child_env(env, flag_fetch=True)
+    try:
+        child = _child_env(env, flag_fetch=True)
+    except UnscopedSecretError:
+        return None
     # The account's own picker (entitlement-gated models such as Mythos, older models it still runs) is
     # native's served catalog, and native serves it only first-party: behind any ANTHROPIC_BASE_URL,
     # our relay included, it logs `[servedCatalog] off (not_first_party)` and answers a generic list.
@@ -347,7 +379,10 @@ def fetch_usage(command=None, env=None, timeout=8):
     resolved = _resolve(command, env)
     if resolved is None:
         return None, INSTALL_HINT
-    child = _child_env(env)
+    try:
+        child = _child_env(env)
+    except UnscopedSecretError as error:
+        return None, str(error)
     if "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in env:
         # With this flag the CLI skips the very fetch /usage asks for (rate_limits: null). The probe
         # is zero-inference behind the unused admission gate; DISABLE_TELEMETRY stays on (P#258).

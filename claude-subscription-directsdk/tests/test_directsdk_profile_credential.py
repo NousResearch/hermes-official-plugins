@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -64,21 +65,25 @@ def test_the_profile_token_wins_over_the_gateways(ambient, tmp_path):
     assert os.environ[TOKEN] == AMBIENT
 
 
-@pytest.mark.parametrize("scope", [{}, {TOKEN: ""}, {TOKEN: "  "}, None], ids=["miss", "empty", "blank", "unscoped"])
-def test_a_selected_login_directory_drops_the_gateways_token(ambient, tmp_path, scope):
-    _set_config_dir(str(tmp_path / "login"))
-    with multiplexed(scope):
-        assert _apply({TOKEN: AMBIENT, "UNRELATED": "kept"}) == {"UNRELATED": "kept"}
-
-
-@pytest.mark.parametrize("setting", [None, "", " \t "])
-@pytest.mark.parametrize("scope", [{}, None], ids=["miss", "unscoped"])
-def test_without_a_profile_token_or_login_directory_the_env_is_untouched(ambient, scope, setting):
+@pytest.mark.parametrize("scope", [{}, {TOKEN: ""}, {TOKEN: "  "}], ids=["miss", "empty", "blank"])
+@pytest.mark.parametrize("setting", [None, str(Path("login"))])
+def test_a_served_profile_never_inherits_the_gateways_login(ambient, scope, setting):
+    """#313: without a token of its own a served profile loses the launch profile's token, gateway headers and
+    config directory, whether or not claude_config_dir is set."""
     if setting is not None:
         _set_config_dir(setting)
+    inherited = {TOKEN: AMBIENT, "ANTHROPIC_CUSTOM_HEADERS": "X-Gateway: launch", "CLAUDE_CONFIG_DIR": "/launch/.claude",
+                 "UNRELATED": "kept"}
     with multiplexed(scope):
-        assert _apply({TOKEN: AMBIENT}) == {TOKEN: AMBIENT}
-        assert _apply({}) == {}
+        env = _apply(dict(inherited, CLAUDE_CONFIG_DIR=setting) if setting else dict(inherited))
+    assert env == ({"UNRELATED": "kept", "CLAUDE_CONFIG_DIR": setting} if setting else {"UNRELATED": "kept"})
+
+
+def test_a_served_profile_uses_its_own_gateway_headers_and_login_dir(ambient):
+    scope = {"ANTHROPIC_CUSTOM_HEADERS": "X-Gateway: served", "CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR": "/served/.claude"}
+    with multiplexed(scope):
+        env = _apply({TOKEN: AMBIENT, "ANTHROPIC_CUSTOM_HEADERS": "X-Gateway: launch", "CLAUDE_CONFIG_DIR": "/launch/.claude"})
+    assert env == {"ANTHROPIC_CUSTOM_HEADERS": "X-Gateway: served", "CLAUDE_CONFIG_DIR": "/served/.claude"}
 
 
 def test_a_single_profile_install_keeps_its_own_token(ambient, tmp_path):
@@ -87,12 +92,24 @@ def test_a_single_profile_install_keeps_its_own_token(ambient, tmp_path):
     assert _apply({TOKEN: AMBIENT}) == {TOKEN: AMBIENT}
 
 
-def test_an_unscoped_read_is_no_profile_token(ambient):
-    from agent.secret_scope import UnscopedSecretError, get_secret
+def test_an_unscoped_read_under_multiplexing_fails_closed(ambient):
+    """No scope bound while multiplexing: no child may start on the launch profile's token."""
+    from agent.secret_scope import UnscopedSecretError
+    with multiplexed(None), pytest.raises(UnscopedSecretError):
+        _apply({TOKEN: AMBIENT})
+
+
+def test_unscoped_setup_probes_degrade_without_spawning(ambient, monkeypatch):
+    import directsdk_setup
+    spawned = []
+    monkeypatch.setattr(directsdk_setup.subprocess, "run", lambda *a, **k: spawned.append(a))
+    env = {"PATH": os.defpath, TOKEN: AMBIENT}
     with multiplexed(None):
-        with pytest.raises(UnscopedSecretError):
-            get_secret(TOKEN)
-        assert _apply({TOKEN: AMBIENT}) == {TOKEN: AMBIENT}
+        status = directsdk_setup.setup_status(command=[sys.executable], env=env)
+        assert directsdk_setup.discover_models(command=[sys.executable], env=env) is None
+        limits, reason = directsdk_setup.fetch_usage(command=[sys.executable], env=env)
+    assert spawned == [] and not status["logged_in"] and "could not read" in status["detail"]
+    assert limits is None and "could not read" in reason
 
 
 def test_an_older_core_without_secret_scope_is_no_profile_token(ambient, tmp_path, monkeypatch):

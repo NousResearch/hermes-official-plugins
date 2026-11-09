@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from conftest import PLUGIN_NAME
+from conftest import PLUGIN_NAME, popen_from_run
 from test_directsdk import FAKE
 
 REQUEST = dict(model="sonnet", messages=[{"role": "user", "content": "go"}],
@@ -125,7 +125,7 @@ def test_a_new_process_asks_claude_code_once_before_refusing(native, monkeypatch
         answer = {"type": "control_response", "response": {"subtype": "success", "request_id": "hermes-usage",
                                                            "response": {"rate_limits": body}}}
         return SimpleNamespace(stdout=json.dumps(answer) + "\n", returncode=0)
-    monkeypatch.setattr(directsdk_setup.subprocess, "run", fake_run)
+    monkeypatch.setattr(directsdk_setup.subprocess, "Popen", popen_from_run(fake_run, turns=directsdk_setup.subprocess.Popen))
     if refused:
         with pytest.raises(ClaudeExtraUsageBlocked, match="2030-01-01T00:00:00Z"):
             native()

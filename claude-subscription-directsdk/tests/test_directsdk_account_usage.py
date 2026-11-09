@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import popen_from_run
+
 PROVIDER = 'claude-subscription-directsdk-experimental'
 LIMITS = {'limits': [
     {'kind': 'session', 'percent': 45, 'resets_at': '2026-10-01T07:09:00Z'},
@@ -46,6 +48,8 @@ def cli(profile, monkeypatch):
         raise AssertionError('the usage hook must never read, refresh or send the Claude Code login')
 
     monkeypatch.setattr(subprocess, 'run', run)
+    # The installed copy Hermes loads has its own module objects, so the fake is installed process-wide.
+    monkeypatch.setattr(subprocess, 'Popen', popen_from_run(run))
     for name in ('read_claude_code_credentials', 'resolve_anthropic_token', '_refresh_oauth_token',
                  '_write_claude_code_credentials', '_read_claude_code_credentials_from_keychain'):
         monkeypatch.setattr(credentials, name, refuse, raising=False)

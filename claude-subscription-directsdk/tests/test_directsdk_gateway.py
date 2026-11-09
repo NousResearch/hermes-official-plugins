@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from conftest import PLUGIN_NAME
+from conftest import PLUGIN_NAME, popen_from_run
 from test_directsdk_admission import NATIVE
 
 REQUEST = dict(model="sonnet", messages=[{"role": "user", "content": "go"}])
@@ -119,6 +119,7 @@ def test_usage_and_picker_probes_use_the_gateway_too(clean, monkeypatch, probe):
         assert kwargs["env"]["ANTHROPIC_BASE_URL"].startswith("http://127.0.0.1:")
         return SimpleNamespace(stdout="", returncode=0)
     monkeypatch.setattr(directsdk_setup.subprocess, "run", run)
+    monkeypatch.setattr(directsdk_setup.subprocess, "Popen", popen_from_run(run))
     _settings(upstream_url="https://llm-gateway.example.com/anthropic", upstream_proxy="http://egress.example.com:3128")
     getattr(directsdk_setup, probe)(command=[sys.executable], env={"PATH": os.defpath})
     assert used == [("https://llm-gateway.example.com/anthropic", ("egress.example.com", 3128, None))]
@@ -138,6 +139,7 @@ def test_a_bad_gateway_setting_refuses_and_never_goes_direct(clean, tmp_path, mo
     _settings(**settings)
     spawned = []
     monkeypatch.setattr(directsdk_setup.subprocess, "run", lambda *a, **k: spawned.append(a))
+    monkeypatch.setattr(directsdk_setup.subprocess, "Popen", lambda *a, **k: spawned.append(a))
     with pytest.raises(directsdk_setup.ClaudeUpstreamConfigError, match=named) as raised:
         _turn(tmp_path)
     verdict = classify_api_error(raised.value, provider=PLUGIN_NAME, model="sonnet")

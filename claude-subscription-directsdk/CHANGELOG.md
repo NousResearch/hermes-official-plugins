@@ -13,6 +13,8 @@
 
 ### Fixed
 
+- An empty `.oauth_refresh.lock` that a Claude Code left after exiting mid-refresh (anthropics/claude-code#95236) is removed from the child's own login directory before every spawn, once it is past Claude Code's 60 s stale window; before, every request failed with "another Claude Code process is refreshing it" until the user deleted it. A lock with contents or a fresh mtime is never touched (P#25, thanks @LevSky22 and @100yenadmin).
+- The picker and `/usage` probes own their Claude Code child: it is killed and waited for before its scratch directory is removed, on every path, and at interpreter exit. `hermes status` on Windows printed a `PermissionError [WinError 32]` traceback, left a `claude-directsdk-picker-*` directory and a running `claude.exe` behind, because the catalog refresh thread was still inside the handshake when Hermes exited (C#146288).
 - Setup no longer reports a Console API key, an API-key helper or a cloud backend login (Bedrock, Vertex, Foundry) as a working subscription login: `claude auth status` says `loggedIn: true` for those too, so setup passed and the first turn failed. It now says which login Claude Code would use and how to switch (P#28, thanks @100yenadmin).
 - Claude Code is no longer looked up under a relative `HOME`, which resolved against the current directory and could run a `claude` planted there (P#27, thanks @grantjayy).
 - The "Third-party apps now draw from your extra usage" 400 is classified as a billing stop with a message that names the plan settings and the `hermes-agent` caller, instead of an unknown error that core answered silently from a fallback provider (P#296).

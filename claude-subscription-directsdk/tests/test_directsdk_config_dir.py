@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from conftest import PLUGIN_NAME
+from conftest import PLUGIN_NAME, popen_from_run
 from test_directsdk import FAKE
 from test_directsdk_setup import PINNED_PICKER, PRO
 
@@ -152,6 +152,7 @@ def test_setup_probes_pass_the_profile_directory(profile, tmp_path, monkeypatch,
                 "models": PINNED_PICKER, "account": PRO["account"]}}}
         return SimpleNamespace(stdout=json.dumps(output), returncode=0)
     monkeypatch.setattr(directsdk_setup.subprocess, "run", run)
+    monkeypatch.setattr(directsdk_setup.subprocess, "Popen", popen_from_run(run))
     env = {"PATH": os.defpath, "HOME": str(tmp_path), OVERRIDE: str(tmp_path / "override")}
     result = getattr(directsdk_setup, probe)(command=[sys.executable], env=env)
     assert result["logged_in"] if probe == "setup_status" else result

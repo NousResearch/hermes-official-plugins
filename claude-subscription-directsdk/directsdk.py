@@ -31,13 +31,15 @@ try:
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from .directsdk_setup import (
         INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
-        apply_traffic_policy, check_extra_usage, drop_api_credentials, observe_rate_limit, relay, resolve_upstream)
+        apply_traffic_policy, check_extra_usage, drop_api_credentials, observe_rate_limit, reap_orphaned_refresh_lock, relay,
+        resolve_upstream)
 except ImportError:
     from admission import Admission
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from directsdk_setup import (
         INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
-        apply_traffic_policy, check_extra_usage, drop_api_credentials, observe_rate_limit, relay, resolve_upstream)
+        apply_traffic_policy, check_extra_usage, drop_api_credentials, observe_rate_limit, reap_orphaned_refresh_lock, relay,
+        resolve_upstream)
 
 
 # Hermes picks retry vs fallback from an error's status_code (main loop and auxiliary ladder alike).
@@ -836,6 +838,8 @@ class Client:
                 if self.env is None:
                     # The serving profile's own token, or none when its claude_config_dir picks the login.
                     apply_profile_credential(env)
+                # A refresh lock an earlier native left mid-refresh would fail this request (claude-code#95236).
+                reap_orphaned_refresh_lock(env)
                 # The extra_usage setting refuses here, before anything is billed (#43).
                 check_extra_usage(resolved, dict(env))
                 # An inherited effort level would override the --effort Hermes passes below.

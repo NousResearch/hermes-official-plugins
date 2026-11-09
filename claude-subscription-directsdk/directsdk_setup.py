@@ -9,18 +9,22 @@ The handshake always fetches the CLI's feature flags, which is what makes its pi
 model the account runs. Anything unexpected returns ``None``/``False`` so callers fall back to the
 pinned catalog rather than failing setup.
 """
+import atexit
 import base64
 import ipaddress
 import json
 import logging
 import os
 import shutil
+import signal
 import ssl
 import subprocess
 import tempfile
 import threading
+import time
 from collections import namedtuple
 from collections.abc import Mapping
+from pathlib import Path
 from urllib.parse import urlsplit
 
 try:
@@ -229,12 +233,107 @@ def _child_env(env, *, flag_fetch=False):
     child = drop_api_credentials(dict(env))
     apply_config_dir(child)
     apply_profile_credential(child)
+    reap_orphaned_refresh_lock(child)
     apply_traffic_policy(child)
     if flag_fetch:
         for key in FLAG_FETCH_BLOCKERS:
             if key not in env:
                 child.pop(key, None)
     return child
+
+
+# Claude Code's refresh lock is `stale: 60000, update: 5000`: a live holder bumps its mtime every 5 s.
+_REFRESH_LOCK_STALE_S = 60
+
+
+def _config_dir(env):
+    """Claude Code's config dir for a child env: CLAUDE_CONFIG_DIR, else ``~/.claude`` by Node's ``os.homedir()``
+    (%USERPROFILE% on Windows even when a Git Bash shell sets HOME elsewhere)."""
+    if env.get("CLAUDE_CONFIG_DIR"):
+        return Path(env["CLAUDE_CONFIG_DIR"]).expanduser()
+    home = (env.get("USERPROFILE") or env.get("HOME")) if os.name == "nt" else env.get("HOME")
+    return (Path(home) if home else Path.home()) / ".claude"
+
+
+def reap_orphaned_refresh_lock(env):
+    """Remove the empty ``.oauth_refresh.lock`` a Claude Code that exited mid-refresh left in the child's config dir.
+
+    Claude Code never reclaims it (anthropics/claude-code#95236), and every later request fails with "another
+    Claude Code process is refreshing it or exited mid-refresh". Only a lock past Claude Code's own 60 s stale
+    window goes, and ``rmdir`` refuses one with contents."""
+    lock = _config_dir(env) / ".oauth_refresh.lock"
+    try:
+        if lock.is_dir() and time.time() - lock.stat().st_mtime > _REFRESH_LOCK_STALE_S:
+            lock.rmdir()
+    except OSError:
+        pass
+
+
+_probes = set()
+_probes_lock = threading.Lock()
+_reaper_registered = False
+
+
+def _kill_tree(process):
+    """Kill a probe child and what it started (the npm shim is cmd.exe -> node on Windows)."""
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, check=False)
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)  # windows-footgun: ok - the nt branch above never reaches this line
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+def _reap_probes():
+    with _probes_lock:
+        live = tuple(_probes)
+    for process in live:
+        _kill_tree(process)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _probe(argv, *, input, env, timeout, prefix):
+    """stdout of one zero-inference CLI probe run in its own scratch cwd; the child never outlives the call.
+
+    A daemon thread can still be inside a probe when the interpreter exits (`hermes status` refreshes the
+    model catalog on one). The scratch dir's finalizer then ran while the child held it as its cwd, which
+    on Windows is a WinError 32 traceback, a leaked dir and a running claude.exe (C#146288). So the child is
+    killed and waited for before the dir goes, on every path; at exit a reaper does the same first.
+    """
+    global _reaper_registered
+    scratch = tempfile.TemporaryDirectory(prefix=prefix, ignore_cleanup_errors=True)
+    with _probes_lock:
+        if not _reaper_registered:
+            # After the first TemporaryDirectory: atexit runs LIFO, so this runs before tempfile's finalizers.
+            atexit.register(_reap_probes)
+            _reaper_registered = True
+    process = None
+    try:
+        group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+                 else {"start_new_session": True})
+        process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, encoding="utf-8", errors="replace", cwd=scratch.name, env=env, **group)
+        with _probes_lock:
+            _probes.add(process)
+        stdout, _ = process.communicate(input, timeout=timeout)
+        return stdout
+    finally:
+        if process is not None:
+            _kill_tree(process)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            with _probes_lock:
+                _probes.discard(process)
+        scratch.cleanup()
 
 
 def _plan_label(raw):
@@ -312,10 +411,8 @@ def discover_models(command=None, env=None, timeout=40):
                            "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands", "--no-session-persistence"]
         handshake = json.dumps({"type": "control_request", "request_id": "hermes-picker",
                                 "request": {"subtype": "initialize"}}) + "\n"
-        with tempfile.TemporaryDirectory(prefix="claude-directsdk-picker-") as cwd:
-            run = subprocess.run(argv, input=handshake, env=child, cwd=cwd, capture_output=True,
-                                 text=True, encoding="utf-8", errors="replace", timeout=timeout)
-        rows = [json.loads(line) for line in run.stdout.splitlines() if line.startswith("{")]
+        stdout = _probe(argv, input=handshake, env=child, timeout=timeout, prefix="claude-directsdk-picker-")
+        rows = [json.loads(line) for line in stdout.splitlines() if line.startswith("{")]
         response = next(r["response"] for r in rows if r.get("type") == "control_response")
         native = response.get("response", {}).get("models") or []
         # Counted only behind the relay; first-party nothing observes the CLI's traffic, so say so.
@@ -419,10 +516,8 @@ def fetch_usage(command=None, env=None, timeout=8):
                            '{"mcpServers":{}}', "--disable-slash-commands", "--no-session-persistence"]
         request = json.dumps({"type": "control_request", "request_id": "hermes-usage",
                               "request": {"subtype": "get_usage", "skip_behaviors": True}}) + "\n"
-        with tempfile.TemporaryDirectory(prefix="claude-directsdk-usage-") as cwd:
-            run = subprocess.run(argv, input=request, env=child, cwd=cwd, capture_output=True,
-                                 text=True, encoding="utf-8", errors="replace", timeout=timeout)
-        rows = [json.loads(line) for line in run.stdout.splitlines() if line.startswith("{")]
+        stdout = _probe(argv, input=request, env=child, timeout=timeout, prefix="claude-directsdk-usage-")
+        rows = [json.loads(line) for line in stdout.splitlines() if line.startswith("{")]
         response = next(r["response"] for r in rows if r.get("type") == "control_response"
                         and r.get("response", {}).get("request_id") == "hermes-usage")
     except subprocess.TimeoutExpired:

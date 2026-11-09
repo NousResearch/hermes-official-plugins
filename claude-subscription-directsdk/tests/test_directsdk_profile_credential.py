@@ -14,6 +14,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import popen_from_run
+
 from test_directsdk import FAKE
 from test_directsdk_config_dir import _set_config_dir
 from test_directsdk_setup import PRO
@@ -103,6 +105,7 @@ def test_unscoped_setup_probes_degrade_without_spawning(ambient, monkeypatch):
     import directsdk_setup
     spawned = []
     monkeypatch.setattr(directsdk_setup.subprocess, "run", lambda *a, **k: spawned.append(a))
+    monkeypatch.setattr(directsdk_setup.subprocess, "Popen", lambda *a, **k: spawned.append(a))
     env = {"PATH": os.defpath, TOKEN: AMBIENT}
     with multiplexed(None):
         status = directsdk_setup.setup_status(command=[sys.executable], env=env)
@@ -202,6 +205,7 @@ def test_setup_probes_use_the_serving_profiles_login(ambient, tmp_path, monkeypa
             output = {"type": "control_response", "response": {"response": {"models": [], "account": PRO["account"]}}}
         return SimpleNamespace(stdout=json.dumps(output), returncode=0)
     monkeypatch.setattr(directsdk_setup.subprocess, "run", run)
+    monkeypatch.setattr(directsdk_setup.subprocess, "Popen", popen_from_run(run))
     env = {"PATH": os.defpath, "HOME": str(tmp_path), TOKEN: AMBIENT}
     with multiplexed({TOKEN: PROFILE}):
         getattr(directsdk_setup, probe)(command=[sys.executable], env=env)

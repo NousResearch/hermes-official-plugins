@@ -32,7 +32,7 @@ Corrections must **supersede** the earlier scan/result with an explicit provenan
 
 ## Coverage truth
 
-Every inventory file and mandatory `lane:A01:2025` through `lane:A10:2025` unit gets a state and reason. Applicable ASVS control coverage is separate from file counts. States are `reviewed`, `not_applicable`, `deferred`, `unsupported`, `unknown`, and `failed`; exclusion is a scoped reason, not silent omission.
+Every inventory file and mandatory `lane:A01:2025` through `lane:A10:2025` unit gets a state and reason. Applicable ASVS control coverage is separate from file counts and informational: unchecked ASVS controls are counted in the report but never make a scan incomplete. States are `reviewed`, `not_applicable`, `deferred`, `unsupported`, `unknown`, and `failed`; exclusion is a scoped reason, not silent omission.
 
 Complete coverage requires all inventory files reviewed/not_applicable or explicitly excluded, all applicable OWASP lanes reviewed/not_applicable, and no missing worker. Preserve all other gaps as partial. A canceled, failed, interrupted, or zero-finding partial result cannot support a clean conclusion.
 

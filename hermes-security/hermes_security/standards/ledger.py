@@ -195,13 +195,26 @@ def build_ledger(surfaces, coverage_units: list[dict], findings: list[dict]) -> 
 
 
 def mandatory_gaps(ledger: dict) -> list[str]:
-    """Explain each unclosed lane or applicable control in plain language."""
+    """Explain each unclosed OWASP lane in plain language.
+
+    ASVS controls are informational: no packet assigns them, so counting them would mark every
+    scan incomplete. ``asvs_summary`` reports how many were checked instead.
+    """
     gaps = []
-    for section, key, label in (("owaspTop10", "categories", "OWASP lane"), ("asvs", "controls", "ASVS control")):
-        for row in ledger.get(section, {}).get(key, []):
-            if row["state"] not in {"reviewed", "not_applicable"}:
-                gaps.append(f"{label} {row['id']} is {row['state']}: {str(row['reason']).rstrip(' .')}.")
+    for row in ledger.get("owaspTop10", {}).get("categories", []):
+        if row["state"] not in {"reviewed", "not_applicable"}:
+            gaps.append(f"OWASP lane {row['id']} is {row['state']}: {str(row['reason']).rstrip(' .')}.")
     return gaps
+
+
+def asvs_summary(ledger: dict) -> dict:
+    """Counts of applicable ASVS controls (those not ``not_applicable``) by state, plus finding-mapped ones."""
+    controls = [c for c in ledger.get("asvs", {}).get("controls", []) if c.get("state") != "not_applicable"]
+    states: dict[str, int] = {}
+    for control in controls:
+        states[control["state"]] = states.get(control["state"], 0) + 1
+    mapped = sum(c.get("reason") == "finding mapped but control not closed" for c in controls)
+    return {"applicable": len(controls), "states": states, "findingMapped": mapped}
 
 
 def specialist_profiles_for(surfaces) -> list[str]:

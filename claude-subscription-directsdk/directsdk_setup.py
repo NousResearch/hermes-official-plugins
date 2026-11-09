@@ -9,12 +9,19 @@ The handshake always fetches the CLI's feature flags, which is what makes its pi
 model the account runs. Anything unexpected returns ``None``/``False`` so callers fall back to the
 pinned catalog rather than failing setup.
 """
+import base64
+import ipaddress
 import json
+import logging
 import os
 import shutil
+import ssl
 import subprocess
 import tempfile
+import threading
+from collections import namedtuple
 from collections.abc import Mapping
+from urllib.parse import urlsplit
 
 try:
     from . import extra_usage
@@ -241,7 +248,8 @@ def setup_status(command=None, env=None, timeout=20):
     login_command = resolved + ["auth", "login"]
     try:
         child = _child_env(env)
-    except UnscopedSecretError as error:
+        resolve_upstream()  # an unusable gateway setting fails setup, and an opted-in one logs where the login goes
+    except (UnscopedSecretError, ClaudeUpstreamConfigError) as error:
         return {"available": True, "logged_in": False, "plan": "", "detail": str(error), "login_command": login_command}
     try:
         run = subprocess.run(resolved + ["auth", "status"], env=child, stdin=subprocess.DEVNULL,
@@ -273,7 +281,8 @@ def discover_models(command=None, env=None, timeout=40):
         return None
     try:
         child = _child_env(env, flag_fetch=True)
-    except UnscopedSecretError:
+        upstream = resolve_upstream()
+    except (UnscopedSecretError, ClaudeUpstreamConfigError):
         return None
     # The account's own picker (entitlement-gated models such as Mythos, older models it still runs) is
     # native's served catalog, and native serves it only first-party: behind any ANTHROPIC_BASE_URL,
@@ -282,7 +291,8 @@ def discover_models(command=None, env=None, timeout=40):
     # stdin, so native has no user turn to query; its debug log shows bootstrap, MCP-directory and
     # telemetry fetches and no Messages request. An inherited auth/backend override keeps the relay,
     # since the request path refuses those environments anyway and the bearer must not leave for them.
-    gate = None if _first_party(child) else Admission("https://api.anthropic.com", timeout)
+    # An opted-in gateway carries the handshake too; the picker is then the CLI's generic list.
+    gate = None if _first_party(child) and not upstream.opted_in else relay(upstream, timeout)
     try:
         if gate is not None:
             child["ANTHROPIC_BASE_URL"] = gate.url
@@ -383,13 +393,14 @@ def fetch_usage(command=None, env=None, timeout=8):
         return None, INSTALL_HINT
     try:
         child = _child_env(env)
-    except UnscopedSecretError as error:
+        upstream = resolve_upstream()
+    except (UnscopedSecretError, ClaudeUpstreamConfigError) as error:
         return None, str(error)
     if "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in env:
         # With this flag the CLI skips the very fetch /usage asks for (rate_limits: null). The probe
         # is zero-inference behind the unused admission gate; DISABLE_TELEMETRY stays on (P#258).
         child.pop("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", None)
-    gate = Admission("https://api.anthropic.com", timeout)
+    gate = relay(upstream, timeout)
     try:
         child["ANTHROPIC_BASE_URL"] = gate.url
         argv = resolved + ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
@@ -431,6 +442,108 @@ def _catalog_label(model):
         parts = parts[:-1]
     family, version = parts[0], [p for p in parts[1:] if p.isdigit()]
     return " ".join(filter(None, [family.capitalize(), ".".join(version)]))
+
+
+ANTHROPIC_UPSTREAM = "https://api.anthropic.com"
+UPSTREAM_SETTINGS = ("upstream_url", "upstream_proxy", "upstream_ca_file")
+# The CONNECT proxy's `user:password`, a secret, so it lives in the profile's .env, never in config.yaml.
+PROXY_AUTH_ENV = "CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY_AUTH"
+Upstream = namedtuple("Upstream", "url proxy context opted_in")
+_logger = logging.getLogger(__name__)
+_warned = set()
+_warned_lock = threading.Lock()
+
+
+class ClaudeUpstreamConfigError(RuntimeError):
+    """A gateway setting is set but unusable: the request is refused instead of going to Anthropic directly."""
+
+
+def _loopback(host):
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host == "localhost"
+
+
+def _setting_text(key):
+    value = _setting(key, "")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _upstream_url(raw):
+    try:
+        parts = urlsplit(raw)
+        host, _ = parts.hostname, parts.port
+    except ValueError:
+        host, parts = None, None
+    if (not host or parts.username or parts.password or parts.query or parts.fragment
+            or not (parts.scheme == "https" or (parts.scheme == "http" and _loopback(host)))):
+        raise ClaudeUpstreamConfigError("upstream_url must be an https:// URL with no user:password@, ?query or "
+                                        "#fragment; refusing to send the Claude login anywhere else")
+    return raw.rstrip("/")
+
+
+def _upstream_proxy(raw):
+    try:
+        parts = urlsplit(raw)
+        host, port = parts.hostname, parts.port or 80
+    except ValueError:
+        host = port = None
+    if (not host or not parts or parts.scheme != "http" or parts.username or parts.password
+            or parts.path not in ("", "/") or parts.query or parts.fragment):
+        raise ClaudeUpstreamConfigError("upstream_proxy must be http://host:port (an HTTP CONNECT proxy; put its "
+                                        f"user:password in {PROXY_AUTH_ENV} in the profile's .env)")
+    headers = None
+    reader, routed = _secret_scope()
+    credentials = reader(PROXY_AUTH_ENV) if reader else (None if routed else os.environ.get(PROXY_AUTH_ENV))
+    if credentials:
+        headers = {"Proxy-Authorization": "Basic " + base64.b64encode(credentials.encode()).decode()}
+    return host, port, headers
+
+
+def _upstream_context(raw):
+    path = os.path.expanduser(raw)
+    context = ssl.create_default_context()
+    try:
+        context.load_verify_locations(cafile=path)
+    except (OSError, ssl.SSLError, ValueError) as error:
+        raise ClaudeUpstreamConfigError(f"upstream_ca_file {path!r} is not a readable PEM CA bundle ({error})") from None
+    return context
+
+
+def resolve_upstream():
+    """Where the relay sends the Claude login: Anthropic, or the profile's opted-in gateway.
+
+    Any of ``upstream_url``, ``upstream_proxy``, ``upstream_ca_file`` set is the opt-in, and every one set must be
+    valid or ``ClaudeUpstreamConfigError`` names it: never a fallback to the direct route. The CA file adds trust to
+    the system roots; certificate and hostname checks stay on. An inherited ``ANTHROPIC_BASE_URL`` is never read.
+    """
+    url_raw, proxy_raw, ca_raw = (_setting_text(key) for key in UPSTREAM_SETTINGS)
+    if not (url_raw or proxy_raw or ca_raw):
+        return Upstream(ANTHROPIC_UPSTREAM, None, None, False)
+    url = _upstream_url(url_raw) if url_raw else ANTHROPIC_UPSTREAM
+    proxy = _upstream_proxy(proxy_raw) if proxy_raw else None
+    context = _upstream_context(ca_raw) if ca_raw else None
+    host = urlsplit(url).hostname
+    try:
+        from hermes_constants import get_hermes_home
+        home = str(get_hermes_home())
+    except ImportError:
+        home = ""
+    with _warned_lock:
+        first = (home, url, proxy and proxy[:2], ca_raw) not in _warned
+        _warned.add((home, url, proxy and proxy[:2], ca_raw))
+    if first:
+        route = (f" through the CONNECT proxy {proxy[0]}:{proxy[1]}" if proxy else "") + (
+            ", TLS inspected with the CA in upstream_ca_file" if context else "")
+        _logger.warning("claude-subscription-directsdk: the Claude login's bearer token goes to %s%s (upstream "
+                        "settings for this profile)", host, route)
+    return Upstream(url, proxy, context, True)
+
+
+def relay(upstream, timeout, **kwargs):
+    """An admission relay to ``upstream`` (``resolve_upstream()``)."""
+    return Admission(upstream.url, timeout, proxy=upstream.proxy, context=upstream.context, **kwargs)
 
 
 def check_extra_usage(command, env):

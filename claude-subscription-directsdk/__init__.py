@@ -216,6 +216,9 @@ def classify_api_error(error, **_):
     # as this error; Hermes marks its request cancelled first, drops ours and raises InterruptedError.
     if isinstance(error, RuntimeError) and str(error) == 'Claude request cancelled':
         return {'reason': 'timeout'}
+    if type(error).__name__ == 'ClaudeUpstreamConfigError':
+        # The profile's gateway setting is wrong: no retry fixes it, and no provider switch should hide it.
+        return {'reason': 'format_error', 'retryable': False, 'should_fallback': False}
     if type(error).__name__ == 'ClaudeExtraUsageBlocked':
         return _plan_limit(str(error))
     if type(error).__name__ == 'ClaudeAPIError' and THIRD_PARTY_EXTRA_USAGE in str(error).lower():

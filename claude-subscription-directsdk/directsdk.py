@@ -31,13 +31,13 @@ try:
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from .directsdk_setup import (
         INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
-        apply_traffic_policy, check_extra_usage, drop_api_credentials, observe_rate_limit)
+        apply_traffic_policy, check_extra_usage, drop_api_credentials, observe_rate_limit, relay, resolve_upstream)
 except ImportError:
     from admission import Admission
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from directsdk_setup import (
         INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
-        apply_traffic_policy, check_extra_usage, drop_api_credentials, observe_rate_limit)
+        apply_traffic_policy, check_extra_usage, drop_api_credentials, observe_rate_limit, relay, resolve_upstream)
 
 
 # Hermes picks retry vs fallback from an error's status_code (main loop and auxiliary ladder alike).
@@ -851,7 +851,10 @@ class Client:
                 # turn, where Claude reads Claude Code's notes as text smuggled into the user's message (#195).
                 env.update(CLAUDE_CODE_DISABLE_AUTO_MEMORY='1', CLAUDE_CODE_DISABLE_CLAUDE_MDS='1')
                 # The queried frame lets the relay keep the cache breakpoint off native's per-request context.
-                request.admission = Admission(env.get('ANTHROPIC_BASE_URL', 'https://api.anthropic.com'), timeout, queried=frames[-1]['message']['content'])
+                # Anthropic or the profile's opted-in gateway; an explicit Client(env=...) fixture may name its own.
+                queried = frames[-1]['message']['content']
+                request.admission = (Admission(env['ANTHROPIC_BASE_URL'], timeout, queried=queried) if env.get('ANTHROPIC_BASE_URL')
+                                     else relay(resolve_upstream(), timeout, queried=queried))
                 # A Hermes auxiliary one-shot (summary, title: marked by the profile hook, one turn, no tools) is
                 # never replayed, so the relay drops its message cache marks instead of moving them.
                 request.admission.one_shot = kwargs.get('hermes_auxiliary') is True and not manifest and len(frames) == 1

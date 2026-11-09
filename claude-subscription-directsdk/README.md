@@ -84,7 +84,7 @@ Auxiliary/fallback routing remains owned by Hermes. Configure those routes expli
 
 ### Proxies
 
-The relay opens the upstream connection itself, so it applies native's proxy variables from the Hermes process environment: `https_proxy`/`HTTPS_PROXY`, then `http_proxy`/`HTTP_PROXY`, with `NO_PROXY` exceptions (standard-library matching; comma- or space-separated). The proxy must be an `http://` CONNECT proxy; `user:pass@` in its URL becomes a `Proxy-Authorization` header. TLS still terminates at `api.anthropic.com`, so the subscription bearer never reaches the proxy. A SOCKS or TLS-to-proxy URL is ignored with a warning and the relay connects directly, as it did before proxy support.
+The relay opens the upstream connection itself, so it applies native's proxy variables from the Hermes process environment: `https_proxy`/`HTTPS_PROXY`, then `http_proxy`/`HTTP_PROXY`, with `NO_PROXY` exceptions (standard-library matching; comma- or space-separated). The proxy must be an `http://` CONNECT proxy; `user:pass@` in its URL becomes a `Proxy-Authorization` header. TLS still terminates at `api.anthropic.com`, so the subscription bearer never reaches the proxy. A SOCKS or TLS-to-proxy URL is ignored with a warning and the relay connects directly, as it did before proxy support. For a proxy that must never be bypassed, use the `upstream_proxy` setting below, which fails closed.
 
 ## Settings
 
@@ -122,6 +122,22 @@ A 400 that says "Third-party apps now draw from your extra usage" is reported th
 ```sh
 hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.extra_usage stop
 ```
+
+**Organization gateway** (`upstream_url`, `upstream_proxy`, `upstream_ca_file`, all empty by default; #46). One explicit opt-in per profile for organizations that route model traffic through their own LLM gateway, an egress CONNECT proxy, or a TLS-inspecting proxy:
+
+```sh
+S=plugins.entries.claude-subscription-directsdk-experimental.settings
+hermes config set $S.upstream_url https://llm-gateway.example.com/anthropic
+hermes config set $S.upstream_proxy http://egress.example.com:3128
+hermes config set $S.upstream_ca_file /etc/ssl/corp-root.pem
+```
+
+- `upstream_url` replaces `https://api.anthropic.com` for every relay the plugin opens: turns, `/usage` and the picker handshake (which then goes through the relay too, so the picker is Claude Code's generic list rather than the account's own). It must be `https://` with no `user:password@`, query or fragment. **The Claude login's bearer token goes to this host**: one warning per profile and route names it in the log.
+- `upstream_proxy` is an `http://host:port` CONNECT proxy for that hop; TLS still ends at the upstream host. Its credentials are a secret: put `user:password` in `CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY_AUTH` in the profile's `.env`. With this setting the `HTTPS_PROXY` variables are not used for the relay.
+- `upstream_ca_file` adds a PEM bundle to the system roots; certificate and hostname checks stay on. The warning then says the TLS is inspected.
+- Gateway auth headers go in `ANTHROPIC_CUSTOM_HEADERS` in the profile's `.env`; Claude Code sends them and the relay forwards them. A profile served by a multiplexed gateway gets only its own `.env` values.
+- Fail closed: a setting that is set but invalid (non-HTTPS URL, credentials in a URL, a SOCKS proxy, an unreadable CA file) refuses the turn, `/usage` and setup with an error naming the setting. It never falls back to the direct route.
+- An inherited `ANTHROPIC_BASE_URL` stays refused with or without these settings; no environment variable selects the upstream.
 
 ## Ownership and replay
 

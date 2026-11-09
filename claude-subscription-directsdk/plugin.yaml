@@ -11,6 +11,8 @@ requires_hermes: ">=0.21.4"
 platforms: []
 optional_env:
   - CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND
+  - CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY_AUTH
+  - ANTHROPIC_CUSTOM_HEADERS
   - CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR
   - CLAUDE_CONFIG_DIR
 external_dependencies:
@@ -48,3 +50,26 @@ config_schema:
     description: >-
       An ISO 8601 time. In ask mode, requests drawing extra usage are sent until then. The refusal message
       prints the exact command with the current window's reset time.
+  upstream_url:
+    type: string
+    default: ""
+    label: Organization LLM gateway URL
+    description: >-
+      Send this profile's Claude requests, /usage and the picker handshake to your organization's gateway
+      instead of https://api.anthropic.com. The Claude login's bearer token goes to this host. https:// only,
+      no user:password, query or fragment. Empty means Anthropic directly. An invalid value refuses every
+      request rather than falling back.
+  upstream_proxy:
+    type: string
+    default: ""
+    label: Upstream CONNECT proxy
+    description: >-
+      http://host:port of an HTTP CONNECT proxy for the upstream hop (TLS still ends at the upstream host).
+      Put its user:password in CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY_AUTH in the profile's .env.
+  upstream_ca_file:
+    type: string
+    default: ""
+    label: Extra CA bundle for the upstream hop
+    description: >-
+      A PEM file added to the system roots, for a TLS-inspecting proxy or a gateway with a private CA.
+      Certificate and hostname checks stay on. An unreadable file refuses every request.

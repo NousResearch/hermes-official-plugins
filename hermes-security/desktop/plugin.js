@@ -1564,12 +1564,16 @@ function FindingSections({ id, finding: f, patch, chains, note, setNote, saveNot
     ] })
   ] })
 }
-// A titled create reopens the chat already holding that title, so a fix chat's title carries the
-// minute it was started: a second fix of the same finding gets its own chat, a double click does not.
-export function fixChatTitle(title, now = new Date()) {
-  const when = now.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
-  return `Fix: ${title || 'security finding'} · ${when}`
+// A titled create reopens the chat already holding that title, so a fix chat's title names the finding
+// (short id) and the second it started: another finding or a later attempt never reuses a chat.
+export function fixChatTitle(title, id, now = new Date()) {
+  const when = now.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    second: '2-digit', hour12: false })
+  const short = String(id || '').replace(/^hsf_/, '').slice(0, 6)
+  return `Fix: ${title || 'security finding'}${short ? ` · ${short}` : ''} · ${when}`
 }
+// Findings whose fix chat is being created; a second click meanwhile does nothing (no second prompt).
+export const fixesStarting = new Set()
 export async function startChat(path, title, prompt) {
   const session = await host.request('session.create', { cwd: path, title })
   if (!session?.session_id) throw new Error('A chat could not be started.')
@@ -1594,14 +1598,18 @@ export function FindingDetail({ id, onBack, nativeSelect = false }) {
     action.mutate({ path: `/findings/${id}/triage`, body: { state, note: newNote }, expected: { state } })
   const root = f.target?.root || pathOf(f.scan) || pathOf(f)
   const fix = async () => {
+    if (fixesStarting.has(id)) return
+    fixesStarting.add(id)
     setChatError(null)
     try {
-      const session = await startChat(root, fixChatTitle(f.title),
+      const session = await startChat(root, fixChatTitle(f.title, id),
         `Load the hermes-security:fix-finding skill and fix security finding ${id} ("${f.title}") in ${root}. ` +
         'Read it with the security tools first, make the smallest fix for the root cause, and verify it.')
       await host.openSession(session.stored_session_id || session.session_id)
     } catch (e) {
       setChatError(e)
+    } finally {
+      fixesStarting.delete(id)
     }
   }
   const level = sevOf(f)

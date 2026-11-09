@@ -10,6 +10,7 @@ the next one. Under ``ask``/``stop`` a check that cannot tell refuses too.
 from datetime import datetime, timezone
 import hashlib
 import logging
+import math
 import os
 import threading
 import time
@@ -90,6 +91,13 @@ def observe(key, summary, setting=None):
                        "to 'ask' or 'stop' to refuse it.", until)
 
 
+def usage_percent(value, fraction=False):
+    """A finite number as a 0-100 percent, else None. ``fraction``: the legacy ``utilization`` windows send 0..1."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return value * 100.0 if fraction and value <= 1 else float(value)
+
+
 def observe_usage(key, limits):
     """Feed a ``get_usage`` ``rate_limits`` body and return ``(using_overage, resets_at)``: spilling means extra
     usage is on and an account-wide plan window is full."""
@@ -97,14 +105,12 @@ def observe_usage(key, limits):
     full = []
     for entry in limits.get("limits") or ():
         if isinstance(entry, dict) and entry.get("kind") in ("session", "weekly_all"):
-            percent = entry.get("percent")
-            if isinstance(percent, (int, float)) and not isinstance(percent, bool) and percent >= 100:
+            if (usage_percent(entry.get("percent")) or 0) >= 100:
                 full.append(entry.get("resets_at"))
     if not limits.get("limits"):
         for name in ("five_hour", "seven_day"):
             window = limits.get(name) if isinstance(limits.get(name), dict) else {}
-            used = window.get("utilization")
-            if isinstance(used, (int, float)) and not isinstance(used, bool) and used >= 100:
+            if (usage_percent(window.get("utilization"), fraction=True) or 0) >= 100:
                 full.append(window.get("resets_at"))
     resets = [_parse(value) for value in full]
     resets_at = max((r for r in resets if r), default=None)

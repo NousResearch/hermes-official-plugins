@@ -1,7 +1,6 @@
 """Claude Subscription DirectSDK (Experimental) — standalone Hermes model-provider registration."""
 from datetime import datetime, timezone
 import logging
-import math
 import os
 import shutil
 
@@ -12,9 +11,11 @@ from providers.base import ProviderProfile
 try:
     from .model_catalog import ALIASES, MODEL_METADATA, MODEL_CAPABILITIES, PICKER_ROUTES, native_model
     from .directsdk_setup import INSTALL_HINT, _resolve
+    from .extra_usage import usage_percent as _percent
 except ImportError:
     from model_catalog import ALIASES, MODEL_METADATA, MODEL_CAPABILITIES, PICKER_ROUTES, native_model
     from directsdk_setup import INSTALL_HINT, _resolve
+    from extra_usage import usage_percent as _percent
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +31,6 @@ LIMIT_LABELS = {'session': 'Current session', 'weekly_all': 'Current week'}
 # The older top-level windows, for a response without `limits` (core's Anthropic fetcher reads these).
 LEGACY_WINDOWS = (('five_hour', 'Current session'), ('seven_day', 'Current week'),
                   ('seven_day_opus', 'Opus week'), ('seven_day_sonnet', 'Sonnet week'))
-
-
-def _percent(value, fraction=False):
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-        return None
-    return value * 100.0 if fraction and value <= 1 else float(value)
 
 
 def _reset_at(value):

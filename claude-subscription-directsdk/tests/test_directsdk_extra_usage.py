@@ -138,6 +138,23 @@ def test_a_new_process_asks_claude_code_once_before_refusing(native, monkeypatch
     assert len(calls) == 1 and native.spawns() == (0 if refused else 2)
 
 
+@pytest.mark.parametrize("utilization, refused", [(1, True), (1.0, True), (100, True), (0.99, False)])
+def test_a_full_legacy_window_is_spilling(native, monkeypatch, utilization, refused):
+    """Greptile 4511161857: legacy `utilization` is a 0..1 fraction (as /usage reads it), so 1 is a full window."""
+    from extra_usage import ClaudeExtraUsageBlocked
+    _settings(extra_usage="stop")
+    body = {"extra_usage": {"is_enabled": True}, "five_hour": {"utilization": utilization, "resets_at": "2030-01-01T00:00:00Z"},
+            "seven_day": {"utilization": 0.2}}
+    _usage_probe(monkeypatch, json.dumps({"type": "control_response", "response": {
+        "subtype": "success", "request_id": "hermes-usage", "response": {"rate_limits": body}}}) + "\n")
+    if refused:
+        with pytest.raises(ClaudeExtraUsageBlocked, match="2030-01-01T00:00:00Z"):
+            native()
+    else:
+        native()
+    assert native.spawns() == (0 if refused else 1)
+
+
 def _usage_probe(monkeypatch, answer):
     """Fake only the get_usage probe child; the turn spawns the real fake native. Returns the probe envs."""
     import directsdk_setup

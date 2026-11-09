@@ -8,6 +8,7 @@ import os
 import ssl
 import sys
 import threading
+import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from types import SimpleNamespace
@@ -125,6 +126,49 @@ def test_usage_and_picker_probes_use_the_gateway_too(clean, monkeypatch, probe):
     assert used == [("https://llm-gateway.example.com/anthropic", ("egress.example.com", 3128, None))]
 
 
+@pytest.mark.parametrize("probe", ["fetch_usage", "discover_models", "turn"])
+def test_the_clis_own_calls_take_the_configured_proxy_and_ca(clean, tmp_path, monkeypatch, probe):
+    """Greptile 4511161868. Only Messages requests follow ANTHROPIC_BASE_URL; get_usage, bootstrap, the MCP directory
+    and telemetry go to api.anthropic.com from the CLI itself. With upstream_proxy / upstream_ca_file set they must
+    take that proxy and CA too (an org that requires egress through it), while the loopback relay stays direct."""
+    import directsdk_setup
+    ca, _ = _tls_pair(tmp_path)
+    _settings(upstream_url="https://llm-gateway.example.com/anthropic", upstream_proxy="http://egress.example.com:3128",
+              upstream_ca_file=str(ca))
+    monkeypatch.setenv(PROXY_AUTH, "svc:p@ss")
+    monkeypatch.setenv("NO_PROXY", "internal.example.com")
+    seen = []
+    if probe == "turn":
+        native = tmp_path / "native.py"
+        native.write_text("import json, os\nopen(os.environ['ENV_CAPTURE'], 'w').write(json.dumps(dict(os.environ)))\n"
+                          + NATIVE, encoding="utf-8")
+        monkeypatch.setenv("ENV_CAPTURE", str(tmp_path / "env.json"))
+        import directsdk
+        client = directsdk.Client(command=[sys.executable, str(native)], timeout=5)
+        try:
+            with pytest.raises(Exception):  # nothing listens at the gateway; the spawn env is what is checked
+                client.create(**REQUEST)
+        finally:
+            client.close()
+        seen.append(json.loads((tmp_path / "env.json").read_text()))
+    else:
+        status = {"loggedIn": True, "authMethod": "claude.ai", "subscriptionType": "max"}
+
+        def run(argv, **kwargs):
+            if argv[1:3] == ["auth", "status"]:
+                return SimpleNamespace(stdout=json.dumps(status), returncode=0)
+            seen.append(kwargs["env"])
+            return SimpleNamespace(stdout="", returncode=0)
+        monkeypatch.setattr(directsdk_setup.subprocess, "run", run)
+        monkeypatch.setattr(directsdk_setup.subprocess, "Popen", popen_from_run(run))
+        getattr(directsdk_setup, probe)(command=[sys.executable], env=dict(os.environ, PATH=os.defpath))
+    env, = seen
+    assert env["HTTPS_PROXY"] == env["https_proxy"] == "http://svc:p%40ss@egress.example.com:3128"
+    assert env["NODE_EXTRA_CA_CERTS"] == str(ca)
+    assert env["NO_PROXY"].split(",") == ["internal.example.com", "127.0.0.1", "localhost"]
+    assert env["ANTHROPIC_BASE_URL"].startswith("http://127.0.0.1:")
+
+
 @pytest.mark.parametrize("settings, named", [
     ({"upstream_url": "http://gateway.example.com"}, "upstream_url"),
     ({"upstream_url": "https://user:pw@gateway.example.com"}, "upstream_url"),
@@ -168,7 +212,7 @@ def test_a_non_string_gateway_setting_refuses_instead_of_going_direct(clean, tmp
 def test_an_empty_gateway_setting_is_the_direct_route(clean):
     import directsdk_setup
     _settings(upstream_url="", upstream_proxy="  ")
-    assert directsdk_setup.resolve_upstream() == ("https://api.anthropic.com", None, None, False)
+    assert directsdk_setup.resolve_upstream()[:4] == ("https://api.anthropic.com", None, None, False)
 
 
 def test_an_inherited_base_url_stays_refused_with_the_opt_in(clean, tmp_path, monkeypatch):
@@ -197,6 +241,34 @@ def test_no_settings_is_anthropic_with_the_default_trust(clean):
     upstream = directsdk_setup.resolve_upstream()
     assert upstream.url == "https://api.anthropic.com" and not upstream.opted_in
     assert upstream.proxy is None and upstream.context is None
+
+
+@pytest.mark.parametrize("method, path", [("GET", "/api/oauth/usage"), ("GET", "/api/claude_cli/bootstrap"),
+                                          ("GET", "/v1/mcp_servers"), ("POST", "/api/event_logging/v2/batch")])
+def test_only_messages_requests_reach_the_gateway(clean, method, path):
+    """Greptile 4511161868. Measured with the real CLI (2.1.319, 2.1.292) behind an opted-in gateway: get_usage and
+    the initialize handshake send nothing to ANTHROPIC_BASE_URL; their fetches (these paths) go to api.anthropic.com
+    directly, and only POST /v1/messages follows the base URL. The relay forwards that one path and nothing else, so
+    the login's bearer reaches the gateway only on a Messages request."""
+    import directsdk_setup
+    gateway = _Gateway()
+    try:
+        _settings(upstream_url=f"http://127.0.0.1:{gateway.port}/org")
+        gate = directsdk_setup.relay(directsdk_setup.resolve_upstream(), 5)
+        try:
+            request = urllib.request.Request(gate.url + path, data=b"{}" if method == "POST" else None, method=method,
+                                             headers={"Authorization": "Bearer probe", "Content-Type": "application/json"})
+            with pytest.raises(urllib.error.HTTPError):
+                urllib.request.urlopen(request, timeout=10)
+            assert not gate.used and gateway.seen == []
+            messages = urllib.request.Request(gate.url + "/v1/messages", data=b"{}", headers={
+                "Authorization": "Bearer probe", "Content-Type": "application/json"})
+            urllib.request.urlopen(messages, timeout=10).read()
+        finally:
+            gate.close()
+    finally:
+        gateway.close()
+    assert gateway.seen == [("/org/v1/messages", "Bearer probe")]
 
 
 def _tls_pair(tmp_path):

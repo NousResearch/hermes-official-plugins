@@ -24,7 +24,7 @@ import time
 from collections import namedtuple
 from collections.abc import Mapping
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 try:
     from . import extra_usage
@@ -419,8 +419,10 @@ def discover_models(command=None, env=None, timeout=40):
     # stdin, so native has no user turn to query; its debug log shows bootstrap, MCP-directory and
     # telemetry fetches and no Messages request. An inherited auth/backend override keeps the relay,
     # since the request path refuses those environments anyway and the bearer must not leave for them.
-    # An opted-in gateway carries the handshake too; the picker is then the CLI's generic list.
+    # With an opted-in gateway the relay is the base URL, so the picker is the CLI's generic list; the handshake's
+    # own fetches still go to api.anthropic.com, through the configured proxy and CA (egress_env).
     gate = None if _first_party(child) and not upstream.opted_in else relay(upstream, timeout)
+    egress_env(child, upstream)
     try:
         if gate is not None:
             child["ANTHROPIC_BASE_URL"] = gate.url
@@ -534,6 +536,7 @@ def _ask_usage(resolved, child, exported, upstream, timeout):
         # With this flag the CLI skips the very fetch /usage asks for (rate_limits: null). The probe
         # is zero-inference behind the unused admission gate; DISABLE_TELEMETRY stays on (P#258).
         child.pop("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", None)
+    egress_env(child, upstream)
     gate = relay(upstream, timeout)
     try:
         child["ANTHROPIC_BASE_URL"] = gate.url
@@ -579,7 +582,8 @@ ANTHROPIC_UPSTREAM = "https://api.anthropic.com"
 UPSTREAM_SETTINGS = ("upstream_url", "upstream_proxy", "upstream_ca_file")
 # The CONNECT proxy's `user:password`, a secret, so it lives in the profile's .env, never in config.yaml.
 PROXY_AUTH_ENV = "CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY_AUTH"
-Upstream = namedtuple("Upstream", "url proxy context opted_in")
+# child_env: what the CLI's own non-Messages calls need to take the same egress route (see egress_env).
+Upstream = namedtuple("Upstream", "url proxy context opted_in child_env", defaults=(None,))
 _logger = logging.getLogger(__name__)
 _warned = set()
 _warned_lock = threading.Lock()
@@ -635,7 +639,7 @@ def _upstream_proxy(raw):
     credentials = reader(PROXY_AUTH_ENV) if reader else (None if routed else os.environ.get(PROXY_AUTH_ENV))
     if credentials:
         headers = {"Proxy-Authorization": "Basic " + base64.b64encode(credentials.encode()).decode()}
-    return host, port, headers
+    return (host, port, headers), credentials
 
 
 def _upstream_context(raw):
@@ -659,8 +663,15 @@ def resolve_upstream():
     if not (url_raw or proxy_raw or ca_raw):
         return Upstream(ANTHROPIC_UPSTREAM, None, None, False)
     url = _upstream_url(url_raw) if url_raw else ANTHROPIC_UPSTREAM
-    proxy = _upstream_proxy(proxy_raw) if proxy_raw else None
+    proxy, credentials = _upstream_proxy(proxy_raw) if proxy_raw else (None, None)
     context = _upstream_context(ca_raw) if ca_raw else None
+    child_env = {}
+    if proxy:
+        user, _, password = (credentials or "").partition(":")
+        auth = f"{quote(user, safe='')}:{quote(password, safe='')}@" if credentials else ""
+        child_env["HTTPS_PROXY"] = child_env["https_proxy"] = f"http://{auth}{proxy[0]}:{proxy[1]}"
+    if context:
+        child_env["NODE_EXTRA_CA_CERTS"] = os.path.expanduser(ca_raw)
     host = urlsplit(url).hostname
     try:
         from hermes_constants import get_hermes_home
@@ -675,7 +686,21 @@ def resolve_upstream():
             ", TLS inspected with the CA in upstream_ca_file" if context else "")
         _logger.warning("claude-subscription-directsdk: the Claude login's bearer token goes to %s%s (upstream "
                         "settings for this profile)", host, route)
-    return Upstream(url, proxy, context, True)
+    return Upstream(url, proxy, context, True, child_env)
+
+
+def egress_env(env, upstream):
+    """Route a child's own calls (in place) the way the relay goes. Claude Code sends only Messages requests to
+    ANTHROPIC_BASE_URL; get_usage, bootstrap, the MCP directory and telemetry go to api.anthropic.com itself (measured
+    on 2.1.319 and 2.1.292). Under an opted-in upstream_proxy / upstream_ca_file those calls take the same CONNECT
+    proxy and trust the same CA, and the loopback relay stays direct."""
+    if not upstream.child_env:
+        return env
+    env.update(upstream.child_env)
+    if "HTTPS_PROXY" in upstream.child_env:
+        bypass = [entry for entry in (env.get("NO_PROXY") or env.get("no_proxy") or "").split(",") if entry.strip()]
+        env["NO_PROXY"] = env["no_proxy"] = ",".join(bypass + ["127.0.0.1", "localhost"])
+    return env
 
 
 def relay(upstream, timeout, **kwargs):

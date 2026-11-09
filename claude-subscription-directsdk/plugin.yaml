@@ -56,8 +56,9 @@ config_schema:
     default: ""
     label: Organization LLM gateway URL
     description: >-
-      Send this profile's Claude requests, /usage and the picker handshake to your organization's gateway
-      instead of https://api.anthropic.com. The Claude login's bearer token goes to this host. https:// only
+      Send this profile's Claude Messages requests to your organization's gateway instead of
+      https://api.anthropic.com. Claude Code's own account calls (/usage, bootstrap, MCP directory) still go to
+      api.anthropic.com, through upstream_proxy when set. The Claude login's bearer token goes to this host. https:// only
       (http:// only for a loopback host), no user:password, query or fragment. Empty means Anthropic directly. An invalid value refuses every
       request rather than falling back.
   upstream_proxy:
@@ -65,8 +66,9 @@ config_schema:
     default: ""
     label: Upstream CONNECT proxy
     description: >-
-      http://host:port of an HTTP CONNECT proxy for the upstream hop (TLS still ends at the upstream host).
-      Put its user:password in CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY_AUTH in the profile's .env.
+      http://host:port of an HTTP CONNECT proxy for the upstream hop (TLS still ends at the upstream host) and
+      for Claude Code's own calls to api.anthropic.com. Put its user:password in
+      CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY_AUTH in the profile's .env.
   upstream_ca_file:
     type: string
     default: ""

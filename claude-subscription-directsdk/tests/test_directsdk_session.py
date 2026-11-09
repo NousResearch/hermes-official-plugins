@@ -31,8 +31,8 @@ USAGE = {'input_tokens': 10, 'output_tokens': 5, 'cache_read_input_tokens': 0, '
 
 
 class Upstream(BaseHTTPRequestHandler):
-    """Answers from the history alone (two tool rounds per user turn, then text), so a kept process and a fresh one
-    get the same reply for the same conversation; keeps every body as received."""
+    """Answers from the history alone (five silent tool rounds per user turn, then thinking and text), so a kept
+    process and a fresh one get the same reply for the same conversation; keeps every body as received."""
 
     def log_message(self, *_):
         pass
@@ -42,12 +42,12 @@ class Upstream(BaseHTTPRequestHandler):
         self.server.bodies.append(raw)
         body = json.loads(raw)
         rounds = sum(m['role'] == 'assistant' for m in body['messages'])
-        tool = rounds % 3 < 2
-        blocks = [{'type': 'thinking', 'thinking': f'plan {rounds}', 'signature': f'sig{rounds:04d}'},
-                  {'type': 'text', 'text': f'step {rounds}'}]
-        if tool:
-            blocks.append({'type': 'tool_use', 'id': f'toolu_{rounds:04d}', 'name': 'mcp__hermes__read_file',
-                           'input': {'path': f'f{rounds}'}})
+        # Five steps with nothing for the user is what makes native add its "user hasn't heard from you" reminder.
+        tool = rounds % 6 < 5
+        blocks = [{'type': 'tool_use', 'id': f'toolu_{rounds:04d}', 'name': 'mcp__hermes__read_file',
+                   'input': {'path': f'f{rounds}'}}] if tool else \
+            [{'type': 'thinking', 'thinking': f'plan {rounds}', 'signature': f'sig{rounds:04d}'},
+             {'type': 'text', 'text': f'step {rounds}'}]
         events = [{'type': 'message_start', 'message': {'id': f'msg_{rounds}', 'type': 'message', 'role': 'assistant',
                                                        'model': body['model'], 'content': [], 'usage': USAGE}}]
         for i, block in enumerate(blocks):
@@ -144,7 +144,7 @@ def test_kept_session_sends_the_same_bytes_as_one_shots(home, upstream, monkeypa
     try:
         with caplog.at_level('INFO', logger=directsdk.logger.name):
             assert converse(kept, on_step=lambda: pids.append(session_pids(kept))) == history
-        assert len(expected) == 6 and upstream.bodies == expected
+        assert len(expected) == 12 and upstream.bodies == expected
         # One process served the whole conversation, and it never diverged.
         assert len(set().union(*pids)) == 1
         assert not [r for r in caplog.records if 'diverged' in r.getMessage()]

@@ -1,5 +1,6 @@
 """Scaffold contracts; no Hermes runtime or network required."""
 import importlib.util
+import hashlib
 import json
 import pytest
 import sys
@@ -59,6 +60,16 @@ def test_provenance_pins_and_entries():
         for key in ("sourceSha256", "destinationSha256"):
             assert len(entry[key]) == 64
             int(entry[key], 16)
+
+
+def test_provenance_pins_match_the_shipped_files():
+    # A pin that no longer matches its file hides what changed from the upstream source.
+    provenance = json.loads((ROOT / "UPSTREAM_PROVENANCE.json").read_text(encoding='utf-8'))
+    # Pins are of the bytes git stores (LF); a Windows checkout reads the same text with CRLF.
+    stale = [entry["destination"] for entry in provenance["files"]
+             if hashlib.sha256((ROOT / entry["destination"]).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+             != entry["destinationSha256"]]
+    assert stale == [], f"update destinationSha256 in UPSTREAM_PROVENANCE.json for {stale}"
 
 
 def test_register_is_lazy_and_forwards_context(monkeypatch):

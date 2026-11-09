@@ -117,9 +117,12 @@ if they differ, and keeps it in the plugin's data folder. Package names and
 versions are sent to api.osv.dev, and to api.deps.dev for manifests that have no
 lockfile.
 
-An advisory alone doesn't produce a finding. A finding is reported only when
-the review shows your code reaches the vulnerable behavior. If the check can't
-run, the report says so and marks the scan as partial.
+Advisories are collected into one dependency finding, rated at the worst
+advisory it contains. Packages a `uv.lock` or `package-lock.json` installs only
+for development (test runners, linters) are marked as such and count as low,
+because they don't ship with your code. A separate finding is reported only
+when the review shows your code reaches the vulnerable behavior. If the check
+can't run, the report says so and marks the scan as partial.
 
 To turn the check off, set `HERMES_SECURITY_DEPENDENCY_CHECK=off`. If your
 network blocks GitHub, ask an admin to install osv-scanner and set

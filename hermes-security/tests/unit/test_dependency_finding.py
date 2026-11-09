@@ -122,3 +122,14 @@ def test_finalize_reports_end_of_life_runtimes_when_no_lockfile_is_in_scope(tmp_
     report = service.get_scan(sid, 'report')['content']
     assert 'Dependencies with known vulnerabilities (worst: low)' in report
     assert 'Runtime past end of life: nodejs 18 in .nvmrc' in report
+
+
+def test_development_only_packages_count_as_low():
+    dev = {**lead('pytest', 'medium', path='api/uv.lock'), 'devOnly': True}
+    result = build(receipt([dev]))
+    assert result['severity']['level'] == 'low'
+    assert 'pytest 1.0.0 (development only) in api/uv.lock: medium' in result['rootCause']
+    assert '(1 installed only for development)' in result['summary']
+    assert 'only for development count as low' in result['severity']['rationale']
+    # A shipped package still sets the rating.
+    assert build(receipt([dev, lead('lodash', 'high')]))['severity']['level'] == 'high'

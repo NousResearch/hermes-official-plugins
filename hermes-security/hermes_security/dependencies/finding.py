@@ -26,6 +26,9 @@ _UNRATED = 'low'
 
 
 def _level(lead):
+    """A lead's advisory rating; development-only packages never ship, so they count as low."""
+    if lead.get('devOnly'):
+        return _UNRATED
     return lead.get('severity') if lead.get('severity') in _RANK else _UNRATED
 
 
@@ -38,7 +41,8 @@ def _package_line(lead):
     ids = ', '.join(a.get('id', '') for a in advisories[:3]) + (f' +{len(advisories) - 3} more' if len(advisories) > 3 else '')
     fixed = sorted({v for a in advisories for v in a.get('fixed', [])})[:3]
     rated = lead.get('severity') if lead.get('severity') in _RANK else 'unrated'
-    return (f"{lead.get('name')} {lead.get('version')} in {lead.get('path')}: {rated}, "
+    dev = ' (development only)' if lead.get('devOnly') else ''
+    return (f"{lead.get('name')} {lead.get('version')}{dev} in {lead.get('path')}: {rated}, "
             f"{len(advisories)} {'advisory' if len(advisories) == 1 else 'advisories'} ({ids})"
             + (f'; fixed in {", ".join(fixed)}' if fixed else '; no fixed version published'))
 
@@ -82,12 +86,14 @@ def build(receipt, *, scan_id, repo_key):
     by_level = ', '.join(f'{levels[k]} {k}' for k in _RANK if levels[k])
     leads.sort(key=lambda l: (-_RANK.get(_level(l), 0), l.get('path', ''), l.get('name', '')))
 
+    dev_only = sum(bool(l.get('devOnly')) for l in leads)
     parts = []
     if leads:
         parts.append(f"{_plural(total, 'package')} of {receipt.get('packages', total)} pinned in "
                      f"{_plural(len(receipt.get('sources', [])), 'lockfile')} {'has' if total == 1 else 'have'} "
                      f"{receipt.get('advisories', 0)} published "
-                     f"{'advisory' if receipt.get('advisories', 0) == 1 else 'advisories'}")
+                     f"{'advisory' if receipt.get('advisories', 0) == 1 else 'advisories'}"
+                     + (f' ({dev_only} installed only for development)' if dev_only else ''))
     if runtimes:
         parts.append(f"{_plural(len(runtimes), 'declared runtime')} past end of life")
     summary = (' and '.join(parts) + f'. The worst of them is rated {worst}. An attacker who can drive input '
@@ -127,7 +133,8 @@ def build(receipt, *, scan_id, repo_key):
                             'The pinned versions are the ones that ship at runtime.']},
         'severity': {'level': worst,
                      'rationale': (f'Rated at the most severe advisory among the affected packages ({by_level}). '
-                                   'Advisories without a published rating, and runtimes past end of life, count as low.'),
+                                   'Advisories without a published rating, runtimes past end of life, and packages '
+                                   'the lockfile installs only for development count as low.'),
                      'reachability': 'Not traced: depends on whether this code calls the affected functions',
                      'impact': 'Whatever each advisory describes, up to the worst rating above',
                      'likelihood': 'Higher for packages that handle network or user input',

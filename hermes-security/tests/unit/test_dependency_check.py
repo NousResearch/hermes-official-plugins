@@ -260,3 +260,68 @@ def test_packet_leads_fit_in_one_tool_page():
     leads, total = dependencies.leads_for(receipt, ['package-lock.json'])
     assert total == 100 and 0 < len(leads) < 100
     assert len(json.dumps(leads)) < MAX_RESULT_CHARS // 4
+
+
+UV_LOCK = '''version = 1
+
+[[package]]
+name = "app"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [{ name = "jinja2" }]
+
+[package.optional-dependencies]
+server = [{ name = "uvicorn" }]
+
+[package.dev-dependencies]
+dev = [{ name = "pytest" }, { name = "jinja2" }]
+
+[[package]]
+name = "jinja2"
+version = "3.1.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [{ name = "markupsafe" }]
+
+[[package]]
+name = "markupsafe"
+version = "3.0.2"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "uvicorn"
+version = "0.30.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "pytest"
+version = "8.4.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [{ name = "pluggy" }, { name = "markupsafe" }]
+
+[[package]]
+name = "pluggy"
+version = "1.6.0"
+source = { registry = "https://pypi.org/simple" }
+'''
+
+
+def test_dev_only_packages_come_from_the_lockfile():
+    # uv: reachable only through the dev group; runtime, extras and shared packages ship.
+    assert dependencies.dev_only_packages('api/uv.lock', lambda _: UV_LOCK) == {'pytest', 'pluggy'}
+    # Without the project's own package the lockfile says nothing, so everything counts as shipped.
+    no_root = UV_LOCK.replace('source = { virtual = "." }', 'source = { registry = "https://pypi.org/simple" }')
+    assert dependencies.dev_only_packages('uv.lock', lambda _: no_root) == set()
+    lock = {'packages': {'': {'name': 'web'}, 'node_modules/jest': {'dev': True},
+                         'node_modules/lodash': {}, 'node_modules/a/node_modules/lodash': {'dev': True},
+                         'node_modules/mocha': {'devOptional': True}}}
+    assert dependencies.dev_only_packages('web/package-lock.json', lambda _: json.dumps(lock)) == {'jest'}
+    assert dependencies.dev_only_packages('yarn.lock', lambda _: 'x') == set()
+    assert dependencies.dev_only_packages('uv.lock', lambda _: 'not toml [') == set()
+
+
+def test_summary_marks_dev_only_leads(tmp_path):
+    summary = dependencies.summarize(report_for(tmp_path), tmp_path, {'web/package-lock.json'},
+                                     dev=lambda path: {'lodash'} if path == 'web/package-lock.json' else set())
+    assert summary['leads'][0]['devOnly'] is True
+    plain = dependencies.summarize(report_for(tmp_path), tmp_path, {'web/package-lock.json'})
+    assert 'devOnly' not in plain['leads'][0]

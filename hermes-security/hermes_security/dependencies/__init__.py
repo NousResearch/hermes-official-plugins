@@ -79,12 +79,71 @@ def local_packages(path, read):
     return set()
 
 
-def summarize(report, root, inventory_paths, local=None):
+def _uv_dev_only(rows):
+    """uv.lock names reached only through the project's development groups.
+
+    Runtime is everything reachable from the project's own packages through ``dependencies`` and
+    ``optional-dependencies`` (extras can ship); dev is reachable through ``dev-dependencies``.
+    A name on both paths ships, so it is not dev-only.
+    """
+    edges = {}
+    for row in rows:
+        name = str(row.get('name', '')).lower()
+        deps = [d for d in row.get('dependencies', []) if isinstance(d, dict)]
+        for extra in (row.get('optional-dependencies') or {}).values():
+            deps += [d for d in extra if isinstance(d, dict)]
+        edges.setdefault(name, set()).update(str(d.get('name', '')).lower() for d in deps)
+    roots = [r for r in rows if isinstance(r.get('source'), dict) and r['source'].keys() & {'editable', 'virtual', 'directory', 'path'}]
+    if not roots:
+        return set()
+
+    def reach(start):
+        seen, todo = set(), list(start)
+        while todo:
+            name = todo.pop()
+            if name not in seen:
+                seen.add(name)
+                todo.extend(edges.get(name, ()))
+        return seen
+
+    root_names = {str(r.get('name', '')).lower() for r in roots}
+    runtime = reach(root_names)
+    dev_start = {str(d.get('name', '')).lower() for r in roots for group in (r.get('dev-dependencies') or {}).values()
+                 for d in group if isinstance(d, dict)}
+    return reach(dev_start) - runtime - root_names
+
+
+def dev_only_packages(path, read):
+    """Names a lockfile installs only for development (tests, linters), never with the shipped code.
+
+    Empty when the lockfile does not say: an unknown package is treated as shipped.
+    """
+    try:
+        text = read(path)
+        if not text:
+            return set()
+        name = PurePosixPath(path).name
+        if name == 'uv.lock':
+            return _uv_dev_only(tomllib.loads(text).get('package', []))
+        if name == 'package-lock.json':
+            dev, shipped = set(), set()
+            for key, entry in (json.loads(text).get('packages') or {}).items():
+                if isinstance(entry, dict) and 'node_modules/' in key:
+                    package = str(entry.get('name') or key.rsplit('node_modules/', 1)[-1]).lower()
+                    (dev if entry.get('dev') is True else shipped).add(package)
+            return dev - shipped
+    except (ValueError, TypeError, AttributeError, tomllib.TOMLDecodeError):
+        return set()
+    return set()
+
+
+def summarize(report, root, inventory_paths, local=None, dev=None):
     """Compact per-package leads, most severe first, for files in the scan inventory.
 
     *local* maps a lockfile path to the project's own package names. Those are
     skipped: OSV matches by name only, so an unpublished workspace package would
-    pick up advisories meant for an unrelated package of the same name.
+    pick up advisories meant for an unrelated package of the same name. *dev* maps a
+    lockfile path to names it installs only for development; their leads say so.
     """
     leads, packages, outside, sources, skipped = [], 0, 0, set(), 0
     for result in report.get('results', []):
@@ -95,6 +154,7 @@ def summarize(report, root, inventory_paths, local=None):
             continue
         sources.add(path)
         own = local(path) if local else set()
+        dev_only = dev(path) if dev else set()
         for package in result.get('packages', []):
             info = package.get('package') or {}
             if str(info.get('name', '')).lower() in own:
@@ -109,10 +169,13 @@ def summarize(report, root, inventory_paths, local=None):
                            'summary': str(v.get('summary') or '')[:300], 'severity': _severity(v, groups),
                            'fixed': _fixed(v, info.get('name'))} for v in vulns]
             worst = max((_SEVERITY_RANK.get(a['severity'], 0) for a in advisories), default=0)
-            leads.append({'path': path, 'ecosystem': str(info.get('ecosystem', ''))[:40],
+            lead = {'path': path, 'ecosystem': str(info.get('ecosystem', ''))[:40],
                           'name': str(info.get('name', ''))[:200], 'version': str(info.get('version', ''))[:100],
                           'severity': next((k for k, v in _SEVERITY_RANK.items() if v == worst and k != 'moderate'), 'unknown'),
-                          'advisories': advisories})
+                          'advisories': advisories}
+            if str(info.get('name', '')).lower() in dev_only:
+                lead['devOnly'] = True
+            leads.append(lead)
     leads.sort(key=lambda l: (-_SEVERITY_RANK.get(l['severity'], 0), l['path'], l['name'], l['version']))
     return {'packages': packages, 'vulnerablePackages': len(leads), 'advisories': sum(len(l['advisories']) for l in leads),
             'sources': sorted(sources), 'outsideInventory': outside, 'localPackages': skipped, 'leads': leads[:MAX_LEADS],
@@ -136,7 +199,8 @@ def check_dependencies(*, root, inventory, data_dir, work_dir, read, enabled=Tru
         receipt['network'] = list(osv.NETWORK if receipt['tool']['source'] == 'downloaded' else osv.NETWORK[1:])
         report, run = osv.run_scanner(executable, root, work_dir)
         whole = lambda path: read(path, max_bytes=LOCKFILE_BYTES)
-        summary = summarize(report, root, paths, local=lambda path: local_packages(path, whole))
+        summary = summarize(report, root, paths, local=lambda path: local_packages(path, whole),
+                            dev=lambda path: dev_only_packages(path, whole))
         receipt.update(summary, status='ok', run=run)
         if not summary['sources']:
             # The scanner ran, but nothing in scope declares packages: say so, never 'ok'.

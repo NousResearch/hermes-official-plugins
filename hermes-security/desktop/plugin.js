@@ -1008,6 +1008,18 @@ export function Coverage({ data }) {
         : jsx('p', { className: 'hs-muted', children: 'No gaps recorded.' })
   ] })
 }
+// Back-to-back events with the same message read as one line with a count (a worker result logs
+// one 'Coverage updated' per file it closed). Paging still follows the raw event ids.
+export function collapseEvents(rows) {
+  const out = []
+  for (const event of rows) {
+    const text = event.message || event.kind || 'Event'
+    const last = out.at(-1)
+    if (last && last.text === text && last.kind === event.kind) last.count += 1
+    else out.push({ ...event, text, count: 1 })
+  }
+  return out
+}
 function Activity({ id }) {
   const [after, setAfter] = useState(0)
   const q = useData(`/scans/${id}/activity`, { after_id: after, limit: PAGE_SIZE })
@@ -1017,8 +1029,8 @@ function Activity({ id }) {
     children: jsxs(Block, {
       children: [
         rows.length
-          ? rows.map((event, i) =>
-              jsx(Paragraph, { value: `${shortDate(event.createdAt || event.at) || ''} · ${event.message || event.kind || 'Event'}` }, event.id || i))
+          ? collapseEvents(rows).map((event, i) =>
+              jsx(Paragraph, { value: `${shortDate(event.createdAt || event.at) || ''} · ${event.text}${event.count > 1 ? ` (×${event.count})` : ''}` }, event.id || i))
           : jsx('p', { className: 'hs-muted', children: 'No activity recorded.' }),
         rows.length >= PAGE_SIZE || after
           ? jsxs('div', { className: 'hs-bar', children: [

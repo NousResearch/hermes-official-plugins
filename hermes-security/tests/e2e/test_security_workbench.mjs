@@ -902,3 +902,24 @@ test('scan rows offer Open and Delete on right-click; running scans cannot be de
 test('select values ellipsize through the slot Radix keeps, not the className it drops', () => {
   assert.match(source, /\.hs-select-trigger>\[data-slot=select-value\]\{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap/)
 })
+
+test('back-to-back repeated activity reads as one line with a count', () => {
+  const rows = [
+    { id: 1, kind: 'worker.accepted', message: 'Worker result recorded.' },
+    { id: 2, kind: 'coverage.updated', message: 'Coverage updated' },
+    { id: 3, kind: 'coverage.updated', message: 'Coverage updated' },
+    { id: 4, kind: 'coverage.updated', message: 'Coverage updated' },
+    { id: 5, kind: 'autoresume.paused', message: 'Could not continue automatically.' },
+    { id: 6, kind: 'worker.accepted', message: 'Worker result recorded.' },
+    { id: 7, kind: 'autoresume.paused', message: 'Could not continue automatically.' },
+    { id: 8, kind: 'note', message: 'Coverage updated' }
+  ]
+  const lines = plugin.collapseEvents(rows).map((e) => [e.id, e.text, e.count])
+  // Only consecutive repeats of the same kind merge, so the order of events is kept.
+  assert.deepEqual(lines, [
+    [1, 'Worker result recorded.', 1], [2, 'Coverage updated', 3], [5, 'Could not continue automatically.', 1],
+    [6, 'Worker result recorded.', 1], [7, 'Could not continue automatically.', 1], [8, 'Coverage updated', 1]
+  ])
+  assert.deepEqual(plugin.collapseEvents([{ id: 9, kind: 'x' }]).map((e) => e.text), ['x'])
+  assert.deepEqual(plugin.collapseEvents([]), [])
+})

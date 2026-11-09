@@ -75,6 +75,7 @@ def upstream(tmp_path, *replies):
             bodies.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
+            self.send_header('request-id', 'req_fixture01')
             self.end_headers()
             events = replies[min(len(bodies), len(replies)) - 1]
             self.wfile.write(''.join(f'data: {json.dumps(e)}\n\n' for e in events).encode())
@@ -152,3 +153,13 @@ def test_json_suffix_closes_every_prefix_of_a_tool_argument():
         suffix = directsdk._json_suffix(text[:cut])
         assert suffix is not None, text[:cut]
         json.loads(text[:cut] + suffix)
+
+
+def test_refusal_names_its_request_id_in_the_log_and_the_message(tmp_path, caplog):
+    # #341: without the id, a refusal cannot be looked up with Anthropic.
+    details = {'type': 'refusal', 'category': 'cyber', 'explanation': 'Flagged'}
+    with upstream(tmp_path, reply(['{"path": "/tmp/a.txt"}'], 'refusal', details)) as (client, _), caplog.at_level('WARNING'):
+        result = client.create(**REQUEST)
+    assert result.choices[0].message.refusal == 'Flagged (request_id=req_fixture01)'
+    [record] = [r for r in caplog.records if 'refused' in r.getMessage()]
+    assert all(part in record.getMessage() for part in ('model=sonnet', 'request_id=req_fixture01', 'category=cyber'))

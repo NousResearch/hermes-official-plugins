@@ -9,6 +9,7 @@ from contextlib import suppress
 import hashlib
 import inspect
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -41,19 +42,25 @@ except ImportError:
         resolve_upstream, Upstream)
 
 
+logger = logging.getLogger(__name__)
+
+
 # Hermes picks retry vs fallback from an error's status_code (main loop and auxiliary ladder alike).
 class ClaudeCodeMissing(RuntimeError):
     """The official Claude Code CLI this transport drives is not installed (or not on PATH)."""
     status_code = 503
 
 
+def _request_id(value):
+    """Only a bounded opaque ID may enter diagnostics, never arbitrary header contents."""
+    return value if isinstance(value, str) and re.fullmatch(r'req_[A-Za-z0-9_-]{1,124}', value) else None
+
+
 class ClaudeAPIError(RuntimeError):
     """A failed upstream or native-answered request; status_code is None when there is no HTTP equivalent."""
 
     def __init__(self, message, status_code=None, *, request_id=None):
-        # Only a bounded opaque ID may enter diagnostics, never arbitrary header contents.
-        if not isinstance(request_id, str) or re.fullmatch(r'req_[A-Za-z0-9_-]{1,124}', request_id) is None:
-            request_id = None
+        request_id = _request_id(request_id)
         if request_id:
             message += f' (request_id={request_id})'
         super().__init__(message)
@@ -1199,8 +1206,12 @@ class Client:
                 if refused:
                     details = next((a['stop_details'] for a in assistants if isinstance(a.get('stop_details'), dict)), {})
                     explanation, category = details.get('explanation'), details.get('category')
-                    message['refusal'] = (explanation.strip() if isinstance(explanation, str) and explanation.strip() else
-                                          f'provider refusal category: {category}' if isinstance(category, str) and category else None)
+                    reason = (explanation.strip() if isinstance(explanation, str) and explanation.strip() else
+                              f'provider refusal category: {category}' if isinstance(category, str) and category else None)
+                    # The request id is what Anthropic support needs to look a refusal up (#341).
+                    request_id = _request_id(admission.request_id)
+                    logger.warning('Claude refused the request: model=%s request_id=%s category=%s', kwargs['model'], request_id, category)
+                    message['refusal'] = f'{reason or "provider refusal"} (request_id={request_id})' if request_id else reason
                     # The cut-off call stays out of what Hermes acts on: Hermes promotes a refusal to the text it shows
                     # only when nothing else is in the message, so with the call kept the user read "no explanation".
                     # The carrier above still holds native's turn as sent, refused tool_use included.

@@ -65,7 +65,7 @@ def test_markdown_layers_and_zero_partial():
     d = inputs()
     text = render_markdown(d['manifest'], d['findings_doc'], d['coverage'], d['chains_doc'])
     assert 'CWE-' not in text.split('\n\n')[1]
-    for term in ['This scan is incomplete', 'Root cause', 'Attack path', 'Evidence', 'src/api.py:40', '```', 'What could make this wrong', 'Proof gaps', 'Validation', 'NOT RUN', 'Severity', 'Fix', 'Regression tests', 'OWASP Top 10:2025', 'Not yet reviewed']:
+    for term in ['This scan is incomplete', 'Root cause', 'Attack path', 'Evidence', 'src/api.py:40', '```', 'What could make this wrong', 'Not verified:', 'Validation', 'NOT RUN', 'Severity', 'Fix', 'Regression tests', 'OWASP Top 10:2025', 'Not yet reviewed']:
         assert term in text
     assert 'clean' not in text.lower()
     d['findings_doc']['findings'] = []
@@ -87,7 +87,7 @@ def test_markdown_summarizes_workers_and_repeated_gaps():
     assert '- Review worker' not in text and 'att\\_' not in text
     assert 'Review workers: 120 accepted, 1 rejected, 1 missing. coverage.json lists each one.' in text
     # Repeated gaps collapse to one line each; one-off gaps stay as written.
-    assert '- 40 ASVS controls are unknown: no explicit control coverage unit. coverage.json lists each one.' in text
+    assert '- 40 ASVS controls: not yet reviewed — no explicit control coverage unit. coverage.json lists each one.' in text
     assert '- 3 review packets have no accepted result. coverage.json lists each one.' in text
     assert '- ASVS control V9.9.9 is unknown: finding mapped but control not closed.' in text
     assert '- Authentication review is missing.' in text
@@ -95,6 +95,67 @@ def test_markdown_summarizes_workers_and_repeated_gaps():
     cov['workers'] = [{'attemptId': 'att_' + 'a' * 24, 'role': 'investigator', 'status': 'accepted'}]
     cov['gaps'] = []
     assert 'Review workers: 1 accepted.' in render_markdown(d['manifest'], d['findings_doc'], cov, d['chains_doc'])
+
+
+def test_markdown_is_laid_out_for_a_reader():
+    d = inputs()
+    d['manifest']['target'].update(root='/data/repos/github.com/acme/shop', revision='0123456789abcdef', dirty=True)
+    main = d['findings_doc']['findings'][0]
+    main['taxonomy']['asvs'] = []
+    memory = copy.deepcopy(main)
+    memory.update(findingId='hsf_' + 'b' * 24, title='A large upload can exhaust server memory')
+    memory['severity'] = {**memory['severity'], 'level': 'medium'}
+    memory['taxonomy'] = {**memory['taxonomy'], 'cwe': ['CWE-400']}
+    memory['codeEvidence'] = [{**memory['codeEvidence'][0], 'path': 'src/upload.py', 'startLine': 10,
+                               'code': ''.join(f'line {i}\n' for i in range(1, 41))}]
+    dependency = copy.deepcopy(main)
+    dependency.update(findingId='hsf_' + 'c' * 24, ruleId='dependency.known-advisories', codeEvidence=[],
+                      title='Dependencies with known vulnerabilities (worst: low)',
+                      locations=[{'path': 'uv.lock', 'startLine': 1, 'role': 'manifest'}])
+    dependency['severity'] = {**dependency['severity'], 'level': 'low'}
+    dependency['taxonomy'] = {**dependency['taxonomy'], 'cwe': ['CWE-1395']}
+    d['findings_doc']['findings'] = [main, memory, dependency]
+    cov = d['coverage']
+    cov['files'] = {'total': 3, 'reviewed': 2, 'deferred': 0, 'unsupported': 1,
+                    'excluded': [{'path': '.git', 'reason': 'git_metadata'}]}
+    cov['standards']['owaspTop10']['categories'][0].update(
+        state='reviewed', reason='Closed by 7 reviews (att_' + 'a' * 24 + ', att_' + 'b' * 24 + ', ...); latest note: Checked.')
+    cov['gaps'] = [f'ASVS control V1.{i}.1 is unknown: no explicit control coverage unit.' for i in range(1, 5)] + [
+        'file:web/min.js is unsupported: minified bundle.']
+    text = render_markdown(d['manifest'], d['findings_doc'], cov, d['chains_doc'])
+    # Header names the repository and short commit, not the clone path or a 40-character hash.
+    assert text.startswith('# Security review: acme/shop\n\nCommit `0123456` with uncommitted changes · Standard scan · 2026-10-05\n')
+    assert '/data/repos' not in text and '0123456789abcdef' not in text
+    # The banner says what is still open, in counts.
+    assert ('Reviewed 2 of 3 files and 1 of 10 OWASP Top 10 categories. Still open: 4 ASVS checklist controls '
+            'with no recorded review; 1 file not fully reviewed.') in text
+    # A summary table links every finding; a manifest location has no fake line number.
+    assert '**3 findings:** 1 high, 1 medium, 1 low.' in text
+    assert '| 1 | High | [' in text and '](#finding-1)' in text and '| `uv.lock` |' in text
+    # Findings are grouped by weakness type, worst group first, and numbered in reading order.
+    assert text.index('## Access control (1)') < text.index('## Memory and resource exhaustion (1)') \
+        < text.index('## Code and dependency integrity (1)')
+    assert '<a id="finding-2"></a>\n\n### 2. A large upload can exhaust server memory' in text
+    # Severity, location and validation sit under the title; the fix comes before the proof.
+    section = text[text.index('### 1. '):text.index('### 2. ')]
+    assert '**High** · `src/api.py:40` · Supported by code · Validation: NOT RUN' in section
+    assert section.index('**Fix:**') < section.index('#### Root cause') < section.index('#### Evidence')
+    assert 'Proof gaps' not in section and 'Not verified:' in section
+    assert 'ASVS' not in section.split('Classification:')[1].split('\n')[0]
+    assert '```python\n' in section
+    # Long excerpts keep their head and tail and name the lines left out.
+    memory_section = text[text.index('### 2. '):text.index('### 3. ')]
+    assert 'line 12\n' in memory_section and 'line 13\n' not in memory_section and 'line 29\n' in memory_section
+    assert '*16 lines left out (lines 22–37); findings.json has the full excerpt.*' in memory_section
+    # The dependency finding points to its table instead of repeating generic attack steps.
+    dependency_section = text[text.index('### 3. '):]
+    assert '[Dependency check](#dependency-check)' in dependency_section
+    assert '#### Attack path' not in dependency_section.split('## Coverage')[0]
+    # Machine labels and worker IDs stay out of the coverage section.
+    assert '- `.git` — Git metadata' in text and 'git\\_metadata' not in text
+    assert '| Reviewed | Reviewed by 7 workers. Latest note: Checked. |' in text and 'att\\_' not in text
+    assert '- web/min.js: not supported — minified bundle.' in text
+    assert text.index('## Code and dependency integrity') < text.index('## Coverage') < text.index('## Limitations')
 
 
 def test_reportable_section_validation():

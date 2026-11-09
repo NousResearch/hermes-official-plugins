@@ -368,7 +368,7 @@ def test_source_fence_injection_stays_quoted_in_report(hostile):
     assert response['inserted'] == 1
     partial_bundle(service, plan)
     report = service.export(plan['scanId'], 'md')['content']
-    assert '````\n```\n# ' + INJECTION + '\n````' in report
+    assert '````python\n```\n# ' + INJECTION + '\n````' in report
     assert not (root / 'OWNED').exists()
 
 

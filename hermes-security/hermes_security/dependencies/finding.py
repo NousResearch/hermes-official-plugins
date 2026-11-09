@@ -85,8 +85,9 @@ def build(receipt, *, scan_id, repo_key):
     parts = []
     if leads:
         parts.append(f"{_plural(total, 'package')} of {receipt.get('packages', total)} pinned in "
-                     f"{_plural(len(receipt.get('sources', [])), 'lockfile')} have "
-                     f"{receipt.get('advisories', 0)} published advisories")
+                     f"{_plural(len(receipt.get('sources', [])), 'lockfile')} {'has' if total == 1 else 'have'} "
+                     f"{receipt.get('advisories', 0)} published "
+                     f"{'advisory' if receipt.get('advisories', 0) == 1 else 'advisories'}")
     if runtimes:
         parts.append(f"{_plural(len(runtimes), 'declared runtime')} past end of life")
     summary = (' and '.join(parts) + f'. The worst of them is rated {worst}. An attacker who can drive input '

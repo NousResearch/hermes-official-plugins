@@ -326,22 +326,21 @@ def _probe(argv, *, input, env, timeout, prefix):
         with _probes_lock:
             _probes.add(process)
         # Not communicate(): it reaps the leader, and once reaped its group id no longer proves the group is ours,
-        # so a launcher that exited first would leave the real CLI running. On timeout the group dies, closing stdout.
-        expired = threading.Event()
-        timer = threading.Timer(timeout, lambda: (expired.set(), kill_process_tree(process)))
-        timer.start()
+        # so a launcher that exited first would leave the real CLI running.
         try:
-            try:
-                process.stdin.write(input)
-                process.stdin.close()
-            except OSError:  # BrokenPipeError, or EINVAL on Windows: exited without reading; its output still counts
-                pass
-            stdout = process.stdout.read()
-        finally:
-            timer.cancel()
-        if expired.is_set():
+            process.stdin.write(input)
+            process.stdin.close()
+        except OSError:  # BrokenPipeError, or EINVAL on Windows: exited without reading; its output still counts
+            pass
+        # The read gets its own deadline: a descendant the kill cannot reach (a Windows launcher that already exited)
+        # can hold stdout open long past the timeout.
+        out = []
+        reader = threading.Thread(target=lambda: out.append(process.stdout.read()), daemon=True)
+        reader.start()
+        reader.join(timeout)
+        if reader.is_alive():
             raise subprocess.TimeoutExpired(argv, timeout)
-        return stdout
+        return "".join(out)
     finally:
         if process is not None:
             kill_process_tree(process)

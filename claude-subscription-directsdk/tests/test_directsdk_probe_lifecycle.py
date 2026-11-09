@@ -133,3 +133,31 @@ def test_a_probe_whose_launcher_exits_first_leaves_no_descendant(profile, tmp_pa
     finally:
         if _alive(descendant):
             os.kill(descendant, 9)
+
+
+# A launcher that leaves a descendant holding the probe's stdout, outside its process group, and exits.
+DETACHED_HOLDER = textwrap.dedent("""
+    import os, subprocess, sys
+    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(20)"], stdout=sys.stdout,
+                              **({} if os.name == "nt" else {"start_new_session": True}))
+    open(os.environ["PROBE_LOG"], "w").write(str(holder.pid))
+""")
+
+
+def test_a_probe_returns_at_its_timeout_while_an_unkillable_descendant_holds_stdout(profile, tmp_path):
+    """Greptile 4512444851. The kill cannot reach every descendant (on Windows a launcher that already exited is
+    skipped), so the read has its own deadline instead of waiting for stdout to close."""
+    import psutil
+    import directsdk_setup
+    launcher = tmp_path / "claude.py"
+    launcher.write_text(DETACHED_HOLDER, encoding="utf-8")
+    log = tmp_path / "holder.pid"
+    env = {**os.environ, "PATH": os.defpath, "HOME": str(tmp_path), "PROBE_LOG": str(log)}
+    started = time.monotonic()
+    try:
+        result = directsdk_setup.fetch_usage(command=[sys.executable, str(launcher)], env=env, timeout=2)
+        assert time.monotonic() - started < 10
+        assert result == (None, "Claude Code did not answer in time")
+    finally:
+        if log.exists() and _alive(int(log.read_text())):
+            psutil.Process(int(log.read_text())).kill()

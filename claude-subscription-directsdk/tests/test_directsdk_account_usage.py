@@ -2,9 +2,11 @@
 control request; only that subprocess is faked. The plugin never reads or sends the CLI's token."""
 from datetime import datetime, timezone
 import json
+import os
 import subprocess
 import sys
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -36,7 +38,7 @@ def cli(profile, monkeypatch):
     import agent.anthropic_credentials as credentials
 
     class State:
-        reply, calls, deadlines = _answer(LIMITS), [], []
+        reply, calls = _answer(LIMITS), []
 
     def run(argv, **kwargs):
         State.calls.append(SimpleNamespace(argv=argv, env=kwargs['env'], input=kwargs.get('input')))
@@ -51,8 +53,6 @@ def cli(profile, monkeypatch):
     monkeypatch.setattr(subprocess, 'run', run)
     # The installed copy Hermes loads has its own module objects, so the fake is installed process-wide.
     monkeypatch.setattr(subprocess, 'Popen', popen_from_run(run))
-    timer = threading.Timer
-    monkeypatch.setattr(threading, 'Timer', lambda interval, *a, **k: State.deadlines.append(interval) or timer(interval, *a, **k))
     for name in ('read_claude_code_credentials', 'resolve_anthropic_token', '_refresh_oauth_token',
                  '_write_claude_code_credentials', '_read_claude_code_credentials_from_keychain'):
         monkeypatch.setattr(credentials, name, refuse, raising=False)
@@ -76,8 +76,34 @@ def test_limits_come_from_claude_code_get_usage(cli):
     assert snapshot.unavailable_reason is None
     call, = cli.calls
     assert json.loads(call.input)['request'] == {'subtype': 'get_usage', 'skip_behaviors': True}
-    # Behind the unused admission gate (no inference can leave), and under core's 10 s hook deadline.
-    assert call.env['ANTHROPIC_BASE_URL'].startswith('http://127.0.0.1:') and cli.deadlines and max(cli.deadlines) < 10
+    # Behind the unused admission gate: no inference can leave.
+    assert call.env['ANTHROPIC_BASE_URL'].startswith('http://127.0.0.1:')
+
+
+def test_a_cli_that_never_answers_still_fits_cores_hook_deadline(cli, monkeypatch):
+    """Core abandons the /usage hook at 10 s; the probe gives up before that even while stdout stays open."""
+    hung = threading.Event()
+
+    class Hanging:
+        pid, returncode = os.getpid(), None  # not our child: the cleanup kill signals nothing
+
+        def __init__(self, argv, **kwargs):
+            self.stdin = SimpleNamespace(write=lambda _: None, close=lambda: None)
+            self.stdout = SimpleNamespace(read=lambda: hung.wait(30) and '')
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout=None):
+            return 0
+    monkeypatch.setattr(subprocess, 'Popen', Hanging)
+    started = time.monotonic()
+    try:
+        snapshot, _ = _usage()
+    finally:
+        hung.set()
+    assert time.monotonic() - started < 10
+    assert snapshot.unavailable_reason == 'Claude Code did not answer in time'
 
 
 def test_a_body_without_limits_reads_the_legacy_windows(cli):

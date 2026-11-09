@@ -43,7 +43,8 @@ LOGIN_HINT = "Claude Code is installed but not logged in. Run `claude auth login
 # How `auth status` says native would authenticate, for logins that bill API usage rather than the subscription.
 _METERED_AUTH = {"api_key": "an Anthropic API key", "api_key_helper": "an API key helper", "third_party": "a third-party cloud login"}
 METERED_HINT = ("Claude Code would sign in with {0}, which bills API usage instead of your Claude subscription. Run `claude auth login` "
-                "with your Claude account (and unset ANTHROPIC_API_KEY in Hermes' environment if it is set), then select this provider again.")
+                "with your Claude account (and remove any Bedrock, Vertex or Foundry switch from Hermes' environment), then select "
+                "this provider again.")
 LOGGED_OUT_HINT = ("Claude Code is installed but has no usable login in the environment Hermes runs it in. Run `claude auth login` "
                    "as the user Hermes runs as, set CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) in Hermes' environment, "
                    "or point the claude_config_dir plugin setting (or CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR) "

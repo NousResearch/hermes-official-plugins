@@ -326,6 +326,7 @@ def test_hermes_never_budgets_a_discovered_row_past_the_native_window(profile, t
     {"loggedIn": True, "authMethod": "api_key", "apiProvider": "firstParty"},
     {"loggedIn": True, "authMethod": "api_key_helper", "apiProvider": "firstParty"},
     {"loggedIn": True, "authMethod": "third_party", "apiProvider": "anthropicAws"},
+    {"loggedIn": True, "authMethod": "third_party", "apiProvider": "bedrock"},  # CLAUDE_CODE_USE_BEDROCK=1, 2.1.319
     {"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "gateway", "subscriptionType": "max"},
 ])
 def test_a_login_that_bills_api_usage_is_not_a_subscription_login(profile, tmp_path, auth):

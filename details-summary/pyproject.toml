@@ -1,0 +1,12 @@
+[project]
+name = "hermes-details-summary"
+version = "0.1.0"
+description = "Hermes Agent plugin (official): short human opener, full agent PR description folded into <details>"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nous Research" }]
+requires-python = ">=3.11"
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/details-summary"

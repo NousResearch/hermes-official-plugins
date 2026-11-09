@@ -229,6 +229,15 @@ Catalog entries come in two tiers:
 <p><code>security_scan_start</code> and 8 more · <code>/security</code> · <code>hermes security-review</code></p>
 </td>
 <td width="50%" valign="top">
+<a href="details-summary/"><img src="assets/details-summary.jpg" alt="Details Summary plugin"></a>
+<h3><a href="details-summary/">Details Summary</a></h3>
+<code>hermes plugins install details-summary</code>
+<p>Every pull request Hermes opens starts with one to three plain sentences a reviewer can read in ten seconds, with the full agent-written description folded into <code>&lt;details&gt;&lt;summary&gt;Claude Opus 5.5 Medium&lt;/summary&gt;</code>. A system prompt section teaches the shape and the opener rules; a <code>pre_tool_call</code> hook blocks <code>gh pr create</code>, <code>gh pr edit</code> and GitHub MCP PR writes whose body does not follow it. After Simon Willison's <a href="https://simonwillison.net/2026/Nov/9/details-summary/">details-summary post</a>.</p>
+<p>Prompt section + <code>pre_tool_call</code> hook · <code>hermes details-summary check</code></p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 <h3>More on the way</h3>
 <p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
 </td>

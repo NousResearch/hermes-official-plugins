@@ -118,3 +118,26 @@ def test_finalize_ignores_open_asvs_units():
     assert _coverage_gaps(coverage) == []
     coverage['units'].append({'unitId': 'file:b.py', 'state': 'deferred'})
     assert _coverage_gaps(coverage) == ['Review unit file:b.py is incomplete.']
+
+
+def test_key_line_is_checked_on_submit_and_named_in_the_report(tmp_path):
+    root = tmp_path / 'repo'; root.mkdir()
+    (root / 'app.py').write_text('def get_invoice(invoice_id):\n    return invoices.get(invoice_id)\n')
+    service = SecurityService(tmp_path / 'data')
+    plan = service.start_scan(path=str(root))
+    sid = plan['scanId']
+    outside = candidate_for(root)
+    outside['identity']['anchor'] = 'app.py/outside'
+    outside['codeEvidence'][0]['keyLine'] = 3
+    good = candidate_for(root)
+    good['codeEvidence'][0]['keyLine'] = 2
+    result = service.submit_worker_result(worker(plan, [good, outside]))
+    assert result['inserted'] == 1 and len(result['rejected']) == 1
+    assert 'keyLine must be a line inside its excerpt' in json.dumps(result['rejected'])
+    assert service.get_scan(sid, 'candidates')['items'][0]['codeEvidence'][0]['keyLine'] == 2
+    good['evidenceState'] = 'source_supported'
+    service.submit_worker_result(worker(plan, [good], attempt='att_validator', role='validator'))
+    service.record_chains(sid)
+    service.finalize(sid)
+    report = service.export(sid, 'md')['content']
+    assert 'Key line 2: `return invoices.get(invoice_id)`.' in report

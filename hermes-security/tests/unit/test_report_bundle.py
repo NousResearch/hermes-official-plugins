@@ -218,3 +218,25 @@ def test_exports(tmp_path):
     with pytest.raises(ValueError): export(tmp_path, 'xml')
     (tmp_path/'report.md').write_text('tampered')
     with pytest.raises(ValueError): export(tmp_path, 'json')
+
+
+def test_a_long_excerpt_keeps_its_key_line():
+    d = inputs()
+    f = d['findings_doc']['findings'][0]
+    code = ''.join(f'line {i}\n' for i in range(1, 61))
+    f['codeEvidence'] = [{**f['codeEvidence'][0], 'path': 'src/big.py', 'startLine': 100, 'endLine': 159,
+                          'keyLine': 140, 'code': code}]
+    text = render_markdown(d['manifest'], d['findings_doc'], d['coverage'], d['chains_doc'])
+    # line 41 of the excerpt is file line 140: a 25-line window around it is kept.
+    assert 'Key line 140: `line 41`.' in text
+    assert 'line 29\n' in text and 'line 53\n' in text and 'line 28\n' not in text and 'line 54\n' not in text
+    assert '*28 lines left out (lines 100–127); findings.json has the full excerpt.*' in text
+    assert '*7 lines left out (lines 153–159); findings.json has the full excerpt.*' in text
+    # Near the end, the window stays full-size; a key line outside the excerpt is ignored.
+    f['codeEvidence'][0]['keyLine'] = 159
+    end = render_markdown(d['manifest'], d['findings_doc'], d['coverage'], d['chains_doc'])
+    assert 'line 36\n' in end and 'line 60\n' in end and 'line 35\n' not in end
+    assert '*35 lines left out (lines 100–134)' in end
+    f['codeEvidence'][0]['keyLine'] = 400
+    ignored = render_markdown(d['manifest'], d['findings_doc'], d['coverage'], d['chains_doc'])
+    assert 'Key line' not in ignored and 'line 12\n' in ignored and 'line 13\n' not in ignored

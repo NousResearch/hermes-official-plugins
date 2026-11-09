@@ -1430,9 +1430,10 @@ export function codeLines(excerpt, locations = []) {
   const start = Number.isInteger(excerpt.startLine) && excerpt.startLine > 0 ? excerpt.startLine : null
   return String(excerpt.code ?? '').split('\n').map((line, index) => {
     const number = start === null ? null : start + index
-    const highlighted = number !== null && list(locations).some((loc) =>
+    // The worker's key line, when it named one, is highlighted with the cited locations.
+    const highlighted = number !== null && (number === excerpt.keyLine || list(locations).some((loc) =>
       loc.path === excerpt.path && Number.isInteger(loc.startLine) && loc.startLine > 0 &&
-      number >= loc.startLine && number <= (Number.isInteger(loc.endLine) ? loc.endLine : loc.startLine))
+      number >= loc.startLine && number <= (Number.isInteger(loc.endLine) ? loc.endLine : loc.startLine)))
     return { text: line, number, highlighted }
   })
 }

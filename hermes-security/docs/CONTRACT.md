@@ -114,7 +114,7 @@ positive+negative controls, and level `local-safe` or `active-authorized`. A pro
   "evidenceState": "source_supported",
   "taxonomy": {"category": "broken-access-control", "cwe": ["CWE-639"], "owasp": ["A01:2025"], "asvs": ["V8.2.2"]},
   "locations": [{"path": "src/api/invoices.py", "startLine": 40, "endLine": 52, "role": "sink"}],   // minItems 1
-  "codeEvidence": [{"id": "ev-1", "label": "...", "path": "...", "startLine": 40, "endLine": 44,
+  "codeEvidence": [{"id": "ev-1", "label": "...", "path": "...", "startLine": 40, "endLine": 44, "keyLine": 42,  // keyLine optional
                     "code": "<exact excerpt, <=4000 chars, secrets redacted>", "sha256": "<sha256 of exact excerpt bytes>",
                     "explanation": "..."}],
   "counterEvidence": ["strongest reason this might not be exploitable"],
@@ -158,7 +158,8 @@ inconclusive candidates are retained in `findings.json` under `"retained"` with 
 Payload hard limits (reject with ValidationError): total JSON <= 2 MiB; string fields <= 20000 chars;
 `code` excerpt <= 4000 chars; unknown top-level keys rejected; non-finite numbers rejected.
 Citation check on submit: every `locations[*].path` / `codeEvidence[*].path` must be in the scan inventory
-(normalized, no `..`, no absolute), line ranges within the file, and `codeEvidence.code` must match the snapshot
+(normalized, no `..`, no absolute), line ranges within the file, an optional `codeEvidence.keyLine` inside its
+excerpt's range, and `codeEvidence.code` must match the snapshot
 file lines (whitespace-trimmed line-by-line compare) — mismatches are rejected per-candidate with reasons
 returned, not silently fixed.
 

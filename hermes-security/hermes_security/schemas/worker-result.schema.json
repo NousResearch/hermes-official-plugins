@@ -359,6 +359,10 @@
                 "type": "integer",
                 "minimum": 1
               },
+              "keyLine": {
+                "type": "integer",
+                "minimum": 1
+              },
               "code": {
                 "type": "string",
                 "maxLength": 4000

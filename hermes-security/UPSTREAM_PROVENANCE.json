@@ -55,7 +55,7 @@
       "license": "Apache-2.0",
       "modified": true,
       "sourceSha256": "1b24978a3cdb3c336ac27a2b39fb35457bade13a4aad0782710fe38ac39965cf",
-      "destinationSha256": "53611f4ce013ee069b31a00a60f9426ff9624277b4c0e48e9bca783ba7304136"
+      "destinationSha256": "377a00a9377189f8ed43736f1c8b09d88812e60f7bf5d30eb24a1c3e2cfba8c7"
     },
     {
       "source": "scripts/finalize_scan_contract.py",
@@ -95,7 +95,7 @@
       "license": "Apache-2.0",
       "modified": true,
       "sourceSha256": "9c34375584c8ae76959b0eae038b86b2b8ed7874517c249fcae8715314c76298",
-      "destinationSha256": "6294ce5c5417a87c6144120995fffcff6e61f32617375a59fe15db820e4c76a4"
+      "destinationSha256": "f79790b134d6c582131481c1e74eaaf76a5746ebadfbb69edce2fb008c679e45"
     },
     {
       "source": "references/scan-contract.md",
@@ -103,7 +103,7 @@
       "license": "Apache-2.0",
       "modified": true,
       "sourceSha256": "b362636c29d1e8b18053481abe2f97d7bb099a97040f5b63aa2702a41c1d62c8",
-      "destinationSha256": "6294ce5c5417a87c6144120995fffcff6e61f32617375a59fe15db820e4c76a4"
+      "destinationSha256": "f79790b134d6c582131481c1e74eaaf76a5746ebadfbb69edce2fb008c679e45"
     },
     {
       "source": "references/core-scan.md",
@@ -247,7 +247,7 @@
       "license": "Apache-2.0",
       "modified": true,
       "sourceSha256": "a89c6aa0649def73f815bac662c679cb07a00b71b995addb53ad1b6d8313022a",
-      "destinationSha256": "015edaf469f863a1947f29681c474f5986b134f4d0c946bd2d1bf13f844af65d"
+      "destinationSha256": "fcaf1ce43a077d94e319497eb403ec9b523d2ccd3780cf159b9f634742b6032a"
     },
     {
       "source": "skills/deep-security-scan/SKILL.md",
@@ -255,7 +255,7 @@
       "license": "Apache-2.0",
       "modified": true,
       "sourceSha256": "d6aed0d9b47065a1384a96d0a45c843b0cda8ba48e3d2cbe96c65357c6e55ee3",
-      "destinationSha256": "015edaf469f863a1947f29681c474f5986b134f4d0c946bd2d1bf13f844af65d"
+      "destinationSha256": "fcaf1ce43a077d94e319497eb403ec9b523d2ccd3780cf159b9f634742b6032a"
     },
     {
       "source": "skills/security-scan/SKILL.md",
@@ -263,7 +263,7 @@
       "license": "Apache-2.0",
       "modified": true,
       "sourceSha256": "71e05d106aac8895aaa328c3ee868ae56ddc4763657c170ad6779e376f162eba",
-      "destinationSha256": "015edaf469f863a1947f29681c474f5986b134f4d0c946bd2d1bf13f844af65d"
+      "destinationSha256": "fcaf1ce43a077d94e319497eb403ec9b523d2ccd3780cf159b9f634742b6032a"
     },
     {
       "source": "skills/security-diff-scan/SKILL.md",

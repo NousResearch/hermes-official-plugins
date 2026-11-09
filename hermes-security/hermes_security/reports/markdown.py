@@ -7,6 +7,7 @@ import re
 from collections import Counter
 from .copy import SEVERITIES, _reportable, human_label
 from ..orchestration.standard import SKIP_LABELS
+from ..standards.ledger import asvs_summary
 from ..timing import duration_text, elapsed_seconds
 
 
@@ -400,6 +401,17 @@ def render_markdown(manifest: dict, findings_doc: dict, coverage: dict, chains_d
         rows.append(f"| {key} | {_text(c.get('name', ''))} | {human_label(c.get('state', 'unknown'))} | {_text(reason or None)} |")
     parts.extend(['### OWASP Top 10:2025', 'Common web application risk categories and the review work completed for each.',
                   '| Category | Name | Review state | Reason |\n|---|---|---|---|\n' + '\n'.join(rows)])
+    asvs = asvs_summary(coverage.get('standards', {}))
+    if asvs['applicable']:
+        states = asvs['states']
+        checked = states.get('reviewed', 0)
+        rest = ', '.join(f'{n} {human_label(s).lower()}' for s, n in sorted(states.items()) if s != 'reviewed')
+        mapped = (f" {_plural(asvs['findingMapped'], 'control')} "
+                  f"{'relates' if asvs['findingMapped'] == 1 else 'relate'} to reported findings."
+                  if asvs['findingMapped'] else '')
+        parts.append(f"ASVS 5.0.0 checklist (informational; it does not decide completeness): {_num(checked)} of "
+                     f"{_plural(asvs['applicable'], 'applicable control')} recorded as reviewed"
+                     + (f' ({rest})' if rest else '') + f'.{mapped} coverage.json lists each control.')
     units = coverage.get('units', [])
     closed = sum(u.get('state') in {'reviewed', 'not_applicable'} for u in units)
     if closed:

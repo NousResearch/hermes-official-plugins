@@ -232,7 +232,9 @@ Keep these limits in mind:
   as gaps in coverage. Zero findings with partial coverage doesn't mean the code
   is clean.
 - The OWASP Top 10:2025 and ASVS 5.0.0 mappings show what was reviewed. They
-  are not a certification.
+  are not a certification. A scan is complete when every file in scope and all
+  ten OWASP categories are closed; the ASVS checklist is reported as a count of
+  controls checked and does not decide completeness.
 - The model can miss issues or misread code, so check its conclusions.
 - Deep scans have a fixed budget and can be resumed, but a scan isn't
   guaranteed to keep running through a Hermes restart.

@@ -158,6 +158,21 @@ def test_markdown_is_laid_out_for_a_reader():
     assert text.index('## Code and dependency integrity') < text.index('## Coverage') < text.index('## Limitations')
 
 
+def test_asvs_is_reported_as_an_informational_count():
+    d = inputs()
+    d['coverage']['standards']['asvs']['controls'] = (
+        [{'id': f'V1.{i}.1', 'state': 'unknown', 'evidence': [], 'reason': 'no explicit control coverage unit'} for i in range(3)]
+        + [{'id': 'V2.1.1', 'state': 'reviewed', 'evidence': ['att_x'], 'reason': 'checked'},
+           {'id': 'V3.1.1', 'state': 'unknown', 'evidence': [], 'reason': 'finding mapped but control not closed'},
+           {'id': 'V4.1.1', 'state': 'not_applicable', 'evidence': [], 'reason': 'no matching surface'}])
+    text = render_markdown(d['manifest'], d['findings_doc'], d['coverage'], d['chains_doc'])
+    assert ('ASVS 5.0.0 checklist (informational; it does not decide completeness): 1 of 5 applicable controls '
+            'recorded as reviewed (4 not yet reviewed). 1 control relate to reported findings.') not in text
+    assert ('ASVS 5.0.0 checklist (informational; it does not decide completeness): 1 of 5 applicable controls '
+            'recorded as reviewed (4 not yet reviewed). 1 control relates to reported findings. '
+            'coverage.json lists each control.') in text
+
+
 def test_reportable_section_validation():
     f = inputs()['findings_doc']['findings'][0]
     assert validate_finding_sections(f) == []

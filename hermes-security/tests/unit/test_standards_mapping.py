@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from hermes_security.standards.ledger import (
     load_top10, load_asvs, load_cwe_map, detect_surfaces, applicable_controls,
-    build_ledger, mandatory_gaps, map_cwe, specialist_profiles_for,
+    asvs_summary, build_ledger, mandatory_gaps, map_cwe, specialist_profiles_for,
 )
 
 NAMES = [
@@ -69,7 +69,10 @@ def test_explicit_closures_and_evidence():
     assert (first['state'], first['reason'], first['evidence']) == ('reviewed', 'traced', ['att_1'])
     control = next(c for c in ledger['asvs']['controls'] if c['id'] == 'V8.2.2')
     assert control['state'] == 'deferred' and control['reason'] == 'needs owner'
-    assert any('V8.2.2' in gap for gap in mandatory_gaps(ledger))
+    # ASVS is informational: a deferred control is counted, never a completeness gap.
+    assert not any('V8.2.2' in gap for gap in mandatory_gaps(ledger))
+    summary = asvs_summary(ledger)
+    assert summary['states'].get('deferred') == 1 and summary['applicable'] >= 1
 
 
 def test_exceptional_conditions_and_ssrf():
@@ -149,3 +152,14 @@ def test_exceptional_case_checklist_and_conflict_order_independence():
              {'unit': 'lane:A10:2025', 'state': 'not_applicable'}]
     assert build_ledger(set(), units, []) == build_ledger(set(), units[::-1], [])
     assert build_ledger(set(), units, [])['owaspTop10']['categories'][-1]['state'] == 'unknown'
+
+
+def test_unreviewed_asvs_controls_alone_never_make_a_scan_incomplete():
+    surfaces = {'web-route', 'auth', 'session', 'config', 'logging'}
+    units = [{'unit': 'lane:' + c['id'], 'state': 'reviewed', 'note': 'traced'} for c in load_top10()['categories']]
+    ledger = build_ledger(surfaces, units, [{'taxonomy': {'cwe': ['CWE-918']}}])
+    assert mandatory_gaps(ledger) == []
+    summary = asvs_summary(ledger)
+    assert summary['applicable'] >= len(applicable_controls(surfaces)) > 0
+    assert summary['findingMapped'] >= 1   # CWE-918 maps to ASVS controls that no unit closed
+    assert summary['states'].get('unknown') == summary['applicable'] and 'reviewed' not in summary['states']

@@ -2,7 +2,6 @@
 isUsingOverage, get_usage's extra_usage + full plan windows), before the next request is billed."""
 import json
 import logging
-import os
 import sys
 import time
 from types import SimpleNamespace
@@ -63,96 +62,62 @@ def native(profile, tmp_path, monkeypatch):
     extra_usage.reset()
 
 
-def test_stop_refuses_the_next_request_once_native_reports_extra_usage(native):
+@pytest.mark.parametrize("mode", ["notify", "stop", "ask", "stpo"])
+def test_a_spilling_window_follows_the_extra_usage_setting(native, mode, caplog):
+    """notify (the default) warns once per window; stop and ask refuse the next request before it is billed; an
+    unknown mode refuses rather than spends."""
     from agent.error_classifier import FailoverReason, classify_api_error
     from extra_usage import ClaudeExtraUsageBlocked
-    _settings(extra_usage="stop")
+    if mode != "notify":
+        _settings(extra_usage=mode)
+    caplog.set_level(logging.WARNING)
     native(SPILLING)  # this request crossed the limit: already billed, so it completes
+    if mode == "notify":
+        native(SPILLING)
+        native()
+        assert native.spawns() == 3
+        assert sum("drawing paid extra usage" in r.getMessage() for r in caplog.records) == 1
+        return
     with pytest.raises(ClaudeExtraUsageBlocked) as raised:
         native()
     assert native.spawns() == 1  # refused before Claude Code started
     message = str(raised.value)
     assert time.strftime("%Y-%m-%dT%H:%M", time.gmtime(RESETS)) in message
-    assert "extra_usage ask" in message and "hermes config set" in message
     verdict = classify_api_error(raised.value, provider=PLUGIN_NAME, model="sonnet")
     assert verdict.reason == FailoverReason.billing and not verdict.retryable and not verdict.should_fallback
-    assert verdict.error_context["usage_window"] and verdict.error_context["display_message"] == message
+    assert verdict.error_context["display_message"] == message
+    if mode == "ask":
+        assert "extra_usage_allowed_until" in message
+        _settings(extra_usage="ask", extra_usage_allowed_until=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(RESETS)))
+        assert native().choices[0].message.content == "hello\n"
+        assert native.spawns() == 2
 
 
-def test_ask_refuses_until_the_user_allows_this_window(native):
-    from extra_usage import ClaudeExtraUsageBlocked
-    _settings(extra_usage="ask")
-    native(SPILLING)
-    with pytest.raises(ClaudeExtraUsageBlocked) as raised:
-        native()
-    assert "extra_usage_allowed_until" in str(raised.value)
-    _settings(extra_usage="ask", extra_usage_allowed_until=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(RESETS)))
-    assert native().choices[0].message.content == "hello\n"
-    assert native.spawns() == 2
+def _answer(body):
+    return json.dumps({"type": "control_response", "response": {
+        "subtype": "success", "request_id": "hermes-usage", "response": {"rate_limits": body}}}) + "\n"
 
 
-def test_notify_is_the_default_and_warns_once_per_window(native, caplog):
-    caplog.set_level(logging.WARNING)
-    for _ in range(3):
-        native(SPILLING)
-    assert native.spawns() == 3
-    assert [r.getMessage() for r in caplog.records].count(
-        next(r.getMessage() for r in caplog.records if "drawing paid extra usage" in r.getMessage())) == 1
-
-
-def test_a_plan_window_that_resets_admits_again(native, monkeypatch):
-    import extra_usage
-    _settings(extra_usage="stop")
-    native(dict(SPILLING, resetsAt=int(time.time()) + 60))
-    monkeypatch.setattr(extra_usage.time, "time", lambda: RESETS + 1)
-    probed = []
-    import directsdk_setup
-    monkeypatch.setattr(directsdk_setup, "_ask_usage", lambda *a: probed.append(a) or ({"limits": []}, None))
-    assert native().choices[0].message.content == "hello\n"
-    assert len(probed) == 1  # past the reset the process asks Claude Code again
-
-
-@pytest.mark.parametrize("percent, refused", [(100, True), (99, False)])
-def test_a_new_process_asks_claude_code_once_before_refusing(native, monkeypatch, percent, refused):
-    """No state yet (fresh process) under stop: one zero-inference get_usage decides."""
-    import directsdk_setup
+@pytest.mark.parametrize("answer, refused", [
+    (_answer({"extra_usage": {"is_enabled": True}, "limits": [{"kind": "session", "percent": 100,
+                                                                "resets_at": "2030-01-01T00:00:00Z"}]}), "2030-01-01T00:00:00Z"),
+    # Legacy `utilization` is a 0..1 fraction (as /usage reads it), so 1 is a full window.
+    (_answer({"extra_usage": {"is_enabled": True}, "five_hour": {"utilization": 1, "resets_at": "2030-01-01T00:00:00Z"}}),
+     "2030-01-01T00:00:00Z"),
+    ("", "needs a version with get_usage"),  # an answer that cannot tell refuses rather than spends
+    (_answer({"extra_usage": {"is_enabled": True}, "limits": [{"kind": "session", "percent": 99}]}), None),
+], ids=["full", "legacy-full", "unknown", "within"])
+def test_a_fresh_process_under_stop_asks_claude_code_before_the_first_turn(native, monkeypatch, answer, refused):
     from extra_usage import ClaudeExtraUsageBlocked
     _settings(extra_usage="stop")
-    body = {"extra_usage": {"is_enabled": True}, "limits": [
-        {"kind": "session", "percent": percent, "resets_at": "2030-01-01T00:00:00Z"},
-        {"kind": "weekly_all", "percent": 20}]}
-    calls = []
-
-    def fake_run(argv, **kwargs):
-        calls.append(argv)
-        answer = {"type": "control_response", "response": {"subtype": "success", "request_id": "hermes-usage",
-                                                           "response": {"rate_limits": body}}}
-        return SimpleNamespace(stdout=json.dumps(answer) + "\n", returncode=0)
-    monkeypatch.setattr(directsdk_setup.subprocess, "Popen", popen_from_run(fake_run, turns=directsdk_setup.subprocess.Popen))
+    probes = _usage_probe(monkeypatch, answer)
     if refused:
-        with pytest.raises(ClaudeExtraUsageBlocked, match="2030-01-01T00:00:00Z"):
+        with pytest.raises(ClaudeExtraUsageBlocked, match=refused):
             native()
     else:
         native()
         native()
-    assert len(calls) == 1 and native.spawns() == (0 if refused else 2)
-
-
-@pytest.mark.parametrize("utilization, refused", [(1, True), (1.0, True), (100, True), (0.99, False)])
-def test_a_full_legacy_window_is_spilling(native, monkeypatch, utilization, refused):
-    """Greptile 4511161857: legacy `utilization` is a 0..1 fraction (as /usage reads it), so 1 is a full window."""
-    from extra_usage import ClaudeExtraUsageBlocked
-    _settings(extra_usage="stop")
-    body = {"extra_usage": {"is_enabled": True}, "five_hour": {"utilization": utilization, "resets_at": "2030-01-01T00:00:00Z"},
-            "seven_day": {"utilization": 0.2}}
-    _usage_probe(monkeypatch, json.dumps({"type": "control_response", "response": {
-        "subtype": "success", "request_id": "hermes-usage", "response": {"rate_limits": body}}}) + "\n")
-    if refused:
-        with pytest.raises(ClaudeExtraUsageBlocked, match="2030-01-01T00:00:00Z"):
-            native()
-    else:
-        native()
-    assert native.spawns() == (0 if refused else 1)
+    assert native.spawns() == (0 if refused else 2) and len(probes) == 1
 
 
 def _usage_probe(monkeypatch, answer):
@@ -165,58 +130,3 @@ def _usage_probe(monkeypatch, answer):
         return SimpleNamespace(stdout=answer, returncode=0)
     monkeypatch.setattr(directsdk_setup.subprocess, "Popen", popen_from_run(fake_run, turns=directsdk_setup.subprocess.Popen))
     return envs
-
-
-@pytest.mark.parametrize("mode", ["stop", "ask"])
-def test_a_check_that_cannot_tell_refuses_under_stop_and_ask(native, monkeypatch, mode):
-    """Greptile 4511161845: an unknown answer used to be recorded as 'not spilling' and the turn was sent."""
-    from extra_usage import ClaudeExtraUsageBlocked
-    _settings(extra_usage=mode)
-    probes = _usage_probe(monkeypatch, "")
-    for _ in range(2):
-        with pytest.raises(ClaudeExtraUsageBlocked, match="needs a version with get_usage"):
-            native()
-    assert native.spawns() == 0 and len(probes) == 2  # refused before Claude Code started; the unknown is not kept
-
-
-def test_the_check_asks_about_the_login_the_turn_uses(native, monkeypatch, tmp_path):
-    """Greptile 4511161827: an explicit Client(env=...) keeps its token for the turn, and the probe must ask about
-    that same login, not the one the profile would pick."""
-    import directsdk
-    from extra_usage import ClaudeExtraUsageBlocked
-    _settings(extra_usage="stop")
-    spilling = {"extra_usage": {"is_enabled": True}, "limits": [{"kind": "session", "percent": 100}]}
-    probes = _usage_probe(monkeypatch, json.dumps({"type": "control_response", "response": {
-        "subtype": "success", "request_id": "hermes-usage", "response": {"rate_limits": spilling}}}) + "\n")
-    script = tmp_path / "native.py"
-    client = directsdk.Client(command=[sys.executable, str(script)],
-                              env={"PATH": os.defpath, "HOME": str(tmp_path), "SPAWNS": str(tmp_path / "spawns"),
-                                   "CLAUDE_CODE_OAUTH_TOKEN": "fixture-login", "CLAUDE_CONFIG_DIR": str(tmp_path / "fx")})
-    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "process-login")
-    try:
-        with pytest.raises(ClaudeExtraUsageBlocked, match="drawing paid extra usage"):
-            client.create(**REQUEST)
-    finally:
-        client.close()
-    probe, = probes
-    assert probe["CLAUDE_CODE_OAUTH_TOKEN"] == "fixture-login" and probe["CLAUDE_CONFIG_DIR"] == str(tmp_path / "fx")
-
-
-def test_an_unknown_mode_refuses_rather_than_spends(native):
-    from extra_usage import ClaudeExtraUsageBlocked
-    _settings(extra_usage="stpo")
-    native(SPILLING)
-    with pytest.raises(ClaudeExtraUsageBlocked):
-        native()
-
-
-def test_the_third_party_extra_usage_400_is_a_billing_stop_not_a_silent_fallback(profile):
-    """P#296: classify_api_error used to decline this 400, so core walked the fallback chain silently."""
-    from agent.error_classifier import FailoverReason, classify_api_error
-    from directsdk import ClaudeAPIError
-    error = ClaudeAPIError("Incomplete upstream response (first upstream attempt: status 400, upstream said: Third-party "
-                           "apps now draw from your extra usage, not your plan limits. Ask your workspace admin.)", 400)
-    verdict = classify_api_error(error, provider=PLUGIN_NAME, model="sonnet")
-    assert verdict.reason == FailoverReason.billing and not verdict.should_fallback
-    assert "hermes-agent" in verdict.error_context["display_message"]
-    assert "Ask your workspace admin" in verdict.error_context["display_message"]

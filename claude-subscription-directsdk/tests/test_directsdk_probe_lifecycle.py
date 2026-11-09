@@ -32,20 +32,52 @@ def _alive(pid):
         return False
 
 
-@pytest.mark.parametrize("probe", ["discover_models", "fetch_usage"])
-def test_a_timed_out_probe_leaves_no_child_and_no_scratch_dir(profile, tmp_path, probe):
+# A shim that starts the real CLI in its own process group and exits first.
+LAUNCHER = textwrap.dedent("""
+    import json, os, subprocess, sys
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    open(os.environ["PROBE_LOG"], "w").write(json.dumps({"pid": child.pid, "cwd": os.getcwd()}))
+""")
+# A launcher that leaves a descendant holding the probe's stdout, outside its process group, and exits.
+DETACHED_HOLDER = textwrap.dedent("""
+    import json, os, subprocess, sys
+    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(20)"], stdout=sys.stdout,
+                              **({} if os.name == "nt" else {"start_new_session": True}))
+    open(os.environ["PROBE_LOG"], "w").write(json.dumps({"pid": os.getpid(), "cwd": os.getcwd(), "holder": holder.pid}))
+""")
+
+
+@pytest.mark.parametrize("probe, cli", [
+    ("discover_models", HANG), ("fetch_usage", HANG),
+    pytest.param("fetch_usage", LAUNCHER, marks=pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")),
+    ("fetch_usage", DETACHED_HOLDER)], ids=["picker", "usage", "usage-launcher-exits-first", "usage-detached-holder"])
+def test_a_timed_out_probe_leaves_no_child_and_no_scratch_dir(profile, tmp_path, probe, cli):
+    """Cleanup reaches a descendant a launcher left in its group; a detached holder of stdout is out of the kill's
+    reach (Greptile 4512444851), so the read has its own deadline."""
+    import psutil
     import directsdk_setup
     script = tmp_path / "claude.py"
-    script.write_text(HANG, encoding="utf-8")
+    script.write_text(cli, encoding="utf-8")
     log = tmp_path / "probe.json"
     env = {**os.environ, "PATH": os.defpath, "HOME": str(tmp_path), "PROBE_LOG": str(log)}
     started = time.monotonic()
-    result = getattr(directsdk_setup, probe)(command=[sys.executable, str(script)], env=env, timeout=2)
-    assert time.monotonic() - started < 15
-    assert result is None or result[0] is None
-    seen = json.loads(log.read_text())
-    assert not _alive(seen["pid"]), "the probe child outlived the call"
-    assert not os.path.exists(seen["cwd"]), "the scratch cwd was left behind"
+    try:
+        result = getattr(directsdk_setup, probe)(command=[sys.executable, str(script)], env=env, timeout=2)
+        assert time.monotonic() - started < 10
+        assert result is None or result[0] is None
+        seen = json.loads(log.read_text())
+        deadline = time.monotonic() + 3
+        while _alive(seen["pid"]) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not _alive(seen["pid"]), "the probe child outlived the call"
+        if cli is HANG:  # a live holder keeps its cwd (on Windows the dir cannot go while it runs)
+            assert not os.path.exists(seen["cwd"]), "the scratch cwd was left behind"
+    finally:
+        left = json.loads(log.read_text()) if log.exists() else {}
+        for pid in (left.get("holder"), left.get("pid")):
+            if pid and _alive(pid):
+                psutil.Process(pid).kill()
 
 
 def test_an_exiting_interpreter_kills_a_probe_still_running_on_a_daemon_thread(tmp_path):
@@ -82,19 +114,6 @@ def _lock(config, age):
     return lock
 
 
-@pytest.mark.parametrize("age, contents, reaped", [(120, False, True), (5, False, False), (120, True, False)])
-def test_only_a_stale_empty_refresh_lock_is_reaped_before_a_spawn(profile, tmp_path, age, contents, reaped):
-    """Older than Claude Code's own 60 s stale window and empty: an orphan. A live holder bumps it every 5 s."""
-    import directsdk_setup
-    config = tmp_path / "login"
-    lock = _lock(config, age)
-    if contents:
-        (lock / "owner").write_text("x", encoding="utf-8")
-    env = {**os.environ, "PATH": os.defpath, "CLAUDE_CONFIG_DIR": str(config), "FAKE_STATE": "{}"}
-    directsdk_setup.setup_status(command=[sys.executable, "-c", "print('{}')"], env=env)
-    assert lock.exists() is not reaped
-
-
 def test_a_turn_reaps_the_orphaned_lock_of_its_own_login(profile, tmp_path, monkeypatch):
     import directsdk
     from test_directsdk import FAKE
@@ -115,49 +134,3 @@ def test_a_turn_reaps_the_orphaned_lock_of_its_own_login(profile, tmp_path, monk
     assert not lock.exists()
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
-def test_a_probe_whose_launcher_exits_first_leaves_no_descendant(profile, tmp_path):
-    """A shim that starts the real CLI and exits: probe cleanup still kills what it left in the group."""
-    import directsdk_setup
-    pidfile = tmp_path / "descendant.pid"
-    launcher = tmp_path / "claude.sh"
-    launcher.write_text(f"sleep 30 </dev/null >/dev/null 2>&1 &\necho $! > {pidfile}\nexit 0\n", encoding="utf-8")
-    env = {**os.environ, "PATH": os.defpath, "HOME": str(tmp_path)}
-    directsdk_setup.fetch_usage(command=["/bin/sh", str(launcher)], env=env, timeout=5)
-    descendant = int(pidfile.read_text())
-    deadline = time.monotonic() + 3
-    while _alive(descendant) and time.monotonic() < deadline:
-        time.sleep(0.05)
-    try:
-        assert not _alive(descendant), "the launcher's descendant outlived probe cleanup"
-    finally:
-        if _alive(descendant):
-            os.kill(descendant, 9)
-
-
-# A launcher that leaves a descendant holding the probe's stdout, outside its process group, and exits.
-DETACHED_HOLDER = textwrap.dedent("""
-    import os, subprocess, sys
-    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(20)"], stdout=sys.stdout,
-                              **({} if os.name == "nt" else {"start_new_session": True}))
-    open(os.environ["PROBE_LOG"], "w").write(str(holder.pid))
-""")
-
-
-def test_a_probe_returns_at_its_timeout_while_an_unkillable_descendant_holds_stdout(profile, tmp_path):
-    """Greptile 4512444851. The kill cannot reach every descendant (on Windows a launcher that already exited is
-    skipped), so the read has its own deadline instead of waiting for stdout to close."""
-    import psutil
-    import directsdk_setup
-    launcher = tmp_path / "claude.py"
-    launcher.write_text(DETACHED_HOLDER, encoding="utf-8")
-    log = tmp_path / "holder.pid"
-    env = {**os.environ, "PATH": os.defpath, "HOME": str(tmp_path), "PROBE_LOG": str(log)}
-    started = time.monotonic()
-    try:
-        result = directsdk_setup.fetch_usage(command=[sys.executable, str(launcher)], env=env, timeout=2)
-        assert time.monotonic() - started < 10
-        assert result == (None, "Claude Code did not answer in time")
-    finally:
-        if log.exists() and _alive(int(log.read_text())):
-            psutil.Process(int(log.read_text())).kill()

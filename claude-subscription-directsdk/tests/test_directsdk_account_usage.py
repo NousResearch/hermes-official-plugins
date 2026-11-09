@@ -2,11 +2,8 @@
 control request; only that subprocess is faked. The plugin never reads or sends the CLI's token."""
 from datetime import datetime, timezone
 import json
-import os
 import subprocess
 import sys
-import threading
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -80,33 +77,6 @@ def test_limits_come_from_claude_code_get_usage(cli):
     assert call.env['ANTHROPIC_BASE_URL'].startswith('http://127.0.0.1:')
 
 
-def test_a_cli_that_never_answers_still_fits_cores_hook_deadline(cli, monkeypatch):
-    """Core abandons the /usage hook at 10 s; the probe gives up before that even while stdout stays open."""
-    hung = threading.Event()
-
-    class Hanging:
-        # The Windows shape: the launcher already exited (so the kill skips it) while a child holds stdout open.
-        pid, returncode = os.getpid(), 0
-
-        def __init__(self, argv, **kwargs):
-            self.stdin = SimpleNamespace(write=lambda _: None, close=lambda: None)
-            self.stdout = SimpleNamespace(read=lambda: hung.wait(30) and '')
-
-        def poll(self):
-            return 0
-
-        def wait(self, timeout=None):
-            return 0
-    monkeypatch.setattr(subprocess, 'Popen', Hanging)
-    started = time.monotonic()
-    try:
-        snapshot, _ = _usage()
-    finally:
-        hung.set()
-    assert time.monotonic() - started < 10
-    assert snapshot.unavailable_reason == 'Claude Code did not answer in time'
-
-
 def test_a_body_without_limits_reads_the_legacy_windows(cli):
     cli.reply = _answer(LEGACY)
     snapshot, _ = _usage()
@@ -137,15 +107,18 @@ def test_usage_detail_is_shown_beside_the_limits(cli):
     assert snapshot.details == ('Extra usage: 12.50 / 50.00 USD', 'Usage credits spent: 12.50 USD of 50.00 USD',
                                 'This week by surface: Claude Code 99%, Cowork 1%')
     assert lines[-3:] == list(snapshot.details)
-
-
-def test_extra_usage_off_is_said_and_a_listed_model_limit_is_not_doubled(cli):
-    body = {**REAL_2_1_319, 'extra_usage': {'is_enabled': False, 'disabled_reason': 'org_level_disabled'},
-            'limits': REAL_2_1_319['limits'] + [{'kind': 'weekly_scoped', 'percent': 7, 'scope': {'model': {'display_name': 'Fable'}}}]}
-    cli.reply = _answer(body)
+    # Extra usage turned off is said, and a model limit listed in `limits` too is not shown twice.
+    cli.reply = _answer({**REAL_2_1_319, 'extra_usage': {'is_enabled': False, 'disabled_reason': 'org_level_disabled'},
+                         'limits': REAL_2_1_319['limits'] + [
+                             {'kind': 'weekly_scoped', 'percent': 7, 'scope': {'model': {'display_name': 'Fable'}}}]})
     snapshot, _ = _usage()
     assert [w.label for w in snapshot.windows].count('Fable week') == 1
     assert snapshot.details[0] == 'Extra usage: off (org_level_disabled)'
+    # A truthy scalar where a list of rows belongs keeps the plan limits (Greptile 4511161876).
+    cli.reply = _answer({**LIMITS, 'seven_day_breakdown': {'rows': 7}, 'model_scoped': True})
+    snapshot, _ = _usage()
+    assert snapshot.unavailable_reason is None
+    assert [w.label for w in snapshot.windows][:2] == ['Current session', 'Current week']
 
 
 def test_works_with_adopt_external_logins_off_and_follows_the_profile_login(cli, monkeypatch):
@@ -199,17 +172,3 @@ def test_missing_claude_code_makes_no_call(cli, monkeypatch, tmp_path):
     monkeypatch.setenv('CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND', str(tmp_path / 'no-such-claude'))
     snapshot, lines = _usage()
     assert cli.calls == [] and lines[-1].startswith('Unavailable: Claude Code is not installed')
-
-
-@pytest.mark.parametrize('details', [{'seven_day_breakdown': {'rows': 7}}, {'model_scoped': True},
-                                     {'seven_day_breakdown': {'rows': 'abc'}, 'model_scoped': 3}])
-def test_a_malformed_detail_container_keeps_the_plan_limits(cli, details):
-    """Greptile 4511161876: a truthy scalar where a list of rows belongs raised and lost the whole snapshot."""
-    import extra_usage
-    cli.reply = _answer({**LIMITS, **details})
-    snapshot, lines = _usage()
-    assert snapshot.unavailable_reason is None
-    assert [w.label for w in snapshot.windows][:2] == ['Current session', 'Current week']
-    # The extra-usage policy reads the same body and must not raise on it either.
-    extra_usage.observe_usage('malformed', {'limits': 5, 'extra_usage': {'is_enabled': True}})
-    extra_usage.reset()

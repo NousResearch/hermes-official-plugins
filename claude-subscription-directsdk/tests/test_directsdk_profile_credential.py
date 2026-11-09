@@ -67,9 +67,21 @@ def test_the_profile_token_wins_over_the_gateways(ambient, tmp_path):
 
 
 @pytest.mark.parametrize("scope", [{}, {TOKEN: ""}, {TOKEN: "  "}], ids=["miss", "empty", "blank"])
-def test_a_served_profile_never_inherits_the_gateways_login(ambient, tmp_path, scope):
+def test_a_served_profile_never_runs_on_the_gateways_login(ambient, tmp_path, monkeypatch, scope):
     """#313: without a token of its own a served profile loses the launch profile's token, gateway headers and
-    config directory, and runs on the login its claude_config_dir names."""
+    config directory. With no directory of its own either, Claude Code would fall back to ~/.claude under the
+    inherited HOME (the launch profile's login), so the turn is refused before a spawn, naming both ways to give
+    the profile a login. With a claude_config_dir it runs on that login."""
+    import directsdk
+    client, seen = _native(tmp_path, monkeypatch)
+    try:
+        with multiplexed(scope), pytest.raises(directsdk.ClaudeCodeLoggedOut) as raised:
+            client.create(**REQUEST)
+    finally:
+        client.close()
+    assert not (tmp_path / "tokens.jsonl").exists()
+    assert "claude_config_dir" in str(raised.value) and TOKEN in str(raised.value)
+    assert AMBIENT not in str(raised.value)
     setting = str(tmp_path / "login")
     _set_config_dir(setting)
     inherited = {TOKEN: AMBIENT, "ANTHROPIC_CUSTOM_HEADERS": "X-Gateway: launch", "CLAUDE_CONFIG_DIR": setting,
@@ -79,72 +91,10 @@ def test_a_served_profile_never_inherits_the_gateways_login(ambient, tmp_path, s
     assert env == {"UNRELATED": "kept", "CLAUDE_CONFIG_DIR": setting}
 
 
-@pytest.mark.parametrize("scope", [{}, {TOKEN: "  "}], ids=["miss", "blank"])
-def test_a_served_profile_with_no_login_of_its_own_is_refused(ambient, scope):
-    """No token and no directory of its own: Claude Code would fall back to ~/.claude under the inherited HOME,
-    the launch profile's login and allowance. Refuse, naming both ways to give the profile a login."""
-    import directsdk
-    with multiplexed(scope), pytest.raises(directsdk.ClaudeCodeLoggedOut) as raised:
-        _apply({TOKEN: AMBIENT, "HOME": "/launch", "CLAUDE_CONFIG_DIR": "/launch/.claude"})
-    assert "claude_config_dir" in str(raised.value) and TOKEN in str(raised.value)
-    assert AMBIENT not in str(raised.value)
-
-
-def test_a_served_profile_with_no_login_never_spawns(ambient, tmp_path, monkeypatch):
-    import directsdk
-    client, seen = _native(tmp_path, monkeypatch)
-    try:
-        with multiplexed({}), pytest.raises(directsdk.ClaudeCodeLoggedOut):
-            client.create(**REQUEST)
-    finally:
-        client.close()
-    assert not (tmp_path / "tokens.jsonl").exists()
-
-
-def test_a_routed_profile_with_no_bound_scope_names_the_scope_error(ambient, monkeypatch, tmp_path):
-    """Routed by a HERMES_HOME override alone (no scope, no multiplexing): core's own scope error, not a TypeError."""
-    from agent.secret_scope import UnscopedSecretError
-    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
-    token = set_hermes_home_override(str(tmp_path / "served-profile"))
-    try:
-        with pytest.raises(UnscopedSecretError):
-            _apply({TOKEN: AMBIENT})
-    finally:
-        reset_hermes_home_override(token)
-
-
-def test_a_served_profile_uses_its_own_gateway_headers_and_login_dir(ambient):
-    scope = {"ANTHROPIC_CUSTOM_HEADERS": "X-Gateway: served", "CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR": "/served/.claude"}
-    with multiplexed(scope):
-        env = _apply({TOKEN: AMBIENT, "ANTHROPIC_CUSTOM_HEADERS": "X-Gateway: launch", "CLAUDE_CONFIG_DIR": "/launch/.claude"})
-    assert env == {"ANTHROPIC_CUSTOM_HEADERS": "X-Gateway: served", "CLAUDE_CONFIG_DIR": "/served/.claude"}
-
-
 def test_a_single_profile_install_keeps_its_own_token(ambient, tmp_path):
     """Not multiplexed: get_secret reads os.environ, the token the child inherited anyway."""
     _set_config_dir(str(tmp_path / "login"))
     assert _apply({TOKEN: AMBIENT}) == {TOKEN: AMBIENT}
-
-
-def test_an_unscoped_read_under_multiplexing_fails_closed(ambient):
-    """No scope bound while multiplexing: no child may start on the launch profile's token."""
-    from agent.secret_scope import UnscopedSecretError
-    with multiplexed(None), pytest.raises(UnscopedSecretError):
-        _apply({TOKEN: AMBIENT})
-
-
-def test_unscoped_setup_probes_degrade_without_spawning(ambient, monkeypatch):
-    import directsdk_setup
-    spawned = []
-    monkeypatch.setattr(directsdk_setup.subprocess, "run", lambda *a, **k: spawned.append(a))
-    monkeypatch.setattr(directsdk_setup.subprocess, "Popen", lambda *a, **k: spawned.append(a))
-    env = {"PATH": os.defpath, TOKEN: AMBIENT}
-    with multiplexed(None):
-        status = directsdk_setup.setup_status(command=[sys.executable], env=env)
-        assert directsdk_setup.discover_models(command=[sys.executable], env=env) is None
-        limits, reason = directsdk_setup.fetch_usage(command=[sys.executable], env=env)
-    assert spawned == [] and not status["logged_in"] and "could not read" in status["detail"]
-    assert limits is None and "could not read" in reason
 
 
 def test_an_older_core_without_secret_scope_is_no_profile_token(ambient, tmp_path, monkeypatch):

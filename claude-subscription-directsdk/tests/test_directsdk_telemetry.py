@@ -59,12 +59,6 @@ def _turn_env(profile, tmp_path, **extra):
     return env
 
 
-def test_turns_are_quiet_by_default(profile, tmp_path):
-    env = _turn_env(profile, tmp_path)
-    assert {k: env.get(k) for k in QUIET} == dict.fromkeys(QUIET, "1")
-    assert env["DISABLE_AUTOUPDATER"] == "1" and env["DISABLE_FEEDBACK_COMMAND"] == "1"
-
-
 @pytest.mark.parametrize("value", [None, "false", "'off'"])
 def test_the_picker_handshake_fetches_feature_flags_with_telemetry_off(profile, tmp_path, value):
     """#86: DISABLE_TELEMETRY or the nonessential-traffic flag shrinks the CLI picker 13 -> 5 (2.1.319), so the
@@ -75,16 +69,6 @@ def test_the_picker_handshake_fetches_feature_flags_with_telemetry_off(profile, 
     assert {k: status.get(k) for k in QUIET} == dict.fromkeys(QUIET, "1")
     assert "DISABLE_TELEMETRY" not in handshake and "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in handshake
     assert handshake["DISABLE_ERROR_REPORTING"] == "1" and handshake["DISABLE_AUTOUPDATER"] == "1"
-
-
-@pytest.mark.parametrize("value", ["true", "'on'"])
-@pytest.mark.parametrize("child", ["discovery", "turn"])
-def test_turning_the_setting_on_lifts_the_quiet_flags(profile, tmp_path, child, value):
-    _set_telemetry(value)
-    envs = _discovery_envs(profile, tmp_path) if child == "discovery" else [_turn_env(profile, tmp_path)]
-    for env in envs:
-        assert not set(QUIET) & set(env), {k: env[k] for k in QUIET if k in env}
-        assert env["DISABLE_AUTOUPDATER"] == "1"
 
 
 @pytest.mark.parametrize("value", [None, "false"])

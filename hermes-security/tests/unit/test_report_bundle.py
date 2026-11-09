@@ -73,6 +73,30 @@ def test_markdown_layers_and_zero_partial():
     assert 'This scan is incomplete' in text and 'clean' not in text.lower()
 
 
+def test_markdown_summarizes_workers_and_repeated_gaps():
+    d = inputs()
+    cov = d['coverage']
+    cov['workers'] = ([{'attemptId': f'att_{i:024x}', 'role': 'investigator', 'status': 'accepted'} for i in range(120)]
+                      + [{'attemptId': 'att_' + 'f' * 24, 'role': 'validator', 'status': 'rejected'},
+                         {'attemptId': 'att_' + 'e' * 24, 'role': 'investigator', 'status': 'missing'}])
+    asvs = [f'ASVS control V1.{i}.1 is unknown: no explicit control coverage unit.' for i in range(1, 41)]
+    packets = [f'Worker packet pkt_{i:024x} has no accepted result.' for i in range(3)]
+    cov['gaps'] = ['Authentication review is missing.', 'ASVS control V9.9.9 is unknown: finding mapped but control not closed.'] + asvs + packets
+    text = render_markdown(d['manifest'], d['findings_doc'], cov, d['chains_doc'])
+    # One line per kind of result, not one per worker; per-worker detail stays in coverage.json.
+    assert '- Review worker' not in text and 'att\\_' not in text
+    assert 'Review workers: 120 accepted, 1 rejected, 1 missing. coverage.json lists each one.' in text
+    # Repeated gaps collapse to one line each; one-off gaps stay as written.
+    assert '- 40 ASVS controls are unknown: no explicit control coverage unit. coverage.json lists each one.' in text
+    assert '- 3 review packets have no accepted result. coverage.json lists each one.' in text
+    assert '- ASVS control V9.9.9 is unknown: finding mapped but control not closed.' in text
+    assert '- Authentication review is missing.' in text
+    assert 'V1.1.1' not in text and 'pkt\\_' not in text
+    cov['workers'] = [{'attemptId': 'att_' + 'a' * 24, 'role': 'investigator', 'status': 'accepted'}]
+    cov['gaps'] = []
+    assert 'Review workers: 1 accepted.' in render_markdown(d['manifest'], d['findings_doc'], cov, d['chains_doc'])
+
+
 def test_reportable_section_validation():
     f = inputs()['findings_doc']['findings'][0]
     assert validate_finding_sections(f) == []

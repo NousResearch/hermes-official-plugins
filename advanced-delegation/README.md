@@ -218,6 +218,25 @@ hermes config set delegation.backends.model_map.default fast
 hermes config set delegation.backends.profile_routes.profiles '[{name: coder, description: "Writes and refactors code."}]'
 ```
 
+## Model routing skill
+
+The plugin bundles one skill, `model-routing`: a procedure for splitting big work into subagent
+tasks and sending each to the cheapest of your model routes that reliably passes it, escalating
+only on model-caused failures. Load it with `skill_view('advanced-delegation:model-routing')` or
+`/skill advanced-delegation:model-routing`. It is registered only where the delegation modes are
+(a core with pluggable delegation providers); if registering it fails, the plugin logs a
+warning and the delegation modes still load.
+
+- **Your routes are the ladder.** List your `model_map` routes cheapest first; the skill's helper
+  (`skills/model-routing/scripts/route_ledger.py`, stdlib Python) reads them in config order with
+  `sync-routes` and maps task difficulty 1-5 onto however many routes you have.
+- **A local ledger learns from results.** Each recorded outcome (with its test evidence) goes to
+  `<HERMES_HOME>/plugin-data/advanced-delegation/routing-ledger.jsonl` (override with
+  `ADVANCED_DELEGATION_LEDGER`), next to `routes.json`, the synced route names, descriptions and
+  `provider:model@effort`, never keys or URL credentials. Nothing else is written and nothing
+  leaves the machine.
+- **No tools, hooks or dependencies.** The skill adds none; it drives `delegate_task`.
+
 ## Development
 
 ```bash

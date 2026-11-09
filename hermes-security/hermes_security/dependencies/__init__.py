@@ -84,7 +84,8 @@ def _uv_dev_only(rows):
 
     Runtime is everything reachable from the project's own packages through ``dependencies`` and
     ``optional-dependencies`` (extras can ship); dev is reachable through ``dev-dependencies``.
-    A name on both paths ships, so it is not dev-only.
+    A name on both paths ships, so it is not dev-only. Local packages reached only as a dev
+    dependency are dev tools, so what they pull in is dev-only too.
     """
     edges = {}
     for row in rows:
@@ -106,11 +107,15 @@ def _uv_dev_only(rows):
                 todo.extend(edges.get(name, ()))
         return seen
 
-    root_names = {str(r.get('name', '')).lower() for r in roots}
-    runtime = reach(root_names)
+    local = {str(r.get('name', '')).lower() for r in roots}
     dev_start = {str(d.get('name', '')).lower() for r in roots for group in (r.get('dev-dependencies') or {}).values()
                  for d in group if isinstance(d, dict)}
-    return reach(dev_start) - runtime - root_names
+    # A local package that some local package pulls in only for development (a test-helpers member) is a
+    # dev tool, not something the project ships; the rest are the shipped roots. A lockfile where that
+    # leaves none keeps every local package as a root.
+    shipped = (local - dev_start) or local
+    runtime = reach(shipped)
+    return reach(dev_start) - runtime - local
 
 
 def dev_only_packages(path, read):

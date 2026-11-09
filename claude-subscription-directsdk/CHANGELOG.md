@@ -17,6 +17,7 @@
 
 ### Changed
 
+- Claude Code's "The user hasn't heard from you in a while" reminder is off (`CLAUDE_CODE_SILENT_TURN_REMINDER=0`). Native added it after five tool steps without text, on the next user turn when replayed and mid-turn when kept, so session mode sent different requests from per-call on every long turn. Requests from sessions with such turns change once; the cached prefix moves on the first request after the update.
 - `claude_code_telemetry` is off by default (#331): every Claude Code child starts with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_TELEMETRY` and `DISABLE_ERROR_REPORTING` set unless the setting is turned on, which also takes about 0.25 s off each spawn. The model picker stays complete: its zero-inference `initialize` handshake leaves `DISABLE_TELEMETRY` and the nonessential-traffic flag unset (either one shrinks the CLI picker from 13 rows to 5 on 2.1.319), so it lists the same 12 routes as with telemetry on. A flag you export yourself is kept.
 
 ### Fixed

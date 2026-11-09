@@ -1231,6 +1231,9 @@ class Client:
             egress_env(env, upstream)
             # Hermes owns budgets; native's replayed reminder invalidates cached history.
             env['CLAUDE_CODE_TOTAL_TOKENS_REMINDER'] = 'off'
+            # Native's "user hasn't heard from you" reminder counts steps since the user's message: a kept
+            # native sees them live and adds it on the turn's 6th call, a replay only on the next turn's.
+            env['CLAUDE_CODE_SILENT_TURN_REMINDER'] = '0'
             # Hermes owns memory and instructions. --setting-sources '' leaves auto memory and the managed
             # CLAUDE.md loading, and native would put them in the conversation as a reminder on the user's
             # turn, where Claude reads Claude Code's notes as text smuggled into the user's message (#195).

@@ -18,6 +18,7 @@ _SEPARATORS = {"&&", "||", ";", "|", "&", "\n", "(", ")"}
 _PULLS_PATH = re.compile(r"(?:^|/)repos/[^/\s]+/[^/\s]+/pulls(?:/\d+)?/?$")
 _PR_TOOL_NAME = re.compile(r"(create|update|edit|open)_?(pull_?request|pr)\b|pull_?request_(create|update)", re.I)
 _SHELL_EXPANSION = re.compile(r"\$\(|`|\$\{?\w")
+_HOME_VAR = re.compile(r"^\$(?:HOME|\{HOME\})(/|\\|$)")
 
 
 @dataclass
@@ -73,8 +74,10 @@ def _read_file(path: str, cwd: str) -> BodyRef:
     if path == "-":
         return BodyRef(where, unreadable="The body comes from stdin, which cannot be checked. Write it "
                                          "to a file and pass --body-file <file>.")
+    path = _HOME_VAR.sub(lambda m: os.path.expanduser("~") + m.group(1), path)
     if _SHELL_EXPANSION.search(path):
-        return BodyRef(where, unreadable="The body file path uses shell expansion. Pass a literal path.")
+        return BodyRef(where, unreadable="The body file path uses shell expansion other than $HOME. Pass a "
+                                         "literal path.")
     p = Path(os.path.expanduser(path))
     if not p.is_absolute():
         p = Path(cwd or os.getcwd()) / p

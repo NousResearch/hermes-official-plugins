@@ -128,6 +128,16 @@ def test_body_file_written_in_the_same_command_says_to_split(tmp_path):
     assert msg and "Write the body file in a separate step first" in msg
 
 
+def test_home_variable_in_body_file_path_is_expanded(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    (tmp_path / "b.md").write_text(GOOD, encoding="utf-8")
+    for spelled in ("$HOME/b.md", "${HOME}/b.md"):
+        assert check_tool_call("terminal", {"command": f"gh pr create --body-file {spelled}"}) is None
+    msg = check_tool_call("terminal", {"command": "gh pr create --body-file $OTHER/b.md"})
+    assert msg and "other than $HOME" in msg
+
+
 def test_gh_api_pulls_body_and_mcp_tool_are_checked(tmp_path):
     assert check_tool_call("terminal", {"command": "gh api repos/o/r/pulls/9 -X PATCH -f body=short"})
     (tmp_path / "b.md").write_text(GOOD, encoding="utf-8")

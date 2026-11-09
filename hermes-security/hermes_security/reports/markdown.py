@@ -20,6 +20,41 @@ def _bullets(values, fallback='None recorded.'):
     return '\n'.join('- ' + _text(v) for v in values) if values else fallback
 
 
+_LISTED = ' coverage.json lists each one.'
+_STANDARD_GAP = re.compile(r'(OWASP lane|ASVS control) \S+ is (\w+): (.+)')
+_PACKET_GAP = re.compile(r'Worker packet \S+ has no accepted result\.')
+
+
+def _workers_line(workers):
+    """One count per worker result; listing every attempt ID tells a reader nothing."""
+    counts = Counter(w.get('status') or 'unknown' for w in workers)
+    order = ['accepted', 'rejected', 'late', 'missing']
+    keys = [k for k in order if counts[k]] + sorted(k for k in counts if k not in order)
+    text = 'Review workers: ' + ', '.join(f'{counts[k]} {_text(k)}' for k in keys) + '.'
+    return text + (_LISTED if len(workers) > 1 else '')
+
+
+def _gap_lines(gaps):
+    """Gaps with repeats grouped: one line per kind of open standard item, one for unfinished packets."""
+    groups = {}   # key -> gap texts, in first-seen order
+    for index, gap in enumerate(gaps):
+        text = str(gap)
+        match = _STANDARD_GAP.fullmatch(text)
+        key = (('standard',) + match.groups() if match else ('packet',) if _PACKET_GAP.fullmatch(text)
+               else ('single', index))
+        groups.setdefault(key, []).append(text)
+    out = []
+    for key, items in groups.items():
+        if len(items) == 1:
+            out.append(items[0])
+        elif key[0] == 'packet':
+            out.append(f'{len(items)} review packets have no accepted result.{_LISTED}')
+        else:
+            _, label, state, reason = key
+            out.append(f'{len(items)} {label}s are {state}: {reason}{_LISTED}')
+    return out
+
+
 def _runtimes(check):
     """Runtime lines. The runtime lookup runs on its own, so they appear whatever the package check did."""
     lines = []
@@ -82,7 +117,8 @@ def render_markdown(manifest: dict, findings_doc: dict, coverage: dict, chains_d
         if not gaps:
             gaps = [f"The scan ended with status {manifest.get('status', 'unknown')}; not all requested review work was established as complete."]
         # Keep the banner short; the full gap list is rendered under Limitations.
-        summary = _text(gaps[0]) if len(gaps) == 1 else f'{len(gaps)} coverage gaps are listed under Limitations.'
+        grouped = _gap_lines(gaps)
+        summary = _text(grouped[0]) if len(grouped) == 1 else 'The coverage gaps are listed under Limitations.'
         parts.append('> **This scan is incomplete.** ' + summary +
                      ' Absence of findings does not establish that the target is safe.')
     totals = Counter(f['severity']['level'] for f in findings)
@@ -108,6 +144,8 @@ def render_markdown(manifest: dict, findings_doc: dict, coverage: dict, chains_d
                      'coverage.json lists every file.')
     listed = [item for item in excluded
               if item.get('reason') != 'out_of_scope' and not str(item.get('reason', '')).startswith('standard_')]
+    if coverage.get('workers'):
+        parts.append(_text(_workers_line(coverage['workers'])))
     for item in listed[:200]:
         parts.append(f"Excluded: {_text(item.get('path'))} — {_text(item.get('reason'))}.")
     if len(listed) > 200:
@@ -128,8 +166,6 @@ def render_markdown(manifest: dict, findings_doc: dict, coverage: dict, chains_d
         parts.append(f'{len(units) - len(open_units)} coverage units are closed; their review notes are in coverage.json.')
     for unit in open_units:
         parts.append(f"- {_text(unit.get('unitId'))}: {human_label(unit.get('state', 'unknown'))} — {_text(unit.get('reason'))}")
-    for worker in coverage.get('workers', []):
-        parts.append(f"- Review worker {_text(worker.get('attemptId'))}: {_text(worker.get('status'))}")
     for f in findings:
         parts.extend([f"## {_text(f.get('title'))}", _text(f.get('summary'))])
         taxonomy = f.get('taxonomy', {})
@@ -179,6 +215,6 @@ def render_markdown(manifest: dict, findings_doc: dict, coverage: dict, chains_d
         reason = f.get('reason') or f.get('rejectionReason') or f.get('summary') or 'No reason recorded.'
         parts.append(f"- {_text(f.get('title', f.get('candidateId')))}: {human_label(f.get('evidenceState', 'candidate'))} — {_text(reason)}")
     gaps = coverage.get('gaps') or ([f"The scan ended with status {manifest.get('status', 'unknown')}; not all requested review work was established as complete."] if incomplete else [])
-    parts.extend(['## Limitations', _bullets(gaps, 'No coverage gaps were recorded.'),
+    parts.extend(['## Limitations', _bullets(_gap_lines(gaps), 'No coverage gaps were recorded.'),
                   'Source review alone does not establish runtime exploitability. Validation that was not performed is marked NOT RUN.'])
     return '\n\n'.join(parts) + '\n'

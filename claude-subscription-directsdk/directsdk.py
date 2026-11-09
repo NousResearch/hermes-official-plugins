@@ -992,6 +992,8 @@ def shared_workdir():
     The path sits in a tempdir others may share: it must be our own real directory, closed to others,
     in a parent nobody else can rename it out of. The utime keeps Hermes' 24h scratch prune off it.
     """
+    if os.name == 'nt':
+        return _windows_shared_workdir()
     if not hasattr(os, 'getuid'):
         return None
     path = Path(tempfile.gettempdir()) / f'claude-directsdk-cwd-{os.getuid()}'
@@ -1004,6 +1006,27 @@ def shared_workdir():
             return None
         os.utime(path)
     except OSError:
+        return None
+    return str(path)
+
+
+def _windows_shared_workdir():
+    """Windows has no uid: key the path by the user name, and accept it only inside that user's own profile
+    (the default %TEMP%, which other users cannot write) as a real directory, never a link or junction."""
+    name = re.sub(r'[^A-Za-z0-9_.-]', '_', os.environ.get('USERNAME', ''))
+    profile = os.environ.get('LOCALAPPDATA') or os.environ.get('USERPROFILE')
+    if not name or not profile:
+        return None
+    path = Path(tempfile.gettempdir()) / f'claude-directsdk-cwd-{name}'
+    try:
+        if os.path.normcase(os.path.commonpath([os.path.realpath(path.parent), os.path.realpath(profile)])) != os.path.normcase(os.path.realpath(profile)):
+            return None
+        _create_private(path)
+        # A link or junction resolves elsewhere; only our own real directory is used.
+        if not path.is_dir() or os.path.realpath(path) != os.path.join(os.path.realpath(path.parent), path.name):
+            return None
+        os.utime(path)
+    except (OSError, ValueError):
         return None
     return str(path)
 

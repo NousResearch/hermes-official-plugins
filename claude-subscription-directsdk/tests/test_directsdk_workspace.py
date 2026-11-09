@@ -209,6 +209,26 @@ def test_tightening_never_follows_a_symlink_swapped_in_after_the_mkdir(tmp_path,
     assert stat.S_IMODE(victim.stat().st_mode) == before, "chmod followed the swapped-in symlink"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows has no uid; the path is keyed by USERNAME")
+def test_windows_clients_share_one_workspace_in_the_users_own_temp(tmp_path, monkeypatch):
+    # Without a uid every Windows process used a fresh mkdtemp, so message 1 moved on every gateway restart.
+    assert native.shared_workdir() == native.shared_workdir()
+    assert Path(native.shared_workdir()).name == "claude-directsdk-cwd-" + os.environ["USERNAME"]
+
+
+def test_the_windows_workspace_is_refused_outside_the_users_profile(tmp_path, monkeypatch):
+    profile, shared = tmp_path / "profile", tmp_path / "shared-temp"
+    for path in (profile, shared):
+        path.mkdir()
+    monkeypatch.setenv("USERNAME", "fixture user")
+    monkeypatch.setenv("LOCALAPPDATA", str(profile))
+    monkeypatch.setattr(native.tempfile, "tempdir", str(profile / "Temp"))
+    (profile / "Temp").mkdir()
+    assert native._windows_shared_workdir() == str(profile / "Temp" / "claude-directsdk-cwd-fixture_user")
+    monkeypatch.setattr(native.tempfile, "tempdir", str(shared))
+    assert native._windows_shared_workdir() is None, "a temp dir other users may write is never shared"
+
+
 def test_launch_files_a_killed_process_left_are_swept_and_a_live_ones_kept(tmp_path, monkeypatch):
     # The launch files hold the whole system prompt and tool schemas; a hard kill must not leave them behind.
     monkeypatch.setattr(native.tempfile, "tempdir", str(tmp_path))

@@ -22,7 +22,7 @@ for path in (str(HERMES_AGENT_REPO), str(REPO_ROOT)):
         sys.path.insert(0, path)
 
 collect_ignore = ["__init__.py", "directsdk.py", "directsdk_setup.py", "admission.py", "model_catalog.py", "extra_usage.py",
-                  "inert_mcp.py", "process_tree.py", "evals"]
+                  "process_tree.py", "evals"]
 
 
 @pytest.fixture
@@ -52,13 +52,13 @@ def profile(tmp_path, monkeypatch):
 def popen_from_run(run, turns=None):
     """A ``subprocess.Popen`` stand-in that answers through a ``subprocess.run``-style fake, for tests that stub
     the CLI's probes (the plugin spawns its zero-inference probes with Popen so it can own the child). A turn
-    spawn (``--max-turns`` in argv) goes to ``turns``, the real Popen, when given."""
+    spawn (it alone carries ``--system-prompt-file``) goes to ``turns``, the real Popen, when given."""
     class FakePopen:
         # Not our child, so kill_process_tree sees an already-reaped process and signals nothing.
         pid, returncode = os.getpid(), 0
 
         def __new__(cls, argv, **kwargs):
-            if turns is not None and "--max-turns" in argv:
+            if turns is not None and "--system-prompt-file" in argv:
                 return turns(argv, **kwargs)
             return super().__new__(cls)
 

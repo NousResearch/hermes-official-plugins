@@ -26,7 +26,10 @@ SPEC.loader.exec_module(native)
 
 FAKE = '''import json, os, pathlib, sys
 pathlib.Path(os.path.join(os.environ["HOME"], "cwds.log")).open("a").write(str(pathlib.Path.cwd()) + "\\n")
-for line in sys.stdin: pass
+for line in sys.stdin:
+    row = json.loads(line)
+    if row["type"] == "user" and row.get("shouldQuery", True):
+        break
 print(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}], "id": "m", "stop_reason": "end_turn"}}), flush=True)
 print(json.dumps({"type": "stream_event", "event": {"type": "message_stop"}}), flush=True)
 print(json.dumps({"type": "result", "subtype": "success", "usage": {"input_tokens": 1, "output_tokens": 1}}), flush=True)
@@ -204,3 +207,25 @@ def test_tightening_never_follows_a_symlink_swapped_in_after_the_mkdir(tmp_path,
     finally:
         client.close()
     assert stat.S_IMODE(victim.stat().st_mode) == before, "chmod followed the swapped-in symlink"
+
+
+def test_launch_files_a_killed_process_left_are_swept_and_a_live_ones_kept(tmp_path, monkeypatch):
+    # The launch files hold the whole system prompt and tool schemas; a hard kill must not leave them behind.
+    monkeypatch.setattr(native.tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(native, "_swept", [])
+    dead = native.subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    stale = tmp_path / f"claude-directsdk-launch-{dead.pid}-x"
+    live = tmp_path / f"claude-directsdk-launch-{os.getppid()}-x"
+    for path in (stale, live):
+        path.mkdir()
+        (path / "system.md").write_text("system prompt")
+    ours = native._launch_dir()
+    assert not stale.exists() and live.exists() and ours.is_dir()
+    client = fake_client(tmp_path)
+    try:
+        list(client.create(**REQUEST))
+    finally:
+        client.close()
+    assert not [p for p in tmp_path.glob(f"claude-directsdk-launch-{os.getpid()}-*") if p != ours], \
+        "a finished request leaves no launch files"

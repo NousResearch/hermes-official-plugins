@@ -61,7 +61,9 @@ assert 'temperature' not in body and 'top_p' not in body
 assert body['output_config']['effort'] == 'low'
 assert sys.argv[sys.argv.index('--effort')+1] == 'low' and 'CLAUDE_CODE_EFFORT_LEVEL' not in os.environ
 assert len(pathlib.Path(sys.argv[sys.argv.index('--system-prompt-file')+1]).read_text()) == 150000
-for line in sys.stdin: pass
+for line in sys.stdin:
+ row=json.loads(line)
+ if row['type']=='user' and row.get('shouldQuery', True): break
 for i in range(8):
  print(json.dumps({'type':'stream_event','event':{'type':'content_block_delta','delta':{'type':'text_delta','text':'x'}}}),flush=True)
  time.sleep(.1)

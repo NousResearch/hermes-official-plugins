@@ -22,20 +22,15 @@ const plugin: HermesPlugin = {
   id: 'accent',
   name: 'Accent Picker',
   description:
-    'Pick the theme accent from an OKLCH color picker in the status bar; the palette re-derives live. Authoring tool — the color is not persisted.',
+    'Pick the theme accent from an OKLCH color picker in the status bar; the palette re-derives live. The choice persists across reloads via ctx.storage.',
   defaultEnabled: false,
   register(ctx) {
-    // The override is a scratch value, not a setting. Dropping it on unregister
-    // means disabling the plugin (or reloading) returns every surface to the
-    // authored theme instead of stranding a color with no control to clear it.
-    ctx.onDispose(() => setAccentOverride(null))
-
     ctx.registerMany([
       {
         id: 'picker',
         area: STATUSBAR_AREAS.right,
         order: 90,
-        render: () => <AccentPickerTrigger />
+        render: () => <AccentPickerTrigger ctx={ctx} />
       },
       {
         id: 'reset',

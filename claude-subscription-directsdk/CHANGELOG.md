@@ -4,6 +4,14 @@
 
 ### Added
 
+- Session mode (`session_mode`, default on; `max_sessions`, default 4): one Claude Code process per Hermes agent, kept
+  alive between model calls. Hermes' tools are an SDK MCP server inside the plugin, so Claude Code never runs one, and
+  a tool round no longer pays a process start and a history replay (0.5 to 1.0 s offline, growing with history; 0.03 s
+  kept). Upstream requests are byte-identical to a fresh process's, so caching and cost do not change. Restarts and
+  replays on any divergence; auxiliary, tool-less, concurrent and over-the-cap calls run one-shot. The inert MCP helper
+  process and its manifest file are gone.
+- Tool calls stream as Claude writes them: the name at once (Hermes shows "Preparing <tool>"), then the arguments (#326).
+
 - Organization gateway opt-in (#46): per-profile `upstream_url`, `upstream_proxy` (HTTP CONNECT, credentials in `CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY_AUTH`) and `upstream_ca_file` settings route every relay (turns, `/usage`, the picker handshake) through the organization's gateway. Claude Code sends only Messages requests to that relay; its own account calls (`/usage`, bootstrap, MCP directory, telemetry when on) go to `api.anthropic.com` and now take the configured proxy and CA too (`HTTPS_PROXY`, `NODE_EXTRA_CA_CERTS` on the child). Any one set is the opt-in; a set but invalid value (including a non-string one such as `upstream_proxy: false`) refuses the request instead of going to Anthropic directly. One warning per profile names the host the Claude login's bearer goes to. An inherited `ANTHROPIC_BASE_URL` stays refused. Supersedes P#257 (thanks @salch-cred), P#130 (thanks @alextidalrise) and P#23 (thanks @MematiBas42), which selected the route from environment variables.
 - `extra_usage` setting (`allow`, `notify`, `ask`, `stop`; default `notify`) decides what a request does once Claude Code reports the account is drawing paid extra usage (#43). It reads native's `rate_limit_event` (`isUsingOverage`, `resetsAt`), which the plugin used to drop (P#281, thanks @salch-cred), and keeps the state in memory per process and login; no files are written. `ask` and `stop` refuse before Claude Code starts, with the reset time and the `hermes config set` line that allows it (`extra_usage_allowed_until` in `ask`). A refusal is a plan-limit stop, so Hermes does not switch to a fallback provider. In `ask` and `stop` a check that cannot tell (no usage answer) refuses with its reason instead of sending a possibly paid turn, and the check asks about the turn's own login and route. Supersedes P#282 (thanks @creditlabsonarc-rgb), whose marker file and guessed expiry are replaced by native's own reset time.
 
@@ -12,6 +20,23 @@
 - `claude_code_telemetry` is off by default (#331): every Claude Code child starts with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_TELEMETRY` and `DISABLE_ERROR_REPORTING` set unless the setting is turned on, which also takes about 0.25 s off each spawn. The model picker stays complete: its zero-inference `initialize` handshake leaves `DISABLE_TELEMETRY` and the nonessential-traffic flag unset (either one shrinks the CLI picker from 13 rows to 5 on 2.1.319), so it lists the same 12 routes as with telemetry on. A flag you export yourself is kept.
 
 ### Fixed
+
+- A tool call cut at the output cap or streamed as invalid JSON reaches Hermes with its raw arguments and finish
+  `length`, so Hermes retries the request and never runs it. Before, the turn failed with `error_max_turns` (#164, #221),
+  and a reply with one valid and one invalid call silently lost the invalid one. After invalid JSON, that conversation
+  asks the API to validate tool arguments. Salvages P#171 (thanks @salch-cred); supersedes P#256 and P#338.
+- A refusal logs its model, request id and category, and `message.refusal` carries the request id (#341).
+- Schema-less `json_object` structured output is declared unsupported, so Hermes drops it before an auxiliary request
+  instead of failing every time (#327). A request refused before Claude Code starts is not retried (#328). Salvages
+  P#336 (thanks @kanederkson).
+- The relay folds native's `<system-reminder>`-wrapped date line back into the environment message (2.1.292 and later),
+  so message 1 reads the same on every request of a conversation (#38).
+- Tool ids from another provider (`terminal:42`) are mapped to valid, paired ids on the wire (P#21, thanks @efron).
+- A tool named `mcp__<tool>` (server segment dropped) maps to the offered tool (P#342).
+- On Windows every Claude Code of one user shares one working directory, as on POSIX. Each process used a fresh one, and
+  native writes it into message 1, so the cache prefix moved on every gateway restart.
+- A Hermes killed mid-request no longer leaves its system prompt and tool schemas in `%TEMP%`: launch files are removed
+  after the first step and swept on the next start.
 
 - An empty `.oauth_refresh.lock` that a Claude Code left after exiting mid-refresh (anthropics/claude-code#95236) is removed from the child's own login directory before every spawn, once it is past Claude Code's 60 s stale window; before, every request failed with "another Claude Code process is refreshing it" until the user deleted it. A lock with contents or a fresh mtime is never touched (P#25, thanks @LevSky22 and @100yenadmin).
 - The picker and `/usage` probes own their Claude Code child: it is killed and waited for before its scratch directory is removed, on every path, and at interpreter exit. `hermes status` on Windows printed a `PermissionError [WinError 32]` traceback, left a `claude-directsdk-picker-*` directory and a running `claude.exe` behind, because the catalog refresh thread was still inside the handshake when Hermes exited (C#146288). A launcher that exits before the CLI it started (a shell or npm shim) no longer leaves that CLI running: probes and turns share one process-group helper that signals the group while the leader is still unreaped.

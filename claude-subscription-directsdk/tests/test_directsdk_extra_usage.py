@@ -43,6 +43,9 @@ def native(profile, tmp_path, monkeypatch):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("SPAWNS", str(spawns))
     monkeypatch.setenv("HOME", str(tmp_path))
+    # A cold stop/ask check asks get_usage first: by default it answers "within the plan limits".
+    _usage_probe(monkeypatch, json.dumps({"type": "control_response", "response": {
+        "subtype": "success", "request_id": "hermes-usage", "response": {"rate_limits": {"limits": []}}}}) + "\n")
 
     def run(rate_event=None):
         import directsdk
@@ -104,7 +107,7 @@ def test_a_plan_window_that_resets_admits_again(native, monkeypatch):
     monkeypatch.setattr(extra_usage.time, "time", lambda: RESETS + 1)
     probed = []
     import directsdk_setup
-    monkeypatch.setattr(directsdk_setup, "fetch_usage", lambda **kw: probed.append(kw) or (None, "fixture"))
+    monkeypatch.setattr(directsdk_setup, "_ask_usage", lambda *a: probed.append(a) or ({"limits": []}, None))
     assert native().choices[0].message.content == "hello\n"
     assert len(probed) == 1  # past the reset the process asks Claude Code again
 
@@ -133,6 +136,53 @@ def test_a_new_process_asks_claude_code_once_before_refusing(native, monkeypatch
         native()
         native()
     assert len(calls) == 1 and native.spawns() == (0 if refused else 2)
+
+
+def _usage_probe(monkeypatch, answer):
+    """Fake only the get_usage probe child; the turn spawns the real fake native. Returns the probe envs."""
+    import directsdk_setup
+    envs = []
+
+    def fake_run(argv, **kwargs):
+        envs.append(kwargs["env"])
+        return SimpleNamespace(stdout=answer, returncode=0)
+    monkeypatch.setattr(directsdk_setup.subprocess, "Popen", popen_from_run(fake_run, turns=directsdk_setup.subprocess.Popen))
+    return envs
+
+
+@pytest.mark.parametrize("mode", ["stop", "ask"])
+def test_a_check_that_cannot_tell_refuses_under_stop_and_ask(native, monkeypatch, mode):
+    """Greptile 4511161845: an unknown answer used to be recorded as 'not spilling' and the turn was sent."""
+    from extra_usage import ClaudeExtraUsageBlocked
+    _settings(extra_usage=mode)
+    probes = _usage_probe(monkeypatch, "")
+    for _ in range(2):
+        with pytest.raises(ClaudeExtraUsageBlocked, match="needs a version with get_usage"):
+            native()
+    assert native.spawns() == 0 and len(probes) == 2  # refused before Claude Code started; the unknown is not kept
+
+
+def test_the_check_asks_about_the_login_the_turn_uses(native, monkeypatch, tmp_path):
+    """Greptile 4511161827: an explicit Client(env=...) keeps its token for the turn, and the probe must ask about
+    that same login, not the one the profile would pick."""
+    import directsdk
+    from extra_usage import ClaudeExtraUsageBlocked
+    _settings(extra_usage="stop")
+    spilling = {"extra_usage": {"is_enabled": True}, "limits": [{"kind": "session", "percent": 100}]}
+    probes = _usage_probe(monkeypatch, json.dumps({"type": "control_response", "response": {
+        "subtype": "success", "request_id": "hermes-usage", "response": {"rate_limits": spilling}}}) + "\n")
+    script = tmp_path / "native.py"
+    client = directsdk.Client(command=[sys.executable, str(script)],
+                              env={"PATH": os.defpath, "HOME": str(tmp_path), "SPAWNS": str(tmp_path / "spawns"),
+                                   "CLAUDE_CODE_OAUTH_TOKEN": "fixture-login", "CLAUDE_CONFIG_DIR": str(tmp_path / "fx")})
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "process-login")
+    try:
+        with pytest.raises(ClaudeExtraUsageBlocked, match="drawing paid extra usage"):
+            client.create(**REQUEST)
+    finally:
+        client.close()
+    probe, = probes
+    assert probe["CLAUDE_CODE_OAUTH_TOKEN"] == "fixture-login" and probe["CLAUDE_CONFIG_DIR"] == str(tmp_path / "fx")
 
 
 def test_an_unknown_mode_refuses_rather_than_spends(native):

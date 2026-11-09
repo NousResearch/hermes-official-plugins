@@ -5,7 +5,7 @@ account a child signs in with. Nothing is written to disk.
 Modes: ``allow`` (do nothing), ``notify`` (default: warn once per limit window when native reports
 ``isUsingOverage``), ``ask`` (refuse until the user allows this window), ``stop`` (refuse until the
 plan limit resets). The request that first crosses the limit is already billed; the policy acts on
-the next one.
+the next one. Under ``ask``/``stop`` a check that cannot tell refuses too.
 """
 from datetime import datetime, timezone
 import hashlib
@@ -91,8 +91,8 @@ def observe(key, summary, setting=None):
 
 
 def observe_usage(key, limits):
-    """Feed a ``get_usage`` ``rate_limits`` body: spilling means extra usage is on and an account-wide
-    plan window is full."""
+    """Feed a ``get_usage`` ``rate_limits`` body and return ``(using_overage, resets_at)``: spilling means extra
+    usage is on and an account-wide plan window is full."""
     extra = limits.get("extra_usage") if isinstance(limits.get("extra_usage"), dict) else {}
     full = []
     for entry in limits.get("limits") or ():
@@ -108,7 +108,9 @@ def observe_usage(key, limits):
                 full.append(window.get("resets_at"))
     resets = [_parse(value) for value in full]
     resets_at = max((r for r in resets if r), default=None)
-    _record(key, bool(extra.get("is_enabled")) and bool(full), resets_at)
+    using = bool(extra.get("is_enabled")) and bool(full)
+    _record(key, using, resets_at)
+    return using, resets_at
 
 
 def _parse(value):
@@ -130,29 +132,33 @@ def _allowed_until(setting):
 def admit(key, setting, probe):
     """Raise ``ClaudeExtraUsageBlocked`` when the profile refuses extra usage the account is drawing.
 
-    ``probe()`` runs Claude Code's zero-inference ``get_usage`` and feeds ``observe_usage``; it is called
-    only under ``ask``/``stop`` when this process holds no current answer for the account.
+    ``probe()`` runs Claude Code's zero-inference ``get_usage`` and returns ``(rate_limits, reason)``; it is
+    called only under ``ask``/``stop`` when this process holds no current answer for the account. A probe that
+    cannot tell refuses: these modes exist to prevent unapproved spend. That unknown is not remembered.
     """
     current = mode(setting)
     if current in ("allow", "notify"):
         return
     now = time.time()
+    allowed = _allowed_until(setting)
+    if current == "ask" and allowed and allowed > now:
+        return
     with _lock:
         known = _state.get(key)
     if known is None or now >= known["until"]:
         with _lock:
             _state.pop(key, None)  # a stale answer must not outlive a probe that could not tell
-        probe()
-        with _lock:
-            known = _state.get(key)
-        if known is None:  # the probe could not tell: do not refuse on a guess, ask again later
-            _record(key, False, None, now)
-            return
-    if not known["using_overage"]:
-        return
-    resets_at = known["resets_at"]
-    allowed = _allowed_until(setting)
-    if current == "ask" and allowed and allowed > now:
+        limits, reason = probe()
+        if limits is None:
+            raise ClaudeExtraUsageBlocked(
+                f"Could not check whether this Claude account is drawing paid extra usage ({reason}), and the "
+                f"extra_usage setting is '{current}', so the request was not sent. Fix the cause and send the message "
+                f"again, or run `hermes config set plugins.entries.{PLUGIN_ID}.settings.{MODE_SETTING} notify` to "
+                f"send without this check.")
+        using, resets_at = observe_usage(key, limits)
+    else:
+        using, resets_at = known["using_overage"], known["resets_at"]
+    if not using:
         return
     when = f" The plan limit resets at {_iso(resets_at)}." if resets_at else ""
     base = f"plugins.entries.{PLUGIN_ID}.settings"

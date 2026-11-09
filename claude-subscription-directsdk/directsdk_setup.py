@@ -522,7 +522,15 @@ def fetch_usage(command=None, env=None, timeout=8):
         upstream = resolve_upstream()
     except (UnscopedSecretError, ClaudeCodeLoggedOut, ClaudeUpstreamConfigError) as error:
         return None, str(error)
-    if "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in env:
+    limits, reason = _ask_usage(resolved, child, env, upstream, timeout)
+    if limits is not None:
+        extra_usage.observe_usage(extra_usage.account_key(child), limits)
+    return limits, reason
+
+
+def _ask_usage(resolved, child, exported, upstream, timeout):
+    """Run the zero-inference ``get_usage`` probe on ``child``, an env whose login is already prepared."""
+    if "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in exported:
         # With this flag the CLI skips the very fetch /usage asks for (rate_limits: null). The probe
         # is zero-inference behind the unused admission gate; DISABLE_TELEMETRY stays on (P#258).
         child.pop("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", None)
@@ -549,7 +557,6 @@ def fetch_usage(command=None, env=None, timeout=8):
     body = response.get("response") if isinstance(response.get("response"), dict) else {}
     limits = body.get("rate_limits")
     if isinstance(limits, dict):
-        extra_usage.observe_usage(extra_usage.account_key(child), limits)
         return limits, None
     if not body.get("rate_limits_available"):
         return None, "no Claude subscription login found (run `claude` and log in)"
@@ -670,12 +677,13 @@ def relay(upstream, timeout, **kwargs):
     return Admission(upstream.url, timeout, proxy=upstream.proxy, context=upstream.context, **kwargs)
 
 
-def check_extra_usage(command, env):
+def check_extra_usage(resolved, env, upstream, timeout=8):
     """Refuse before spawning when the account draws paid extra usage and the profile's ``extra_usage``
-    setting is ``ask`` or ``stop`` (``extra_usage.ClaudeExtraUsageBlocked``). ``env`` is the child env
-    with its login applied and before the quiet-traffic flags, so the probe can still read the limits."""
+    setting is ``ask`` or ``stop`` (``extra_usage.ClaudeExtraUsageBlocked``). ``env`` is the turn's child env
+    with its login applied and before the quiet-traffic flags; the probe runs on a copy of it, so it asks about
+    the account the turn would bill, and it goes to the turn's ``upstream``."""
     def probe():
-        fetch_usage(command=command, env=env)
+        return _ask_usage(resolved, apply_traffic_policy(dict(env)), env, upstream, timeout)
     extra_usage.admit(extra_usage.account_key(env), _setting, probe)
 
 

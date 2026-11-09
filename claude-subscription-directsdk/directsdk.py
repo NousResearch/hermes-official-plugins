@@ -26,21 +26,19 @@ import weakref
 from types import SimpleNamespace
 
 try:
-    from .admission import Admission
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from .process_tree import kill_process_tree, own_process_group, unreaped
     from .directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, drop_api_credentials, observe_rate_limit, reap_orphaned_refresh_lock, relay,
-        resolve_upstream)
+        resolve_upstream, Upstream)
 except ImportError:
-    from admission import Admission
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from process_tree import kill_process_tree, own_process_group, unreaped
     from directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, drop_api_credentials, observe_rate_limit, reap_orphaned_refresh_lock, relay,
-        resolve_upstream)
+        resolve_upstream, Upstream)
 
 
 # Hermes picks retry vs fallback from an error's status_code (main loop and auxiliary ladder alike).
@@ -794,8 +792,11 @@ class Client:
                     apply_profile_credential(env)
                 # A refresh lock an earlier native left mid-refresh would fail this request (claude-code#95236).
                 reap_orphaned_refresh_lock(env)
+                # Anthropic or the profile's opted-in gateway; an explicit Client(env=...) fixture may name its own.
+                upstream = (Upstream(env['ANTHROPIC_BASE_URL'], None, None, False) if env.get('ANTHROPIC_BASE_URL')
+                            else resolve_upstream())
                 # The extra_usage setting refuses here, before anything is billed (#43).
-                check_extra_usage(resolved, dict(env))
+                check_extra_usage(resolved, dict(env), upstream)
                 # An inherited effort level would override the --effort Hermes passes below.
                 for key in ('CLAUDE_CODE_EXTRA_BODY', 'CLAUDE_CODE_EFFORT_LEVEL'):
                     env.pop(key, None)
@@ -809,10 +810,7 @@ class Client:
                 # turn, where Claude reads Claude Code's notes as text smuggled into the user's message (#195).
                 env.update(CLAUDE_CODE_DISABLE_AUTO_MEMORY='1', CLAUDE_CODE_DISABLE_CLAUDE_MDS='1')
                 # The queried frame lets the relay keep the cache breakpoint off native's per-request context.
-                # Anthropic or the profile's opted-in gateway; an explicit Client(env=...) fixture may name its own.
-                queried = frames[-1]['message']['content']
-                request.admission = (Admission(env['ANTHROPIC_BASE_URL'], timeout, queried=queried) if env.get('ANTHROPIC_BASE_URL')
-                                     else relay(resolve_upstream(), timeout, queried=queried))
+                request.admission = relay(upstream, timeout, queried=frames[-1]['message']['content'])
                 # A Hermes auxiliary one-shot (summary, title: marked by the profile hook, one turn, no tools) is
                 # never replayed, so the relay drops its message cache marks instead of moving them.
                 request.admission.one_shot = kwargs.get('hermes_auxiliary') is True and not manifest and len(frames) == 1

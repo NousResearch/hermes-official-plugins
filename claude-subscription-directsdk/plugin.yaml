@@ -42,7 +42,8 @@ config_schema:
       What to do once Claude Code reports that this account is drawing paid extra usage. allow: carry on.
       notify: carry on and log one warning per limit window. ask: refuse each request until you allow the
       current window (extra_usage_allowed_until). stop: refuse every request until the plan limit resets.
-      The request that crosses the limit is already billed; the setting acts on the next one.
+      The request that crosses the limit is already billed; the setting acts on the next one. In ask and stop,
+      a request is also refused when Claude Code cannot say whether the account is drawing extra usage.
   extra_usage_allowed_until:
     type: string
     default: ""

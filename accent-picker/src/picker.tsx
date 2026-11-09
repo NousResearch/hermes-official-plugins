@@ -198,7 +198,7 @@ function HueRail({ lch, onPick }: { lch: Oklch; onPick: (h: number) => void }) {
   )
 }
 
-function AccentPicker() {
+function AccentPicker({ ctx }: { ctx: any }) {
   const { theme, renderedMode } = useTheme()
   const override = useValue($accentOverride)
   const painted = theme.colors.primary
@@ -208,6 +208,22 @@ function AccentPicker() {
   // Follow the painted accent when it changes from outside this control — but
   // never mid-drag, which would fight the user's own pointer.
   const dragging = useRef(false)
+
+  // Restore persisted accent on mount (ctx.storage fallback).
+  useEffect(() => {
+    try {
+      const saved = ctx && ctx.storage.get('hermes-accent-picker', null)
+      if (saved) { setAccentOverride(saved) }
+    } catch (e) {}
+  }, [])
+
+  // Persist accent on every change.
+  useEffect(() => {
+    try {
+      if (ctx && override) { ctx.storage.set('hermes-accent-picker', override) }
+      else if (ctx && override === null) { ctx.storage.set('hermes-accent-picker', null) }
+    } catch (e) {}
+  }, [override])
 
   useEffect(() => {
     if (!dragging.current) {
@@ -294,7 +310,7 @@ function AccentPicker() {
   )
 }
 
-export function AccentPickerTrigger() {
+export function AccentPickerTrigger({ ctx }: { ctx: any }) {
   const { theme } = useTheme()
 
   return (
@@ -318,7 +334,7 @@ export function AccentPickerTrigger() {
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-auto p-0" side="top">
-        <AccentPicker />
+        <AccentPicker ctx={ctx} />
       </PopoverContent>
     </Popover>
   )

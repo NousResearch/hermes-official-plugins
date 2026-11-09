@@ -141,13 +141,32 @@ function HueRail({ lch, onPick }) {
     }
   );
 }
-function AccentPicker() {
+function AccentPicker({ ctx }) {
   const { theme, renderedMode } = useTheme();
   const override = useValue($accentOverride);
   const painted = theme.colors.primary;
   const [lch, setLch] = useState(() => hexToOklch(painted) ?? { l: 0.5, c: 0.15, h: 260 });
   const [text, setText] = useState(painted);
   const dragging = useRef(false);
+  useEffect(() => {
+    try {
+      const saved = ctx && ctx.storage.get("hermes-accent-picker", null);
+      if (saved) {
+        setAccentOverride(saved);
+      }
+    } catch (e) {
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      if (ctx && override) {
+        ctx.storage.set("hermes-accent-picker", override);
+      } else if (ctx && override === null) {
+        ctx.storage.set("hermes-accent-picker", null);
+      }
+    } catch (e) {
+    }
+  }, [override]);
   useEffect(() => {
     if (!dragging.current) {
       setLch(hexToOklch(painted) ?? { l: 0.5, c: 0.15, h: 260 });
@@ -223,7 +242,7 @@ function AccentPicker() {
     /* @__PURE__ */ jsx("p", { className: "h-3 font-mono text-[10px] leading-tight text-(--ui-text-tertiary)", children: override && override.toLowerCase() !== painted.toLowerCase() ? `picked ${override} \u2192 ${painted} for contrast` : "\xA0" })
   ] });
 }
-function AccentPickerTrigger() {
+function AccentPickerTrigger({ ctx }) {
   const { theme } = useTheme();
   return /* @__PURE__ */ jsxs(Popover, { children: [
     /* @__PURE__ */ jsx(PopoverTrigger, { asChild: true, children: /* @__PURE__ */ jsxs(
@@ -244,7 +263,7 @@ function AccentPickerTrigger() {
         ]
       }
     ) }),
-    /* @__PURE__ */ jsx(PopoverContent, { align: "end", className: "w-auto p-0", side: "top", children: /* @__PURE__ */ jsx(AccentPicker, {}) })
+    /* @__PURE__ */ jsx(PopoverContent, { align: "end", className: "w-auto p-0", side: "top", children: /* @__PURE__ */ jsx(AccentPicker, { ctx }) })
   ] });
 }
 
@@ -253,16 +272,15 @@ import { jsx as jsx2 } from "react/jsx-runtime";
 var plugin = {
   id: "accent",
   name: "Accent Picker",
-  description: "Pick the theme accent from an OKLCH color picker in the status bar; the palette re-derives live. Authoring tool \u2014 the color is not persisted.",
+  description: "Pick the theme accent from an OKLCH color picker in the status bar; the palette re-derives live. The choice persists across reloads via ctx.storage.",
   defaultEnabled: false,
   register(ctx) {
-    ctx.onDispose(() => setAccentOverride2(null));
     ctx.registerMany([
       {
         id: "picker",
         area: STATUSBAR_AREAS.right,
         order: 90,
-        render: () => /* @__PURE__ */ jsx2(AccentPickerTrigger, {})
+        render: () => /* @__PURE__ */ jsx2(AccentPickerTrigger, { ctx })
       },
       {
         id: "reset",

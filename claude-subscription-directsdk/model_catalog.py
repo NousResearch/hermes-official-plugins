@@ -7,14 +7,16 @@ CONTEXT_WINDOWS = {
     'claude-opus-5-5': 1_000_000,
     'claude-opus-5': 1_000_000,
     'claude-opus-4-8': 1_000_000,
+    'claude-fable-5-2': 1_000_000,
     'claude-fable-5-1': 1_000_000,
+    'claude-mythos-5-2': 1_000_000,
     'claude-mythos-5-1': 1_000_000,
 }
 # Models Anthropic grants per organization (Mythos: verified organizations only,
-# https://platform.claude.com/docs/en/models/mythos-5-1/overview). They are pinned for their window,
+# https://platform.claude.com/docs/en/models/mythos-5-1/overview and .../mythos-5-2/overview). They are pinned for their window,
 # thinking policy and capabilities like any route, but the picker lists one only when the account's
 # own picker offers it: never appended from this table, never in the static fallback list.
-ACCESS_GATED = frozenset({'claude-mythos-5-1'})
+ACCESS_GATED = frozenset({'claude-mythos-5-1', 'claude-mythos-5-2'})
 # Families that 400 on ``thinking: {"type": "disabled"}`` (the same contract Hermes core keeps
 # in agent/anthropic_adapter.py). A caller's disable is omitted for them, which beats a dead
 # request. That does not turn thinking off, so request_body asks for the lowest effort instead
@@ -33,7 +35,7 @@ ALIASES = {
     'haiku': 'claude-haiku-5-5',
     'claude-haiku-4-5': 'claude-haiku-4-5-20251001',
     'opus': 'claude-opus-5-5',
-    'fable': 'claude-fable-5-1',
+    'fable': 'claude-fable-5-2',
 }
 # Haiku 4.5 rejects `thinking: {'type': 'adaptive'}` with a 400 upstream; its effort signal
 # still applies. Unknown routes keep adaptive so future models are not silently downgraded.

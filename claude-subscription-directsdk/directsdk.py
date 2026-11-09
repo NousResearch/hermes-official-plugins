@@ -31,13 +31,13 @@ try:
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from .directsdk_setup import (
         INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
-        apply_traffic_policy, drop_api_credentials)
+        apply_traffic_policy, check_extra_usage, drop_api_credentials, observe_rate_limit)
 except ImportError:
     from admission import Admission
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from directsdk_setup import (
         INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
-        apply_traffic_policy, drop_api_credentials)
+        apply_traffic_policy, check_extra_usage, drop_api_credentials, observe_rate_limit)
 
 
 # Hermes picks retry vs fallback from an error's status_code (main loop and auxiliary ladder alike).
@@ -540,8 +540,14 @@ def _rate_limit_summary(event) -> "dict | None":
     if not isinstance(info, dict):
         return None
     window = str(info.get('rateLimitType') or '')
-    return {'window': window, 'overage_status': str(info.get('overageStatus') or ''),
-            'using_overage': bool(info.get('isUsingOverage')) or window == 'overage'}
+    summary = {'window': window, 'overage_status': str(info.get('overageStatus') or ''),
+               'using_overage': bool(info.get('isUsingOverage')) or window == 'overage'}
+    # Epoch seconds: when the plan window frees up, and when the extra-usage allowance does.
+    for key, source in (('resets_at', 'resetsAt'), ('overage_resets_at', 'overageResetsAt')):
+        value = info.get(source)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            summary[key] = value
+    return summary
 
 
 def _stderr_tail(native_stderr):
@@ -830,6 +836,8 @@ class Client:
                 if self.env is None:
                     # The serving profile's own token, or none when its claude_config_dir picks the login.
                     apply_profile_credential(env)
+                # The extra_usage setting refuses here, before anything is billed (#43).
+                check_extra_usage(resolved, dict(env))
                 # An inherited effort level would override the --effort Hermes passes below.
                 for key in ('CLAUDE_CODE_EXTRA_BODY', 'CLAUDE_CODE_EFFORT_LEVEL'):
                     env.pop(key, None)
@@ -986,6 +994,7 @@ class Client:
                         summary = _rate_limit_summary(event)
                         if summary:
                             rate_limit = summary
+                            observe_rate_limit(env, summary)
                     elif kind == 'stream_event':
                         native = event['event']
                         if native['type'] == 'message_stop':

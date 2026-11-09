@@ -31,3 +31,20 @@ config_schema:
       Let Claude Code send its usage telemetry and error reports. Off by default. The model picker and
       /usage stay complete either way: their zero-inference probes still fetch Claude Code's feature
       flags and plan limits.
+  extra_usage:
+    type: string
+    default: notify
+    choices: [allow, notify, ask, stop]
+    label: When the plan limit is reached and extra usage starts
+    description: >-
+      What to do once Claude Code reports that this account is drawing paid extra usage. allow: carry on.
+      notify: carry on and log one warning per limit window. ask: refuse each request until you allow the
+      current window (extra_usage_allowed_until). stop: refuse every request until the plan limit resets.
+      The request that crosses the limit is already billed; the setting acts on the next one.
+  extra_usage_allowed_until:
+    type: string
+    default: ""
+    label: Extra usage allowed until (ask mode)
+    description: >-
+      An ISO 8601 time. In ask mode, requests drawing extra usage are sent until then. The refusal message
+      prints the exact command with the current window's reset time.

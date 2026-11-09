@@ -20,7 +20,7 @@ for path in (str(HERMES_AGENT_REPO), str(REPO_ROOT)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-collect_ignore = ["__init__.py", "directsdk.py", "directsdk_setup.py", "admission.py", "model_catalog.py",
+collect_ignore = ["__init__.py", "directsdk.py", "directsdk_setup.py", "admission.py", "model_catalog.py", "extra_usage.py",
                   "inert_mcp.py", "evals"]
 
 

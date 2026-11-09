@@ -108,6 +108,21 @@ hermes config set plugins.entries.claude-subscription-directsdk-experimental.set
 
 It is read for the active profile on every spawn, so it applies to the next request without a restart. Whatever the setting, the plugin never lets the CLI auto-update itself, use its feedback upload path or send its own session-title request (`DISABLE_AUTOUPDATER`, `DISABLE_FEEDBACK_COMMAND`, `CLAUDE_CODE_DISABLE_TERMINAL_TITLE`), and an opt-out you export yourself (`DISABLE_TELEMETRY`, `DO_NOT_TRACK`, ...) is passed through untouched.
 
+**Extra usage** (`extra_usage`, `allow` | `notify` | `ask` | `stop`, default `notify`). What a request does once Claude Code reports that this account has passed its plan limit and is drawing paid extra usage (#43). Claude Code sends that signal with every request (`rate_limit_event`: `isUsingOverage`, `resetsAt`); the plugin keeps it in memory per process, per Claude login, and writes no files.
+
+- `allow`: nothing changes.
+- `notify`: requests continue; one warning per limit window goes to the log (`hermes logs`).
+- `ask`: requests are refused before Claude Code starts, with a message that names the reset time and the command that allows extra usage until then: `hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.extra_usage_allowed_until <reset time>`.
+- `stop`: requests are refused until the plan limit resets; the message names the reset time and how to switch to `ask` or `allow`.
+
+A refusal is a plan-limit stop: Hermes shows the message and does not switch to a fallback provider. The request that crosses the limit is already billed when Claude Code reports it; the setting acts on the next one. In `ask` and `stop`, a process that has not yet seen a request for the login asks Claude Code once (`get_usage`, no Messages request, about 0.5 to 0.9 s) and counts the account as spilling when extra usage is on and the session or weekly limit is at 100%. An unknown value counts as `stop`.
+
+A 400 that says "Third-party apps now draw from your extra usage" is reported the same way (a billing stop whose message points at the plan settings and names the `hermes-agent` caller), instead of Hermes silently answering from a fallback provider (P#296).
+
+```sh
+hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.extra_usage stop
+```
+
 ## Ownership and replay
 
 Each `chat.completions.create` starts a fresh process in a private temporary directory. Native tools, skills and setting sources are disabled. MCP advertises only the current Hermes tool inventory, has inert callbacks, and is denied execution by native `dontAsk`. Full descriptions and schemas are supplied through tools plus validated generation fields in `CLAUDE_CODE_EXTRA_BODY`, applied from a private native settings file; the system prompt uses a private file too. This avoids the OS per-argument/environment-string limit. Authentication and identity fields are never replaced.

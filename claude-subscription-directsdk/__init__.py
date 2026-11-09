@@ -198,12 +198,32 @@ class ClaudeOAuthDirectSDKProfile(ProviderProfile):
                                     unavailable_reason=reason)
 
 
+# The server's 400 when it bills a request to extra usage the account cannot draw (P#296; Team/Enterprise
+# "Ask your workspace admin", individual plans "Add more at claude.ai/settings/usage").
+THIRD_PARTY_EXTRA_USAGE = 'third-party apps now draw from'
+
+
+def _plan_limit(message):
+    # usage_window keeps core from switching providers on a plan limit and shows the message verbatim;
+    # no fallback: the next provider in the chain may be paid API usage.
+    return {'reason': 'billing', 'retryable': False, 'should_fallback': False,
+            'error_context': {'usage_window': True, 'display_message': message}}
+
+
 def classify_api_error(error, **_):
     # Hermes' stale-call watchdog stops a hung call through Client.cancel(), so its kill comes back as our cancel
     # error, which Hermes would retry as unknown: classify it as the timeout it is. A user interrupt never arrives
     # as this error; Hermes marks its request cancelled first, drops ours and raises InterruptedError.
     if isinstance(error, RuntimeError) and str(error) == 'Claude request cancelled':
         return {'reason': 'timeout'}
+    if type(error).__name__ == 'ClaudeExtraUsageBlocked':
+        return _plan_limit(str(error))
+    if type(error).__name__ == 'ClaudeAPIError' and THIRD_PARTY_EXTRA_USAGE in str(error).lower():
+        return _plan_limit(
+            'Claude refused this request and would bill it to extra usage ("Third-party apps now draw from your '
+            'extra usage"), which this account cannot draw now. Claude Code runs as `hermes-agent` for this '
+            'provider. Check the plan and extra-usage settings at https://claude.ai/settings/usage (on Team or '
+            f'Enterprise, your workspace admin controls them). Upstream said: {str(error)[:400]}')
     return None
 
 

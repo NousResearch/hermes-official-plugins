@@ -2,12 +2,17 @@
 
 ## [0.4.0] - Unreleased
 
+### Added
+
+- `extra_usage` setting (`allow`, `notify`, `ask`, `stop`; default `notify`) decides what a request does once Claude Code reports the account is drawing paid extra usage (#43). It reads native's `rate_limit_event` (`isUsingOverage`, `resetsAt`), which the plugin used to drop (P#281, thanks @salch-cred), and keeps the state in memory per process and login; no files are written. `ask` and `stop` refuse before Claude Code starts, with the reset time and the `hermes config set` line that allows it (`extra_usage_allowed_until` in `ask`). A refusal is a plan-limit stop, so Hermes does not switch to a fallback provider. Supersedes P#282 (thanks @creditlabsonarc-rgb), whose marker file and guessed expiry are replaced by native's own reset time.
+
 ### Changed
 
 - `claude_code_telemetry` is off by default (#331): every Claude Code child starts with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_TELEMETRY` and `DISABLE_ERROR_REPORTING` set unless the setting is turned on, which also takes about 0.25 s off each spawn. The model picker stays complete: its zero-inference `initialize` handshake leaves `DISABLE_TELEMETRY` and the nonessential-traffic flag unset (either one shrinks the CLI picker from 13 rows to 5 on 2.1.319), so it lists the same 12 routes as with telemetry on. A flag you export yourself is kept.
 
 ### Fixed
 
+- The "Third-party apps now draw from your extra usage" 400 is classified as a billing stop with a message that names the plan settings and the `hermes-agent` caller, instead of an unknown error that core answered silently from a fallback provider (P#296).
 - A multiplexed gateway (`gateway.multiplex_profiles: true`) runs each profile's Claude Code on that profile's own login. `CLAUDE_CODE_OAUTH_TOKEN` in a served profile's `.env` now reaches its Claude Code children (read from core's per-turn secret scope; multiplexing never loads it into the process environment). A served profile without a token of its own no longer inherits the gateway process's token, `ANTHROPIC_CUSTOM_HEADERS` or `CLAUDE_CONFIG_DIR`, with or without `claude_config_dir` (Claude Code prefers the token over the selected login directory), so no profile runs on another profile's account. With multiplexing on and no secret scope bound, the request and the setup probes fail closed instead of guessing. Single-profile installs and an explicit `Client(env=...)` are unchanged, and the process environment is never modified (#34, #313, thanks @kalfian).
 - `/usage` shows the extra-usage state, usage credits spent, this week's share per surface and the per-model limits beside the plan limits. They were dropped whenever Claude Code answered with `limits`, which current versions always do.
 - `/usage` shows the plan limits with `claude_code_telemetry: false`: the CLI skips its `get_usage` fetch under `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, so the zero-inference usage probe no longer sets that one flag (telemetry and error reporting stay off; a flag the user exported is kept).

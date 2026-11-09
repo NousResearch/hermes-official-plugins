@@ -17,9 +17,11 @@ import tempfile
 from collections.abc import Mapping
 
 try:
+    from . import extra_usage
     from .admission import Admission
     from .model_catalog import MODEL_METADATA, PICKER_ROUTES, native_model
 except ImportError:
+    import extra_usage
     from admission import Admission
     from model_catalog import MODEL_METADATA, PICKER_ROUTES, native_model
 try:
@@ -412,6 +414,7 @@ def fetch_usage(command=None, env=None, timeout=8):
     body = response.get("response") if isinstance(response.get("response"), dict) else {}
     limits = body.get("rate_limits")
     if isinstance(limits, dict):
+        extra_usage.observe_usage(extra_usage.account_key(child), limits)
         return limits, None
     if not body.get("rate_limits_available"):
         return None, "no Claude subscription login found (run `claude` and log in)"
@@ -428,3 +431,17 @@ def _catalog_label(model):
         parts = parts[:-1]
     family, version = parts[0], [p for p in parts[1:] if p.isdigit()]
     return " ".join(filter(None, [family.capitalize(), ".".join(version)]))
+
+
+def check_extra_usage(command, env):
+    """Refuse before spawning when the account draws paid extra usage and the profile's ``extra_usage``
+    setting is ``ask`` or ``stop`` (``extra_usage.ClaudeExtraUsageBlocked``). ``env`` is the child env
+    with its login applied and before the quiet-traffic flags, so the probe can still read the limits."""
+    def probe():
+        fetch_usage(command=command, env=env)
+    extra_usage.admit(extra_usage.account_key(env), _setting, probe)
+
+
+def observe_rate_limit(env, summary):
+    """Feed one native ``rate_limit_event`` summary into the profile's extra-usage policy."""
+    extra_usage.observe(extra_usage.account_key(env), summary, _setting)

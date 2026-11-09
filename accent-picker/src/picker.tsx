@@ -208,14 +208,33 @@ function AccentPicker({ ctx }: { ctx: any }) {
   // Follow the painted accent when it changes from outside this control — but
   // never mid-drag, which would fight the user's own pointer.
   const dragging = useRef(false)
+  const persist = (val: string | null) => {
+    // ctx.storage (best-effort)
+    try { if (ctx && ctx.storage) ctx.storage.set('hermes-accent-picker', val) } catch (e) {}
+    // ctx.files (disk, robust)
+    try { if (ctx && ctx.files) void ctx.files.writeText('data', 'accent.txt', val === null ? '' : String(val)) } catch (e) {}
+  }
 
-  // Restore persisted accent on mount (ctx.storage fallback).
+  // Restore persisted accent on mount. Prefer ctx.files (real disk, survives restarts)
+  // over ctx.storage (localStorage, which the Electron webview may not persist).
   useLayoutEffect(() => {
+    let cancelled = false
+    const apply = (val: any) => { if (!cancelled && val) setAccentOverride(val) }
+    // ctx.storage (fast, sync)
     try {
-      const saved = ctx && ctx.storage.get('hermes-accent-picker', null)
-      console.log('[accent-picker] restore:', saved, 'ctx:', !!ctx, 'storage:', !!(ctx && ctx.storage))
-      if (saved) { setAccentOverride(saved) }
-    } catch (e) { console.error('[accent-picker] restore err', e) }
+      const saved = ctx && ctx.storage && ctx.storage.get('hermes-accent-picker', null)
+      if (saved) apply(saved)
+    } catch (e) {}
+    // ctx.files (disk, robust)
+    if (ctx && ctx.files) {
+      ctx.files.readText('data', 'accent.txt').then((r: any) => {
+        if (r && r.ok && r.text) {
+          const v = r.text.trim()
+          if (v) apply(v)
+        }
+      }).catch(() => {})
+    }
+    return () => { cancelled = true }
   }, [])
 
   // Persist accent on every change.
@@ -239,7 +258,7 @@ function AccentPicker({ ctx }: { ctx: any }) {
     const hex = oklchToHex(next)
     setText(hex)
     setAccentOverride(hex)
-    try { if (ctx) { ctx.storage.set('hermes-accent-picker', hex); console.log('[accent-picker] saved', hex) } } catch (e) { console.error('[accent-picker] save err', e) }
+    persist(hex)
     requestAnimationFrame(() => {
       dragging.current = false
     })
@@ -260,14 +279,14 @@ function AccentPicker({ ctx }: { ctx: any }) {
           onChange={event => {
             setText(event.target.value)
             setAccentOverride(event.target.value)
-            try { if (ctx) ctx.storage.set('hermes-accent-picker', event.target.value) } catch (e) {}
+            persist(event.target.value)
           }}
           spellCheck={false}
           value={text}
         />
         <button
           className="shrink-0 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px]"
-          onClick={() => { setAccentOverride(null); try { if (ctx) ctx.storage.set('hermes-accent-picker', null) } catch (e) {} } }
+          onClick={() => { setAccentOverride(null); persist(null) } }
           type="button"
         >
           reset
@@ -279,7 +298,7 @@ function AccentPicker({ ctx }: { ctx: any }) {
           <button
             className="size-5 rounded-sm border border-(--dt-border)"
             key={swatch.hex}
-            onClick={() => { setAccentOverride(swatch.hex); try { if (ctx) ctx.storage.set('hermes-accent-picker', swatch.hex) } catch (e) {} } }
+            onClick={() => { setAccentOverride(swatch.hex); persist(swatch.hex) } }
             style={{ background: swatch.hex }}
             title={`${swatch.name} · ${swatch.hex}`}
             type="button"

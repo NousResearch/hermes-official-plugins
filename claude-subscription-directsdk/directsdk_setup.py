@@ -641,8 +641,7 @@ def _upstream_proxy(raw):
     return (host, port, headers), credentials
 
 
-def _upstream_context(raw):
-    path = os.path.expanduser(raw)
+def _upstream_context(path):
     context = ssl.create_default_context()
     try:
         context.load_verify_locations(cafile=path)
@@ -663,14 +662,18 @@ def resolve_upstream():
         return Upstream(ANTHROPIC_UPSTREAM, None, None, False)
     url = _upstream_url(url_raw) if url_raw else ANTHROPIC_UPSTREAM
     proxy, credentials = _upstream_proxy(proxy_raw) if proxy_raw else (None, None)
-    context = _upstream_context(ca_raw) if ca_raw else None
+    # Absolute once: the relay loads it from Hermes' cwd, Claude Code runs in a scratch cwd.
+    ca_path = os.path.abspath(os.path.expanduser(ca_raw)) if ca_raw else None
+    context = _upstream_context(ca_path) if ca_path else None
     child_env = {}
     if proxy:
         user, _, password = (credentials or "").partition(":")
         auth = f"{quote(user, safe='')}:{quote(password, safe='')}@" if credentials else ""
-        child_env["HTTPS_PROXY"] = child_env["https_proxy"] = f"http://{auth}{proxy[0]}:{proxy[1]}"
+        proxy_host = f"[{proxy[0]}]" if ":" in proxy[0] else proxy[0]  # urlsplit's hostname drops IPv6 brackets
+        for name in _proxy_names("HTTPS_PROXY"):
+            child_env[name] = f"http://{auth}{proxy_host}:{proxy[1]}"
     if context:
-        child_env["NODE_EXTRA_CA_CERTS"] = os.path.expanduser(ca_raw)
+        child_env["NODE_EXTRA_CA_CERTS"] = ca_path
     host = urlsplit(url).hostname
     try:
         from hermes_constants import get_hermes_home
@@ -698,8 +701,15 @@ def egress_env(env, upstream):
     env.update(upstream.child_env)
     if "HTTPS_PROXY" in upstream.child_env:
         bypass = [entry for entry in (env.get("NO_PROXY") or env.get("no_proxy") or "").split(",") if entry.strip()]
-        env["NO_PROXY"] = env["no_proxy"] = ",".join(bypass + ["127.0.0.1", "localhost"])
+        for name in _proxy_names("NO_PROXY"):
+            env[name] = ",".join(bypass + ["127.0.0.1", "localhost"])
     return env
+
+
+def _proxy_names(name):
+    """Both spellings on POSIX (tools read either); one on Windows, whose env names ignore case, so a second
+    spelling is a duplicate entry in the child's environment block."""
+    return (name,) if os.name == "nt" else (name, name.lower())
 
 
 def relay(upstream, timeout, **kwargs):

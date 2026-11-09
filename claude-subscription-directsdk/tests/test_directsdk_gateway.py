@@ -133,8 +133,9 @@ def test_the_clis_own_calls_take_the_configured_proxy_and_ca(clean, tmp_path, mo
     take that proxy and CA too (an org that requires egress through it), while the loopback relay stays direct."""
     import directsdk_setup
     ca, _ = _tls_pair(tmp_path)
+    monkeypatch.chdir(tmp_path)  # a relative CA path is Hermes' cwd, and the CLI runs in another one
     _settings(upstream_url="https://llm-gateway.example.com/anthropic", upstream_proxy="http://egress.example.com:3128",
-              upstream_ca_file=str(ca))
+              upstream_ca_file=ca.name)
     monkeypatch.setenv(PROXY_AUTH, "svc:p@ss")
     monkeypatch.setenv("NO_PROXY", "internal.example.com")
     seen = []
@@ -163,10 +164,34 @@ def test_the_clis_own_calls_take_the_configured_proxy_and_ca(clean, tmp_path, mo
         monkeypatch.setattr(directsdk_setup.subprocess, "Popen", popen_from_run(run))
         getattr(directsdk_setup, probe)(command=[sys.executable], env=dict(os.environ, PATH=os.defpath))
     env, = seen
-    assert env["HTTPS_PROXY"] == env["https_proxy"] == "http://svc:p%40ss@egress.example.com:3128"
+    assert _spellings(env, "HTTPS_PROXY") == ["http://svc:p%40ss@egress.example.com:3128"] * _SPELLINGS
     assert env["NODE_EXTRA_CA_CERTS"] == str(ca)
-    assert env["NO_PROXY"].split(",") == ["internal.example.com", "127.0.0.1", "localhost"]
+    assert [value.split(",") for value in _spellings(env, "NO_PROXY")] == [
+        ["internal.example.com", "127.0.0.1", "localhost"]] * _SPELLINGS
     assert env["ANTHROPIC_BASE_URL"].startswith("http://127.0.0.1:")
+
+
+# Windows env names ignore case: one entry there, both spellings on POSIX.
+_SPELLINGS = 1 if os.name == "nt" else 2
+
+
+def _spellings(env, name):
+    return [value for key, value in env.items() if key.upper() == name]
+
+
+def test_an_ipv6_proxy_keeps_its_brackets_for_the_cli(clean, monkeypatch):
+    """Greptile 4512444873: urlsplit's hostname is ``::1``; ``http://::1:3128`` is no proxy URL."""
+    import directsdk_setup
+    _settings(upstream_proxy="http://[::1]:3128")
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(kwargs["env"])
+        return SimpleNamespace(stdout="", returncode=0)
+    monkeypatch.setattr(directsdk_setup.subprocess, "Popen", popen_from_run(run))
+    directsdk_setup.fetch_usage(command=[sys.executable], env={"PATH": os.defpath})
+    env, = seen
+    assert _spellings(env, "HTTPS_PROXY") == ["http://[::1]:3128"] * _SPELLINGS
 
 
 @pytest.mark.parametrize("settings, named", [

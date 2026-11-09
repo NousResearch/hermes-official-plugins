@@ -561,16 +561,27 @@ test('all finding tabs and repository metadata render without missing SDK refere
   assert.match(output, /Not tested/)
   assert.match(output, /Add an ownership check/)
   assert.match(output, /Fix in chat/)
-  // Each fix starts its own chat: the title carries the minute it started.
-  assert.equal(plugin.fixChatTitle('Test finding', new Date(2026, 10, 9, 1, 45)), 'Fix: Test finding · Nov 9, 01:45')
-  assert.notEqual(plugin.fixChatTitle('Test finding', new Date(2026, 10, 9, 1, 45)),
-    plugin.fixChatTitle('Test finding', new Date(2026, 10, 9, 2, 10)))
-  assert.equal(plugin.fixChatTitle('', new Date(2026, 10, 9, 1, 45)), 'Fix: security finding · Nov 9, 01:45')
+  // Each fix starts its own chat: the title names the finding and the second it started.
+  const at = new Date(2026, 10, 9, 1, 45, 7)
+  assert.equal(plugin.fixChatTitle('Test finding', 'hsf_32c904e04b66b939ad4e5fb8', at), 'Fix: Test finding · 32c904 · Nov 9, 01:45:07')
+  // Same title on another finding, or a retry a second later, never shares a chat.
+  assert.notEqual(plugin.fixChatTitle('Missing authorization', 'hsf_aaaaaa', at), plugin.fixChatTitle('Missing authorization', 'hsf_bbbbbb', at))
+  assert.notEqual(plugin.fixChatTitle('Test finding', 'hsf_32c904', at),
+    plugin.fixChatTitle('Test finding', 'hsf_32c904', new Date(2026, 10, 9, 1, 45, 8)))
+  assert.equal(plugin.fixChatTitle('', '', at), 'Fix: security finding · Nov 9, 01:45:07')
   env.rpc = []
-  await nodes(plugin.FindingDetail({ id: 'hsf_test', onBack() {} }))
-    .find((n) => n.type === 'button' && /Fix in chat/.test(render(n.props.children ?? ''))).props.onClick()
-  const created = env.rpc.find(([method]) => method === 'session.create')
-  assert.match(created[1].title, /^Fix: Test finding · [A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}$/)
+  const fixButton = () => nodes(plugin.FindingDetail({ id: 'hsf_test', onBack() {} }))
+    .find((n) => n.type === 'button' && /Fix in chat/.test(render(n.props.children ?? '')))
+  // A double click while the chat is being created sends one prompt, not two.
+  await Promise.all([fixButton().props.onClick(), fixButton().props.onClick()])
+  assert.equal(env.rpc.filter(([method]) => method === 'session.create').length, 1)
+  assert.equal(env.rpc.filter(([method]) => method === 'prompt.submit').length, 1)
+  assert.match(env.rpc.find(([method]) => method === 'session.create')[1].title,
+    /^Fix: Test finding · test · [A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}:\d{2}$/)
+  assert.equal(plugin.fixesStarting.size, 0)
+  // Once it finished, a later click starts another chat.
+  await fixButton().props.onClick()
+  assert.equal(env.rpc.filter(([method]) => method === 'session.create').length, 2)
   env.states = []
   const page = render(plugin.BrowserView({ kind: 'Findings', selected: null, setSelected() {}, onFinding: {}, newScan: false, setNewScan() {} }))
   assert.match(page, /A member reads another tenant invoice/)

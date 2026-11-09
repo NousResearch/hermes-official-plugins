@@ -39,7 +39,7 @@ const plugin: HermesPlugin = {
           id: 'accent.reset',
           label: 'Accent: reset to the theme default',
           keywords: ['accent', 'color', 'theme', 'reset', 'default'],
-          run: () => setAccentOverride(null)
+          run: () => { setAccentOverride(null); try { if (ctx) ctx.storage.set('hermes-accent-picker', null) } catch (e) {} }
         } satisfies PaletteContribution
       },
       {

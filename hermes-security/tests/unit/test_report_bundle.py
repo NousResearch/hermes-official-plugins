@@ -240,3 +240,29 @@ def test_a_long_excerpt_keeps_its_key_line():
     f['codeEvidence'][0]['keyLine'] = 400
     ignored = render_markdown(d['manifest'], d['findings_doc'], d['coverage'], d['chains_doc'])
     assert 'Key line' not in ignored and 'line 12\n' in ignored and 'line 13\n' not in ignored
+
+
+def test_findings_sharing_a_weakness_roll_up_into_one_summary_row():
+    d = inputs()
+    base = d['findings_doc']['findings'][0]
+    found = []
+    for i, (cwe, level) in enumerate([('CWE-400', 'low'), ('CWE-400', 'medium'), ('CWE-400', 'low'),
+                                      ('CWE-613', 'low'), ('CWE-613', 'low')]):
+        f = copy.deepcopy(base)
+        f.update(findingId=f'hsf_{i:024x}', title=f'Finding {i}')
+        f['severity'] = {**f['severity'], 'level': level}
+        f['taxonomy'] = {**f['taxonomy'], 'cwe': [cwe]}
+        f['remediation'] = {**f['remediation'], 'summary': f'Fix number {i}. More detail.'}
+        found.append(f)
+    d['findings_doc']['findings'] = found
+    text = render_markdown(d['manifest'], d['findings_doc'], d['coverage'], d['chains_doc'])
+    # Three or more with one primary CWE share a row; two stay separate.
+    assert ('| 1–3 | Medium to low | [3 findings: CWE-400 (memory and resource exhaustion)](#pattern-1) '
+            '| 3 places | One fix per place; see the list. |') in text
+    assert '| 4 | Low | [Finding 3](#finding-4) |' in text and '| 5 | Low | [Finding 4](#finding-5) |' in text
+    # The pattern lists every place with its fix, and each finding keeps its own full section.
+    assert '<a id="pattern-1"></a>\n\n**3 findings: CWE-400 (memory and resource exhaustion).**' in text
+    assert '- [1. Finding 1](#finding-1) — `src/api.py:40` — Fix number 1.' in text
+    for n in range(1, 6):
+        assert f'<a id="finding-{n}"></a>' in text
+    assert text.index('<a id="pattern-1">') < text.index('<a id="finding-1">')

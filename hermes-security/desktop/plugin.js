@@ -755,11 +755,14 @@ export async function continueInChat(id, session) {
 // Start the agent run in its own background chat session and link it to the scan.
 // Falls back to a chat draft when this backend can't create sessions.
 // `route` = { model, provider } picked on the form; omitted = the profile's default model.
+// The title names the scan: a create whose title an existing chat already holds reopens that
+// chat, so a repo-only title would put every later scan of the repo in its first scan's chat.
+export const scanChatTitle = (id, path) => `Security scan · ${repoName(path)} · ${String(id).replace(/^scan_/, '').slice(0, 6)}`
 export async function launchScan(id, path, route = {}) {
   const prompt = scanPrompt(id, path)
   try {
     const session = await host.request('session.create', {
-      cwd: path, title: `Security scan · ${repoName(path)}`,
+      cwd: path, title: scanChatTitle(id, path),
       ...(route.model ? { model: route.model, ...(route.provider ? { provider: route.provider } : {}) } : {})
     })
     const sessionId = session?.session_id

@@ -79,3 +79,42 @@ def test_end_to_end_static(tmp_path):
     assert service.export(sid, 'csv')['content']
     assert service.export(sid, 'json')['content']
     assert verify_bundle(Path(final['artifactDir']))['ok']
+
+
+def _reviewed_scan(tmp_path, name, extra):
+    root = tmp_path / name; root.mkdir()
+    (root / 'app.py').write_text('def f():\n    return 1\n')
+    service = SecurityService(tmp_path / (name + '-data'))
+    sid = service.start_scan(path=str(root))['scanId']
+    lanes = [{'unit': f'lane:A{i:02}:2025', 'state': 'reviewed', 'note': 'Checked.'} for i in range(1, 11)]
+    service.checkpoint(sid, coverage=[{'unit': 'file:app.py', 'state': 'reviewed', 'note': 'Read in full.'}] + lanes + extra,
+                       note='Done.')
+    service.record_chains(sid)
+    final = service.finalize(sid)
+    return final, json.loads((Path(final['artifactDir']) / 'coverage.json').read_text(encoding='utf-8'))
+
+
+def test_open_asvs_units_never_make_a_reviewed_scan_partial(tmp_path):
+    asvs = [{'unit': 'asvs:V8.2.2', 'state': 'deferred', 'note': 'Needs an owner.'},
+            {'unit': 'asvs:V16.5.3', 'state': 'failed', 'note': 'Could not check.'},
+            {'unit': 'asvs:V1.3.6', 'state': 'unknown', 'note': 'Not looked at.'}]
+    _, baseline = _reviewed_scan(tmp_path, 'plain', [])
+    final, coverage = _reviewed_scan(tmp_path, 'asvs', asvs)
+    # The ledger keeps each ASVS state, but open ASVS units add no gap: the coverage is the same as
+    # an identical scan that recorded none (its other gaps are this harness's unreviewed packets).
+    states = {c['id']: c['state'] for c in coverage['standards']['asvs']['controls']}
+    assert (states['V8.2.2'], states['V16.5.3'], states['V1.3.6']) == ('deferred', 'failed', 'unknown')
+    assert not any('asvs' in gap.lower() for gap in coverage['gaps'])
+    assert [g for g in coverage['gaps'] if 'Worker packet' not in g] == []
+    assert len(coverage['gaps']) == len(baseline['gaps']) and coverage['completeness'] == baseline['completeness']
+
+
+def test_finalize_ignores_open_asvs_units():
+    from hermes_security.reports.finalize import _coverage_gaps
+    coverage = {'completeness': 'complete', 'files': {'total': 1, 'reviewed': 1, 'deferred': 0, 'unsupported': 0},
+                'standards': {'owaspTop10': {'categories': [{'id': f'A{i:02}:2025', 'state': 'reviewed'} for i in range(1, 11)]}},
+                'units': [{'unitId': 'file:app.py', 'state': 'reviewed'}, {'unitId': 'asvs:V8.2.2', 'state': 'deferred'},
+                          {'unitId': 'asvs:V16.5.3', 'state': 'failed'}], 'workers': []}
+    assert _coverage_gaps(coverage) == []
+    coverage['units'].append({'unitId': 'file:b.py', 'state': 'deferred'})
+    assert _coverage_gaps(coverage) == ['Review unit file:b.py is incomplete.']

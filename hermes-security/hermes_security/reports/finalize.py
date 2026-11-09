@@ -82,7 +82,8 @@ def _coverage_gaps(coverage):
         if states.get(key) not in done:
             gaps.append(f'{key} review is incomplete.')
     for unit in coverage.get('units', []):
-        if unit.get('state') not in done:
+        # ASVS units are informational; the standards ledger still records their state.
+        if unit.get('state') not in done and not str(unit.get('unitId', '')).startswith('asvs:'):
             gaps.append(f"Review unit {unit.get('unitId', 'unknown')} is incomplete.")
     if any(w.get('status') == 'missing' for w in coverage.get('workers', [])):
         gaps.append('A review worker result is missing.')

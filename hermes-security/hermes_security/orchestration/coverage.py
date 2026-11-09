@@ -45,7 +45,8 @@ def build_coverage(scan, inventory, units, attempts, packets, findings):
     done = {'reviewed', 'not_applicable'}
     files = [by_id['file:' + p] for p in sorted(review_paths)]
     for unit in by_id.values():
-        if unit['state'] not in done:
+        # ASVS units are informational (ledger.asvs_summary); they never make a scan partial.
+        if unit['state'] not in done and not unit['unitId'].startswith('asvs:'):
             gaps.append(unit['unitId'] + ' is ' + unit['state'] + ': ' + unit['reason'])
     workers = [{'attemptId': a['attempt_id'], 'role': a['role'], 'status': a['status'] if a['status'] in {'accepted', 'rejected', 'late'} else 'missing'} for a in attempts]
     accepted = {a['packet_id'] for a in attempts if a['status'] == 'accepted'}

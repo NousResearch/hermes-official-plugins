@@ -171,6 +171,26 @@ def test_injection_refused_records_pause_once_and_does_not_count(scan):
     assert service.store.get_scan(plan['scanId'])['reason'] is None and guard(service, plan)['count'] == 1
 
 
+def test_injection_refused_while_workers_run_is_not_a_pause(scan):
+    service, plan = scan
+    ctx = FakeCtx(result=False)
+    h = hooks(service, ctx)
+    first = plan['packets'][0]
+    h['subagent_start'](parent_session_id=SESSION, child_session_id='child-1',
+                        child_goal=goal(plan, 'att_running1', first))
+    nxt = service.next_step(plan['scanId'])
+    assert nxt['step'] == 'dispatch' and nxt['running'] == 1
+    end(h); end(h)
+    # Running workers report back into the chat, so the scan is not paused.
+    assert service.store.get_scan(plan['scanId'])['reason'] is None
+    assert not [e for e in service.store.events(plan['scanId']) if e['kind'] == 'autoresume.paused']
+    assert guard(service, plan)['count'] == 0 and not guard(service, plan).get('pending')
+    # Once nothing is running, a refused continue is a real pause again.
+    h['subagent_stop'](parent_session_id=SESSION, child_session_id='child-1', child_status='failed')
+    end(h)
+    assert service.store.get_scan(plan['scanId'])['reason'] == recovery.PAUSED_OFF
+
+
 def test_hook_errors_never_reach_the_host(scan):
     service, _ = scan
     ctx = FakeCtx(result=RuntimeError('host down'))

@@ -118,6 +118,12 @@ def continue_scan(service, scan, *, interrupted, inject):
         service.store.add_event(scan_id, 'autoresume.scheduled', f'Continuing automatically: next step is {nxt["step"]}.',
                                 {'step': nxt['step'], 'count': count + 1, 'progressKey': key})
         return 'scheduled'
+    if nxt.get('running'):
+        # Running workers report back into this chat and drive its next turn: not a pause.
+        _write_guard(service, scan_id, lambda g: g.update(count=count, pending=None))
+        if scan['reason'] == PAUSED_OFF:
+            _set_reason(service, scan, None)
+        return 'workers-running'
     _write_guard(service, scan_id, lambda g: g.update(count=count, pending=None, offAt=key))
     if guard.get('offAt') != key:
         _set_reason(service, scan, PAUSED_OFF)

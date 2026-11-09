@@ -162,10 +162,11 @@ def _frame_first(messages, queried):
     return True
 
 
-# The only trailing system text the relay moves: native 2.1.299's date line, exactly as its opening request ends the
-# environment message. Any other trailing text stays put, since moving text that varies per request into the
-# environment message would change the prefix from message 1 on every request.
-_DATE_LINE = re.compile(r"Today's date is \d{4}-\d{2}-\d{2}\.")
+# The only trailing system text the relay moves: native's date line, exactly as its opening request ends the
+# environment message (bare on 2.1.299, wrapped in a system-reminder on 2.1.292 and 2.1.319). Any other trailing
+# text stays put, since moving text that varies per request into the environment message would change the prefix
+# from message 1 on every request.
+_DATE_LINE = re.compile(r"(?:<system-reminder>\n)?Today's date is \d{4}-\d{2}-\d{2}\.(?:\n</system-reminder>)?")
 
 
 def stable_request_context(payload, queried):

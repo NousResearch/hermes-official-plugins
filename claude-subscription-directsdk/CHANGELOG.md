@@ -4,6 +4,7 @@
 
 ### Added
 
+- Fable 5.2 (`claude-fable-5-2[1m]`, 1M), released November 9, 2026; the `fable` alias moves to it (pin `claude-fable-5-1` to keep Fable 5.1). It needs Claude Code 2.1.321 or newer. Thinking stays mandatory, and the usage-credits note follows Anthropic's plan rule as for Fable 5 and 5.1. Mythos 5.2 (`claude-mythos-5-2[1m]`, 1M) is pinned as access-gated like Mythos 5.1.
 - Mythos 5.1 (`claude-mythos-5-1[1m]`, 1M) for organizations Anthropic has verified. It is listed only when the account's own picker offers it, never from the pinned catalog, so accounts without access do not see it. Reasoning-off requests ask for the lowest effort instead of a disable Mythos rejects.
 - Per-profile `claude_config_dir` setting selects the Claude login for every native spawn in a multiplexed gateway (#34).
 

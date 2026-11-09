@@ -544,7 +544,7 @@ test('completed scan uses sealed manifest counts beside coverage', () => {
   assert.match(output, /fixture-model/)
   assert.match(output, /Run in chat/)
 })
-test('all finding tabs and repository metadata render without missing SDK references', () => {
+test('all finding tabs and repository metadata render without missing SDK references', async () => {
   env.fixtures['/findings/hsf_test'] = {
     ...env.fixtures['/findings/hsf_test'],
     title: 'Test finding',
@@ -561,6 +561,16 @@ test('all finding tabs and repository metadata render without missing SDK refere
   assert.match(output, /Not tested/)
   assert.match(output, /Add an ownership check/)
   assert.match(output, /Fix in chat/)
+  // Each fix starts its own chat: the title carries the minute it started.
+  assert.equal(plugin.fixChatTitle('Test finding', new Date(2026, 10, 9, 1, 45)), 'Fix: Test finding · Nov 9, 01:45')
+  assert.notEqual(plugin.fixChatTitle('Test finding', new Date(2026, 10, 9, 1, 45)),
+    plugin.fixChatTitle('Test finding', new Date(2026, 10, 9, 2, 10)))
+  assert.equal(plugin.fixChatTitle('', new Date(2026, 10, 9, 1, 45)), 'Fix: security finding · Nov 9, 01:45')
+  env.rpc = []
+  await nodes(plugin.FindingDetail({ id: 'hsf_test', onBack() {} }))
+    .find((n) => n.type === 'button' && /Fix in chat/.test(render(n.props.children ?? ''))).props.onClick()
+  const created = env.rpc.find(([method]) => method === 'session.create')
+  assert.match(created[1].title, /^Fix: Test finding · [A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}$/)
   env.states = []
   const page = render(plugin.BrowserView({ kind: 'Findings', selected: null, setSelected() {}, onFinding: {}, newScan: false, setNewScan() {} }))
   assert.match(page, /A member reads another tenant invoice/)

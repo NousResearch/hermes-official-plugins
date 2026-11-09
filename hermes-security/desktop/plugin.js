@@ -1548,6 +1548,12 @@ function FindingSections({ id, finding: f, patch, chains, note, setNote, saveNot
     ] })
   ] })
 }
+// A titled create reopens the chat already holding that title, so a fix chat's title carries the
+// minute it was started: a second fix of the same finding gets its own chat, a double click does not.
+export function fixChatTitle(title, now = new Date()) {
+  const when = now.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+  return `Fix: ${title || 'security finding'} · ${when}`
+}
 export async function startChat(path, title, prompt) {
   const session = await host.request('session.create', { cwd: path, title })
   if (!session?.session_id) throw new Error('A chat could not be started.')
@@ -1574,7 +1580,7 @@ export function FindingDetail({ id, onBack, nativeSelect = false }) {
   const fix = async () => {
     setChatError(null)
     try {
-      const session = await startChat(root, `Fix: ${f.title || 'security finding'}`,
+      const session = await startChat(root, fixChatTitle(f.title),
         `Load the hermes-security:fix-finding skill and fix security finding ${id} ("${f.title}") in ${root}. ` +
         'Read it with the security tools first, make the smallest fix for the root cause, and verify it.')
       await host.openSession(session.stored_session_id || session.session_id)

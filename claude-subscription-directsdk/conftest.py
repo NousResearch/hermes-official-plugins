@@ -10,6 +10,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,7 +22,7 @@ for path in (str(HERMES_AGENT_REPO), str(REPO_ROOT)):
         sys.path.insert(0, path)
 
 collect_ignore = ["__init__.py", "directsdk.py", "directsdk_setup.py", "admission.py", "model_catalog.py", "extra_usage.py",
-                  "inert_mcp.py", "evals"]
+                  "inert_mcp.py", "process_tree.py", "evals"]
 
 
 @pytest.fixture
@@ -53,7 +54,8 @@ def popen_from_run(run, turns=None):
     the CLI's probes (the plugin spawns its zero-inference probes with Popen so it can own the child). A turn
     spawn (``--max-turns`` in argv) goes to ``turns``, the real Popen, when given."""
     class FakePopen:
-        pid, returncode = 0, 0
+        # Not our child, so kill_process_tree sees an already-reaped process and signals nothing.
+        pid, returncode = os.getpid(), 0
 
         def __new__(cls, argv, **kwargs):
             if turns is not None and "--max-turns" in argv:
@@ -61,12 +63,14 @@ def popen_from_run(run, turns=None):
             return super().__new__(cls)
 
         def __init__(self, argv, **kwargs):
-            self.argv, self.kwargs = argv, kwargs
+            self.argv, self.kwargs, self.written, self.answer = argv, kwargs, [], ""
+            self.stdin = SimpleNamespace(write=self.written.append, close=self._answer)
+            self.stdout = SimpleNamespace(read=lambda: self.answer)
 
-        def communicate(self, input=None, timeout=None):
-            result = run(self.argv, input=input, env=self.kwargs.get("env"), cwd=self.kwargs.get("cwd"),
-                         timeout=timeout, capture_output=True, text=True)
-            return getattr(result, "stdout", ""), ""
+        def _answer(self):
+            result = run(self.argv, input="".join(self.written), env=self.kwargs.get("env"), cwd=self.kwargs.get("cwd"),
+                         timeout=self.kwargs.get("timeout"), capture_output=True, text=True)
+            self.answer = getattr(result, "stdout", "") or ""
 
         def poll(self):
             return 0

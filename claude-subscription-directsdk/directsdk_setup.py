@@ -16,7 +16,6 @@ import json
 import logging
 import os
 import shutil
-import signal
 import ssl
 import subprocess
 import tempfile
@@ -31,10 +30,12 @@ try:
     from . import extra_usage
     from .admission import Admission
     from .model_catalog import MODEL_METADATA, PICKER_ROUTES, native_model
+    from .process_tree import kill_process_tree, own_process_group
 except ImportError:
     import extra_usage
     from admission import Admission
     from model_catalog import MODEL_METADATA, PICKER_ROUTES, native_model
+    from process_tree import kill_process_tree, own_process_group
 try:
     from agent.secret_scope import UnscopedSecretError
 except ImportError:  # a core without per-profile secret scopes never raises it
@@ -274,25 +275,11 @@ _probes_lock = threading.Lock()
 _reaper_registered = False
 
 
-def _kill_tree(process):
-    """Kill a probe child and what it started (the npm shim is cmd.exe -> node on Windows)."""
-    if process.poll() is not None:
-        return
-    if os.name == "nt":
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)], stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, check=False)
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)  # windows-footgun: ok - the nt branch above never reaches this line
-        except (ProcessLookupError, PermissionError):
-            pass
-
-
 def _reap_probes():
     with _probes_lock:
         live = tuple(_probes)
     for process in live:
-        _kill_tree(process)
+        kill_process_tree(process)
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
@@ -316,17 +303,31 @@ def _probe(argv, *, input, env, timeout, prefix):
             _reaper_registered = True
     process = None
     try:
-        group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
-                 else {"start_new_session": True})
-        process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   text=True, encoding="utf-8", errors="replace", cwd=scratch.name, env=env, **group)
+        process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                   text=True, encoding="utf-8", errors="replace", cwd=scratch.name, env=env,
+                                   **own_process_group())
         with _probes_lock:
             _probes.add(process)
-        stdout, _ = process.communicate(input, timeout=timeout)
+        # Not communicate(): it reaps the leader, and once reaped its group id no longer proves the group is ours,
+        # so a launcher that exited first would leave the real CLI running. On timeout the group dies, closing stdout.
+        expired = threading.Event()
+        timer = threading.Timer(timeout, lambda: (expired.set(), kill_process_tree(process)))
+        timer.start()
+        try:
+            try:
+                process.stdin.write(input)
+                process.stdin.close()
+            except OSError:  # BrokenPipeError, or EINVAL on Windows: exited without reading; its output still counts
+                pass
+            stdout = process.stdout.read()
+        finally:
+            timer.cancel()
+        if expired.is_set():
+            raise subprocess.TimeoutExpired(argv, timeout)
         return stdout
     finally:
         if process is not None:
-            _kill_tree(process)
+            kill_process_tree(process)
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:

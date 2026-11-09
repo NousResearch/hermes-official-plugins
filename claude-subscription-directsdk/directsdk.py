@@ -15,7 +15,6 @@ from pathlib import Path
 import queue
 import re
 import shutil
-import signal
 import stat
 import subprocess
 import sys
@@ -29,6 +28,7 @@ from types import SimpleNamespace
 try:
     from .admission import Admission
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
+    from .process_tree import kill_process_tree, own_process_group, unreaped
     from .directsdk_setup import (
         INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, drop_api_credentials, observe_rate_limit, reap_orphaned_refresh_lock, relay,
@@ -36,6 +36,7 @@ try:
 except ImportError:
     from admission import Admission
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
+    from process_tree import kill_process_tree, own_process_group, unreaped
     from directsdk_setup import (
         INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, drop_api_credentials, observe_rate_limit, reap_orphaned_refresh_lock, relay,
@@ -392,50 +393,8 @@ class Request:
         with self.lock:
             if self.cancelled.is_set():
                 raise RuntimeError('Claude request cancelled')
-            self.process = subprocess.Popen(command, stdin=stdin, **kwargs, **_own_process_group())
+            self.process = subprocess.Popen(command, stdin=stdin, **kwargs, **own_process_group())
         return self.process
-
-
-def _own_process_group():
-    """Popen kwargs that put native (and the node/cmd children it spawns) in a group we can kill as one."""
-    if os.name == 'nt':
-        return {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
-    return {'start_new_session': True}
-
-
-def _unreaped(process, block=False):
-    """Whether our leader is still unreaped (exited or not), observed without reaping it.
-
-    While our unreaped leader holds the PID, its group id cannot be recycled, so signalling the
-    group is safe even after a launcher exited and left children behind. Already reaped (by us or
-    a host-wide ``waitpid(-1)`` reaper such as core's Kanban dispatcher): the PID is no longer
-    proof of ownership, so the caller does nothing. ``os.waitid`` is missing on macOS before
-    Python 3.13; there the old ``poll()`` guard stays.
-    """
-    if not hasattr(os, 'waitid'):
-        return process.poll() is None
-    try:
-        os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT | (0 if block else os.WNOHANG))
-    except ChildProcessError:
-        return False
-    return True
-
-
-def kill_process_tree(process):
-    """Kill native and every descendant: the npm shim is cmd.exe -> node on Windows, and a plain
-    Popen.kill() would orphan the node child that holds the real request open."""
-    if os.name == 'nt':
-        if process.poll() is not None:
-            return
-        subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-        return
-    if not _unreaped(process):
-        return
-    try:
-        os.killpg(process.pid, signal.SIGKILL)  # windows-footgun: ok — the nt branch above never reaches this line
-    except (ProcessLookupError, PermissionError):
-        # ESRCH: already gone. EPERM: macOS answers killpg with EPERM once the group leader is a zombie.
-        pass
 
 
 DRAIN_GRACE_S = 10.0
@@ -911,7 +870,7 @@ class Client:
                         # The consumer may close while paused at a yielded chunk.
                         # Reaping belongs to this owner thread, never cancel(). Clear the group
                         # first: a launcher that exits leaves children the reap would orphan.
-                        if os.name != 'nt' and hasattr(os, 'waitid') and _unreaped(process, block=True):
+                        if os.name != 'nt' and hasattr(os, 'waitid') and unreaped(process, block=True):
                             kill_process_tree(process)
                         process.wait()
                         events.put(None)

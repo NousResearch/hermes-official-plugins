@@ -113,3 +113,23 @@ def test_a_turn_reaps_the_orphaned_lock_of_its_own_login(profile, tmp_path, monk
     finally:
         client.close()
     assert not lock.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_a_probe_whose_launcher_exits_first_leaves_no_descendant(profile, tmp_path):
+    """A shim that starts the real CLI and exits: probe cleanup still kills what it left in the group."""
+    import directsdk_setup
+    pidfile = tmp_path / "descendant.pid"
+    launcher = tmp_path / "claude.sh"
+    launcher.write_text(f"sleep 30 </dev/null >/dev/null 2>&1 &\necho $! > {pidfile}\nexit 0\n", encoding="utf-8")
+    env = {**os.environ, "PATH": os.defpath, "HOME": str(tmp_path)}
+    directsdk_setup.fetch_usage(command=["/bin/sh", str(launcher)], env=env, timeout=5)
+    descendant = int(pidfile.read_text())
+    deadline = time.monotonic() + 3
+    while _alive(descendant) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    try:
+        assert not _alive(descendant), "the launcher's descendant outlived probe cleanup"
+    finally:
+        if _alive(descendant):
+            os.kill(descendant, 9)

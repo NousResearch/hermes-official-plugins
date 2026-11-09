@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 import subprocess
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -35,10 +36,10 @@ def cli(profile, monkeypatch):
     import agent.anthropic_credentials as credentials
 
     class State:
-        reply, calls = _answer(LIMITS), []
+        reply, calls, deadlines = _answer(LIMITS), [], []
 
     def run(argv, **kwargs):
-        State.calls.append(SimpleNamespace(argv=argv, env=kwargs['env'], input=kwargs.get('input'), timeout=kwargs.get('timeout')))
+        State.calls.append(SimpleNamespace(argv=argv, env=kwargs['env'], input=kwargs.get('input')))
         if isinstance(State.reply, Exception):
             raise State.reply
         out = State.reply if isinstance(State.reply, str) else json.dumps(State.reply, allow_nan=True)
@@ -50,6 +51,8 @@ def cli(profile, monkeypatch):
     monkeypatch.setattr(subprocess, 'run', run)
     # The installed copy Hermes loads has its own module objects, so the fake is installed process-wide.
     monkeypatch.setattr(subprocess, 'Popen', popen_from_run(run))
+    timer = threading.Timer
+    monkeypatch.setattr(threading, 'Timer', lambda interval, *a, **k: State.deadlines.append(interval) or timer(interval, *a, **k))
     for name in ('read_claude_code_credentials', 'resolve_anthropic_token', '_refresh_oauth_token',
                  '_write_claude_code_credentials', '_read_claude_code_credentials_from_keychain'):
         monkeypatch.setattr(credentials, name, refuse, raising=False)
@@ -74,7 +77,7 @@ def test_limits_come_from_claude_code_get_usage(cli):
     call, = cli.calls
     assert json.loads(call.input)['request'] == {'subtype': 'get_usage', 'skip_behaviors': True}
     # Behind the unused admission gate (no inference can leave), and under core's 10 s hook deadline.
-    assert call.env['ANTHROPIC_BASE_URL'].startswith('http://127.0.0.1:') and call.timeout < 10
+    assert call.env['ANTHROPIC_BASE_URL'].startswith('http://127.0.0.1:') and cli.deadlines and max(cli.deadlines) < 10
 
 
 def test_a_body_without_limits_reads_the_legacy_windows(cli):

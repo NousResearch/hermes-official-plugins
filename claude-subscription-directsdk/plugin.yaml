@@ -25,9 +25,9 @@ config_schema:
     description: Select this profile's logged-in Claude config directory, overriding process environment directories.
   claude_code_telemetry:
     type: bool
-    default: true
-    label: Claude Code telemetry and feature flags
+    default: false
+    label: Claude Code telemetry and error reporting
     description: >-
-      Let Claude Code send its usage telemetry and fetch feature flags. Feature flags unlock newer
-      models in the model picker; turn off to keep Claude Code quiet (the picker may then list fewer
-      models).
+      Let Claude Code send its usage telemetry and error reports. Off by default. The model picker and
+      /usage stay complete either way: their zero-inference probes still fetch Claude Code's feature
+      flags and plan limits.

@@ -267,9 +267,9 @@ def test_pinned_models_the_picker_omits_stay_selectable(profile, tmp_path):
 
 
 # What a CLI started with DISABLE_TELEMETRY / CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC advertises
-# (#86): its feature-flag fetch is off, so only each family's current model is offered. The plugin
-# sets those flags only when the user turns its claude_code_telemetry setting off (or exports one
-# themselves); the pinned table fills the gap then.
+# (#86): its feature-flag fetch is off, so only each family's current model is offered. The plugin's
+# handshake leaves both unset, so this happens only when the user exports one; the pinned table fills
+# the gap then.
 PRIVACY_PICKER = [
     {"value": "opus", "resolvedModel": "claude-opus-5-5", "displayName": "Opus", "description": "Opus 5.5 · Best for everyday, complex tasks"},
     {"value": "opus[1m]", "resolvedModel": "claude-opus-5-5[1m]", "displayName": "Opus (1M context)", "description": "Opus 5.5 with 1M context"},

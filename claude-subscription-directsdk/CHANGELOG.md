@@ -2,8 +2,13 @@
 
 ## [0.4.0] - Unreleased
 
+### Changed
+
+- `claude_code_telemetry` is off by default (#331): every Claude Code child starts with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_TELEMETRY` and `DISABLE_ERROR_REPORTING` set unless the setting is turned on, which also takes about 0.25 s off each spawn. The model picker stays complete: its zero-inference `initialize` handshake leaves `DISABLE_TELEMETRY` and the nonessential-traffic flag unset (either one shrinks the CLI picker from 13 rows to 5 on 2.1.319), so it lists the same 12 routes as with telemetry on. A flag you export yourself is kept.
+
 ### Fixed
 
+- `/usage` shows the extra-usage state, usage credits spent, this week's share per surface and the per-model limits beside the plan limits. They were dropped whenever Claude Code answered with `limits`, which current versions always do.
 - `/usage` shows the plan limits with `claude_code_telemetry: false`: the CLI skips its `get_usage` fetch under `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, so the zero-inference usage probe no longer sets that one flag (telemetry and error reporting stay off; a flag the user exported is kept).
 
 ## [0.3.1] - Unreleased

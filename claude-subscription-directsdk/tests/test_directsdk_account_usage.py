@@ -66,7 +66,7 @@ def test_limits_come_from_claude_code_get_usage(cli):
     assert snapshot.windows[0].reset_at == datetime(2026, 10, 1, 7, 9, tzinfo=timezone.utc)
     assert lines[0] == '\U0001F4C8 Claude plan limits' and lines[1] == f'Provider: {PROVIDER}'
     assert lines[2].startswith('Current session: 55% remaining (45% used)')
-    assert snapshot.details == () and snapshot.unavailable_reason is None
+    assert snapshot.unavailable_reason is None
     call, = cli.calls
     assert json.loads(call.input)['request'] == {'subtype': 'get_usage', 'skip_behaviors': True}
     # Behind the unused admission gate (no inference can leave), and under core's 10 s hook deadline.
@@ -78,6 +78,40 @@ def test_a_body_without_limits_reads_the_legacy_windows(cli):
     snapshot, _ = _usage()
     assert [(w.label, w.used_percent) for w in snapshot.windows] == [('Current session', 40.0), ('Current week', 12.0)]
     assert snapshot.details == ('Extra usage: 1.50 / 10.00 EUR',)
+
+
+# The detail get_usage carries beside `limits` on Claude Code 2.1.319 (Max, trimmed from a real answer).
+REAL_2_1_319 = {
+    'limits': [{'kind': 'session', 'percent': 1, 'resets_at': '2026-11-09T09:00:00+00:00', 'scope': None},
+               {'kind': 'weekly_all', 'percent': 35, 'resets_at': '2026-11-10T06:00:00+00:00', 'scope': None}],
+    'extra_usage': {'is_enabled': True, 'monthly_limit': 50, 'used_credits': 12.5, 'currency': 'USD'},
+    'spend': {'used': {'amount_minor': 1250, 'currency': 'USD', 'exponent': 2},
+              'limit': {'amount_minor': 5000, 'currency': 'USD', 'exponent': 2}},
+    'seven_day_breakdown': {'rows': [{'key': 'claude_code', 'display_name': 'Claude Code', 'percent': 99},
+                                     {'key': 'cowork', 'display_name': 'Cowork', 'percent': 1}]},
+    'model_scoped': [{'display_name': 'Fable', 'utilization': 7, 'resets_at': '2026-11-10T06:00:00+00:00'}],
+}
+
+
+def test_usage_detail_is_shown_beside_the_limits(cli):
+    """#331: `limits` is present on current Claude Code, and the extra-usage, spend, per-surface and per-model
+    detail beside it used to be dropped."""
+    cli.reply = _answer(REAL_2_1_319)
+    snapshot, lines = _usage()
+    assert [(w.label, w.used_percent) for w in snapshot.windows] == [
+        ('Current session', 1.0), ('Current week', 35.0), ('Fable week', 7.0)]
+    assert snapshot.details == ('Extra usage: 12.50 / 50.00 USD', 'Usage credits spent: 12.50 USD of 50.00 USD',
+                                'This week by surface: Claude Code 99%, Cowork 1%')
+    assert lines[-3:] == list(snapshot.details)
+
+
+def test_extra_usage_off_is_said_and_a_listed_model_limit_is_not_doubled(cli):
+    body = {**REAL_2_1_319, 'extra_usage': {'is_enabled': False, 'disabled_reason': 'org_level_disabled'},
+            'limits': REAL_2_1_319['limits'] + [{'kind': 'weekly_scoped', 'percent': 7, 'scope': {'model': {'display_name': 'Fable'}}}]}
+    cli.reply = _answer(body)
+    snapshot, _ = _usage()
+    assert [w.label for w in snapshot.windows].count('Fable week') == 1
+    assert snapshot.details[0] == 'Extra usage: off (org_level_disabled)'
 
 
 def test_works_with_adopt_external_logins_off_and_follows_the_profile_login(cli, monkeypatch):
@@ -105,11 +139,10 @@ def test_failures_name_the_reason(cli, reply, reason):
 
 
 def test_quiet_mode_still_fetches_limits(cli, monkeypatch):
-    # claude_code_telemetry: false must not blind /usage: the CLI skips get_usage under the
+    # The default (telemetry off) must not blind /usage: the CLI skips get_usage under the
     # nonessential-traffic flag, so the probe drops that one flag and keeps the rest of the quiet set.
     import directsdk_setup
     monkeypatch.delenv('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', raising=False)
-    monkeypatch.setattr(directsdk_setup, 'telemetry_enabled', lambda: False)
     cli.reply = _answer(LEGACY)
     limits, reason = directsdk_setup.fetch_usage()
     assert reason is None and limits == LEGACY

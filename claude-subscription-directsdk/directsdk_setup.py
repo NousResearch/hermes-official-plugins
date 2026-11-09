@@ -4,9 +4,10 @@ Neither sends a Messages request: ``auth status`` reads the local credential sto
 ``initialize`` handshake enumerates the picker without one: it writes only ``initialize`` and no
 user turn. The handshake runs first-party, because Claude Code serves the account's own picker only
 then, so no relay counts its upstream calls and each row's ``upstream_requests`` is ``None``
-(unobserved). With an inherited auth/backend override it stays behind the relay, which counts them. With the ``claude_code_telemetry`` setting on (the default) the CLI
-fetches its feature flags for the handshake, which is what makes its picker list every model. Anything unexpected returns ``None``/``False`` so callers
-fall back to the pinned catalog rather than failing setup.
+(unobserved). With an inherited auth/backend override it stays behind the relay, which counts them.
+The handshake always fetches the CLI's feature flags, which is what makes its picker list every
+model the account runs. Anything unexpected returns ``None``/``False`` so callers fall back to the
+pinned catalog rather than failing setup.
 """
 import json
 import os
@@ -58,9 +59,12 @@ def _resolve(command, env):
 PLUGIN_ID = "claude-subscription-directsdk-experimental"
 TELEMETRY_SETTING = "claude_code_telemetry"
 CONFIG_DIR_SETTING = "claude_config_dir"
-# Any one of these turns off Claude Code's feature-flag fetch, and with it every model its picker
-# only offers through a flag (#86: 11 models become 5). Off only when the user turns the setting off.
+# Set on every child unless the user turns claude_code_telemetry on (#331).
 QUIET_TRAFFIC = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1"}
+# Either one turns off the feature-flag fetch that the account's own picker needs (2.1.319: 13 rows
+# become 5, #86) and the CLI's get_usage fetch (rate_limits: null). The zero-inference picker and
+# usage probes leave them unset unless the user exported one; DISABLE_ERROR_REPORTING stays on.
+FLAG_FETCH_BLOCKERS = ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "DISABLE_TELEMETRY")
 # Never wanted from a child the plugin starts, setting or not: a background self-update of the
 # user's CLI mid-session, and the feedback path (/feedback, /bug, /share, Claude-drafted feedback)
 # that uploads a session to Anthropic. Neither gates feature flags. DISABLE_FEEDBACK_COMMAND is the
@@ -112,11 +116,11 @@ def _setting(key, default=None):
 
 
 def telemetry_enabled():
-    """The active profile's ``claude_code_telemetry`` plugin setting, default on."""
-    value = _setting(TELEMETRY_SETTING, True)
+    """The active profile's ``claude_code_telemetry`` plugin setting, default off."""
+    value = _setting(TELEMETRY_SETTING, False)
     if isinstance(value, str):
-        return value.strip().lower() not in _OFF
-    return value is not False and value != 0
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return isinstance(value, (bool, int)) and bool(value)
 
 
 def apply_config_dir(env):
@@ -142,10 +146,17 @@ def apply_traffic_policy(env, telemetry=None):
     return env
 
 
-def _child_env(env):
+def _child_env(env, *, flag_fetch=False):
+    """The env for a setup probe. ``flag_fetch`` lifts the quiet flags that block the CLI's feature-flag
+    and usage fetches (``FLAG_FETCH_BLOCKERS``), except one the user exported in ``env``."""
     child = drop_api_credentials(dict(env))
     apply_config_dir(child)
-    return apply_traffic_policy(child)
+    apply_traffic_policy(child)
+    if flag_fetch:
+        for key in FLAG_FETCH_BLOCKERS:
+            if key not in env:
+                child.pop(key, None)
+    return child
 
 
 def _plan_label(raw):
@@ -191,7 +202,7 @@ def discover_models(command=None, env=None, timeout=40):
     # account's picker reflects its entitlements.
     if resolved is None or not setup_status(command=resolved, env=env, timeout=timeout)["logged_in"]:
         return None
-    child = _child_env(env)
+    child = _child_env(env, flag_fetch=True)
     # The account's own picker (entitlement-gated models such as Mythos, older models it still runs) is
     # native's served catalog, and native serves it only first-party: behind any ANTHROPIC_BASE_URL,
     # our relay included, it logs `[servedCatalog] off (not_first_party)` and answers a generic list.
@@ -300,10 +311,8 @@ def fetch_usage(command=None, env=None, timeout=8):
         return None, INSTALL_HINT
     child = _child_env(env)
     if "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in env:
-        # The quiet-traffic setting must not blind /usage: with this flag the CLI skips the very fetch
-        # the user just asked for (rate_limits: null on 2.1.302). DISABLE_TELEMETRY and
-        # DISABLE_ERROR_REPORTING stay on, and the probe runs behind the unused admission gate, so
-        # nothing but the plan-limits read leaves. A flag the user exported themselves is kept.
+        # With this flag the CLI skips the very fetch /usage asks for (rate_limits: null). The probe
+        # is zero-inference behind the unused admission gate; DISABLE_TELEMETRY stays on (P#258).
         child.pop("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", None)
     gate = Admission("https://api.anthropic.com", timeout)
     try:

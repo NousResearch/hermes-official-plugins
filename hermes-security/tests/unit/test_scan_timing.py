@@ -40,7 +40,7 @@ def test_the_report_states_total_scan_time():
     coverage = {'completeness': 'complete', 'gaps': [], 'units': [], 'workers': [], 'standards': {},
                 'files': {'total': 1, 'reviewed': 1, 'deferred': 0, 'unsupported': 0, 'excluded': []}}
     text = render_markdown(manifest, {'findings': []}, coverage, {'chains': []})
-    assert 'Scan time: 4 h 15 min (2026-10-26T20:52:00Z to 2026-10-27T01:07:30Z).' in text
+    assert 'Scan time: 4 h 15 min (2026-10-26 20:52 to 2026-10-27 01:07 UTC).' in text
 
 
 def test_scan_reads_carry_timing(tmp_path):

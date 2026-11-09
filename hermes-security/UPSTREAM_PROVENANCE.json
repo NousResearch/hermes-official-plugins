@@ -55,7 +55,7 @@
       "license": "Apache-2.0",
       "modified": true,
       "sourceSha256": "1b24978a3cdb3c336ac27a2b39fb35457bade13a4aad0782710fe38ac39965cf",
-      "destinationSha256": "4ef82f3ce6158c5199e9ca08394ec25b2a96441ebaf39d090adf9cf7690c30bd"
+      "destinationSha256": "53611f4ce013ee069b31a00a60f9426ff9624277b4c0e48e9bca783ba7304136"
     },
     {
       "source": "scripts/finalize_scan_contract.py",

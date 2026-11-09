@@ -109,7 +109,7 @@ def test_fenced_code_is_exact_and_prose_is_escaped():
     f['codeEvidence'][0]['code'] = code
     f['rootCause'] = '<script>bad</script>'
     text = render_markdown(d['manifest'], d['findings_doc'], d['coverage'], d['chains_doc'])
-    assert '````\n' + code + '````' in text
+    assert '````python\n' + code + '````' in text
     assert '\\<script\\>bad\\</script\\>' in text
 
 

@@ -211,14 +211,8 @@ def test_tightening_never_follows_a_symlink_swapped_in_after_the_mkdir(tmp_path,
     assert stat.S_IMODE(victim.stat().st_mode) == before, "chmod followed the swapped-in symlink"
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows has no uid; the path is keyed by USERNAME")
-def test_windows_clients_share_one_workspace_in_the_users_own_temp(tmp_path, monkeypatch):
+def test_the_windows_workspace_is_shared_per_user_and_refused_outside_their_profile(tmp_path, monkeypatch):
     # Without a uid every Windows process used a fresh mkdtemp, so message 1 moved on every gateway restart.
-    assert native.shared_workdir() == native.shared_workdir()
-    assert Path(native.shared_workdir()).name == "claude-directsdk-cwd-" + os.environ["USERNAME"]
-
-
-def test_the_windows_workspace_is_refused_outside_the_users_profile(tmp_path, monkeypatch):
     profile, shared = tmp_path / "profile", tmp_path / "shared-temp"
     for path in (profile, shared):
         path.mkdir()

@@ -21,7 +21,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import directsdk
-import directsdk_setup
 
 CLAUDE = os.environ.get('CLAUDE_CODE_BIN') or shutil.which('claude')
 pytestmark = pytest.mark.skipif(not CLAUDE, reason='needs the Claude Code CLI')
@@ -135,45 +134,40 @@ def session_pids(c):
 # so every session restarted after its first step (two processes per conversation, slower than per-call).
 @pytest.mark.parametrize('login', ['api_key', 'claude_ai'])
 def test_kept_session_sends_the_same_bytes_as_one_shots(home, upstream, monkeypatch, caplog, login):
+    """One kept process serves the conversation with the bytes per-call sends; a diverged history (a compaction-like
+    edit) restarts it and still matches per-call; past the cap another agent runs per-call with the same bytes."""
     one_shot = client(home, upstream, monkeypatch, session=False, login=login)
     history = converse(one_shot)
     one_shot.close()
     expected, upstream.bodies = list(upstream.bodies), []
-    kept, pids = client(home, upstream, monkeypatch, session=True, login=login), []
+    kept, pids, other = client(home, upstream, monkeypatch, session=True, cap=1, login=login), [], None
     try:
         with caplog.at_level('INFO', logger=directsdk.logger.name):
             assert converse(kept, on_step=lambda: pids.append(session_pids(kept))) == history
-    finally:
-        kept.close()
-    assert len(expected) == 6 and upstream.bodies == expected
-    # One process served the whole conversation, and it never diverged.
-    assert len(set().union(*pids)) == 1
-    assert not [r for r in caplog.records if 'diverged' in r.getMessage()]
-
-
-def test_a_diverged_history_restarts_and_stays_byte_identical(home, upstream, monkeypatch):
-    kept = client(home, upstream, monkeypatch, session=True)
-    try:
-        history = converse(kept, turns=('go',))
+        assert len(expected) == 6 and upstream.bodies == expected
+        # One process served the whole conversation, and it never diverged.
+        assert len(set().union(*pids)) == 1
+        assert not [r for r in caplog.records if 'diverged' in r.getMessage()]
+        other, upstream.bodies = directsdk.Client(command=kept.command, timeout=60, env=kept.env), []
+        assert converse(other) == history and not session_pids(other)
+        assert upstream.bodies == expected
         first = session_pids(kept)
-        # Compaction-like edit of an earlier message: the kept process no longer holds this history.
         history[1] = {'role': 'user', 'content': 'go (summarised)'}
         history.append({'role': 'user', 'content': 'next'})
         kept.create(model=MODEL, messages=history, tools=TOOLS, max_tokens=1000)
         assert session_pids(kept) and session_pids(kept) != first
+        after, upstream.bodies = upstream.bodies[-1], []
+        other.create(model=MODEL, messages=history, tools=TOOLS, max_tokens=1000)
+        assert upstream.bodies == [after]
     finally:
         kept.close()
-    after = upstream.bodies[-1]
-    upstream.bodies = []
-    fresh = client(home, upstream, monkeypatch, session=False)
-    try:
-        fresh.create(model=MODEL, messages=history, tools=TOOLS, max_tokens=1000)
-    finally:
-        fresh.close()
-    assert upstream.bodies == [after]
+        if other is not None:
+            other.close()
 
 
-def test_cancel_mid_stream_kills_the_session_and_the_retry_matches(home, upstream, monkeypatch):
+def test_a_kept_session_never_outlives_its_turn_or_its_owner(home, upstream, monkeypatch):
+    """Cancel mid-stream kills the kept process and the retry sends exactly the interrupted request; a SIGKILLed
+    Hermes takes its session with it (native's stdin closes with the owner)."""
     kept = client(home, upstream, monkeypatch, session=True)
     try:
         history = converse(kept, turns=('go',))
@@ -200,33 +194,15 @@ def test_cancel_mid_stream_kills_the_session_and_the_retry_matches(home, upstrea
     finally:
         kept.close()
     assert upstream.bodies[-1] == upstream.bodies[-2]  # the retry sent exactly the interrupted request
-
-
-def test_past_the_cap_a_step_runs_one_shot(home, upstream, monkeypatch):
-    first, second = client(home, upstream, monkeypatch, session=True, cap=1), None
-    try:
-        converse(first, turns=('go',))
-        assert session_pids(first)
-        second = directsdk.Client(command=first.command, timeout=60, env=first.env)
-        converse(second, turns=('go',))
-        assert not session_pids(second)
-    finally:
-        first.close()
-        if second is not None:
-            second.close()
-    bodies = upstream.bodies
-    assert bodies[:3] == bodies[3:]
-
-
-@pytest.mark.skipif(os.name == 'nt', reason='POSIX SIGKILL of the owner')
-def test_killing_hermes_ends_its_session(home, upstream):
+    if os.name == 'nt':
+        return  # POSIX SIGKILL of the owner
     owner = subprocess.Popen([sys.executable, '-c', f'''
 import sys
 sys.path[:0] = {[str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parent)]!r}
 import test_directsdk_session as t, directsdk, time
 directsdk.session_settings = lambda: (True, 4)
 c = directsdk.Client(command={CLAUDE!r}, timeout=60, env={{"PATH": "{os.defpath}", "HOME": {home!r}, "CLAUDE_CONFIG_DIR": {home!r},
-    "ANTHROPIC_API_KEY": "fixture-key", "ANTHROPIC_BASE_URL": "http://127.0.0.1:{upstream.server_port}", "NO_PROXY": "127.0.0.1",
+    "ANTHROPIC_API_KEY": "***", "ANTHROPIC_BASE_URL": "http://127.0.0.1:{upstream.server_port}", "NO_PROXY": "127.0.0.1",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}})
 c.create(model=t.MODEL, messages=[{{"role": "user", "content": "go"}}], tools=t.TOOLS, max_tokens=1000)
 print(c._session.process.pid, flush=True)
@@ -235,7 +211,6 @@ time.sleep(60)
     pid = int(owner.stdout.readline())
     owner.send_signal(signal.SIGKILL)
     owner.wait()
-    # Native is parked on a tool call; its stdin closes with the owner, which ends a stream-json session.
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline and psutil.pid_exists(pid) and psutil.Process(pid).status() != psutil.STATUS_ZOMBIE:
         time.sleep(.05)

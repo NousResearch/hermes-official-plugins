@@ -183,6 +183,17 @@ def _scoped(get_secret, name):
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+class ClaudeCodeLoggedOut(RuntimeError):
+    """Claude Code refused before any upstream request because it has no usable login where Hermes runs it."""
+    status_code = 401
+
+
+PROFILE_LOGIN_HINT = (f"This profile has no Claude login of its own, and Claude Code would otherwise sign in with the login of "
+                      f"the profile this Hermes process was started for. Give it one: set this profile's {CONFIG_DIR_SETTING} "
+                      f"plugin setting to a logged-in Claude config directory, or put {{0}} (from `claude setup-token`) "
+                      f"in this profile's .env.")
+
+
 def apply_profile_credential(env):
     """Give a child ``env`` (in place) the active profile's Claude login, never another profile's.
 
@@ -190,9 +201,11 @@ def apply_profile_credential(env):
     own value (core's secret scope: a multiplexed gateway never loads a served profile's ``.env`` into
     ``os.environ``) is set on the child. A profile served by a process launched for another one never
     inherits that process's token, gateway headers or config directory (#313); a nonempty
-    ``claude_config_dir`` setting also drops an inherited token so the selected login is used. With
-    multiplexing on and no scope bound, ``UnscopedSecretError`` propagates: no child starts on a guess.
-    ``os.environ`` is never changed and no value is logged.
+    ``claude_config_dir`` setting also drops an inherited token so the selected login is used. A served
+    profile with neither its own token nor its own directory is refused (``ClaudeCodeLoggedOut``): the
+    child would fall back to ``~/.claude`` under the inherited HOME, the launch profile's login. With no
+    scope bound, ``UnscopedSecretError`` propagates: no child starts on a guess. ``os.environ`` is never
+    changed and no value is logged.
     """
     get_secret, routed = _secret_scope()
     for name in PROFILE_SECRETS:
@@ -206,12 +219,16 @@ def apply_profile_credential(env):
     if selected and not (get_secret and _scoped(get_secret, OAUTH_TOKEN_ENV)):
         env.pop(OAUTH_TOKEN_ENV, None)
     if routed and not selected:
+        if get_secret is None:
+            raise UnscopedSecretError(OAUTH_TOKEN_ENV)
         # apply_config_dir read the launch environment; only this profile's own .env may choose.
         own = next(filter(None, (_scoped(get_secret, name) for name in _CONFIG_DIR_ENV)), None)
         if own:
             env["CLAUDE_CONFIG_DIR"] = os.path.expanduser(own)
-        else:
+        elif env.get(OAUTH_TOKEN_ENV):
             env.pop("CLAUDE_CONFIG_DIR", None)
+        else:
+            raise ClaudeCodeLoggedOut(PROFILE_LOGIN_HINT.format(OAUTH_TOKEN_ENV))
     return env
 
 
@@ -355,7 +372,7 @@ def setup_status(command=None, env=None, timeout=20):
     try:
         child = _child_env(env)
         resolve_upstream()  # an unusable gateway setting fails setup, and an opted-in one logs where the login goes
-    except (UnscopedSecretError, ClaudeUpstreamConfigError) as error:
+    except (UnscopedSecretError, ClaudeCodeLoggedOut, ClaudeUpstreamConfigError) as error:
         return {"available": True, "logged_in": False, "plan": "", "detail": str(error), "login_command": login_command}
     try:
         run = subprocess.run(resolved + ["auth", "status"], env=child, stdin=subprocess.DEVNULL,
@@ -393,7 +410,7 @@ def discover_models(command=None, env=None, timeout=40):
     try:
         child = _child_env(env, flag_fetch=True)
         upstream = resolve_upstream()
-    except (UnscopedSecretError, ClaudeUpstreamConfigError):
+    except (UnscopedSecretError, ClaudeCodeLoggedOut, ClaudeUpstreamConfigError):
         return None
     # The account's own picker (entitlement-gated models such as Mythos, older models it still runs) is
     # native's served catalog, and native serves it only first-party: behind any ANTHROPIC_BASE_URL,
@@ -503,7 +520,7 @@ def fetch_usage(command=None, env=None, timeout=8):
     try:
         child = _child_env(env)
         upstream = resolve_upstream()
-    except (UnscopedSecretError, ClaudeUpstreamConfigError) as error:
+    except (UnscopedSecretError, ClaudeCodeLoggedOut, ClaudeUpstreamConfigError) as error:
         return None, str(error)
     if "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in env:
         # With this flag the CLI skips the very fetch /usage asks for (rate_limits: null). The probe

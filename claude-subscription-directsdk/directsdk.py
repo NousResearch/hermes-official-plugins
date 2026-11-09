@@ -30,7 +30,7 @@ try:
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from .process_tree import kill_process_tree, own_process_group, unreaped
     from .directsdk_setup import (
-        INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
+        ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, drop_api_credentials, observe_rate_limit, reap_orphaned_refresh_lock, relay,
         resolve_upstream)
 except ImportError:
@@ -38,7 +38,7 @@ except ImportError:
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from process_tree import kill_process_tree, own_process_group, unreaped
     from directsdk_setup import (
-        INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
+        ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, drop_api_credentials, observe_rate_limit, reap_orphaned_refresh_lock, relay,
         resolve_upstream)
 
@@ -47,11 +47,6 @@ except ImportError:
 class ClaudeCodeMissing(RuntimeError):
     """The official Claude Code CLI this transport drives is not installed (or not on PATH)."""
     status_code = 503
-
-
-class ClaudeCodeLoggedOut(RuntimeError):
-    """Claude Code refused before any upstream request because it has no usable login where Hermes runs it."""
-    status_code = 401
 
 
 class ClaudeAPIError(RuntimeError):

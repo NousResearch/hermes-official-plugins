@@ -9,7 +9,6 @@ import logging
 import os
 import sys
 from contextlib import contextmanager
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -68,17 +67,50 @@ def test_the_profile_token_wins_over_the_gateways(ambient, tmp_path):
 
 
 @pytest.mark.parametrize("scope", [{}, {TOKEN: ""}, {TOKEN: "  "}], ids=["miss", "empty", "blank"])
-@pytest.mark.parametrize("setting", [None, str(Path("login"))])
-def test_a_served_profile_never_inherits_the_gateways_login(ambient, scope, setting):
+def test_a_served_profile_never_inherits_the_gateways_login(ambient, tmp_path, scope):
     """#313: without a token of its own a served profile loses the launch profile's token, gateway headers and
-    config directory, whether or not claude_config_dir is set."""
-    if setting is not None:
-        _set_config_dir(setting)
-    inherited = {TOKEN: AMBIENT, "ANTHROPIC_CUSTOM_HEADERS": "X-Gateway: launch", "CLAUDE_CONFIG_DIR": "/launch/.claude",
+    config directory, and runs on the login its claude_config_dir names."""
+    setting = str(tmp_path / "login")
+    _set_config_dir(setting)
+    inherited = {TOKEN: AMBIENT, "ANTHROPIC_CUSTOM_HEADERS": "X-Gateway: launch", "CLAUDE_CONFIG_DIR": setting,
                  "UNRELATED": "kept"}
     with multiplexed(scope):
-        env = _apply(dict(inherited, CLAUDE_CONFIG_DIR=setting) if setting else dict(inherited))
-    assert env == ({"UNRELATED": "kept", "CLAUDE_CONFIG_DIR": setting} if setting else {"UNRELATED": "kept"})
+        env = _apply(dict(inherited))
+    assert env == {"UNRELATED": "kept", "CLAUDE_CONFIG_DIR": setting}
+
+
+@pytest.mark.parametrize("scope", [{}, {TOKEN: "  "}], ids=["miss", "blank"])
+def test_a_served_profile_with_no_login_of_its_own_is_refused(ambient, scope):
+    """No token and no directory of its own: Claude Code would fall back to ~/.claude under the inherited HOME,
+    the launch profile's login and allowance. Refuse, naming both ways to give the profile a login."""
+    import directsdk
+    with multiplexed(scope), pytest.raises(directsdk.ClaudeCodeLoggedOut) as raised:
+        _apply({TOKEN: AMBIENT, "HOME": "/launch", "CLAUDE_CONFIG_DIR": "/launch/.claude"})
+    assert "claude_config_dir" in str(raised.value) and TOKEN in str(raised.value)
+    assert AMBIENT not in str(raised.value)
+
+
+def test_a_served_profile_with_no_login_never_spawns(ambient, tmp_path, monkeypatch):
+    import directsdk
+    client, seen = _native(tmp_path, monkeypatch)
+    try:
+        with multiplexed({}), pytest.raises(directsdk.ClaudeCodeLoggedOut):
+            client.create(**REQUEST)
+    finally:
+        client.close()
+    assert not (tmp_path / "tokens.jsonl").exists()
+
+
+def test_a_routed_profile_with_no_bound_scope_names_the_scope_error(ambient, monkeypatch, tmp_path):
+    """Routed by a HERMES_HOME override alone (no scope, no multiplexing): core's own scope error, not a TypeError."""
+    from agent.secret_scope import UnscopedSecretError
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    token = set_hermes_home_override(str(tmp_path / "served-profile"))
+    try:
+        with pytest.raises(UnscopedSecretError):
+            _apply({TOKEN: AMBIENT})
+    finally:
+        reset_hermes_home_override(token)
 
 
 def test_a_served_profile_uses_its_own_gateway_headers_and_login_dir(ambient):

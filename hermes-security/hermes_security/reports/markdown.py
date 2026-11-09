@@ -96,7 +96,7 @@ def _dependency_section(check):
                  'reviewed reachability appears in the findings above.')
     leads = check.get('leads', [])
     if leads:
-        rows = [f"| {_text(l.get('name'))} | {_text(l.get('version'))} | {_text(l.get('path'))} | {human_label(l.get('severity', 'unknown'))} | "
+        rows = [f"| {_text(l.get('name'))}{' (development only)' if l.get('devOnly') else ''} | {_text(l.get('version'))} | {_text(l.get('path'))} | {human_label(l.get('severity', 'unknown'))} | "
                 + _text(', '.join(a.get('id', '') for a in l.get('advisories', [])[:4])
                         + (f" +{len(l['advisories']) - 4} more" if len(l.get('advisories', [])) > 4 else '')) + ' |'
                 for l in leads]

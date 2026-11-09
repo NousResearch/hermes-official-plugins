@@ -267,7 +267,7 @@ function AccentPicker({ ctx }: { ctx: any }) {
         />
         <button
           className="shrink-0 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px]"
-          onClick={() => { setAccentOverride(null); try { if (ctx) ctx.storage.set('hermes-accent-picker', null) } catch (e) {} }
+          onClick={() => { setAccentOverride(null); try { if (ctx) ctx.storage.set('hermes-accent-picker', null) } catch (e) {} } }
           type="button"
         >
           reset
@@ -279,7 +279,7 @@ function AccentPicker({ ctx }: { ctx: any }) {
           <button
             className="size-5 rounded-sm border border-(--dt-border)"
             key={swatch.hex}
-            onClick={() => { setAccentOverride(swatch.hex); try { if (ctx) ctx.storage.set('hermes-accent-picker', swatch.hex) } catch (e) {} }
+            onClick={() => { setAccentOverride(swatch.hex); try { if (ctx) ctx.storage.set('hermes-accent-picker', swatch.hex) } catch (e) {} } }
             style={{ background: swatch.hex }}
             title={`${swatch.name} · ${swatch.hex}`}
             type="button"

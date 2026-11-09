@@ -325,3 +325,47 @@ def test_summary_marks_dev_only_leads(tmp_path):
     assert summary['leads'][0]['devOnly'] is True
     plain = dependencies.summarize(report_for(tmp_path), tmp_path, {'web/package-lock.json'})
     assert 'devOnly' not in plain['leads'][0]
+
+
+def test_a_local_dev_helper_package_is_not_a_shipped_root():
+    lock = '''version = 1
+
+[[package]]
+name = "app"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [{ name = "jinja2" }]
+
+[package.dev-dependencies]
+dev = [{ name = "test-tools" }]
+
+[[package]]
+name = "test-tools"
+version = "0.1.0"
+source = { editable = "tools" }
+dependencies = [{ name = "pytest" }]
+
+[[package]]
+name = "pytest"
+version = "8.4.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [{ name = "pluggy" }]
+
+[[package]]
+name = "pluggy"
+version = "1.6.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "jinja2"
+version = "3.1.6"
+source = { registry = "https://pypi.org/simple" }
+'''
+    assert dependencies.dev_only_packages('uv.lock', lambda _: lock) == {'pytest', 'pluggy'}
+    # A local package the app ships (runtime dependency) still ships what it pulls in.
+    shipped = lock.replace('dependencies = [{ name = "jinja2" }]', 'dependencies = [{ name = "jinja2" }, { name = "test-tools" }]', 1)
+    assert dependencies.dev_only_packages('uv.lock', lambda _: shipped) == set()
+    # Two local packages that only list each other as dev tools: nothing is guessed away.
+    cycle = lock.replace('source = { editable = "tools" }\ndependencies = [{ name = "pytest" }]',
+                         'source = { editable = "tools" }\ndependencies = [{ name = "pytest" }]\n\n[package.dev-dependencies]\ndev = [{ name = "app" }]')
+    assert dependencies.dev_only_packages('uv.lock', lambda _: cycle) == set()

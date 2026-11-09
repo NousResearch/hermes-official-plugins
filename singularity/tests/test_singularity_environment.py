@@ -1,7 +1,8 @@
 """The container the backend starts: hardening flags, overlay vs tmpfs, limits, mounts, overlay paths,
 and the exec prefix Bot Desktop / computer_use / the browser use to follow the terminal inside."""
 
-import subprocess
+
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -14,11 +15,10 @@ from tools.environments.path_utils import sanitize_task_id_for_path
 def started(monkeypatch, tmp_path):
     """SingularityEnvironment with the CLI faked: records every argv run_capture gets."""
     calls = []
-    monkeypatch.setattr(singularity_env, "_ensure_singularity_available", lambda: "/usr/bin/apptainer")
+    monkeypatch.setattr(singularity_env, "_ensure_singularity_available", lambda **kw: "/usr/bin/apptainer")
     monkeypatch.setattr(singularity_env, "_get_or_build_sif",
-                        lambda image, executable="apptainer": str(tmp_path / "image.sif"))
-    monkeypatch.setattr(singularity_env, "_register_exit_sweep", lambda: None)
-    monkeypatch.setattr(singularity_env, "run_capture",
+                        lambda image, executable="apptainer", **kw: str(tmp_path / "image.sif"))
+    monkeypatch.setattr(singularity_env.subprocess, "run",
                         lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0, stderr=""))
     monkeypatch.setattr(singularity_env.SingularityEnvironment, "init_session", lambda self: None)
     import tools.credential_files as cf
@@ -55,7 +55,7 @@ def test_nonpersistent_instance_uses_tmpfs_and_no_limits_when_zero(started):
 
 
 def test_failed_start_raises_with_stderr(monkeypatch, started):
-    monkeypatch.setattr(singularity_env, "run_capture",
+    monkeypatch.setattr(singularity_env.subprocess, "run",
                         lambda cmd, **kw: SimpleNamespace(returncode=255, stderr="FATAL: no image"))
     with pytest.raises(RuntimeError, match="no image"):
         started()
@@ -64,7 +64,7 @@ def test_failed_start_raises_with_stderr(monkeypatch, started):
 def test_commands_and_exec_prefix_run_inside_the_instance(monkeypatch, started):
     env, _ = started()
     spawned = []
-    monkeypatch.setattr(singularity_env, "_popen_bash", lambda cmd, stdin_data=None: spawned.append(cmd))
+    monkeypatch.setattr(singularity_env, "_popen_bash", lambda cmd, stdin_data=None, **kw: spawned.append(cmd))
     env._run_bash("echo hi")
     assert spawned[0] == ["/usr/bin/apptainer", "exec", f"instance://{env.instance_id}", "bash", "-c", "echo hi"]
     assert env.exec_prefix(user="root", interactive=False) == [
@@ -90,8 +90,12 @@ def test_overlay_dir_sanitizes_colon_in_task_id(started):
 
 def test_overlay_dir_keeps_safe_task_ids_verbatim(started, tmp_path):
     """Overlays created while the backend lived in core must keep resolving to the same directory."""
+    legacy = tmp_path / "scratch" / "hermes-overlays" / "overlay-default"
+    legacy.mkdir(parents=True)
+    (legacy / "marker").write_text("old-state")
     env, _ = started(persistent_filesystem=True, task_id="default")
     assert env._overlay_dir == tmp_path / "scratch" / "hermes-overlays" / "overlay-default"
+    assert (env._overlay_dir / "marker").read_text() == "old-state"
 
 
 def test_distinct_session_keys_get_distinct_overlay_dirs(started):
@@ -107,25 +111,27 @@ def test_sif_is_built_once_from_a_docker_url_and_reused(monkeypatch, tmp_path):
         builds.append(cmd)
         open(cmd[2], "w").close()
         return SimpleNamespace(returncode=0, stderr="")
-    monkeypatch.setattr(singularity_env, "run_capture", fake_run)
+    monkeypatch.setattr(singularity_env.subprocess, "run", fake_run)
     first = singularity_env._get_or_build_sif("docker://python:3.12", "apptainer")
     second = singularity_env._get_or_build_sif("docker://python:3.12", "apptainer")
-    assert first == second == str(tmp_path / "scratch" / ".apptainer" / "python-3.12.sif")
+    assert first == second
+    assert Path(first).is_file()
     assert len(builds) == 1 and builds[0][:2] == ["apptainer", "build"]
 
 
 def test_failed_sif_build_falls_back_to_the_docker_url(monkeypatch):
-    monkeypatch.setattr(singularity_env, "run_capture",
+    monkeypatch.setattr(singularity_env.subprocess, "run",
                         lambda cmd, **kw: SimpleNamespace(returncode=1, stderr="denied"))
     assert singularity_env._get_or_build_sif("docker://python:3.12") == "docker://python:3.12"
 
 
-def test_exit_sweep_removes_scratch_dirs_only(tmp_path):
+def test_cleanup_preserves_persistent_filesystem(started, tmp_path):
     scratch = tmp_path / "scratch"
-    (scratch / "hermes-overlays" / "overlay-default").mkdir(parents=True)
+    env, _ = started(persistent_filesystem=True)
+    (env._overlay_dir / "marker").write_text("persistent-state")
     (scratch / ".apptainer").mkdir()
-    singularity_env._sweep_scratch_dirs()
-    assert not (scratch / "hermes-overlays").exists()
+    env.cleanup()
+    assert (env._overlay_dir / "marker").read_text() == "persistent-state"
     assert (scratch / ".apptainer").is_dir()
 
 

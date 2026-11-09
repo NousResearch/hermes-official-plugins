@@ -15,6 +15,14 @@ logger = logging.getLogger(__name__)
 _INSTALL_URL = "https://apptainer.org/docs/admin/main/installation.html"
 
 
+def _require_profile_boundary_api() -> None:
+    from agent import secret_scope
+
+    if not callable(getattr(secret_scope, "build_profile_env_boundary", None)):
+        raise RuntimeError("Singularity profile isolation requires the #94878 core boundary API; "
+                           "land/update core before installing this companion patch")
+
+
 def find_singularity_executable() -> Optional[str]:
     """``apptainer`` or ``singularity`` on PATH (apptainer preferred), else None."""
     return next((exe for exe in ("apptainer", "singularity") if shutil.which(exe)), None)
@@ -94,9 +102,12 @@ class SingularityProvider(TerminalEnvironmentProvider):
                          "Install Apptainer: %s", _INSTALL_URL)
             return False
         try:
+            _require_profile_boundary_api()
+            from .singularity_env import _singularity_subprocess_env
             probe = subprocess.run([exe, "--version"], capture_output=True, timeout=5,
-                                   stdin=subprocess.DEVNULL, check=False)
-        except (OSError, subprocess.TimeoutExpired) as exc:
+                                   stdin=subprocess.DEVNULL, check=False,
+                                   env=_singularity_subprocess_env())
+        except (OSError, subprocess.TimeoutExpired, RuntimeError) as exc:
             logger.error("Apptainer/Singularity is installed but `%s --version` failed (%s), "
                          "so the install looks broken", exe, exc)
             return False
@@ -126,6 +137,7 @@ class SingularityProvider(TerminalEnvironmentProvider):
     def create_environment(self, *, cwd: str, timeout: int, task_id: str = "default",
                            image: Optional[str] = None, container_config: Optional[dict[str, Any]] = None,
                            **kwargs: Any):
+        _require_profile_boundary_api()
         from .singularity_env import SingularityEnvironment, check_disk_usage_warning
         cc = container_config or {}
         check_disk_usage_warning()

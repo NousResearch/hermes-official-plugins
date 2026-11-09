@@ -85,14 +85,15 @@ def test_a_cli_that_never_answers_still_fits_cores_hook_deadline(cli, monkeypatc
     hung = threading.Event()
 
     class Hanging:
-        pid, returncode = os.getpid(), None  # not our child: the cleanup kill signals nothing
+        # The Windows shape: the launcher already exited (so the kill skips it) while a child holds stdout open.
+        pid, returncode = os.getpid(), 0
 
         def __init__(self, argv, **kwargs):
             self.stdin = SimpleNamespace(write=lambda _: None, close=lambda: None)
             self.stdout = SimpleNamespace(read=lambda: hung.wait(30) and '')
 
         def poll(self):
-            return None
+            return 0
 
         def wait(self, timeout=None):
             return 0

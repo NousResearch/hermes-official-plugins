@@ -209,23 +209,19 @@ function AccentPicker({ ctx }: { ctx: any }) {
   // never mid-drag, which would fight the user's own pointer.
   const dragging = useRef(false)
   const persist = (val: string | null) => {
-    // ctx.storage (best-effort)
     try { if (ctx && ctx.storage) ctx.storage.set('hermes-accent-picker', val) } catch (e) {}
-    // ctx.files (disk, robust)
     try { if (ctx && ctx.files) void ctx.files.writeText('data', 'accent.txt', val === null ? '' : String(val)) } catch (e) {}
   }
 
   // Restore persisted accent on mount. Prefer ctx.files (real disk, survives restarts)
   // over ctx.storage (localStorage, which the Electron webview may not persist).
-  useLayoutEffect(() => {
+  useEffect(() => {
     let cancelled = false
-    const apply = (val: any) => { if (!cancelled && val) setAccentOverride(val) }
-    // ctx.storage (fast, sync)
+    const apply = (val: any) => { if (!cancelled && val) $accentOverride.set(val) }
     try {
       const saved = ctx && ctx.storage && ctx.storage.get('hermes-accent-picker', null)
       if (saved) apply(saved)
     } catch (e) {}
-    // ctx.files (disk, robust)
     if (ctx && ctx.files) {
       ctx.files.readText('data', 'accent.txt').then((r: any) => {
         if (r && r.ok && r.text) {
@@ -257,7 +253,7 @@ function AccentPicker({ ctx }: { ctx: any }) {
     setLch(next)
     const hex = oklchToHex(next)
     setText(hex)
-    setAccentOverride(hex)
+    $accentOverride.set(hex)
     persist(hex)
     requestAnimationFrame(() => {
       dragging.current = false
@@ -278,7 +274,7 @@ function AccentPicker({ ctx }: { ctx: any }) {
           className="min-w-0 flex-1 rounded-sm border border-(--dt-border) bg-transparent px-1.5 py-0.5 font-mono text-[11px] uppercase"
           onChange={event => {
             setText(event.target.value)
-            setAccentOverride(event.target.value)
+            $accentOverride.set(event.target.value)
             persist(event.target.value)
           }}
           spellCheck={false}
@@ -286,7 +282,7 @@ function AccentPicker({ ctx }: { ctx: any }) {
         />
         <button
           className="shrink-0 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px]"
-          onClick={() => { setAccentOverride(null); persist(null) } }
+          onClick={() => { $accentOverride.set(null); persist(null) } }
           type="button"
         >
           reset
@@ -298,7 +294,7 @@ function AccentPicker({ ctx }: { ctx: any }) {
           <button
             className="size-5 rounded-sm border border-(--dt-border)"
             key={swatch.hex}
-            onClick={() => { setAccentOverride(swatch.hex); persist(swatch.hex) } }
+            onClick={() => { $accentOverride.set(swatch.hex); persist(swatch.hex) } }
             style={{ background: swatch.hex }}
             title={`${swatch.name} · ${swatch.hex}`}
             type="button"

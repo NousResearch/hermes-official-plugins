@@ -137,18 +137,22 @@ def _frame_first(messages, queried):
     first turn exactly as every later request replays it. A cache marker on a dropped block
     moves onto the frame with setdefault, never multiplying.
 
-    Only the conversation's first turn is touched (no assistant message yet), only when the
-    queried frame occurs exactly once, and only when everything before it is plain text.
-    Returns whether the turn changed."""
+    Only the conversation's first turn is touched (no assistant message yet); ``drop_prepended_context``
+    says which blocks go. Returns whether the turn changed."""
     if any(m.get('role') == 'assistant' for m in messages):
         return False
     first = next((m for m in messages if m.get('role') == 'user'), {})
-    content = first.get('content')
-    if not isinstance(content, list) or not queried or len(content) <= len(queried):
+    return drop_prepended_context(first.get('content'), queried)
+
+
+def drop_prepended_context(content, frame):
+    """Drop (in place) the plain text native put before Hermes' ``frame`` in one user turn's ``content``: only when
+    the frame occurs exactly once and everything before it is plain text. Returns whether anything was dropped."""
+    if not isinstance(content, list) or not frame or len(content) <= len(frame):
         return False
-    want = [_plain(b) for b in queried]
-    starts = [k for k in range(len(content) - len(queried) + 1)
-              if [_plain(b) for b in content[k:k + len(queried)]] == want]
+    want = [_plain(b) for b in frame]
+    starts = [k for k in range(len(content) - len(frame) + 1)
+              if [_plain(b) for b in content[k:k + len(frame)]] == want]
     if len(starts) != 1 or starts[0] == 0:
         return False
     k = starts[0]
@@ -578,9 +582,12 @@ def canonical_history(payload, frames):
             if sent.get('role') != frame['type']:
                 return payload
             opens_turn = any(b.get('type') != 'tool_result' for b in frame['message']['content'])
-            # The opening turn's native context and assistant turns are native's own; a new user turn keeps the
-            # per-call transforms that follow.
-            if k == 0 or frame['type'] != 'user' or (k == len(frames) - 1 and opens_turn):
+            # Assistant turns are native's own; a new user turn keeps the per-call transforms that follow.
+            if frame['type'] != 'user' or (k == len(frames) - 1 and opens_turn):
+                continue
+            if k == 0:
+                # A kept native replays its opening turn with the context per-call's _frame_first dropped from it.
+                changed = drop_prepended_context(sent.get('content'), frame['message']['content']) or changed
                 continue
             want = copy.deepcopy(frame['message']['content'])
             got = sent.get('content')

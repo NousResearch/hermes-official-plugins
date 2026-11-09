@@ -88,10 +88,23 @@ def home():
         yield path
 
 
-def client(home, upstream, monkeypatch, session, cap=4):
+EMAIL = 'fixture@example.invalid'
+
+
+def client(home, upstream, monkeypatch, session, cap=4, login='api_key'):
     monkeypatch.setattr(directsdk, 'session_settings', lambda: (session, cap))
+    if login == 'claude_ai':
+        # A claude.ai login with an account email: native prepends the userEmail reminder to the opening user turn.
+        account = Path(home) / '.claude.json'
+        state = json.loads(account.read_text()) if account.exists() else {}
+        state['oauthAccount'] = {'emailAddress': EMAIL, 'accountUuid': '00000000-0000-4000-8000-000000000001',
+                                 'organizationUuid': '00000000-0000-4000-8000-000000000002'}
+        account.write_text(json.dumps(state))
+        credential = {'CLAUDE_CODE_OAUTH_TOKEN': 'sk-ant-oat01-fixture'}
+    else:
+        credential = {'ANTHROPIC_API_KEY': 'fixture-key'}
     return directsdk.Client(command=CLAUDE, timeout=60, env={
-        'PATH': os.defpath, 'HOME': home, 'CLAUDE_CONFIG_DIR': home, 'ANTHROPIC_API_KEY': 'fixture-key',
+        'PATH': os.defpath, 'HOME': home, 'CLAUDE_CONFIG_DIR': home, **credential,
         'ANTHROPIC_BASE_URL': f'http://127.0.0.1:{upstream.server_port}', 'NO_PROXY': '127.0.0.1',
         'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1'})
 
@@ -118,19 +131,24 @@ def session_pids(c):
     return {native.process.pid} if native is not None else set()
 
 
-def test_kept_session_sends_the_same_bytes_as_one_shots(home, upstream, monkeypatch):
-    one_shot = client(home, upstream, monkeypatch, session=False)
+# claude_ai is the live A/B's shape: the kept native replayed its opening turn with the reminder per-call never sent,
+# so every session restarted after its first step (two processes per conversation, slower than per-call).
+@pytest.mark.parametrize('login', ['api_key', 'claude_ai'])
+def test_kept_session_sends_the_same_bytes_as_one_shots(home, upstream, monkeypatch, caplog, login):
+    one_shot = client(home, upstream, monkeypatch, session=False, login=login)
     history = converse(one_shot)
     one_shot.close()
     expected, upstream.bodies = list(upstream.bodies), []
-    kept, pids = client(home, upstream, monkeypatch, session=True), []
+    kept, pids = client(home, upstream, monkeypatch, session=True, login=login), []
     try:
-        assert converse(kept, on_step=lambda: pids.append(session_pids(kept))) == history
+        with caplog.at_level('INFO', logger=directsdk.logger.name):
+            assert converse(kept, on_step=lambda: pids.append(session_pids(kept))) == history
     finally:
         kept.close()
     assert len(expected) == 6 and upstream.bodies == expected
-    # One process served the whole conversation.
+    # One process served the whole conversation, and it never diverged.
     assert len(set().union(*pids)) == 1
+    assert not [r for r in caplog.records if 'diverged' in r.getMessage()]
 
 
 def test_a_diverged_history_restarts_and_stays_byte_identical(home, upstream, monkeypatch):

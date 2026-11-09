@@ -4,6 +4,7 @@
 
 ### Added
 
+- Per-profile `claude_code_entrypoint` choice (`hermes-agent`, the unchanged default, or `sdk-cli`) for every native child, with validation and consistent profile handling across inference, discovery, login checks and `/usage` (#296).
 - Mythos 5.1 (`claude-mythos-5-1[1m]`, 1M) for organizations Anthropic has verified. It is listed only when the account's own picker offers it, never from the pinned catalog, so accounts without access do not see it. Reasoning-off requests ask for the lowest effort instead of a disable Mythos rejects.
 - Per-profile `claude_config_dir` setting selects the Claude login for every native spawn in a multiplexed gateway (#34).
 

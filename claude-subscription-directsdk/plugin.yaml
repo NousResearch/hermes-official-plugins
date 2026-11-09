@@ -18,6 +18,15 @@ external_dependencies:
     check: "claude --version"
     install: "npm install -g @anthropic-ai/claude-code"
 config_schema:
+  claude_code_entrypoint:
+    type: string
+    default: hermes-agent
+    choices: [hermes-agent, sdk-cli]
+    label: Claude Code caller
+    description: >-
+      Caller name for every Claude Code child in this profile. Keep hermes-agent by default,
+      or explicitly select sdk-cli when required by your account. Account eligibility and
+      usage metering may differ; neither choice guarantees subscription coverage.
   claude_config_dir:
     type: string
     default: ""

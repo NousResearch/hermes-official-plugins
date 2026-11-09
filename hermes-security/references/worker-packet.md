@@ -168,6 +168,7 @@ This is documentation, not an observed scan or result to submit. The all-zero sc
           "path": "src/invoices.py",
           "startLine": 1,
           "endLine": 4,
+          "keyLine": 3,
           "code": "def get_invoice(db, invoice_id, user):\n    return db.execute(\n        \"SELECT body FROM invoices WHERE id = ?\", (invoice_id,)\n    ).fetchone()",
           "sha256": "5275c9b2f3d6a0cb909c1b82f23b27482951df1a1a6bcd0142dd87adcf35ecc3",
           "explanation": "invoice_id selects the row; the supplied user is not used before the body is returned."
@@ -247,7 +248,7 @@ This is documentation, not an observed scan or result to submit. The all-zero sc
 
 ## Citation rules
 
-Every `locations` and `codeEvidence` path must be inventory-relative, normalized, without `..` or an absolute prefix. Line ranges are 1-based, inclusive, and inside that snapshot file. Supply exact excerpts, not paraphrases, ellipses, synthetic payloads, or adjacent safe code. The service checks snapshot lines (line-by-line whitespace-trimmed comparison) and rejects mismatches per candidate; do not silently “repair” a cited identifier. Re-read rejected evidence against the same snapshot and preserve the rejection reason. Check the accepted subset even when a tool call itself succeeds.
+Every `locations` and `codeEvidence` path must be inventory-relative, normalized, without `..` or an absolute prefix. Line ranges are 1-based, inclusive, and inside that snapshot file. Give each `codeEvidence` entry a `keyLine`: the one line inside its range that shows the defect (the unchecked call, the missing guard's branch, the sink). Reports name it and keep it when they shorten a long excerpt; a `keyLine` outside the range is rejected. Supply exact excerpts, not paraphrases, ellipses, synthetic payloads, or adjacent safe code. The service checks snapshot lines (line-by-line whitespace-trimmed comparison) and rejects mismatches per candidate; do not silently “repair” a cited identifier. Re-read rejected evidence against the same snapshot and preserve the rejection reason. Check the accepted subset even when a tool call itself succeeds.
 
 Secrets are the sole redaction exception: use the plugin's redacted excerpt representation and fingerprint, never emit a literal secret to get a match. If that representation cannot be verified, record a proof gap and stop the unsafe submission. Hash exact retained excerpt bytes using the provided implementation, never a guessed hash. Cite input, effective control, sink, and meaningful transformation separately when different locations support them. An unchanged snapshot and exact evidence are mandatory even if a worker is confident.
 

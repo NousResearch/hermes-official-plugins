@@ -33,6 +33,9 @@ def check_candidate(raw, *, scan, inventory, attempt_id):
         if type(start) is not int or type(end) is not int or not 1 <= start <= end <= paths[path]['lines']:
             raise ValidationError('citation line range is outside inventory file')
     for evidence in candidate['codeEvidence']:
+        key = evidence.get('keyLine')
+        if key is not None and (type(key) is not int or not evidence['startLine'] <= key <= evidence.get('endLine', evidence['startLine'])):
+            raise ValidationError('keyLine must be a line inside its excerpt')
         if not target.verify_excerpt(scan['root'], evidence['path'], evidence['startLine'], evidence.get('endLine', evidence['startLine']), evidence.get('code'), inventory_paths=set(paths), expected_sha256=paths[evidence['path']]['sha256']):
             raise ValidationError(_excerpt_problem(scan, evidence, paths))
         evidence['sha256'] = sha256_hex(evidence['code'])

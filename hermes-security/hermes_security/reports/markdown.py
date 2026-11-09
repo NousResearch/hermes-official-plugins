@@ -195,20 +195,48 @@ def _fenced(code, language):
     return fence + language + '\n' + code + ('' if code.endswith('\n') else '\n') + fence
 
 
+def _key_index(evidence, count):
+    """The key line's index in the excerpt, when the worker named one inside it."""
+    start, key = evidence.get('startLine'), evidence.get('keyLine')
+    if type(start) is int and type(key) is int and 0 <= key - start < count:
+        return key - start
+    return None
+
+
 def _excerpt(evidence):
-    """The quoted lines, unchanged; a long excerpt shows its head and tail and names the lines left out."""
+    """The quoted lines, unchanged. A long excerpt keeps a window around its key line (else its head
+    and tail) and names every range it leaves out; the key line is also named above the code."""
     code = str(evidence.get('code', ''))
     path = str(evidence.get('path') or '')
     language = _LANGUAGES.get(path.rsplit('.', 1)[-1].lower(), '') if '.' in path.rsplit('/', 1)[-1] else ''
     lines = code.splitlines(keepends=True)
+    start = evidence.get('startLine') if type(evidence.get('startLine')) is int else None
+    key = _key_index(evidence, len(lines))
+    parts = []
+    if key is not None and start is not None:
+        text = lines[key].strip()
+        parts.append(f'Key line {start + key}: ' + (_code(text) if text else 'blank') + '.')
     if len(lines) <= MAX_EXCERPT_LINES:
-        return _fenced(code, language)
-    start = evidence.get('startLine') if isinstance(evidence.get('startLine'), int) else None
-    hidden = len(lines) - EXCERPT_HEAD - EXCERPT_TAIL
-    span = f' (lines {start + EXCERPT_HEAD}–{start + EXCERPT_HEAD + hidden - 1})' if start else ''
-    return (_fenced(''.join(lines[:EXCERPT_HEAD]), language)
-            + f'\n\n*{hidden} lines left out{span}; findings.json has the full excerpt.*\n\n'
-            + _fenced(''.join(lines[-EXCERPT_TAIL:]), language))
+        return '\n\n'.join(parts + [_fenced(code, language)])
+    if key is None:
+        kept = [(0, EXCERPT_HEAD), (len(lines) - EXCERPT_TAIL, len(lines))]
+    else:
+        low = max(0, min(key - EXCERPT_HEAD, len(lines) - EXCERPT_HEAD - EXCERPT_TAIL - 1))
+        kept = [(low, low + EXCERPT_HEAD + EXCERPT_TAIL + 1)]
+
+    def left_out(a, b):
+        span = f' (lines {start + a}–{start + b - 1})' if start else ''
+        return f'*{b - a} lines left out{span}; findings.json has the full excerpt.*'
+
+    position = 0
+    for a, b in kept:
+        if a > position:
+            parts.append(left_out(position, a))
+        parts.append(_fenced(''.join(lines[a:b]), language))
+        position = b
+    if position < len(lines):
+        parts.append(left_out(position, len(lines)))
+    return '\n\n'.join(parts)
 
 
 def _caveats(finding):

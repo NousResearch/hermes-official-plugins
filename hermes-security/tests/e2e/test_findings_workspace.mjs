@@ -79,6 +79,8 @@ test('numbered code highlights only source-declared locations and never invents 
   assert.deepEqual(plugin.codeLines(finding.codeEvidence[0],finding.locations).map(x=>[x.number,x.highlighted]),[[40,false],[41,true],[42,true],[43,false]])
   assert.deepEqual(plugin.codeLines({...finding.codeEvidence[0],startLine:undefined},finding.locations).map(x=>x.number),[null,null,null,null])
   assert.ok(plugin.codeLines(finding.codeEvidence[0],[{path:'other.ts',startLine:40,endLine:43}]).every(x=>!x.highlighted))
+  // The worker's key line is highlighted on its own.
+  assert.deepEqual(plugin.codeLines({...finding.codeEvidence[0],keyLine:43},[]).map(x=>x.highlighted),[false,false,false,true])
   assert.equal(plugin.codeLines(finding.codeEvidence[0],finding.locations).map(x=>x.text).join('\n'),finding.codeEvidence[0].code)
 })
 test('untested candidates and inconclusive findings are not labeled code-supported or confirmed', () => {

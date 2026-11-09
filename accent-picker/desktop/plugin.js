@@ -1,5 +1,5 @@
 // src/plugin.tsx
-import { $accentOverride as $accentOverride2, PALETTE_AREA, setAccentOverride as setAccentOverride2, STATUSBAR_AREAS } from "@hermes/plugin-sdk";
+import { $accentOverride as $accentOverride2, PALETTE_AREA, STATUSBAR_AREAS } from "@hermes/plugin-sdk";
 
 // src/picker.tsx
 import {
@@ -12,11 +12,10 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-  setAccentOverride,
   useTheme,
   useValue
 } from "@hermes/plugin-sdk";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { jsx, jsxs } from "react/jsx-runtime";
 var SWATCHES = [
   { hex: "#0053FD", name: "Nous blue \xB7 263\xB0 (light seed)" },
@@ -158,10 +157,10 @@ function AccentPicker({ ctx }) {
     } catch (e) {
     }
   };
-  useLayoutEffect(() => {
+  useEffect(() => {
     let cancelled = false;
     const apply = (val) => {
-      if (!cancelled && val) setAccentOverride(val);
+      if (!cancelled && val) $accentOverride.set(val);
     };
     try {
       const saved = ctx && ctx.storage && ctx.storage.get("hermes-accent-picker", null);
@@ -202,7 +201,7 @@ function AccentPicker({ ctx }) {
     setLch(next);
     const hex = oklchToHex(next);
     setText(hex);
-    setAccentOverride(hex);
+    $accentOverride.set(hex);
     persist(hex);
     requestAnimationFrame(() => {
       dragging.current = false;
@@ -221,7 +220,7 @@ function AccentPicker({ ctx }) {
           className: "min-w-0 flex-1 rounded-sm border border-(--dt-border) bg-transparent px-1.5 py-0.5 font-mono text-[11px] uppercase",
           onChange: (event) => {
             setText(event.target.value);
-            setAccentOverride(event.target.value);
+            $accentOverride.set(event.target.value);
             persist(event.target.value);
           },
           spellCheck: false,
@@ -233,7 +232,7 @@ function AccentPicker({ ctx }) {
         {
           className: "shrink-0 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px]",
           onClick: () => {
-            setAccentOverride(null);
+            $accentOverride.set(null);
             persist(null);
           },
           type: "button",
@@ -246,7 +245,7 @@ function AccentPicker({ ctx }) {
       {
         className: "size-5 rounded-sm border border-(--dt-border)",
         onClick: () => {
-          setAccentOverride(swatch.hex);
+          $accentOverride.set(swatch.hex);
           persist(swatch.hex);
         },
         style: { background: swatch.hex },
@@ -307,6 +306,20 @@ var plugin = {
   description: "Pick the theme accent from an OKLCH color picker in the status bar; the palette re-derives live. The choice persists across reloads via ctx.storage.",
   defaultEnabled: false,
   register(ctx) {
+    try {
+      const saved = ctx && ctx.storage && ctx.storage.get("hermes-accent-picker", null);
+      if (saved) $accentOverride2.set(saved);
+    } catch (e) {
+    }
+    if (ctx && ctx.files) {
+      ctx.files.readText("data", "accent.txt").then((r) => {
+        if (r && r.ok && r.text) {
+          const v = r.text.trim();
+          if (v) $accentOverride2.set(v);
+        }
+      }).catch(() => {
+      });
+    }
     ctx.registerMany([
       {
         id: "picker",
@@ -322,7 +335,7 @@ var plugin = {
           label: "Accent: reset to the theme default",
           keywords: ["accent", "color", "theme", "reset", "default"],
           run: () => {
-            setAccentOverride2(null);
+            $accentOverride2.set(null);
             try {
               if (ctx && ctx.storage) ctx.storage.set("hermes-accent-picker", null);
             } catch (e) {

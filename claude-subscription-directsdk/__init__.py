@@ -73,14 +73,15 @@ def _usage_details(payload, windows):
     if used:
         details.append(f'Usage credits spent: {used}' + (f' of {limit}' if limit else ''))
     breakdown = payload.get('seven_day_breakdown') if isinstance(payload.get('seven_day_breakdown'), dict) else {}
-    rows = [row for row in breakdown.get('rows') or () if isinstance(row, dict)]
+    rows = breakdown.get('rows') if isinstance(breakdown.get('rows'), list) else []
+    rows = [row for row in rows if isinstance(row, dict)]
     shares = [f"{row.get('display_name') or row.get('key')} {round(_percent(row.get('percent')))}%"
               for row in rows if _percent(row.get('percent')) is not None]
     if shares:
         details.append('This week by surface: ' + ', '.join(shares))
     # get_usage's model_scoped utilization is a 0-100 percent, like limits[].percent (Fable 0 / 0 on 2.1.319).
     shown = {window.label for window in windows}
-    for row in payload.get('model_scoped') or ():
+    for row in payload.get('model_scoped') if isinstance(payload.get('model_scoped'), list) else ():
         name = row.get('display_name') if isinstance(row, dict) else None
         if isinstance(name, str) and name and f'{name} week' not in shown:
             windows.append(AccountUsageWindow(label=f'{name} week', used_percent=_percent(row.get('utilization')),

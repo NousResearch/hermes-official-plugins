@@ -103,7 +103,7 @@ def observe_usage(key, limits):
     usage is on and an account-wide plan window is full."""
     extra = limits.get("extra_usage") if isinstance(limits.get("extra_usage"), dict) else {}
     full = []
-    for entry in limits.get("limits") or ():
+    for entry in limits.get("limits") if isinstance(limits.get("limits"), list) else ():
         if isinstance(entry, dict) and entry.get("kind") in ("session", "weekly_all"):
             if (usage_percent(entry.get("percent")) or 0) >= 100:
                 full.append(entry.get("resets_at"))

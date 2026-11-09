@@ -172,3 +172,17 @@ def test_missing_claude_code_makes_no_call(cli, monkeypatch, tmp_path):
     monkeypatch.setenv('CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND', str(tmp_path / 'no-such-claude'))
     snapshot, lines = _usage()
     assert cli.calls == [] and lines[-1].startswith('Unavailable: Claude Code is not installed')
+
+
+@pytest.mark.parametrize('details', [{'seven_day_breakdown': {'rows': 7}}, {'model_scoped': True},
+                                     {'seven_day_breakdown': {'rows': 'abc'}, 'model_scoped': 3}])
+def test_a_malformed_detail_container_keeps_the_plan_limits(cli, details):
+    """Greptile 4511161876: a truthy scalar where a list of rows belongs raised and lost the whole snapshot."""
+    import extra_usage
+    cli.reply = _answer({**LIMITS, **details})
+    snapshot, lines = _usage()
+    assert snapshot.unavailable_reason is None
+    assert [w.label for w in snapshot.windows][:2] == ['Current session', 'Current week']
+    # The extra-usage policy reads the same body and must not raise on it either.
+    extra_usage.observe_usage('malformed', {'limits': 5, 'extra_usage': {'is_enabled': True}})
+    extra_usage.reset()

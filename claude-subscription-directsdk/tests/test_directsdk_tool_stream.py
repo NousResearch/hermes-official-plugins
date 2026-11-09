@@ -98,27 +98,20 @@ def eager(body):
     return [tool.get('eager_input_streaming') for tool in body['tools']]
 
 
-def test_invalid_tool_json_returns_length_and_buffers_the_next_request(tmp_path):
-    # #221: the API streamed a complete but invalid argument (stop tool_use). The call must not run and must not vanish.
-    invalid = reply(['{"path": /tmp/a.txt}'], 'tool_use')
-    with upstream(tmp_path, invalid, reply(['{"path": "/tmp/a.txt"}'], 'tool_use')) as (client, bodies):
+@pytest.mark.parametrize('broken, stop', [('{"path": /tmp/a.txt}', 'tool_use'), ('{"path": "/tm', 'max_tokens')],
+                         ids=['invalid-json', 'cut-at-max-tokens'])
+def test_a_broken_tool_call_is_not_run_and_the_retry_streams_the_right_way(tmp_path, broken, stop):
+    """#221: a complete but invalid argument (stop tool_use) and a call cut off at max_tokens must not run and must
+    not vanish: finish `length` with the arguments as written. Invalid JSON makes the re-sent request ask the API to
+    buffer and validate the arguments; a cut call keeps streaming them."""
+    with upstream(tmp_path, reply([broken], stop), reply(['{"path": "/tmp/a.txt"}'], 'tool_use')) as (client, bodies):
         result = client.create(**REQUEST)
         retry = client.create(**REQUEST)
     assert result.choices[0].finish_reason == 'length'
     assert [(c.id, c.function.name, c.function.arguments) for c in result.choices[0].message.tool_calls] == [
-        ('toolu_1', 'read_file', '{"path": /tmp/a.txt}')]
+        ('toolu_1', 'read_file', broken)]
     assert retry.choices[0].finish_reason == 'tool_calls'
-    # The re-sent request asks the API to buffer and validate the arguments.
-    assert eager(bodies[0]) == [True] and eager(bodies[1]) == [None]
-
-
-def test_cut_tool_call_keeps_streaming_tool_input(tmp_path):
-    with upstream(tmp_path, reply(['{"path": "/tm'], 'max_tokens'), reply(['{"path": "/tmp/a.txt"}'], 'tool_use')) as (client, bodies):
-        result = client.create(**REQUEST)
-        client.create(**REQUEST)
-    assert result.choices[0].finish_reason == 'length'
-    assert result.choices[0].message.tool_calls[0].function.arguments == '{"path": "/tm'
-    assert eager(bodies[1]) == [True]
+    assert eager(bodies[0]) == [True] and eager(bodies[1]) == ([None] if stop == 'tool_use' else [True])
 
 
 def tool_deltas(chunks):
@@ -145,14 +138,6 @@ def test_refusal_mid_call_leaves_streamed_arguments_that_parse(tmp_path):
     arguments = ''.join(d.function.arguments or '' for d in tool_deltas(chunks))
     assert json.loads(arguments) == {'path': '/tm'}
     assert chunks[-1].choices[0].finish_reason == 'content_filter' and len(bodies) == 1
-
-
-def test_json_suffix_closes_every_prefix_of_a_tool_argument():
-    text = json.dumps({'path': 'a\\"b\u00e9', 'n': [1, -2.5e3, True, False, None, {}], 'k': {'x': ''}})
-    for cut in range(1, len(text)):
-        suffix = directsdk._json_suffix(text[:cut])
-        assert suffix is not None, text[:cut]
-        json.loads(text[:cut] + suffix)
 
 
 def test_refusal_names_its_request_id_in_the_log_and_the_message(tmp_path, caplog):

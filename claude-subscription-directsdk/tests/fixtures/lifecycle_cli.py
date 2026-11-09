@@ -44,6 +44,8 @@ for line in sys.stdin:
     row = json.loads(line)
     if row.get('shouldQuery') is False:
         print(json.dumps({'type': 'result', 'num_turns': 0, 'is_error': False}), flush=True)
+    elif row.get('type') == 'user':
+        break  # Native queries on the newest frame; stdin stays open for its MCP server.
 print(json.dumps({'type': 'stream_event', 'event': {'type': 'content_block_delta',
       'delta': {'type': 'text_delta', 'text': 'offline-ok'}}}), flush=True)
 print(json.dumps({'type': 'assistant', 'message': {'role': 'assistant',

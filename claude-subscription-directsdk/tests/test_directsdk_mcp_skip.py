@@ -1,4 +1,4 @@
-"""Tool-less requests skip the inert MCP helper entirely (#42)."""
+"""Tool-less requests mount no MCP server (#42); tool requests serve Hermes' tools in-process, with no helper."""
 import json
 import os
 import sys
@@ -49,7 +49,7 @@ def test_a_request_without_tools_skips_the_helper(tmp_path):
     assert seen == {'mcp': {'mcpServers': {}}, 'tools_json': False}
 
 
-def test_a_request_with_tools_still_mounts_the_helper(tmp_path):
+def test_a_request_with_tools_serves_them_in_process(tmp_path):
     client, report = _client(tmp_path)
     tools = [{'type': 'function', 'function': {'name': 'probe', 'description': 'd',
               'parameters': {'type': 'object', 'properties': {}}}}]
@@ -58,5 +58,5 @@ def test_a_request_with_tools_still_mounts_the_helper(tmp_path):
     finally:
         client.close()
     seen = json.loads(report.read_text())
-    assert list(seen['mcp']['mcpServers']) == ['hermes']
-    assert seen['tools_json'] is True
+    # The SDK server runs inside the plugin over native's control protocol: no helper process, no manifest file.
+    assert seen == {'mcp': {'mcpServers': {'hermes': {'type': 'sdk', 'name': 'hermes'}}}, 'tools_json': False}

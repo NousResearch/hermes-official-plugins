@@ -545,6 +545,83 @@ def restore_queried_turn(payload, queried):
         return unmatched()
 
 
+def _fold_replayed_date(messages):
+    """A kept-alive native keeps its per-request date row in its own history and replays it mid-conversation, where
+    the per-call relay folds it into the environment message (``stable_request_context``). Fold it the same way."""
+    env = next((m for m in messages[:2] if m.get('role') == 'system'), None)
+    rows = [i for i, m in enumerate(messages[:-1]) if m is not env and m.get('role') == 'system'
+            and _DATE_LINE.fullmatch(m['content'] if isinstance(m.get('content'), str) else
+                                     m['content'][0].get('text', '') if isinstance(m.get('content'), list) and len(m['content']) == 1 else '')]
+    if env is None or len(rows) != 1 or not isinstance(env.get('content'), str):
+        return False
+    row = messages.pop(rows[0])
+    line = row['content'] if isinstance(row['content'], str) else row['content'][0]['text']
+    if not env['content'].endswith(line):
+        env['content'] += '\n\n' + line
+    return True
+
+
+def canonical_history(payload, frames):
+    """Send every replayed user frame of a kept-alive native exactly as a fresh native replays Hermes' frame.
+
+    Native holds tool results as it built them from MCP replies (text-block lists), and a fresh native replays
+    Hermes' frames verbatim, so the two would differ from the second request on. Mapping is positional over
+    non-system messages; native's cache mark stays; anything that does not line up forwards as is."""
+    try:
+        body = json.loads(payload)
+        messages = body['messages']
+        changed = _fold_replayed_date(messages)
+        convo = [(i, m) for i, m in enumerate(messages) if m.get('role') != 'system']
+        if len(convo) != len(frames):
+            return payload
+        for k, ((i, sent), frame) in enumerate(zip(convo, frames)):
+            if sent.get('role') != frame['type']:
+                return payload
+            opens_turn = any(b.get('type') != 'tool_result' for b in frame['message']['content'])
+            # The opening turn's native context and assistant turns are native's own; a new user turn keeps the
+            # per-call transforms that follow.
+            if k == 0 or frame['type'] != 'user' or (k == len(frames) - 1 and opens_turn):
+                continue
+            want = copy.deepcopy(frame['message']['content'])
+            got = sent.get('content')
+            mark = next((b['cache_control'] for b in got if isinstance(b, dict) and 'cache_control' in b), None) if isinstance(got, list) else None
+            if mark is not None:
+                want[-1].setdefault('cache_control', mark)
+            if got != want:
+                messages[i] = {'role': 'user', 'content': want}
+                changed = True
+        return json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8') if changed else payload
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError):
+        return payload
+
+
+def _unmarked(value):
+    if isinstance(value, dict):
+        return {k: _unmarked(v) for k, v in value.items() if k != 'cache_control'}
+    if isinstance(value, list):
+        return [_unmarked(v) for v in value]
+    return value
+
+
+def extends_previous(gate, payload):
+    """Whether a kept-alive native's request extends the one it sent before (cache marks aside), so the session wire
+    can never break the cache prefix per-call keeps. Records the request when it does."""
+    try:
+        body = _unmarked(json.loads(payload))
+    except ValueError:
+        return False
+    previous = gate.last_forwarded
+    if previous is not None:
+        stable = list(previous['messages'])
+        while stable and stable[-1].get('role') == 'system':
+            stable.pop()  # Native's per-request trailing row, which no later request replays.
+        if any(body.get(k) != previous.get(k) for k in set(body) | set(previous) if k != 'messages') \
+                or body.get('messages', [])[:len(stable)] != stable:
+            return False
+    gate.last_forwarded = body
+    return True
+
+
 class Capture:
     def __init__(self):
         self.message = None
@@ -705,12 +782,23 @@ class Admission:
         self.unrestored = None
         self.capture = Capture()
         self.error_body = b''
+        # A kept-alive native's step: Hermes' frames for canonical_history, and the request extends_previous checks.
+        self.frames = self.last_forwarded = None
+        self.diverged = False
         self.prefix = '/admit/' + secrets.token_urlsafe(32)
         self.server = _Server(('127.0.0.1', 0), Handler)
         self.server.admission = self
         self.url = f'http://127.0.0.1:{self.server.server_port}' + self.prefix
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval':.05}, daemon=True)
         self.thread.start()
+
+    def rearm(self, timeout, queried, frames):
+        """Admit one more request: the next step of the kept-alive native this relay serves."""
+        with self.lock:
+            self.timeout, self.queried, self.frames = timeout, queried, frames
+            self.cancelled, self.used, self.denied, self.auth_retry_used = False, False, 0, False
+            self.request_id = self.status = self.failure = self.unrestored = None
+            self.capture, self.error_body, self.diverged = Capture(), b'', False
 
     def error_text(self):
         """The upstream's own message for a non-200 answer, '' when none was captured."""
@@ -819,6 +907,13 @@ class Handler(BaseHTTPRequestHandler):
         gate.error_body = b''  # The retry's own answer is the one Hermes reports.
         return True
 
+    def _refuse(self, body):
+        self.send_response(400)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self):
         global _gzip_latched
         gate = self.server.admission
@@ -829,12 +924,7 @@ class Handler(BaseHTTPRequestHandler):
         with gate.lock:
             if gate.cancelled or (gate.used and not self._allows_auth_retry()):
                 gate.denied += 1
-                body = b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_MODEL_ADMISSION_CONSUMED"}}'
-                self.send_response(400)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Content-Length', str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                self._refuse(b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_MODEL_ADMISSION_CONSUMED"}}')
                 return
             gate.used = True
         conn = None
@@ -844,6 +934,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = self.rfile.read(int(self.headers['Content-Length']))
             if getattr(gate, 'one_shot', False):
                 payload = drop_message_breakpoints(payload)
+            if gate.frames is not None:
+                payload = canonical_history(payload, gate.frames)
             try:
                 payload = restore_queried_turn(payload, gate.queried)
             except QueriedTurnMismatch as exc:
@@ -855,6 +947,11 @@ class Handler(BaseHTTPRequestHandler):
             payload = pin_message_breakpoint(payload, gate.queried)
             if gate.eager:
                 payload = stream_tool_input(payload)
+            if gate.frames is not None and not extends_previous(gate, payload):
+                # Never worse than per-call: refuse before upstream, as a denial does; the client serves the step anew.
+                gate.diverged = True
+                self._refuse(b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_SESSION_DIVERGED"}}')
+                return
             target = gate.upstream
             conn, upstream_socket = self._connect_upstream()
             if conn is None:

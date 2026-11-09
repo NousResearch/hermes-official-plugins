@@ -148,16 +148,38 @@ function AccentPicker({ ctx }) {
   const [lch, setLch] = useState(() => hexToOklch(painted) ?? { l: 0.5, c: 0.15, h: 260 });
   const [text, setText] = useState(painted);
   const dragging = useRef(false);
-  useLayoutEffect(() => {
+  const persist = (val) => {
     try {
-      const saved = ctx && ctx.storage.get("hermes-accent-picker", null);
-      console.log("[accent-picker] restore:", saved, "ctx:", !!ctx, "storage:", !!(ctx && ctx.storage));
-      if (saved) {
-        setAccentOverride(saved);
-      }
+      if (ctx && ctx.storage) ctx.storage.set("hermes-accent-picker", val);
     } catch (e) {
-      console.error("[accent-picker] restore err", e);
     }
+    try {
+      if (ctx && ctx.files) void ctx.files.writeText("data", "accent.txt", val === null ? "" : String(val));
+    } catch (e) {
+    }
+  };
+  useLayoutEffect(() => {
+    let cancelled = false;
+    const apply = (val) => {
+      if (!cancelled && val) setAccentOverride(val);
+    };
+    try {
+      const saved = ctx && ctx.storage && ctx.storage.get("hermes-accent-picker", null);
+      if (saved) apply(saved);
+    } catch (e) {
+    }
+    if (ctx && ctx.files) {
+      ctx.files.readText("data", "accent.txt").then((r) => {
+        if (r && r.ok && r.text) {
+          const v = r.text.trim();
+          if (v) apply(v);
+        }
+      }).catch(() => {
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
   }, []);
   useEffect(() => {
     try {
@@ -181,14 +203,7 @@ function AccentPicker({ ctx }) {
     const hex = oklchToHex(next);
     setText(hex);
     setAccentOverride(hex);
-    try {
-      if (ctx) {
-        ctx.storage.set("hermes-accent-picker", hex);
-        console.log("[accent-picker] saved", hex);
-      }
-    } catch (e) {
-      console.error("[accent-picker] save err", e);
-    }
+    persist(hex);
     requestAnimationFrame(() => {
       dragging.current = false;
     });
@@ -207,10 +222,7 @@ function AccentPicker({ ctx }) {
           onChange: (event) => {
             setText(event.target.value);
             setAccentOverride(event.target.value);
-            try {
-              if (ctx) ctx.storage.set("hermes-accent-picker", event.target.value);
-            } catch (e) {
-            }
+            persist(event.target.value);
           },
           spellCheck: false,
           value: text
@@ -222,10 +234,7 @@ function AccentPicker({ ctx }) {
           className: "shrink-0 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px]",
           onClick: () => {
             setAccentOverride(null);
-            try {
-              if (ctx) ctx.storage.set("hermes-accent-picker", null);
-            } catch (e) {
-            }
+            persist(null);
           },
           type: "button",
           children: "reset"
@@ -238,10 +247,7 @@ function AccentPicker({ ctx }) {
         className: "size-5 rounded-sm border border-(--dt-border)",
         onClick: () => {
           setAccentOverride(swatch.hex);
-          try {
-            if (ctx) ctx.storage.set("hermes-accent-picker", swatch.hex);
-          } catch (e) {
-          }
+          persist(swatch.hex);
         },
         style: { background: swatch.hex },
         title: `${swatch.name} \xB7 ${swatch.hex}`,
@@ -318,7 +324,12 @@ var plugin = {
           run: () => {
             setAccentOverride2(null);
             try {
-              if (ctx) ctx.storage.set("hermes-accent-picker", null);
+              if (ctx && ctx.storage) ctx.storage.set("hermes-accent-picker", null);
+            } catch (e) {
+            }
+            ;
+            try {
+              if (ctx && ctx.files) void ctx.files.writeText("data", "accent.txt", "");
             } catch (e) {
             }
           }

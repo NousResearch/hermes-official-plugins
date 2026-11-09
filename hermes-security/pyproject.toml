@@ -3,7 +3,7 @@
 # cannot be enabled in two profiles served by the same gateway.
 [project]
 name = "hermes-security"
-version = "0.1.1"
+version = "0.1.2"
 description = "Local repository security review for Hermes"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}

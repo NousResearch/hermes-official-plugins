@@ -101,7 +101,9 @@ def unsafe(kind, tmp_path, monkeypatch):
     root.mkdir(mode=0o700)
     monkeypatch.setattr(native.tempfile, "tempdir", str(root))
     if kind == "no_uid":
+        # No uid and, on Windows, no user name to key the shared path by: only the private fallback is left.
         monkeypatch.delattr(native.os, "getuid", raising=False)
+        monkeypatch.delenv("USERNAME", raising=False)
         return
     shared = shared_path(root)
     if kind == "file":

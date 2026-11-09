@@ -597,8 +597,14 @@ def _loopback(host):
 
 
 def _setting_text(key):
-    value = _setting(key, "")
-    return value.strip() if isinstance(value, str) else ""
+    value = _setting(key, None)
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        # `upstream_proxy: false` is a set but unusable route, not an absent one: going direct could bypass it.
+        raise ClaudeUpstreamConfigError(f"{key} must be a string (got {type(value).__name__}); refusing to send "
+                                        "the Claude login without the route this profile configured")
+    return value.strip()
 
 
 def _upstream_url(raw):
@@ -609,8 +615,8 @@ def _upstream_url(raw):
         host, parts = None, None
     if (not host or parts.username or parts.password or parts.query or parts.fragment
             or not (parts.scheme == "https" or (parts.scheme == "http" and _loopback(host)))):
-        raise ClaudeUpstreamConfigError("upstream_url must be an https:// URL with no user:password@, ?query or "
-                                        "#fragment; refusing to send the Claude login anywhere else")
+        raise ClaudeUpstreamConfigError("upstream_url must be an https:// URL (http:// only for a loopback host) with no "
+                                        "user:password@, ?query or #fragment; refusing to send the Claude login anywhere else")
     return raw.rstrip("/")
 
 

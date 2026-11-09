@@ -132,11 +132,11 @@ hermes config set $S.upstream_proxy http://egress.example.com:3128
 hermes config set $S.upstream_ca_file /etc/ssl/corp-root.pem
 ```
 
-- `upstream_url` replaces `https://api.anthropic.com` for every relay the plugin opens: turns, `/usage` and the picker handshake (which then goes through the relay too, so the picker is Claude Code's generic list rather than the account's own). It must be `https://` with no `user:password@`, query or fragment. **The Claude login's bearer token goes to this host**: one warning per profile and route names it in the log.
+- `upstream_url` replaces `https://api.anthropic.com` for every relay the plugin opens: turns, `/usage` and the picker handshake (which then goes through the relay too, so the picker is Claude Code's generic list rather than the account's own). It must be `https://` (`http://` only for a loopback host) with no `user:password@`, query or fragment. **The Claude login's bearer token goes to this host**: one warning per profile and route names it in the log.
 - `upstream_proxy` is an `http://host:port` CONNECT proxy for that hop; TLS still ends at the upstream host. Its credentials are a secret: put `user:password` in `CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY_AUTH` in the profile's `.env`. With this setting the `HTTPS_PROXY` variables are not used for the relay.
 - `upstream_ca_file` adds a PEM bundle to the system roots; certificate and hostname checks stay on. The warning then says the TLS is inspected.
 - Gateway auth headers go in `ANTHROPIC_CUSTOM_HEADERS` in the profile's `.env`; Claude Code sends them and the relay forwards them. A profile served by a multiplexed gateway gets only its own `.env` values.
-- Fail closed: a setting that is set but invalid (non-HTTPS URL, credentials in a URL, a SOCKS proxy, an unreadable CA file) refuses the turn, `/usage` and setup with an error naming the setting. It never falls back to the direct route.
+- Fail closed: a setting that is set but invalid (a non-HTTPS URL to a non-loopback host, credentials in a URL, a SOCKS proxy, an unreadable CA file, a value that is not a string such as `upstream_proxy: false`) refuses the turn, `/usage` and setup with an error naming the setting. It never falls back to the direct route.
 - An inherited `ANTHROPIC_BASE_URL` stays refused with or without these settings; no environment variable selects the upstream.
 
 ## Ownership and replay

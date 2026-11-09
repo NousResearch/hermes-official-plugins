@@ -150,6 +150,27 @@ def test_a_bad_gateway_setting_refuses_and_never_goes_direct(clean, tmp_path, mo
     assert spawned == []
 
 
+@pytest.mark.parametrize("raw, named", [("upstream_proxy: false", "upstream_proxy"), ("upstream_url: 123", "upstream_url"),
+                                        ("upstream_ca_file: [a.pem]", "upstream_ca_file")])
+def test_a_non_string_gateway_setting_refuses_instead_of_going_direct(clean, tmp_path, raw, named):
+    """Greptile 4511161853: `upstream_proxy: false` read as unset, so the turn went to Anthropic without the
+    organization's required proxy."""
+    import directsdk_setup
+    from hermes_cli.config import get_config_path
+    get_config_path().write_text(f"plugins:\n  enabled: []\n  entries:\n    {PLUGIN_NAME}:\n      settings:\n"
+                                 f"        {raw}\n", encoding="utf-8")
+    with pytest.raises(directsdk_setup.ClaudeUpstreamConfigError, match=named):
+        directsdk_setup.resolve_upstream()
+    with pytest.raises(directsdk_setup.ClaudeUpstreamConfigError, match=named):
+        _turn(tmp_path)
+
+
+def test_an_empty_gateway_setting_is_the_direct_route(clean):
+    import directsdk_setup
+    _settings(upstream_url="", upstream_proxy="  ")
+    assert directsdk_setup.resolve_upstream() == ("https://api.anthropic.com", None, None, False)
+
+
 def test_an_inherited_base_url_stays_refused_with_the_opt_in(clean, tmp_path, monkeypatch):
     _settings(upstream_url="https://gateway.example.com")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://elsewhere.example.com")

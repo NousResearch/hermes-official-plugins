@@ -57,8 +57,8 @@ config_schema:
     label: Organization LLM gateway URL
     description: >-
       Send this profile's Claude requests, /usage and the picker handshake to your organization's gateway
-      instead of https://api.anthropic.com. The Claude login's bearer token goes to this host. https:// only,
-      no user:password, query or fragment. Empty means Anthropic directly. An invalid value refuses every
+      instead of https://api.anthropic.com. The Claude login's bearer token goes to this host. https:// only
+      (http:// only for a loopback host), no user:password, query or fragment. Empty means Anthropic directly. An invalid value refuses every
       request rather than falling back.
   upstream_proxy:
     type: string

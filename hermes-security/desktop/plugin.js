@@ -1152,6 +1152,18 @@ export function StallNotice({ stall, onContinue }) {
     onContinue ? jsx('button', { type: 'button', className: 'hs-link', onClick: onContinue, children: 'Continue' }) : null
   ] })
 }
+// The host refuses a plugin's automatic continue unless the user allowed it once; say how.
+export const AUTO_CONTINUE_SETTING = 'hermes config set plugins.entries.hermes-security.allow_gateway_injection true'
+export function PausedNotice({ onContinue }) {
+  return jsxs('div', { className: 'hs-now', 'data-state': 'stalled', role: 'status', children: [
+    jsx(Icon, { name: 'alert' }),
+    jsxs('span', { children: [
+      'This scan could not continue on its own. Automatic continue is off, or its chat is closed. To turn it on, run ',
+      jsx('code', { children: AUTO_CONTINUE_SETTING }), ' and restart Hermes.'
+    ] }),
+    onContinue ? jsx('button', { type: 'button', className: 'hs-link', onClick: onContinue, children: 'Continue' }) : null
+  ] })
+}
 const LOCAL_WARNING = 'The agent runs small tests from this repo on this computer (in a temporary copy) to check whether findings are real. Only enable this for code you trust.'
 const APP_WARNING = 'Only add an app you own or are allowed to test. The agent may send up to 200 test requests to that address over the next hour; redirects to other sites are never followed.'
 
@@ -1337,7 +1349,8 @@ export function ScanDetail({ id, onBack, onFinding, onDeleted }) {
       finished ? jsx(ReportSummary, { id, scan, coverage: coverage.data }) : null,
       // A finished scan without recorded steps has nothing honest to draw.
       list(scan.progress?.steps).length || !finished ? jsx(Progress, { scan }) : null,
-      active && scan.stall && !pausedWhy(scan) ? jsx(StallNotice, { stall: scan.stall, onContinue: session ? resumeChat : null })
+      active && pausedWhy(scan) === 'could not continue automatically' ? jsx(PausedNotice, { onContinue: session ? resumeChat : null })
+        : active && scan.stall && !pausedWhy(scan) ? jsx(StallNotice, { stall: scan.stall, onContinue: session ? resumeChat : null })
         : active ? jsx(ChatActivity, { sessionId: session?.sessionId, onOpen: session ? openChat : null }) : jsx('div', { style: { height: 12 } }),
       rows.length || finished
         ? jsx(Loading, { query: findings, children: [

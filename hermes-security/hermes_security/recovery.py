@@ -122,7 +122,9 @@ def continue_scan(service, scan, *, interrupted, inject):
     if guard.get('offAt') != key:
         _set_reason(service, scan, PAUSED_OFF)
         service.store.add_event(scan_id, 'autoresume.paused',
-                                'Could not continue automatically: the chat is closed or automatic continue is turned off.',
+                                'Could not continue automatically: automatic continue is off or the chat is closed. '
+                                'Turn it on with `hermes config set plugins.entries.hermes-security.allow_gateway_injection '
+                                'true` and restart Hermes, or press Continue scan.',
                                 {'step': nxt['step'], 'progressKey': key})
     return 'not-delivered'
 

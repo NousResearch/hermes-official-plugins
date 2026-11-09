@@ -685,6 +685,13 @@ test('a stalled open scan says so and why instead of waiting for the agent', () 
   // Paused wins over stalled; no stall reads as running again.
   env.fixtures['/scans/scan_stalled'].reason = 'paused: needs attention'
   assert.match(render(plugin.ScanDetail({ id: 'scan_stalled', onBack() {}, onFinding() {} })), /Paused — needs attention/)
+  // A refused automatic continue names the setting that turns it on.
+  env.fixtures['/scans/scan_stalled'].reason = 'paused: could not continue automatically'
+  const off = render(plugin.ScanDetail({ id: 'scan_stalled', onBack() {}, onFinding() {} }))
+  assert.match(off, /Automatic continue is off, or its chat is closed/)
+  assert.ok(off.includes(plugin.AUTO_CONTINUE_SETTING))
+  assert.equal(plugin.AUTO_CONTINUE_SETTING, 'hermes config set plugins.entries.hermes-security.allow_gateway_injection true')
+  assert.doesNotMatch(off, /Code review has not finished/)
   env.fixtures['/scans/scan_stalled'].reason = null
   env.fixtures['/scans/scan_stalled'].stall = null
   assert.match(render(plugin.ScanDetail({ id: 'scan_stalled', onBack() {}, onFinding() {} })), /Running/)

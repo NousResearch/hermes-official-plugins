@@ -7,7 +7,7 @@ import re
 from collections import Counter
 from .copy import SEVERITIES, _reportable, human_label
 from ..orchestration.standard import SKIP_LABELS
-from ..standards.ledger import asvs_summary
+from ..standards.ledger import asvs_summary, load_cwe_map
 from ..timing import duration_text, elapsed_seconds
 
 
@@ -256,6 +256,41 @@ def _classification(finding):
     return 'Classification: ' + _text(' · '.join(parts)) + '.' if parts else ''
 
 
+PATTERN_MIN = 3   # findings sharing a primary CWE before they are listed as one pattern
+
+
+def _primary_cwe(finding):
+    cwe = (finding.get('taxonomy') or {}).get('cwe') or []
+    return str(cwe[0]) if cwe else None
+
+
+def _units(findings):
+    """A theme's findings as display units: a pattern (shared primary CWE) or a single finding, worst first."""
+    by_cwe = Counter(_primary_cwe(f) for f in findings)
+    units, seen = [], set()
+    for f in findings:
+        cwe = _primary_cwe(f)
+        if cwe and by_cwe[cwe] >= PATTERN_MIN:
+            if cwe not in seen:
+                seen.add(cwe)
+                units.append([g for g in findings if _primary_cwe(g) == cwe])
+        else:
+            units.append([f])
+    return sorted(units, key=lambda u: min(SEVERITIES.index(f['severity']['level']) for f in u))
+
+
+def _pattern_title(unit):
+    cwe = _primary_cwe(unit[0])
+    # The CWE's name from the pinned map, else the plain group the theme gives it.
+    name = (load_cwe_map().get('entries', {}).get(cwe) or {}).get('name') or _theme(unit[0]).lower()
+    return _text(f"{len(unit)} findings: {cwe}" + (f' ({name})' if name else ''))
+
+
+def _severity_span(unit):
+    levels = sorted({f['severity']['level'] for f in unit}, key=SEVERITIES.index)
+    return human_label(levels[0]) + (f' to {human_label(levels[-1]).lower()}' if len(levels) > 1 else '')
+
+
 def _finding_section(number, f):
     severity = human_label(f['severity']['level'])
     validation = f.get('validation', {})
@@ -359,33 +394,52 @@ def render_markdown(manifest: dict, findings_doc: dict, coverage: dict, chains_d
     if incomplete:
         parts.append(_banner(manifest, coverage))
 
-    # Findings, grouped by weakness type: worst theme first, each theme worst finding first.
+    # Findings, grouped by weakness type: worst theme first, each theme worst finding first. Inside a
+    # theme, findings sharing a primary CWE (PATTERN_MIN or more) stay together as one pattern.
     themes = {}
     for f in findings:
         themes.setdefault(_theme(f), []).append(f)
     order = sorted(themes, key=lambda t: (min(SEVERITIES.index(f['severity']['level']) for f in themes[t]),
                                           t == _OTHER_THEME, -len(themes[t]), t))
-    numbered = [(theme, f) for theme in order for f in themes[theme]]
+    units = {theme: _units(themes[theme]) for theme in order}
     totals = Counter(f['severity']['level'] for f in findings)
     parts.append('## Summary')
     if findings:
         counts = ', '.join(f'{totals[s]} {human_label(s).lower()}' for s in SEVERITIES if totals[s])
         parts.append(f"**{_plural(len(findings), 'finding')}:** {counts}.")
-        rows = []
-        for number, (theme, f) in enumerate(numbered, 1):
-            where = _where(f)
-            rows.append(f"| {number} | {human_label(f['severity']['level'])} | [{_text(f.get('title'))}](#finding-{number}) "
-                        f"| {_code(where.rsplit('/', 1)[-1]) if where else ''} "
-                        f"| {_text(_first_sentence(f.get('remediation', {}).get('summary')))} |")
+        rows, number = [], 0
+        for theme in order:
+            for unit in units[theme]:
+                first = number + 1
+                number += len(unit)
+                if len(unit) == 1:
+                    f = unit[0]
+                    where = _where(f)
+                    rows.append(f"| {first} | {human_label(f['severity']['level'])} | [{_text(f.get('title'))}](#finding-{first}) "
+                                f"| {_code(where.rsplit('/', 1)[-1]) if where else ''} "
+                                f"| {_text(_first_sentence(f.get('remediation', {}).get('summary')))} |")
+                else:
+                    rows.append(f"| {first}–{number} | {_severity_span(unit)} | [{_pattern_title(unit)}](#pattern-{first}) "
+                                f"| {len(unit)} places | One fix per place; see the list. |")
         parts.append('| # | Severity | Finding | Where | Fix |\n|---:|---|---|---|---|\n' + '\n'.join(rows))
     else:
         parts.append('No reportable findings.')
     number = 0
     for theme in order:
         parts.append(f"## {theme} ({len(themes[theme])})")
-        for f in themes[theme]:
-            number += 1
-            parts.extend(_finding_section(number, f))
+        for unit in units[theme]:
+            if len(unit) > 1:
+                lines = []
+                for offset, f in enumerate(unit, number + 1):
+                    where = _where(f)
+                    lines.append(f"- [{offset}. {_text(f.get('title'))}](#finding-{offset})"
+                                 + (f' — {_code(where)}' if where else '')
+                                 + f" — {_text(_first_sentence(f.get('remediation', {}).get('summary')))}")
+                parts.append(f'<a id="pattern-{number + 1}"></a>\n\n**{_pattern_title(unit)}.** '
+                             'The same weakness in different places; each place and its fix:\n\n' + '\n'.join(lines))
+            for f in unit:
+                number += 1
+                parts.extend(_finding_section(number, f))
 
     dependency = _dependency_section(manifest.get('dependencyCheck'))
     if dependency:

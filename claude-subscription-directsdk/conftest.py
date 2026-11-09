@@ -52,13 +52,14 @@ def profile(tmp_path, monkeypatch):
 def popen_from_run(run, turns=None):
     """A ``subprocess.Popen`` stand-in that answers through a ``subprocess.run``-style fake, for tests that stub
     the CLI's probes (the plugin spawns its zero-inference probes with Popen so it can own the child). A turn
-    spawn (it alone carries ``--system-prompt-file``) goes to ``turns``, the real Popen, when given."""
+    spawn (it alone carries ``--system-prompt-file``) goes to ``turns``, the real Popen, when given, and so does the
+    ``taskkill`` that ends a kept turn process on Windows (``subprocess.run`` spawns it through this patched name)."""
     class FakePopen:
         # Not our child, so kill_process_tree sees an already-reaped process and signals nothing.
         pid, returncode = os.getpid(), 0
 
         def __new__(cls, argv, **kwargs):
-            if turns is not None and "--system-prompt-file" in argv:
+            if turns is not None and ("--system-prompt-file" in argv or argv[:1] == ["taskkill"]):
                 return turns(argv, **kwargs)
             return super().__new__(cls)
 

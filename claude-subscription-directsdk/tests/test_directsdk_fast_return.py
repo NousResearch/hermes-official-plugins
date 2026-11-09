@@ -230,14 +230,14 @@ def test_max_turns_tools_return_without_reading_exit_code(native_case):
 
 
 def test_a_tool_call_cut_at_max_tokens_returns_finish_length(native_case):
-    """#164: native keeps the unparsable call and answers it locally (error_max_turns, exit 1), but the
-    capture holds only the text: the answer reaches Hermes as finish length, not a failed turn."""
+    """#164: native keeps the unparsable call and answers it locally (error_max_turns, exit 1). The answer reaches
+    Hermes as finish length with the call's raw arguments (never run, the request is re-sent), not a failed turn."""
     with native_case(cut=True, subtype='error_max_turns', is_error=True, exitcode=1,
                      forbid_returncode=True) as state:
         result = state.client.create(**REQUEST)
         assert result.choices[0].finish_reason == 'length'
         assert result.choices[0].message.content == 'FIRST'
-        assert result.choices[0].message.tool_calls is None
+        assert [(c.id, c.function.arguments) for c in result.choices[0].message.tool_calls] == [('toolu_1', '{"path":')]
         assert not state.returncode_reads
         (state.root / 'release').touch()
         wait_for(lambda: state.process not in directsdk._draining)
@@ -259,7 +259,7 @@ def test_a_cut_call_at_max_turns_returns_finish_length_after_native_exits(native
         result = future.result(timeout=3)
         assert result.choices[0].finish_reason == 'length'
         assert result.choices[0].message.content == 'FIRST'
-        assert result.choices[0].message.tool_calls is None
+        assert [(c.id, c.function.arguments) for c in result.choices[0].message.tool_calls] == [('toolu_1', '{"path":')]
         assert state.real.poll() == 1
         assert len(state.calls) == 1 and state.admission.denied == 1
 

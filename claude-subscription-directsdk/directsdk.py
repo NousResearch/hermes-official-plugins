@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import copy
-from collections import deque
+from collections import OrderedDict, deque
 from contextlib import suppress
 import hashlib
 import inspect
@@ -453,6 +453,102 @@ def _fast_eligible(result, admission, stopped, native_error):
                      or bool(admission.capture.unparsed))))
 
 
+# Conversations whose streamed tool input came back invalid: their next requests ask the API to buffer and validate
+# arguments (no eager_input_streaming), as core's Anthropic transport does on the same failure. Bounded; compaction
+# starts a new conversation id, and with it streaming again.
+_BUFFER_TOOL_INPUT = OrderedDict()
+
+
+def _buffer_tool_input(session_id):
+    _BUFFER_TOOL_INPUT[session_id] = True
+    _BUFFER_TOOL_INPUT.move_to_end(session_id)
+    while len(_BUFFER_TOOL_INPUT) > 256:
+        _BUFFER_TOOL_INPUT.popitem(last=False)
+
+
+def offered_tool_name(name, hermes_names):
+    """``(name to carry in native's history, name Hermes runs)`` for a tool_use native streamed."""
+    if name in hermes_names:
+        # Native sometimes drops the prefix on a tool it was offered (#62); carry the offered name so replayed
+        # history does not teach the slip back to the model.
+        name = PREFIX + name
+    elif name.startswith('mcp__') and not name.startswith(PREFIX) and name[5:] in hermes_names:
+        # Or only the server segment (`mcp__tool_call`); restore it so core does not log an auto-repair per call.
+        name = PREFIX + name[5:]
+    # Any other name is the model's (a Tool Search-deferred tool called directly, #39); Hermes answers it.
+    bare = name.removeprefix(PREFIX)
+    return name, hermes_names.get(bare, bare)
+
+
+def _json_suffix(prefix):
+    """A suffix that makes a cut-off JSON text parse, or None. Used only for a refused call's streamed arguments:
+    Hermes cannot take back a streamed fragment, and one it cannot repair turns the refusal into a truncation
+    that it retries. The call is never run."""
+    stack, in_string, escaped, unicode = [], False, False, 0
+    for ch in prefix:
+        if unicode:
+            unicode = unicode - 1 if ch in '0123456789abcdefABCDEF' else 0
+        elif in_string:
+            escaped, in_string, unicode = (False, True, 4 if ch == 'u' else 0) if escaped else (ch == '\\', ch != '"', 0)
+        elif ch == '"':
+            in_string = True
+        elif ch in '{[':
+            stack.append('}' if ch == '{' else ']')
+        elif ch in '}]' and stack:
+            stack.pop()
+    head = '0' * unicode + ('\\' if escaped else '') + ('"' if in_string else '')
+    closers = ''.join(reversed(stack))
+    for filler in ('', 'null', ':null', '"":null', '0', 'e', 'ue', 'rue', 'l', 'll', 'ull', 'se', 'lse', 'alse'):
+        try:
+            json.loads(prefix + head + filler + closers)
+        except ValueError:
+            continue
+        return head + filler + closers
+    return None
+
+
+class _ToolStream:
+    """Stream each tool call to Hermes as native streams it: the header (id and name) at ``content_block_start``,
+    so Hermes shows the tool being prepared at once (#326), then each argument fragment."""
+
+    def __init__(self, hermes_names):
+        self.hermes_names, self.slots, self.raw = hermes_names, {}, {}
+
+    def deltas(self, native):
+        """The ``tool_calls`` deltas for one native stream event, or None when it is not a tool event."""
+        index, block = native.get('index'), native.get('content_block') or {}
+        if native['type'] == 'content_block_start' and block.get('type') == 'tool_use':
+            self.slots[index], self.raw[index] = (len(self.slots), block.get('id')), ''
+            name = offered_tool_name(block.get('name', ''), self.hermes_names)[1]
+            return [{'index': self.slots[index][0], 'id': block.get('id'), 'type': 'function', 'function': {'name': name, 'arguments': ''}}]
+        if index not in self.slots:
+            return None
+        if native.get('delta', {}).get('type') == 'input_json_delta':
+            fragment = native['delta'].get('partial_json', '')
+            self.raw[index] += fragment
+            return [{'index': self.slots[index][0], 'function': {'arguments': fragment}}] if fragment else []
+        if native['type'] == 'content_block_stop' and not self.raw[index].strip():
+            self.raw[index] = '{}'  # A no-argument call streams nothing; Hermes runs '{}'.
+            return [{'index': self.slots[index][0], 'function': {'arguments': '{}'}}]
+        return None
+
+    def streamed(self, call_id):
+        return any(slot[1] == call_id for slot in self.slots.values())
+
+    def close_refused(self):
+        """Deltas that make every refused call's streamed arguments parse, so Hermes still sees one refusal."""
+        out = []
+        for index, (slot, _) in self.slots.items():
+            raw = self.raw[index]
+            try:
+                json.loads(raw)
+            except ValueError:
+                suffix = _json_suffix(raw) if raw.strip() else '{}'
+                if suffix:
+                    out.append({'index': slot, 'function': {'arguments': suffix}})
+        return out
+
+
 def _hand_off(process, admission, reader, err_drain):
     _draining.add(process)
 
@@ -873,7 +969,9 @@ class Client:
                 # One native session per conversation: native names a per-session scratchpad directory in the
                 # environment message near the top of every request, so a new session id per spawn moved the cache
                 # prefix on every call while feature flags are on.
-                command += ['--session-id', conversation_session_id(system, frames)]
+                session_id = conversation_session_id(system, frames)
+                request.admission.eager = session_id not in _BUFFER_TOOL_INPUT
+                command += ['--session-id', session_id]
                 p = request.spawn(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', cwd=self._workdir(), env=env)
                 # Native's stderr is diagnosis, not noise: a gateway-only failure (issue #44)
                 # previously vanished into DEVNULL, and the reporter had to patch the plugin to
@@ -970,6 +1068,7 @@ class Client:
                 send(None)
                 assistants, results, stopped, emitted = [], [], False, ''
                 rate_limit = None
+                tool_stream = _ToolStream(hermes_names)
                 native_error = native_error_code = None
                 fast = False
                 while True:
@@ -1000,7 +1099,10 @@ class Client:
                         if native['type'] == 'message_stop':
                             stopped = True
                         delta = native.get('delta', {})
-                        if delta.get('type') == 'text_delta':
+                        tool_deltas = tool_stream.deltas(native)
+                        if tool_deltas:
+                            yield self._chunk(kwargs['model'], {'tool_calls': tool_deltas})
+                        elif delta.get('type') == 'text_delta':
                             emitted += delta['text']
                             yield self._chunk(kwargs['model'], {'content': delta['text']})
                         elif delta.get('type') == 'thinking_delta':
@@ -1055,23 +1157,21 @@ class Client:
                 calls = []
                 for block in blocks:
                     if block.get('type') == 'tool_use':
-                        # Native built-ins are off (--tools '', inert MCP, dontAsk), so any other name is
-                        # the model's, e.g. a Tool Search-deferred tool called directly (#39). Hermes owns
-                        # validation and answers an unknown name with a recoverable error.
-                        if block['name'] in hermes_names:
-                            # Native sometimes drops the prefix on a tool it was offered (#62); carry the
-                            # offered name so replayed history does not teach the slip back to the model.
-                            block['name'] = PREFIX + block['name']
-                        elif block['name'].startswith('mcp__') and not block['name'].startswith(PREFIX) and block['name'][5:] in hermes_names:
-                            # Native also drops only the server segment (`mcp__tool_call` for
-                            # `mcp__hermes__tool_call`); restore it so core does not log an auto-repair per call.
-                            block['name'] = PREFIX + block['name'][5:]
-                        name = block['name'].removeprefix(PREFIX)
-                        name = hermes_names.get(name, name)
+                        block['name'], name = offered_tool_name(block['name'], hermes_names)
                         calls.append({'id': block['id'], 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(block['input'], separators=(',', ':'), allow_nan=False)}})
-                # Native keeps a call it cannot parse and answers it locally with a parse error, which sets a
-                # follow-up turn --max-turns 1 stops (error_max_turns, exit 1). Whole-dropped calls must behave
-                # like kept ones (#164), so the turn still returns Hermes' finish length.
+                refused = any(a.get('stop_reason') == 'refusal' for a in assistants)
+                parsed_calls = list(calls)
+                # A call whose arguments did not parse (cut at max_tokens, or invalid streamed JSON) reaches Hermes with
+                # its raw arguments and finish length: Hermes never runs a call from a length reply, it re-sends the
+                # request with a larger output cap (#164, #221). A refused call stays out (below).
+                unparsed = [] if refused or not admission.used else admission.capture.unparsed_calls
+                for call_id, native_name, raw in unparsed:
+                    calls.append({'id': call_id, 'type': 'function', 'function': {'name': offered_tool_name(native_name or '', hermes_names)[1], 'arguments': raw}})
+                if unparsed and not any(a.get('stop_reason') == 'max_tokens' for a in assistants):
+                    # Not a cut: the API streamed invalid JSON. This conversation's next requests buffer and validate.
+                    _buffer_tool_input(session_id)
+                # Native answers a call it cannot parse locally, which sets a follow-up turn --max-turns 1 stops
+                # (error_max_turns, exit 1): the same boundary as a kept call.
                 turn_with_calls = bool(calls) or bool(admission.capture.unparsed)
                 boundary = turn_with_calls and final.get('subtype') == 'error_max_turns' and (fast or proc_returncode == 1)
                 if not boundary and not native_failure_handled and ((not fast and proc_returncode != 0) or final.get('is_error') or final.get('subtype') != 'success'):
@@ -1091,12 +1191,11 @@ class Client:
                 # recovery nudges the model on, as before summarized display. The signed thinking still replays.
                 message = {'role': 'assistant', 'content': text or None, 'tool_calls': calls or None,
                            'reasoning_content': thinking if text or calls else None}
-                carrier = {'type': CARRIER, 'version': 1, 'messages': assistants, 'projection': projection(message)}
+                carrier = {'type': CARRIER, 'version': 1, 'messages': assistants, 'projection': projection({**message, 'tool_calls': parsed_calls or None})}
                 message['reasoning_details'] = [carrier]
                 # An upstream refusal is Hermes' content_filter, as core's Anthropic transport maps it (even with a tool
                 # call cut off by the classifier, which must not run): terminal, one fallback try, never retried as an
                 # empty reply. Its reason rides stop_details, not a content block.
-                refused = any(a.get('stop_reason') == 'refusal' for a in assistants)
                 if refused:
                     details = next((a['stop_details'] for a in assistants if isinstance(a.get('stop_details'), dict)), {})
                     explanation, category = details.get('explanation'), details.get('category')
@@ -1115,9 +1214,12 @@ class Client:
                     normalized_usage['native_admission']['rate_limit'] = rate_limit
                 if admission.unrestored:
                     normalized_usage['native_admission']['unrestored'] = admission.unrestored
-                finish = 'content_filter' if refused else 'tool_calls' if calls else ('length' if any(a.get('stop_reason') in ('max_tokens', 'model_context_window_exceeded') for a in assistants) else 'stop')
+                finish = 'content_filter' if refused else 'length' if unparsed else 'tool_calls' if calls else ('length' if any(a.get('stop_reason') in ('max_tokens', 'model_context_window_exceeded') for a in assistants) else 'stop')
                 response = obj({'id': assistants[-1].get('id', 'claude-native'), 'model': kwargs['model'], 'object': 'chat.completion', 'choices': [{'index': 0, 'finish_reason': finish, 'message': message}], 'usage': normalized_usage})
-                chunk = self._chunk(kwargs['model'], {'content': None, 'tool_calls': [dict(tc, index=i) for i, tc in enumerate(calls)] or None, 'reasoning_details': [carrier], **({'refusal': message['refusal']} if refused else {})}, finish, normalized_usage)
+                # Calls already streamed are not repeated; a refused one gets only what makes its arguments parse.
+                late = tool_stream.close_refused() if refused else [
+                    dict(tc, index=len(tool_stream.slots) + i) for i, tc in enumerate(c for c in calls if not tool_stream.streamed(c['id']))]
+                chunk = self._chunk(kwargs['model'], {'content': None, 'tool_calls': late or None, 'reasoning_details': [carrier], **({'refusal': message['refusal']} if refused else {})}, finish, normalized_usage)
                 chunk._response = response
                 # Fast return removes these per-request files while native drains: safe on POSIX;
                 # ignore_cleanup_errors already tolerates files still held open on Windows.

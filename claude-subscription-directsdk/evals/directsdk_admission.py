@@ -28,6 +28,9 @@ def events(mode):
         blocks = [{'type':'thinking', 'thinking':'fixture thought', 'signature':'fixture-signature'}]
     if mode in ('tools', 'tool_max'):
         blocks += [{'type':'tool_use', 'id':'host_tool_1', 'name':'mcp__hermes__read_file', 'input':{'path':'fixture.txt'}}]
+    if mode == 'bad_tool':
+        # The API streamed a complete but invalid argument (#221); a string input stands for its raw text below.
+        blocks += [{'type':'tool_use', 'id':'host_tool_1', 'name':'mcp__hermes__read_file', 'input':'{"path": fixture.txt}'}]
     if mode == 'unknown_tool':
         # A Tool Search-deferred tool called directly by the name tool_describe showed (#39).
         blocks += [{'type':'tool_use', 'id':'host_tool_1', 'name':'mcp__fastmail__draft_email', 'input':{'to':'fixture'}}]
@@ -39,11 +42,11 @@ def events(mode):
         for field in fields:
             delta = {'type':field+'_delta', field:block[field]}
             if field == 'input':
-                delta = {'type':'input_json_delta', 'partial_json':json.dumps(block['input'])}
+                delta = {'type':'input_json_delta', 'partial_json':block['input'] if isinstance(block['input'], str) else json.dumps(block['input'])}
             yield {'type':'content_block_delta', 'index':i, 'delta':delta}
         yield {'type':'content_block_stop', 'index':i}
     if mode != 'disconnect':
-        stop = {'max':'max_tokens', 'tool_max':'max_tokens', 'context':'model_context_window_exceeded', 'tools':'tool_use', 'unknown_tool':'tool_use', 'refusal':'refusal'}.get(mode, 'end_turn')
+        stop = {'max':'max_tokens', 'tool_max':'max_tokens', 'context':'model_context_window_exceeded', 'tools':'tool_use', 'unknown_tool':'tool_use', 'bad_tool':'tool_use', 'refusal':'refusal'}.get(mode, 'end_turn')
         yield {'type':'message_delta', 'delta':{'stop_reason':stop, 'stop_sequence':None}, 'usage':USAGE}
         yield {'type':'message_stop'}
 
@@ -91,7 +94,7 @@ def run(binary):
     binary = str(Path(binary).absolute())
     before = hashlib.sha256(Path(binary).read_bytes()).hexdigest()
     rows = []
-    for mode in ('final', 'tools', 'max', 'tool_max', 'context', 'thinking', 'refusal', 'error', 'disconnect', 'cancel', 'unknown_tool'):
+    for mode in ('final', 'tools', 'max', 'tool_max', 'context', 'thinking', 'refusal', 'error', 'disconnect', 'cancel', 'unknown_tool', 'bad_tool'):
         with tempfile.TemporaryDirectory(prefix='directsdk-admission-eval-') as home:
             peer = ThreadingHTTPServer(('127.0.0.1', 0), Peer)
             peer.mode, peer.requests, peer.bodies = mode, 0, []
@@ -126,6 +129,10 @@ def run(binary):
                             assert blocks[0]['signature'] == 'fixture-signature'
                         elif mode in ('tools', 'tool_max'):
                             assert result.choices[0].message.tool_calls[0].function.name == 'read_file'
+                        elif mode == 'bad_tool':
+                            # Never run: Hermes re-sends a length reply, and the raw arguments show what was cut.
+                            assert result.choices[0].finish_reason == 'length'
+                            assert result.choices[0].message.tool_calls[0].function.arguments == '{"path": fixture.txt}'
                         elif mode == 'unknown_tool':
                             # Hermes' unknown-tool path answers it; the next request replays that exchange.
                             message = result.choices[0].message.model_dump()

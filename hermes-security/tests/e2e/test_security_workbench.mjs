@@ -744,12 +744,15 @@ test('model and subagent pickers reach the scan and its chat; subagents only wit
     assert.deepEqual(create.options.body, { path: '/remote/repo', mode: 'standard', model: 'x/fast', provider: 'openrouter',
       delegate: { backend: 'model_map', name: 'deep' } })
     assert.deepEqual(env.rpc[0], ['session.create', { cwd: '/remote/repo', title: 'Security scan · repo · new', model: 'x/fast', provider: 'openrouter' }])
-    // Default model: the scan records it, the chat is created without a model override.
+    // Default model: the scan records it and its chat is created on it, not on the profile's default.
     env.states = [{ path: '/remote/repo', otherPath: '', changes: false, deep: false, tests: false, folder: '', context: '', model: '', delegate: '' }, null, false]
     env.rpc = []
     await nodes(plugin.NewScan({})).find((n) => n.type === 'button' && n.props.children === 'Start scan').props.onClick()
     assert.deepEqual(env.calls.filter((c) => c.path === '/scans').at(-1).options.body, { path: '/remote/repo', mode: 'standard', model: 'claude-opus-5-5' })
-    assert.deepEqual(env.rpc[0], ['session.create', { cwd: '/remote/repo', title: 'Security scan · repo · new' }])
+    assert.deepEqual(env.rpc[0], ['session.create', { cwd: '/remote/repo', title: 'Security scan · repo · new', model: 'claude-opus-5-5', provider: 'anthropic' }])
+    assert.deepEqual(plugin.chatRoute('x/fast', env.fixtures['model-options']), { model: 'x/fast', provider: 'openrouter' })
+    assert.deepEqual(plugin.chatRoute('unlisted', env.fixtures['model-options']), { model: 'unlisted' })
+    assert.deepEqual(plugin.chatRoute('', env.fixtures['model-options']), {})
     // A titled create reopens the chat holding that title, so each scan of a repo gets its own.
     assert.equal(plugin.scanChatTitle('scan_c9bf4ff6a0f8d33338f432c7', '/remote/repo'), 'Security scan · repo · c9bf4f')
     assert.notEqual(plugin.scanChatTitle('scan_c9bf4ff6a0f8d33338f432c7', '/remote/repo'),

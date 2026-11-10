@@ -754,7 +754,7 @@ export async function continueInChat(id, session) {
 }
 // Start the agent run in its own background chat session and link it to the scan.
 // Falls back to a chat draft when this backend can't create sessions.
-// `route` = { model, provider } picked on the form; omitted = the profile's default model.
+// `route` = { model, provider } picked on the form, or the current chat's model; empty = the profile's default model.
 // The title names the scan: a create whose title an existing chat already holds reopens that
 // chat, so a repo-only title would put every later scan of the repo in its first scan's chat.
 export const scanChatTitle = (id, path) => `Security scan · ${repoName(path)} · ${String(id).replace(/^scan_/, '').slice(0, 6)}`
@@ -856,6 +856,15 @@ export function modelGroups(options) {
     .map((p) => ({ slug: p.slug, name: p.name || p.slug, models: list(p.models).filter((m) => !list(p.unavailable_models).includes(m)) }))
     .filter((p) => p.models.length)
 }
+// The route for "Same as my chats": the model the label names, so the scan's chat runs on it even
+// when the profile's default model is a different one. The provider is named only when it is certain.
+export function chatRoute(currentModel, options) {
+  const model = String(currentModel || '')
+  if (!model) return {}
+  const holders = modelGroups(options).filter((g) => g.models.includes(model)).map((g) => g.slug)
+  const provider = holders.includes(options?.provider) ? options.provider : holders.length === 1 ? holders[0] : ''
+  return { model, ...(provider ? { provider } : {}) }
+}
 export function NewScan({ onClose, onStarted }) {
   const repos = useData('/repositories', { limit: 100, offset: 0 })
   const clones = useData('/clones')
@@ -905,7 +914,7 @@ export function NewScan({ onClose, onStarted }) {
       // still takes a while to read, and giving up early leaves a scan with no session to run it.
       const created = await change('/scans', body, undefined, { timeoutMs: 60000 })
       if (!created.scanId) throw new Error('The scan was not created. Try again.')
-      const run = await launchScan(created.scanId, path, model ? { model, provider } : {})
+      const run = await launchScan(created.scanId, path, model ? { model, provider } : chatRoute(currentModel, models.data))
       if (!run.background) host.notify({ kind: 'info', message: 'Send the drafted message in chat to run the scan.' })
       onStarted?.(created.scanId)
     } catch (e) {

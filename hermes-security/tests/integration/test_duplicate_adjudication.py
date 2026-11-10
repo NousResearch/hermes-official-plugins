@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from hermes_security.errors import ValidationError
+from hermes_security.errors import Conflict, ValidationError
 from hermes_security.reports import verify_bundle
 from hermes_security.service import SecurityService
 from test_end_to_end_static import candidate_for, worker
@@ -99,3 +99,23 @@ def test_a_different_bug_verdict_seals_both_findings_without_the_verdict_fields(
     for finding in doc['findings']:
         assert not VERDICT_FIELDS & set(finding['provenance'])
         assert finding['provenance']['supersedes'] is None
+
+
+def test_a_changed_target_seals_the_open_pair_as_partial_instead_of_stranding_the_scan(tmp_path):
+    service, plan, first, second, kept, other = checked_pair(tmp_path)
+    sid = plan['scanId']
+    step = open_pair(service, sid, kept, other)
+    source = tmp_path / 'repo' / 'app.py'
+    source.write_text(source.read_text() + '\n# edited after the scan started\n')
+    # The changed target accepts no more results, so the verdict the scan asked for cannot arrive.
+    second['provenance']['distinctFrom'] = [kept]
+    with pytest.raises(Conflict, match='snapshot changed'):
+        service.submit_worker_result(worker(plan, [second], attempt=step['attemptId'], role='validator'))
+    final = service.finalize(sid)
+    assert final['status'] == 'partial'
+    assert final['possibleDuplicates'] == [{'candidateIds': sorted([kept, other]), 'path': 'app.py', 'lines': [2, 2]}]
+    assert verify_bundle(Path(final['artifactDir'])) == {'ok': True, 'problems': []}
+    artifacts = Path(final['artifactDir'])
+    gaps = json.loads((artifacts / 'coverage.json').read_text(encoding='utf-8'))['gaps']
+    assert '1 possible duplicate pair(s) were sealed without a same-bug-or-different verdict.' in gaps
+    assert len(json.loads((artifacts / 'findings.json').read_text(encoding='utf-8'))['findings']) == 2

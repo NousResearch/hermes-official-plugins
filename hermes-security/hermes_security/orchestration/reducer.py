@@ -50,7 +50,8 @@ def reduce_candidates(candidates):
                 absorbed.append({'candidateId': row['candidateId'], 'into': winner['candidateId'], 'reason': 'explicit remediation subsumption'})
     # A duplicateOf verdict absorbs its candidate into the survivor it ends at, as if that survivor
     # had subsumed it. Every target is resolved before anything moves, so chains do not depend on order.
-    for row, into in [(row, _survivor(row['candidateId'], same, kept, absorbed)) for row in kept]:
+    dead = {row['candidateId'] for row in unique.values() if row.get('evidenceState') == 'rejected'}
+    for row, into in [(row, _survivor(row['candidateId'], same, kept, absorbed, dead)) for row in kept]:
         if into:
             kept.remove(row)
             for edge in absorbed:
@@ -72,18 +73,19 @@ def reduce_candidates(candidates):
     return result
 
 
-def _survivor(cid, same, kept, absorbed):
+def _survivor(cid, same, kept, absorbed, dead):
     """The retained live candidate a duplicateOf verdict ends at, or None when it must be ignored.
 
     Ignored: it names itself, an unknown or rejected candidate, runs in a cycle, or ends at a
-    candidate that is not live. A target already merged elsewhere is followed to where it went.
+    candidate that is not live. A live target already merged elsewhere is followed to where it
+    went; a rejected one (``dead``) is not, even when a survivor subsumed it.
     """
     rows = {row['candidateId']: row for row in kept}
     merged = {edge['candidateId']: edge['into'] for edge in absorbed}
     seen, current = {cid}, cid
     while True:
         following = merged.get(current) or (same.get(current) if current in rows else None)
-        if following is None or following == current or not (following in rows or following in merged):
+        if following is None or following == current or following in dead or not (following in rows or following in merged):
             break   # nothing further to follow: a self, unknown or rejected target counts as no verdict
         if following in seen:
             return None

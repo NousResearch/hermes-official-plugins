@@ -886,7 +886,12 @@ class SecurityService:
                 raise ValidationError('deployment evidence requires an explicit parent checkpoint disposition before finalizing')
             reduced = self._reduced(scan_id)
             open_pairs = reducer.possible_duplicates(reduced['retained'], reduced['distinct'])
-            if open_pairs:
+            # A target whose reviewed files changed accepts no more results, so no verdict can
+            # arrive: the scan still seals what it has, as partial, with the open pairs named.
+            stale = not target.is_snapshot_current(scan['target'], scan['snapshot_digest'])
+            diff = target.compare_inventory(scan['target'], self.store.inventory(scan_id)) if stale else None
+            added_only = diff is not None and not diff['changed']
+            if open_pairs and (not stale or added_only):
                 raise ValidationError(f'{len(open_pairs)} possible duplicate pair(s) need a same-bug-or-different verdict from a validator before finalizing; read security_scan_get section next')
             findings, retained, gaps = [], [], []
             for row in reduced['retained'] + reduced['rejected']:
@@ -915,12 +920,13 @@ class SecurityService:
             if receipt and receipt.get('status') == 'not_run':
                 # Requested but unavailable: known-vulnerable dependencies were not checked.
                 gaps.append(dependencies.describe(receipt))
-            if not target.is_snapshot_current(scan['target'], scan['snapshot_digest']):
-                diff = target.compare_inventory(scan['target'], self.store.inventory(scan_id))
-                if diff is not None and not diff['changed']:
+            if stale:
+                if added_only:
                     gaps.append(f"{len(diff['added'])} files were added after this scan started and were not reviewed.")
                 else:
                     gaps.append('Target changed after this recorded snapshot; evidence describes the original snapshot only.')
+            if open_pairs:
+                gaps.append(f'{len(open_pairs)} possible duplicate pair(s) were sealed without a same-bug-or-different verdict.')
             if gaps:
                 coverage['gaps'].extend(gaps)
                 coverage['completeness'] = 'partial'
@@ -954,7 +960,7 @@ class SecurityService:
             self.store.seal(scan_id, manifest['seal']['digest'], str(directory))
             self.store.add_event(scan_id, 'scan.finalized', 'Verified bundle sealed.', {'status': manifest['status']})
             return {'scanId': scan_id, 'status': manifest['status'], 'manifest': manifest, 'artifactDir': str(directory), 'verified': verified,
-                    'possibleDuplicates': open_pairs}   # always empty here: open pairs are refused above
+                    'possibleDuplicates': open_pairs}   # empty unless a changed target sealed with pairs open
 
     def cancel(self, scan_id):
         with self._mutation(scan_id, canceled=True):

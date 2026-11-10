@@ -1,0 +1,30 @@
+name: details-summary
+label: Details Summary
+version: 0.1.0
+manifest_version: 2
+kind: standalone
+author: NousResearch
+license: MIT
+homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/details-summary
+description: >
+  Every pull request body the agent writes gets a short, plain opener a human can read in ten
+  seconds, with the full agent-written description folded into
+  <details><summary>model + effort</summary>. A system prompt section tells the model the shape and
+  how to write the opener; a pre_tool_call hook blocks gh pr create / gh pr edit / gh api pulls
+  writes (and GitHub MCP create/update PR tools) whose body does not follow it. Adds
+  `hermes details-summary check <file>`.
+tags: [github, pull-requests, writing]
+requires_hermes: ">=0.23.0"
+provides_tools: []
+provides_hooks: [pre_tool_call]
+config_schema:
+  max_opener_words:
+    type: int
+    default: 60
+    label: Opener word limit
+    description: "Most words allowed above <details>."
+  max_sentence_words:
+    type: int
+    default: 25
+    label: Sentence word limit
+    description: "Most words allowed in one opener sentence."

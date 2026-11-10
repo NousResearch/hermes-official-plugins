@@ -1,0 +1,6 @@
+name: grammarly
+version: 0.1.3
+requires_hermes: ">=0.21.6"
+description: "AI proofreading for the current Hermes Desktop draft, with a preview before corrections are applied."
+author: "Icarus-B4"
+tags: [desktop, composer, writing, proofreading]

@@ -66,7 +66,8 @@ def _result(scan, step, reason, progress_key, items=(), actionable=None, **extra
     if actionable is None:
         actionable = 1 if step in {'chains', 'finalize'} else len(items)
     return {'scanId': scan['scan_id'], 'step': step, 'reason': reason, 'items': items[:ITEM_LIMIT],
-            'total': len(items), 'actionable': actionable, 'progressKey': progress_key, 'how': HOW[step], **extra}
+            'total': len(items), 'actionable': actionable, 'progressKey': progress_key, 'how': HOW[step],
+            'context': (scan.get('options') or {}).get('notes') or '', **extra}
 
 
 def derive(*, scan, packets, attempts, dispatches, reduced, receipts, chains_recorded, progress_key, now,

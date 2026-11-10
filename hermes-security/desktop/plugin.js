@@ -729,7 +729,8 @@ function ScanRowButton({ row, selected, onSelect, ...props }) {
 }
 export function scanPrompt(id, path) {
   return `Load the hermes-security:security-audit skill and run the existing security scan ${id} for ${path}. ` +
-    'The scan is already started: read it with security_scan_get instead of starting a new one, then work through ' +
+    'The scan is already started: read security_scan_get section summary and honor its user-supplied context, ' +
+    'passing that context unchanged to every reviewer and validator instead of starting a new scan. Work through ' +
     'threat model, code review, validation and attack paths, and finish it with security_scan_finalize.'
 }
 export const continuePrompt = (id) => `Continue security scan ${id}. Read security_scan_get section next, then do that step.`

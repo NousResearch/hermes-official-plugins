@@ -181,6 +181,8 @@ test('start form matches the simple flow and launches the scan in a background c
     assert.equal(started, 'scan_new')
     assert.deepEqual(env.rpc.map(([m]) => m), ['session.create', 'prompt.submit'])
     assert.match(env.rpc[1][1].text, /scan_new/)
+    assert.match(env.rpc[1][1].text, /section summary.*user-supplied context/)
+    assert.match(env.rpc[1][1].text, /context unchanged to every reviewer and validator/)
     assert.deepEqual(env.calls.at(-1).options.body, { sessionId: 'rt_1', storedSessionId: 'st_1' })
     delete env.states
   }

@@ -237,6 +237,7 @@ class SecurityService:
         excluded = scan['options']['excluded']
         return {'scanId': scan['scan_id'], 'root': scan['root'], 'snapshotDigest': scan['snapshot_digest'],
                 'methodologyVersion': METHODOLOGY_VERSION, 'surfaces': scan['options']['surfaces'],
+                'context': scan['options'].get('notes') or '',
                 'specialistProfiles': [{'name': name, 'path': str(refs / 'specialist-profiles' / (name + '.md'))} for name in profiles],
                 'lanes': standard.lanes(), 'applicableControls': ledger.applicable_controls(scan['options']['surfaces']),
                 'packets': self._packets(scan) if packets is None else packets,
@@ -455,7 +456,7 @@ class SecurityService:
             plan = self._plan(scan, packets=[])
             packets = self._packets(scan)
             keep = ('scanId', 'root', 'snapshotDigest', 'methodologyVersion', 'surfaces', 'specialistProfiles',
-                    'workerBriefPath', 'workDir', 'submit', 'inventory', 'status')
+                    'workerBriefPath', 'workDir', 'submit', 'inventory', 'status', 'context')
             return {**{k: plan[k] for k in keep}, 'mode': scan['mode'], 'safetyLevel': scan['safety_level'],
                     'packetCount': len(packets), 'packetIds': [p['packetId'] for p in packets],
                     'laneCount': len(plan['lanes']), 'excludedTotal': plan['excluded']['total'],

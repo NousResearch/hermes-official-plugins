@@ -75,10 +75,17 @@ def _kill(proc):
     except (ProcessLookupError,PermissionError): pass
 
 _SECRET_NAME=('TOKEN','SECRET','PASSWORD','PASSWD','API_KEY','APIKEY','ACCESS_KEY','PRIVATE_KEY','CREDENTIAL','SESSION_KEY')
+# No secret in the name or the value, but each points a tool at one: an agent socket, a
+# credential file or directory, a profile selector, a connection string.
+_CREDENTIAL_POINTER=frozenset({'SSH_AUTH_SOCK','SSH_ASKPASS','GIT_ASKPASS','GNUPGHOME','GPG_AGENT_INFO','KUBECONFIG',
+                               'AWS_PROFILE','AWS_DEFAULT_PROFILE','AWS_CONFIG_FILE','AZURE_CONFIG_DIR','CLOUDSDK_CONFIG',
+                               'DOCKER_CONFIG','NETRC','PGPASSFILE','PGSERVICEFILE','DATABASE_URL'})
 
 def _test_env(cwd):
-    """Run like the user's own shell (PATH, toolchains, HOME) minus credentials."""
-    env={k:v for k,v in os.environ.items() if not any(s in k.upper() for s in _SECRET_NAME)}
+    """Run like the user's own shell (PATH, toolchains, HOME) without the variables that carry or
+    point at credentials. HOME stays, so files under it stay readable: this is not a sandbox."""
+    env={k:v for k,v in os.environ.items()
+         if k.upper() not in _CREDENTIAL_POINTER and not any(s in k.upper() for s in _SECRET_NAME)}
     env.update(TMPDIR=str(cwd),TEMP=str(cwd),TMP=str(cwd))
     return env
 

@@ -1,7 +1,7 @@
 {
   "name": "hermes-security",
   "label": "Security",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Local repository security review with evidence, coverage, and controlled validation.",
   "author": "NousResearch",
   "license": "Apache-2.0",

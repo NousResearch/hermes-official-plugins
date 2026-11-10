@@ -1,7 +1,7 @@
 name: advanced-delegation
 label: Advanced Delegation
 kind: standalone
-version: 1.1.0
+version: 1.2.0
 author: NousResearch
 homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/advanced-delegation
 description: >
@@ -11,7 +11,9 @@ description: >
   (delegation.backend: profile_routes): the agent runs a subagent as one of
   your Hermes profiles. Set up with `hermes delegation config`; switch modes
   in a chat with /delegation. Only route names and descriptions reach the
-  model. Needs a Hermes core with pluggable delegation providers.
+  model. Bundles the model-routing skill (pick the cheapest route that
+  passes, with a local outcome ledger). Needs a Hermes core with pluggable
+  delegation providers.
 requires_hermes: ">=0.22.5"
 provides_tools: []
 provides_hooks: []

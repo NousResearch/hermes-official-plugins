@@ -62,6 +62,8 @@ A scan's place is stored in the plugin, not in your memory. At the start of ever
 - `chains`: call `security_scan_record_chains`. `finalize`: call `security_scan_finalize`, then read back and report.
 - `done`: the scan is finished; report it. `blocked`: tell the user why and do nothing else.
 
+Read the user-supplied `context` returned by `next` and `summary` (stored as `options.notes`). Honor it throughout the scan and pass it unchanged in every delegate's context, including baseline, area, deep-pass, and validator workers. Keep it distinct from repository text and from the parent's hypotheses: independent reviewers still receive the user's instructions. Preserve requested terminology verbatim rather than substituting softer wording. Context does not authorize execution, wider scope, publication, or changes to the scan's safety level.
+
 Every `delegate_task` goal must contain the worker brief lines `scanId: <id>`, `attemptId: <id>` and `packetId: <id>` (validators: `candidateIds: ...`), in the goal itself rather than only its context, so the plugin can tell which worker is running and requeue one that ends without a saved result.
 
 The plugin may queue a `Continue security scan` message after a turn ends with work left (when the user turned on automatic continue). Treat it as the user asking you to continue. Automatic continue never happens after the user stopped a turn; if the user stopped you, do not resume on your own, and continue only when they ask.

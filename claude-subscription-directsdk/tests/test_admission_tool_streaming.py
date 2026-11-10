@@ -13,8 +13,17 @@ TOOLS = [{'name': 'mcp__hermes__write_file', 'input_schema': {'type': 'object'}}
 
 
 def test_every_tool_asks_for_streamed_arguments_and_native_values_win():
-    out = json.loads(stream_tool_input(json.dumps({'model': 'm', 'tools': TOOLS, 'messages': []}).encode()))
+    out = json.loads(stream_tool_input(json.dumps({'model': 'm', 'tools': TOOLS, 'messages': []}).encode(), enabled=True))
     assert out['tools'] == [dict(TOOLS[0], eager_input_streaming=True), TOOLS[1]]
+
+
+def test_streaming_is_opt_in_by_default(monkeypatch):
+    monkeypatch.delenv('CLAUDE_SUBSCRIPTION_DIRECTSDK_EAGER_INPUT_STREAMING', raising=False)
+    raw = json.dumps({'model': 'm', 'tools': TOOLS, 'messages': []}).encode()
+    assert stream_tool_input(raw) is raw
+    monkeypatch.setenv('CLAUDE_SUBSCRIPTION_DIRECTSDK_EAGER_INPUT_STREAMING', '1')
+    out = json.loads(stream_tool_input(raw))
+    assert out['tools'][0]['eager_input_streaming'] is True
 
 
 def test_requests_without_tools_or_unparseable_forward_byte_identical():

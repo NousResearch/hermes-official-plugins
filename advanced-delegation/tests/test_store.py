@@ -179,3 +179,27 @@ def test_validate_route_names_each_daybreak_problem(catalog, change, problem):
 def test_route_summary_marks_daybreak():
     assert store.route_summary(DAYBREAK) == "openai-codex · gpt-6-sol · daybreak"
     assert "daybreak" not in store.route_summary({**DAYBREAK, "daybreak": False})
+
+# --- profile routes in model_map store ------------------------------------------------------
+
+def test_validate_route_accepts_profile_without_model():
+    route = {"name": "code", "description": "Frontier coding.", "profile": "openai"}
+    assert store.validate_route(route, others=[]) == []
+
+
+def test_validate_route_rejects_profile_and_model():
+    route = {"name": "bad", "description": "d", "profile": "openai", "provider": "custom", "model": "gpt-6-sol"}
+    problems = store.validate_route(route, others=[])
+    assert any("both" in p.lower() for p in problems)
+
+
+def test_route_summary_shows_profile_name():
+    route = {"name": "code", "description": "d", "profile": "openai"}
+    assert "openai" in store.route_summary(route)
+
+
+def test_describe_shows_profile_route_in_model_map():
+    text = store.describe({"backend": "model_map", "backends": {"model_map": {
+        "options": [{"name": "code", "description": "Frontier coding.", "profile": "openai"}],
+        "default": "code"}}})
+    assert "code" in text and "openai" in text

@@ -21,7 +21,7 @@ MODE_BLURBS: dict[str, str] = {
 }
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 #: Route keys the editor writes, in the order they are saved.
-ROUTE_KEYS = ("name", "description", "provider", "base_url", "model", "reasoning_effort", "service_tier", "daybreak")
+ROUTE_KEYS = ("name", "description", "provider", "base_url", "model", "reasoning_effort", "service_tier", "daybreak", "profile")
 
 
 def delegation_section(config: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
@@ -198,32 +198,41 @@ def validate_route(route: Mapping[str, Any], others: Sequence[Mapping[str, Any]]
         problems.append(f"Another route is already named {name!r}.")
     if not _text(route.get("description")):
         problems.append("A route needs a one-line description: it is what the agent reads to choose.")
-    if not _text(route.get("model")):
-        problems.append("A route needs a model.")
-    provider = _text(route.get("provider"))
-    if not provider and not _text(route.get("base_url")):
-        problems.append("A route needs a provider or a base_url.")
-    elif provider and not _provider_known(provider):
-        problems.append(f"Unknown provider {provider!r} (see `hermes model` for the providers Hermes knows).")
+    has_profile = bool(_text(route.get("profile")))
+    has_model_fields = bool(_text(route.get("model")) or _text(route.get("provider")) or _text(route.get("base_url")))
+    if has_profile and has_model_fields:
+        problems.append("A route cannot have both profile and model/provider fields; use one or the other.")
+    elif has_profile:
+        pass  # profile route: no model/provider/tier needed
+    else:
+        if not _text(route.get("model")):
+            problems.append("A route needs a model.")
+        provider = _text(route.get("provider"))
+        if not provider and not _text(route.get("base_url")):
+            problems.append("A route needs a provider or a base_url.")
+        elif provider and not _provider_known(provider):
+            problems.append(f"Unknown provider {provider!r} (see `hermes model` for the providers Hermes knows).")
+        tier = _tier_problem(route) if not problems else ""
+        if tier:
+            problems.append(tier)
+        daybreak = _daybreak_problem(route) if not problems else ""
+        if daybreak:
+            problems.append(daybreak)
     effort = route.get("reasoning_effort")
     if effort not in (None, ""):
         from hermes_constants import VALID_REASONING_EFFORTS, parse_reasoning_effort
         if parse_reasoning_effort(effort) is None:
             problems.append(f"Unknown reasoning effort {effort!r}; use none or one of: "
                             f"{', '.join(VALID_REASONING_EFFORTS)}.")
-    tier = _tier_problem(route) if not problems else ""
-    if tier:
-        problems.append(tier)
-    daybreak = _daybreak_problem(route) if not problems else ""
-    if daybreak:
-        problems.append(daybreak)
     return problems
 
 
 # --- display ----------------------------------------------------------------------------------
 
 def route_summary(route: Mapping[str, Any]) -> str:
-    """``provider · model [· reasoning X] [· tier]`` for one route."""
+    """``provider · model [· reasoning X] [· tier]`` or ``profile: name`` for a profile route."""
+    if _text(route.get("profile")):
+        return f"profile: {_text(route.get('profile'))}"
     where = _text(route.get("provider")) or _text(route.get("base_url"))
     parts = [where, _text(route.get("model"))]
     if _text(route.get("reasoning_effort")):

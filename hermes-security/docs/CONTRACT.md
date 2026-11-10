@@ -267,7 +267,7 @@ finish_attempt(scan_id, attempt_id, status, *, result_digest=None, error=None)
 upsert_candidates(scan_id, attempt_id, candidates: list[dict]) -> {"inserted":n,"duplicates":n}  # idempotent on candidate_id+attempt
 list_candidates(scan_id, *, states=None) -> list[dict]
 set_candidate_state(scan_id, candidate_id, state, *, reason) -> dict
-record_coverage(scan_id, units: list[dict], *, source: str, monotonic=False)   # unsealed only; deployment observations merge in the write transaction; other units upsert (optionally monotonic)
+record_coverage(scan_id, units: list[dict], *, source: str, monotonic=False)   # unsealed only; deployment observations merge in the write transaction; other units upsert (optionally monotonic; a monotonic not_applicable leaves a reviewed lane and its closedBy unchanged, and the event is still recorded)
 coverage_units(scan_id) -> list[dict]
 record_validation(scan_id, receipt: dict) -> dict ; validations(scan_id, candidate_id=None) -> list[dict]
 record_chains(scan_id, chains_doc: dict) -> dict ; get_chains(scan_id) -> dict | None

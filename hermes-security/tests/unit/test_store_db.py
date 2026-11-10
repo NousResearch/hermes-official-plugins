@@ -251,3 +251,61 @@ def test_lease_expiry_recovery(tmp_path, monkeypatch):
     assert s.lease(a, "one", 10)
     with pytest.raises(ValidationError):
         s.lease(a, "x", -1)
+
+
+def _close(s, a, unit, order):
+    for source, state in order:
+        s.record_coverage(a, [{"unit": unit, "state": state, "note": "note " + source}], source=source, monotonic=True)
+    return s.coverage_units(a)[0]
+
+
+def test_a_reviewed_lane_survives_a_later_not_applicable(tmp_path):
+    # One packet's "does not apply to my files" is not a statement about the whole scan.
+    s = SecurityStore(tmp_path)
+    a = scan(s)
+    row = _close(s, a, "lane:A02:2025", [("att_a", "reviewed"), ("att_b", "reviewed"), ("att_data", "not_applicable")])
+    assert (row["state"], row["note"], row["closedBy"]) == ("reviewed", "note att_b", ["att_a", "att_b"])
+    with s.transaction() as c:
+        assert tuple(c.execute("SELECT source,state FROM coverage_units WHERE scan_id=?", (a,)).fetchone()) == ("att_b", "reviewed")
+    # The activity log still shows that the worker reported, with what it reported.
+    last = [e for e in s.events(a) if e["kind"] == "coverage.updated"][-1]["data"]
+    assert last == {"source": "att_data", "unit": {"unit": "lane:A02:2025", "state": "not_applicable", "note": "note att_data"}}
+    # A later review still joins the kept row.
+    row = _close(s, a, "lane:A02:2025", [("att_c", "reviewed")])
+    assert (row["state"], row["closedBy"]) == ("reviewed", ["att_a", "att_b", "att_c"])
+
+
+@pytest.mark.parametrize("order", [
+    [("att_a", "reviewed"), ("att_data", "not_applicable")],
+    [("att_data", "not_applicable"), ("att_a", "reviewed")],
+    [("att_data", "not_applicable"), ("att_a", "reviewed"), ("att_other", "not_applicable")],
+])
+def test_lane_state_does_not_depend_on_submission_order(tmp_path, order):
+    s = SecurityStore(tmp_path)
+    row = _close(s, scan(s), "lane:A02:2025", order)
+    # Only the review closed the lane, whichever side of it the not-applicable reports landed.
+    assert (row["state"], row["note"], row["closedBy"]) == ("reviewed", "note att_a", ["att_a"])
+
+
+def test_a_lane_every_review_calls_not_applicable_stays_not_applicable(tmp_path):
+    s = SecurityStore(tmp_path)
+    row = _close(s, scan(s), "lane:A02:2025", [("att_a", "not_applicable"), ("att_b", "not_applicable")])
+    assert (row["state"], row["note"], row["closedBy"]) == ("not_applicable", "note att_b", ["att_a", "att_b"])
+
+
+@pytest.mark.parametrize("unit", ["file:a.py", "asvs:V8.2.2"])
+def test_only_lanes_keep_reviewed_over_not_applicable(tmp_path, unit):
+    # Files and controls keep last-writer-wins among closed states.
+    s = SecurityStore(tmp_path)
+    row = _close(s, scan(s), unit, [("att_a", "reviewed"), ("att_b", "not_applicable")])
+    assert (row["state"], row["note"], row["closedBy"]) == ("not_applicable", "note att_b", ["att_a", "att_b"])
+
+
+def test_a_parent_checkpoint_can_still_set_a_reviewed_lane_not_applicable(tmp_path):
+    # Without monotonic the write is the parent's explicit disposition and replaces the row.
+    s = SecurityStore(tmp_path)
+    a = scan(s)
+    _close(s, a, "lane:A02:2025", [("att_a", "reviewed")])
+    s.record_coverage(a, [{"unit": "lane:A02:2025", "state": "not_applicable", "note": "parent"}], source="checkpoint")
+    row = s.coverage_units(a)[0]
+    assert (row["state"], row["note"], row["closedBy"]) == ("not_applicable", "parent", ["att_a", "checkpoint"])

@@ -643,7 +643,8 @@ class SecurityStore:
     def record_coverage(self, scan_id, units, *, source, monotonic=False):
         """Upsert coverage; deployment observations merge transactionally, never last-writer-wins.
 
-        ``monotonic`` keeps other reviewed/not_applicable units from being downgraded.
+        ``monotonic`` keeps other reviewed/not_applicable units from being downgraded, and
+        keeps a reviewed lane reviewed when a later worker calls it not_applicable.
         """
         guard = (" WHERE coverage_units.state NOT IN ('reviewed','not_applicable')"
                  " OR excluded.state IN ('reviewed','not_applicable')") if monotonic else ""
@@ -660,14 +661,20 @@ class SecurityStore:
                     if 'deployment' not in unit:
                         raise ValidationError('deployment coverage requires structured identity')
                     unit = self._merge_deployment(previous, unit, source)
+                # A worker's lane state covers only its own packet: "not applicable to my files"
+                # neither undoes a lane another worker reviewed nor counts as a review of it.
+                # A checkpoint (not monotonic) is the parent's own disposition and still replaces.
+                mixed = monotonic and uid.startswith('lane:') and old is not None and {old[1], unit["state"]} == {"reviewed", "not_applicable"}
+                kept = mixed and old[1] == "reviewed"
                 # Keep every review that closed a unit, not only the latest one.
-                if unit["state"] in ("reviewed", "not_applicable"):
-                    prior = (json.loads(old[2]).get("closedBy") or [old[0]]) if old and old[1] in ("reviewed", "not_applicable") else []
+                if unit["state"] in ("reviewed", "not_applicable") and not kept:
+                    prior = (json.loads(old[2]).get("closedBy") or [old[0]]) if old and old[1] in ("reviewed", "not_applicable") and not mixed else []
                     unit = {**unit, "closedBy": sorted(set(prior) | {source})}
-                c.execute(
-                    "INSERT INTO coverage_units VALUES(?,?,?,?,?) ON CONFLICT(scan_id,unit_id) DO UPDATE SET source=excluded.source,state=excluded.state,data=excluded.data" + ("" if is_deployment else guard),
-                    (scan_id, uid, source, unit["state"], self._json(unit)),
-                )
+                if not kept:
+                    c.execute(
+                        "INSERT INTO coverage_units VALUES(?,?,?,?,?) ON CONFLICT(scan_id,unit_id) DO UPDATE SET source=excluded.source,state=excluded.state,data=excluded.data" + ("" if is_deployment else guard),
+                        (scan_id, uid, source, unit["state"], self._json(unit)),
+                    )
                 self._event(
                     c,
                     scan_id,

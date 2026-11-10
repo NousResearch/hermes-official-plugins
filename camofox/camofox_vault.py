@@ -26,11 +26,14 @@ def _tracked_session(task_id: Optional[str]) -> Optional[dict[str, Any]]:
 
 
 def secret_transport_ok(url: str) -> bool:
-    """A credential may go to this Camofox URL: HTTPS, or plain HTTP only on loopback; no userinfo."""
+    """A credential may go to this Camofox URL: HTTPS, or plain HTTP on loopback only.
+    Plain HTTP to any other host needs CAMOFOX_ALLOW_INSECURE_TRANSPORT."""
+    allow_insecure = client._flag("CAMOFOX_ALLOW_INSECURE_TRANSPORT", client.get_camofox_config(),
+                                 "allow_insecure_transport")
     parts = urlsplit(url)
     if parts.username or parts.password or parts.query or parts.fragment:
         return False
-    return parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in _LOOPBACK_HOSTS)
+    return parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in _LOOPBACK_HOSTS) or allow_insecure
 
 
 def make_page_backend():

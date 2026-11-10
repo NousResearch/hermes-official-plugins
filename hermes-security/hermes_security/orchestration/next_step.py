@@ -26,6 +26,13 @@ HOW = {
     'blocked': 'Do nothing unless the user asks; tell them why the scan cannot continue.',
 }
 
+# The validate step again, for pairs of candidates that may be one bug reported twice.
+DUPLICATE_HOW = ('Send each pair to a fresh validator delegate (workerRole validator). Put "attemptId: <id>" (start from '
+                 '`attemptId`, one per validator) and both candidate IDs in the goal. The validator rereads both and '
+                 'resubmits ONE of them: with provenance.duplicateOf naming the candidate to keep when both are the '
+                 'same broken control fixed by one remediation, or with provenance.distinctFrom naming the other when '
+                 'they are different bugs. provenance.subsumes on a resubmitted survivor still works.')
+
 
 def _parse(stamp):
     try:
@@ -49,11 +56,12 @@ def _result(scan, step, reason, progress_key, items=(), actionable=None, **extra
 
 
 def derive(*, scan, packets, attempts, dispatches, reduced, receipts, chains_recorded, progress_key, now,
-           max_parallel=6, deep_stopped=False):
+           max_parallel=6, deep_stopped=False, duplicates=()):
     """Return {step, items, total, reason, progressKey, how, ...} for one scan.
 
     Order: packets without an accepted result -> candidates without a validator
-    verdict -> chains -> finalize -> done. A canceled scan is blocked.
+    verdict -> possible duplicate pairs without a verdict -> chains -> finalize
+    -> done. A canceled scan is blocked.
     """
     if scan.get('sealed_at'):
         return _result(scan, 'done', 'The scan is finished.', progress_key)
@@ -128,6 +136,27 @@ def derive(*, scan, packets, attempts, dispatches, reduced, receipts, chains_rec
             return _result(scan, 'validate', f'{len(pending)} candidate(s) have not been checked by a validator.',
                            progress_key, pending + [r for r in rows if r['state'] == 'running'],
                            actionable=len(pending), slots=slots, running=len(running),
+                           attemptId=stable_id('att', scan['scan_id'], 'validator', 'next', prior))
+        return _result(scan, 'wait', f'{len(running)} validator(s) are still running.', progress_key, rows,
+                       actionable=0, slots=slots, running=len(running))
+    if duplicates:
+        # Still the validate step: only the item kind and the instructions differ from the candidates above.
+        validators = [d for d in running if d.get('role') == 'validator' or not d.get('packet_id')]
+        unnamed = any(not d.get('candidate_ids') for d in validators)
+        titles = {row['candidateId']: row.get('title') for row in reduced['retained']}
+        rows = []
+        for pair in duplicates:
+            ids = pair['candidateIds']
+            assigned = any(set(ids) <= set(d.get('candidate_ids') or []) for d in validators)
+            rows.append({'kind': 'duplicate', 'candidateIds': ids, 'path': pair.get('path'), 'lines': pair.get('lines'),
+                         'titles': [titles.get(cid) for cid in ids],
+                         'state': 'running' if unnamed or assigned else 'pending'})
+        pending = [r for r in rows if r['state'] == 'pending']
+        prior = len([a for a in attempts if a.get('role') == 'validator']) + len([d for d in dispatches if not d.get('packet_id')])
+        if pending and slots:
+            return _result(scan, 'validate', f'{len(pending)} possible duplicate pair(s) need a same-bug-or-different verdict.',
+                           progress_key, pending + [r for r in rows if r['state'] == 'running'],
+                           actionable=len(pending), slots=slots, running=len(running), how=DUPLICATE_HOW,
                            attemptId=stable_id('att', scan['scan_id'], 'validator', 'next', prior))
         return _result(scan, 'wait', f'{len(running)} validator(s) are still running.', progress_key, rows,
                        actionable=0, slots=slots, running=len(running))

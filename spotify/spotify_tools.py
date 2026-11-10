@@ -14,6 +14,7 @@ from tools.registry import tool_error, tool_result
 from .spotify_auth import auth_status
 from .spotify_client import (
     SpotifyClient, SpotifyError, normalize_spotify_id, normalize_spotify_uri, normalize_spotify_uris)
+from .spotify_cover import cover_content_type, resolve_cover_image
 
 _Handler = Callable[[SpotifyClient, dict, str], str]
 
@@ -257,6 +258,9 @@ _handle_spotify_playlists = _dispatcher("spotify_playlists", "list", {
         "items": [{"uri": u} for u in normalize_spotify_uris(_as_list(a.get("uris")))], "snapshot_id": a.get("snapshot_id")})),
     "update_details": lambda c, a, act: tool_result(c.request("PUT", _playlist_path(a), json_body={
         "name": a.get("name"), "public": a.get("public"), "collaborative": a.get("collaborative"), "description": a.get("description")})),
+    "upload_cover": lambda c, a, act: tool_result(c.request(
+        "PUT", _playlist_path(a, "/images"), content=resolve_cover_image(str(a.get("image_url") or "")),
+        content_type=cover_content_type(), empty_response={"success": True, "action": act, "status_code": 202})),
 })
 
 
@@ -326,12 +330,13 @@ SPOTIFY_SEARCH_SCHEMA = _schema(
     {"query": COMMON_STRING, "types": _STR_ARRAY, "type": COMMON_STRING, "limit": _INT, "offset": _INT, **_strs("market", "include_external")}, ("query",),
 )
 SPOTIFY_PLAYLISTS_SCHEMA = _schema("spotify_playlists", "List, inspect, create, update, and modify Spotify playlists.", {
-    "action": _enum("list", "get", "items", "create", "add_items", "remove_items", "update_details"),
+    "action": _enum("list", "get", "items", "create", "add_items", "remove_items", "update_details", "upload_cover"),
     **_strs("playlist_id", "market"),
     "limit": _idesc("For list and items: page size (max 50). get always returns the first 100 items"),
     "offset": _idesc("For list and items: index of the first entry. Use items to page past 100 tracks"),
     **_strs("name", "description"),
-    "public": _BOOL, "collaborative": _BOOL, "uris": _STR_ARRAY, "position": _INT, "snapshot_id": COMMON_STRING})
+    "public": _BOOL, "collaborative": _BOOL, "uris": _STR_ARRAY, "position": _INT, "snapshot_id": COMMON_STRING,
+    "image_url": {"type": "string", "description": "For upload_cover: an http(s) URL or a data: URL with the cover image."}})
 SPOTIFY_ALBUMS_SCHEMA = _schema("spotify_albums", "Fetch Spotify album metadata or album tracks.",
                                 {"action": _enum("get", "tracks"), **_strs("album_id", "id", "market"), "limit": _INT, "offset": _INT})
 SPOTIFY_LIBRARY_SCHEMA = _schema("spotify_library", "List, save, or remove the user's saved Spotify tracks or albums. Use `kind` to select which.", {

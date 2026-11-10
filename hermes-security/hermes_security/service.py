@@ -1004,6 +1004,9 @@ class SecurityService:
                 if stop:
                     packets = []
             self.store.set_scan_status(scan_id, 'awaiting_analysis')
+            # An explicit resume always lets automatic continue start over. The event below is not
+            # enough: while duplicate pairs wait for a verdict the progress key ignores events.
+            self.store.update_scan_option(scan_id, 'autoResume', lambda _: None)
             self.store.add_event(scan_id, 'scan.resumed', 'Remaining review packets returned.', {'packetCount': len(packets), 'stopReason': stop})
             return {**self._plan(scan, packets), 'status': 'awaiting_analysis', 'stopReason': stop}
 

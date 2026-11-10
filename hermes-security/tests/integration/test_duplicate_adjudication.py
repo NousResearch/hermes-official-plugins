@@ -213,3 +213,32 @@ def test_validators_that_never_give_a_verdict_trip_the_automatic_continue_limit(
     assert turn_end() == 'scheduled'
     scan = service.store.get_scan(sid)
     assert scan['reason'] is None and scan['options']['autoResume']['count'] == 1
+
+
+@pytest.mark.parametrize('cancel_first', [True, False], ids=['cancel-then-resume', 'resume'])
+@pytest.mark.parametrize('held', ['capped', 'stopped-by-user'])
+def test_an_explicit_resume_lets_automatic_continue_run_again_with_the_pair_still_open(tmp_path, held, cancel_first):
+    service, plan, first, second, kept, other = checked_pair(tmp_path)
+    sid = plan['scanId']
+    open_pair(service, sid, kept, other)
+    get = tools.make_handler('security_scan_get', lambda: service)
+
+    def turn_end(interrupted=False):
+        return recovery.continue_scan(service, service.store.get_scan(sid), interrupted=interrupted, inject=lambda text: True)
+
+    if held == 'capped':
+        for _ in range(recovery.CAP):
+            assert turn_end() == 'scheduled'
+            get({'scan_id': sid, 'section': 'next'})   # the injected turn looked at the scan and settled nothing
+    else:
+        assert turn_end(interrupted=True) == 'stopped-by-user'
+    assert turn_end() == held
+    # No pair was settled, so the pair-based key is unchanged: the resume itself must lift the hold.
+    if cancel_first:
+        service.cancel(sid)
+    service.resume(sid)
+    step = service.next_step(sid)
+    assert step['step'] == 'validate' and step['items'][0]['kind'] == 'duplicate'
+    assert turn_end() == 'scheduled'
+    scan = service.store.get_scan(sid)
+    assert scan['reason'] is None and scan['options']['autoResume']['count'] == 1

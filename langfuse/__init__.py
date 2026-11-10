@@ -137,6 +137,26 @@ def _secret(name: str) -> str:
     return (get_secret(name) or "").strip()
 
 
+def _default_environment() -> str:
+    """Active profile name as the Langfuse environment fallback.
+
+    Runs at client construction (first LLM call), so it works for resumed
+    sessions where on_session_start doesn't fire. ``get_active_profile_name()``
+    reads the HERMES_HOME override set by the multiplexed gateway's
+    ``_profile_runtime_scope``, so it returns the routed profile, not the
+    launch profile.
+    """
+    try:
+        from hermes_cli.profiles import get_active_profile_name
+        name = (get_active_profile_name() or "").strip()
+        # "custom" = unrecognized HERMES_HOME; bucketing under it is worse than unset.
+        if not name or name == "custom":
+            return ""
+        return name
+    except Exception:
+        return ""
+
+
 def _debug(message: str) -> None:
     if _env("HERMES_LANGFUSE_DEBUG").lower() in {"1", "true", "yes", "on"}:
         logger.info("Langfuse tracing: %s", message)
@@ -361,7 +381,7 @@ def _build_client() -> Optional[Langfuse]:
         )
 
     kwargs: dict[str, Any] = {"public_key": public_key, "secret_key": secret_key}
-    for key, name, default in (("base_url", "BASE_URL", "https://cloud.langfuse.com"), ("environment", "ENV", ""),
+    for key, name, default in (("base_url", "BASE_URL", "https://cloud.langfuse.com"), ("environment", "ENV", _default_environment()),
                                ("release", "RELEASE", "")):
         value = _secret(f"HERMES_LANGFUSE_{name}") or _secret(f"LANGFUSE_{name}") or default
         if value:

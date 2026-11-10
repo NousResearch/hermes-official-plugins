@@ -5,6 +5,7 @@ saved. This pure function rebuilds that place from the store, so any later turn
 (or an automatic continue) can pick up exactly where the scan stopped.
 """
 from datetime import datetime, timezone
+from hashlib import sha256
 
 from ..canonical import stable_id
 
@@ -31,7 +32,9 @@ DUPLICATE_HOW = ('Send each pair to a fresh validator delegate (workerRole valid
                  '`attemptId`, one per validator) and both candidate IDs in the goal. The validator rereads both and '
                  'resubmits ONE of them: with provenance.duplicateOf naming the candidate to keep when both are the '
                  'same broken control fixed by one remediation, or with provenance.distinctFrom naming the other when '
-                 'they are different bugs. provenance.subsumes on a resubmitted survivor still works.')
+                 'they are different bugs, or, only when the code read cannot settle it, with '
+                 'provenance.maybeDuplicateOf naming the other and the reason in proofGaps (the scan then finishes '
+                 'with partial coverage). provenance.subsumes on a resubmitted survivor still works.')
 
 
 def _parse(stamp):
@@ -44,6 +47,17 @@ def _parse(stamp):
 def _covers(dispatch_id, attempt_id):
     """Workers submit incrementally as <attemptId>_1, _2, ...; any of them answers the dispatch."""
     return attempt_id == dispatch_id or attempt_id.startswith(dispatch_id + '_')
+
+
+def _pairs_key(duplicates):
+    """Progress while pairs wait for a verdict: it changes only when a pair leaves or joins the set.
+
+    Every accepted result writes an event, so the event key would count a validator that answers
+    without a verdict as progress and the automatic-continue limit would never trip. A string
+    cannot equal the integer event keys of the other steps.
+    """
+    ids = sorted(' '.join(sorted(pair['candidateIds'])) for pair in duplicates)
+    return 'pairs:' + sha256('\n'.join(ids).encode()).hexdigest()[:16]
 
 
 def _result(scan, step, reason, progress_key, items=(), actionable=None, **extra):
@@ -61,7 +75,8 @@ def derive(*, scan, packets, attempts, dispatches, reduced, receipts, chains_rec
 
     Order: packets without an accepted result -> candidates without a validator
     verdict -> possible duplicate pairs without a verdict -> chains -> finalize
-    -> done. A canceled scan is blocked.
+    -> done. A canceled scan is blocked. While pairs wait, progressKey is derived
+    from ``duplicates`` instead of ``progress_key``.
     """
     if scan.get('sealed_at'):
         return _result(scan, 'done', 'The scan is finished.', progress_key)
@@ -153,12 +168,13 @@ def derive(*, scan, packets, attempts, dispatches, reduced, receipts, chains_rec
                          'state': 'running' if unnamed or assigned else 'pending'})
         pending = [r for r in rows if r['state'] == 'pending']
         prior = len([a for a in attempts if a.get('role') == 'validator']) + len([d for d in dispatches if not d.get('packet_id')])
+        pairs_key = _pairs_key(duplicates)
         if pending and slots:
             return _result(scan, 'validate', f'{len(pending)} possible duplicate pair(s) need a same-bug-or-different verdict.',
-                           progress_key, pending + [r for r in rows if r['state'] == 'running'],
+                           pairs_key, pending + [r for r in rows if r['state'] == 'running'],
                            actionable=len(pending), slots=slots, running=len(running), how=DUPLICATE_HOW,
                            attemptId=stable_id('att', scan['scan_id'], 'validator', 'next', prior))
-        return _result(scan, 'wait', f'{len(running)} validator(s) are still running.', progress_key, rows,
+        return _result(scan, 'wait', f'{len(running)} validator(s) are still running.', pairs_key, rows,
                        actionable=0, slots=slots, running=len(running))
     if not chains_recorded and any(r.get('evidenceState') in CHAINABLE for r in reduced['retained']):
         return _result(scan, 'chains', 'Every candidate is checked; attack paths are not recorded yet.', progress_key)

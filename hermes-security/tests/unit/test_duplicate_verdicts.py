@@ -243,3 +243,78 @@ def test_a_malformed_verdict_is_refused_with_an_echoable_path(field, value, path
     payload['candidates'][0].setdefault('provenance', {})[field] = value
     problems = public_problems(validate_worker_result(payload))
     assert problems and all(p.startswith(path + ':') for p in problems)
+
+
+def test_maybe_duplicate_of_on_either_side_leaves_the_pair_open_and_reports_it_undecided():
+    reduced, pairs = pairs_of(pair_rows())
+    assert pairs == [[A, B]] and reduced['undecided'] == []
+    reduced, pairs = pairs_of(pair_rows(maybeDuplicateOf=[A, B]))   # naming itself is dropped
+    assert pairs == [[A, B]] and reduced['undecided'] == [[A, B]] and reduced['distinct'] == []
+    assert len(reduced['retained']) == 2 and reduced['absorbed'] == []
+    rows = pair_rows()
+    rows[0]['provenance']['maybeDuplicateOf'] = [B]
+    reduced, pairs = pairs_of(rows)
+    assert pairs == [[A, B]] and reduced['undecided'] == [[A, B]]
+    for kept in reduced['retained']:
+        assert 'maybeDuplicateOf' not in kept['provenance']
+
+
+def test_maybe_duplicate_of_survives_a_later_record_that_omits_it():
+    first, second = pair_rows(maybeDuplicateOf=[A])
+    later = row(B, second['locations'], aid='att_w')
+    reduced, pairs = pairs_of([first, second, later])
+    assert pairs == [[A, B]] and reduced['undecided'] == [[A, B]]
+    kept = next(r for r in reduced['retained'] if r['candidateId'] == B)
+    assert kept['provenance']['workerAttemptIds'] == ['att_v', 'att_w'] and 'maybeDuplicateOf' not in kept['provenance']
+
+
+def test_a_real_verdict_wins_over_maybe_duplicate_of():
+    # Different on the same side, then on the other side: the pair is gone either way.
+    assert pairs_of(pair_rows(maybeDuplicateOf=[A], distinctFrom=[A]))[1] == []
+    rows = pair_rows(maybeDuplicateOf=[A])
+    rows[0]['provenance']['distinctFrom'] = [B]
+    reduced, pairs = pairs_of(rows)
+    assert pairs == [] and reduced['distinct'] == [[A, B]] and len(reduced['retained']) == 2
+    # Same bug: one candidate is left, so there is no pair to be undecided about.
+    reduced, pairs = pairs_of(pair_rows(maybeDuplicateOf=[A], duplicateOf=A))
+    assert pairs == [] and [r['candidateId'] for r in reduced['retained']] == [A]
+    assert reduced['absorbed'] == [{'candidateId': B, 'into': A, 'reason': 'validator duplicate verdict'}]
+
+
+def test_progress_in_the_duplicate_step_is_keyed_by_the_open_pairs_not_by_events():
+    rows = pair_rows() + [row(C, [loc('route.py', 13, 13, 'sink')])]
+    pairs = possible_duplicates(rows)
+    assert len(pairs) == 3
+    first = derive(attempts=ACCEPTED, reduced=_checked(*rows), duplicates=pairs)
+    again = derive(attempts=ACCEPTED, reduced=_checked(*rows), duplicates=pairs[::-1], progress_key=99)
+    assert first['step'] == again['step'] == 'validate'
+    assert first['progressKey'] == again['progressKey']
+    assert isinstance(first['progressKey'], str) and len(first['progressKey']) <= 32
+    assert first['progressKey'] not in (7, 99) and not first['progressKey'].isdigit()
+    fewer = derive(attempts=ACCEPTED, reduced=_checked(*rows), duplicates=pairs[1:])
+    assert fewer['step'] == 'validate' and fewer['progressKey'] != first['progressKey']
+    # Waiting on the validators of the same pairs is the same place in the scan.
+    waiting = derive(attempts=ACCEPTED, reduced=_checked(*rows), duplicates=pairs,
+                     dispatches=[dispatch('att_d', role='validator')])
+    assert waiting['step'] == 'wait' and waiting['progressKey'] == first['progressKey']
+    # Every other step keeps the event key.
+    for kwargs in ({}, {'duplicates': ()}):
+        assert derive(attempts=ACCEPTED, reduced=_checked(*rows), **kwargs)['progressKey'] == 7
+    assert derive(attempts=ACCEPTED[:2], reduced=_checked(*rows), duplicates=pairs)['progressKey'] == 7
+
+
+def test_the_worker_schema_accepts_maybe_duplicate_of():
+    payload = worker()
+    payload['candidates'][0].setdefault('provenance', {}).update(maybeDuplicateOf=[B, C])
+    assert validate_worker_result(payload) == []
+
+
+@pytest.mark.parametrize('value,path', [
+    (['cand_nope'], '$.candidates[0].provenance.maybeDuplicateOf[0]'),
+    (A, '$.candidates[0].provenance.maybeDuplicateOf'),
+    ([A] * 201, '$.candidates[0].provenance.maybeDuplicateOf')])
+def test_a_malformed_maybe_duplicate_of_is_refused_with_an_echoable_path(value, path):
+    payload = worker()
+    payload['candidates'][0].setdefault('provenance', {})['maybeDuplicateOf'] = value
+    problems = public_problems(validate_worker_result(payload))
+    assert problems and all(p.startswith(path + ':') for p in problems)

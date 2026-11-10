@@ -215,7 +215,7 @@
       "license": "Apache-2.0",
       "modified": true,
       "sourceSha256": "a89c6aa0649def73f815bac662c679cb07a00b71b995addb53ad1b6d8313022a",
-      "destinationSha256": "7815ebb78b40fac87e05cd05ffe9fa8d979cf4df457af040117a7e242820e44a"
+      "destinationSha256": "17b04a82cd800aae10a58b6c5244ab44d428d8407f0241e7c9a2805ef211c9d2"
     },
     {
       "source": "references/scan-contract.md",
@@ -223,7 +223,7 @@
       "license": "Apache-2.0",
       "modified": true,
       "sourceSha256": "b362636c29d1e8b18053481abe2f97d7bb099a97040f5b63aa2702a41c1d62c8",
-      "destinationSha256": "7815ebb78b40fac87e05cd05ffe9fa8d979cf4df457af040117a7e242820e44a"
+      "destinationSha256": "17b04a82cd800aae10a58b6c5244ab44d428d8407f0241e7c9a2805ef211c9d2"
     },
     {
       "source": "skills/define-security-policy/SKILL.md",
@@ -247,7 +247,7 @@
       "license": "Apache-2.0",
       "modified": true,
       "sourceSha256": "a89c6aa0649def73f815bac662c679cb07a00b71b995addb53ad1b6d8313022a",
-      "destinationSha256": "a0c7ec3904a5b7859b83cfbdc5633280dcc4242b78c666429c69e870f089f9b2"
+      "destinationSha256": "222162a05a38eafd911dafb9d2c33a8b5c917c982993c7df2d3d764d7ad4267c"
     },
     {
       "source": "skills/deep-security-scan/SKILL.md",
@@ -255,7 +255,7 @@
       "license": "Apache-2.0",
       "modified": true,
       "sourceSha256": "d6aed0d9b47065a1384a96d0a45c843b0cda8ba48e3d2cbe96c65357c6e55ee3",
-      "destinationSha256": "a0c7ec3904a5b7859b83cfbdc5633280dcc4242b78c666429c69e870f089f9b2"
+      "destinationSha256": "222162a05a38eafd911dafb9d2c33a8b5c917c982993c7df2d3d764d7ad4267c"
     },
     {
       "source": "skills/security-scan/SKILL.md",
@@ -263,7 +263,7 @@
       "license": "Apache-2.0",
       "modified": true,
       "sourceSha256": "71e05d106aac8895aaa328c3ee868ae56ddc4763657c170ad6779e376f162eba",
-      "destinationSha256": "a0c7ec3904a5b7859b83cfbdc5633280dcc4242b78c666429c69e870f089f9b2"
+      "destinationSha256": "222162a05a38eafd911dafb9d2c33a8b5c917c982993c7df2d3d764d7ad4267c"
     },
     {
       "source": "skills/security-diff-scan/SKILL.md",

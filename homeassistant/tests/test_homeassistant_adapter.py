@@ -147,8 +147,10 @@ def _make_adapter(**extra) -> HomeAssistantAdapter:
     return adapter
 
 
-def _make_event(entity_id, old_state, new_state, old_attrs=None, new_attrs=None):
+def _make_event(entity_id, old_state, new_state, old_attrs=None, new_attrs=None,
+                time_fired="2026-11-06T00:50:16.081375+00:00"):
     return {
+        "time_fired": time_fired,
         "data": {
             "entity_id": entity_id,
             "old_state": {"state": old_state, "attributes": old_attrs or {}},
@@ -211,6 +213,20 @@ class TestCooldown:
                              new_attrs={"friendly_name": "Temp"})
         await adapter._handle_ha_event(event2)
         assert adapter.handle_message.call_count == 2
+
+
+class TestMessageId:
+
+    @pytest.mark.asyncio
+    async def test_two_changes_in_one_second_get_distinct_ids(self, monkeypatch):
+        monkeypatch.setattr(time, "time", lambda: 1793928031.5)
+        adapter = _make_adapter(watch_all=True, cooldown_seconds=0)
+        await adapter._handle_ha_event(_make_event("lock.back_door", "locked", "unlocking",
+                                                   time_fired="2026-11-06T00:50:16.081375+00:00"))
+        await adapter._handle_ha_event(_make_event("lock.back_door", "unlocking", "unlocked",
+                                                   time_fired="2026-11-06T00:50:16.162449+00:00"))
+        ids = [call.args[0].message_id for call in adapter.handle_message.call_args_list]
+        assert len(ids) == 2 and ids[0] != ids[1]
 
 
 # ---------------------------------------------------------------------------

@@ -32,11 +32,11 @@ _EVAL_UNSUPPORTED = ("JavaScript evaluation is not supported by this Camofox ser
 
 
 def _dumps(payload: Any, **kw: Any) -> str:
-    return json.dumps(payload, ensure_ascii=False, **kw)
+    return json.dumps(policy.scrub_vault_values(payload), ensure_ascii=False, **kw)
 
 
 def _fail(message: str) -> str:
-    return tool_error(message, success=False)
+    return tool_error(policy.scrub_vault_values(message), success=False)
 
 
 # ---- Session plumbing ----

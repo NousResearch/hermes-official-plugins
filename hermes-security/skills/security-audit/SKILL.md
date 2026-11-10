@@ -90,6 +90,32 @@ On a stop request call `security_scan_cancel`, stop relevant delegates, and read
 
 On explicit request, load `references/deep-scan.md`. Deep runs N independent complete passes (default 3) with an explicit budget, the same snapshot and methodology, and each pass its own attemptId (`workerRole: "deep-pass"`). Keep pass inputs independent; do not feed earlier conclusions to later passes. The plugin's reducer conserves source references; the parent does not replace it with a prose summary. Stop on budget exhaustion, no-new-root-cause threshold of 2 consecutive passes, or cancel. Retain incomplete-pass coverage and remaining intended work; a stopped coordinator is not proof of a complete scan.
 
+## Deployment artifacts and private-network exposure
+
+Treat an image-backed service as a runtime component, not merely a dependency version. For every deployed image or external runtime configuration that owns a security control, identify listeners (API, metrics, debug, health and event-tap), bind addresses, authentication, accessible data, and actors that can reach them. Trace public ingress and direct private-network ingress separately. No public IP or mapped service does not defeat a private-network attack; loopback binding, authentication, or established network isolation does.
+
+For shared infrastructure, explicitly consider a customer-controlled or compromised workload as the attacker and organization-wide telemetry as the asset. Check whether management APIs can stream raw events, not just return health or metrics. Never accept comments such as “no inbound traffic” or “healthcheck only” as evidence of access control. Distinguish intended use from enforced reachability.
+
+When behavior is supplied by an image rather than repository source, record the exact missing artifact and evidence needed: deployed image digest, effective configuration and overrides, bind addresses, API capabilities, and relevant network policy. Inspect available in-scope configuration as inert data; do not run or fetch images, contact deployments, or expand scope under static scan permission. If the evidence cannot be inspected within authorized scope, retain an explicit runtime-artifact coverage gap rather than treating the component as fully reviewed. Do not inflate an unresolved candidate to a confirmed finding.
+
+Validators must evaluate each claimed ingress independently. A missing public IP defeats only the public path; it cannot reject or lower the priority of a private-network path without evidence of isolation. Keep missing facts separate (listener configuration, network reachability, sensitive API capability). Do not call one the smallest gap unless resolving it settles the claim. Separate exposed management interfaces from unpinned images instead of bundling their dispositions.
+
+Before finalizing, the parent must adjudicate every inconclusive candidate involving cross-tenant access, shared control-plane services, or organization-wide data. Re-read its source and counterevidence, state the remaining boundary and proof gap, and preserve material gaps in the report through security_scan_checkpoint. If file coverage is complete but runtime-artifact or deployment-boundary evidence is missing, say “repository review complete; deployment security unresolved,” not unqualified “complete coverage.” Surface potentially high-impact unresolved paths alongside confirmed findings, ahead of generic image-pinning issues. Never rewrite a sealed scan to retrofit new evidence; a correction needs a linked superseding review.
+
+### Record and dispose deployment evidence without another round
+
+Use the optional `deployment:<inventory path>#<stable-key>` coverage units and
+structured `deployment` detail in `references/worker-packet.md`. Existing deployment
+area briefs already ask the targeted questions; do not add a mandatory worker or
+review round. Workers record `pending`/`unknown`; the parent checkpoints each as
+`resolved`/`reviewed` with the evidence and empty missing-artifact list, or
+`deferred`/`deferred` with the exact missing artifacts and adjudication note.
+Pending units block sealing; explicit deferral allows a partial report without
+repeat workers. Re-read high-impact inconclusive cross-tenant/shared-service claims
+and keep their proof gaps visible. Do not turn every inconclusive candidate into
+a coverage gap. Complete file reading is not complete deployment evidence. Never
+pull/run images, contact deployments or fetch config under static permission.
+
 ## Pitfalls
 
 Do not launch nested discovery/validation/report pools or competing scan skills. Do not treat authenticated routes as missing authentication until parent mounts and middleware order are checked. Never “fix” a citation by changing it to nearby safe code. Do not ignore a late warning about wrong roots, execution in static mode, or omitted candidates. A sealed correction must supersede the prior result.

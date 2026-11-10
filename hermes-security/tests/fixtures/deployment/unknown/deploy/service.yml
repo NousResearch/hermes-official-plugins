@@ -1,0 +1,4 @@
+services:
+  collector:
+    image: example.invalid/telemetry:synthetic
+    # No public ingress. Image defaults and network policy are not supplied.

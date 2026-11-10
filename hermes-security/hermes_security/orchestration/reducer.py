@@ -32,9 +32,9 @@ def reduce_candidates(candidates):
         if winner not in kept:
             continue
         declared = winner.get('provenance', {}).get('subsumes', [])
-        for row in list(kept):
+        for row in list(kept) + list(rejected):
             if row is not winner and row['candidateId'] in declared:
-                kept.remove(row)
+                (kept if row in kept else rejected).remove(row)
                 for edge in absorbed:
                     if edge['into'] == row['candidateId']:
                         edge['into'] = winner['candidateId']

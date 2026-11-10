@@ -25,7 +25,7 @@ from .store.db import SecurityStore
 from .store import leases
 from .store.artifacts import scan_dir, write_artifact, read_artifact
 from .standards import ledger
-from .orchestration import METHODOLOGY_VERSION, standard, deep, diff, reducer, next_step, stall, flows
+from .orchestration import METHODOLOGY_VERSION, standard, deep, diff, reducer, next_step, stall, flows, deployment
 from .orchestration.coverage import build_coverage
 from .dependencies import finding as dependency_finding
 from .orchestration.worker_protocol import check_candidate
@@ -555,6 +555,16 @@ class SecurityService:
             chains_recorded=self.store.get_chains(scan_id) is not None, progress_key=progress_key,
             now=now or datetime.now(timezone.utc), max_parallel=standard.MAX_PARALLEL_WORKERS,
             deep_stopped=scan['mode'] == 'deep' and bool(self._deep_stop(scan, attempts, packets)))
+        if result['step'] == 'finalize':
+            unresolved = deployment.pending(self.store.coverage_units(scan_id))
+            if unresolved:
+                result['reason'] = 'Repository results are saved; deployment evidence needs a parent disposition.'
+                result['deploymentEvidence'] = unresolved[:next_step.ITEM_LIMIT]
+                result['deploymentEvidenceTotal'] = len(unresolved)
+                result['how'] = ('Before finalizing, read deployment units in coverage and record each parent disposition '
+                                 'with security_scan_checkpoint: resolved with source/control evidence, or deferred with '
+                                 'the exact missing artifacts and review note. Do not launch repeat workers or fetch images. '
+                                 'Then finalize; deferred deployment evidence remains partial.')
         delegate = scan['options'].get('delegate')
         if delegate and result['step'] in {'dispatch', 'validate'}:
             result['delegate'] = delegate
@@ -578,7 +588,7 @@ class SecurityService:
         return (f'Set "{param}": "{delegate["name"]}" on every delegate_task task: the user chose that {what} '
                 'for this scan\'s subagents.')
 
-    def _coverage_input(self, scan, units, source):
+    def _coverage_input(self, scan, units, source, *, worker=False):
         if not isinstance(units, list) or len(units) > 50000:
             raise ValidationError('coverage must be a bounded list')
         paths = self.store.inventory_paths(scan['scan_id'])
@@ -594,13 +604,18 @@ class SecurityService:
             if not isinstance(ident, str) or ':' not in ident:
                 raise ValidationError('invalid coverage unit identifier')
             kind, value = ident.split(':', 1)
-            valid = (kind == 'file' and value in paths) or (kind == 'lane' and value in lanes) or (kind == 'asvs' and value in controls)
+            detail = deployment.check_unit(ident, unit, paths, worker=worker) if kind == 'deployment' else None
+            if kind != 'deployment' and 'deployment' in unit:
+                raise ValidationError('deployment detail requires a deployment unit')
+            valid = (kind == 'deployment') or (kind == 'file' and value in paths) or (kind == 'lane' and value in lanes) or (kind == 'asvs' and value in controls)
             if not valid or unit.get('state') not in {'reviewed', 'not_applicable', 'deferred', 'unsupported', 'unknown', 'failed'}:
                 raise ValidationError('unknown review unit or coverage state')
             note = unit.get('note', unit.get('reason', 'explicit review disposition'))
             if not isinstance(note, str):
                 raise ValidationError('coverage note must be text')
             result.append({'unitId': ident, 'kind': kind, 'state': unit['state'], 'reason': note, 'evidence': [source]})
+            if detail is not None:
+                result[-1]['deployment'] = detail
         self._safe(result)
         return result
 
@@ -636,7 +651,7 @@ class SecurityService:
             if packet is not None and (packet not in packets or packets[packet]['role'] != payload['workerRole']):
                 raise ValidationError('packet does not belong to this scan or role')
             aid = payload['attemptId']
-            units = self._coverage_input(scan, payload['coverage'], aid)
+            units = self._coverage_input(scan, payload['coverage'], aid, worker=True)
             self._safe({'notes': payload['notes'], 'negativeResults': payload['negativeResults']})
             inventory = self.store.inventory(scan_id)
             accepted, rejected = [], []
@@ -667,7 +682,9 @@ class SecurityService:
                     state = candidate['evidenceState']
                     if state in {'source_supported', 'rejected', 'inconclusive'}:
                         self.store.set_candidate_state(scan_id, candidate['candidateId'], state, reason='Validator source review; runtime NOT RUN.')
-            # Workers only add coverage: a later worker's deferral never undoes another's full review.
+            # The store merges deployment observations transactionally (including reopening
+            # resolved boundaries), while other units retain monotonic worker closure.
+            # Parent adjudication happens after all relevant workers finish; no packet is added.
             self.store.record_coverage(scan_id, units, source=aid, monotonic=True)
             if packet is not None and packets[packet].get('review') in {'area', 'remainder'}:
                 self._record_remainder(scan, packets[packet], units)
@@ -863,6 +880,8 @@ class SecurityService:
 
     def finalize(self, scan_id):
         with self._mutation(scan_id) as scan:
+            if deployment.pending(self.store.coverage_units(scan_id)):
+                raise ValidationError('deployment evidence requires an explicit parent checkpoint disposition before finalizing')
             reduced = self._reduced(scan_id)
             findings, retained, gaps = [], [], []
             for row in reduced['retained'] + reduced['rejected']:

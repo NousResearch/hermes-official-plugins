@@ -305,7 +305,7 @@ def _hermes_reply(response):
         api_mode='chat_completions', provider='claude-subscription-directsdk', model='sonnet', log_prefix='',
         thinking_callback=None, _get_transport=lambda: get_transport('chat_completions'),
         _extract_reasoning=lambda message: getattr(message, 'reasoning', None),
-        _invoke_api_request_error_hook=noop, _has_pending_fallback=lambda: False, _try_activate_fallback=lambda: False,
+        _invoke_api_request_error_hook=noop, _has_pending_fallback=lambda: False, _try_activate_fallback=lambda **k: False,
         _buffer_diagnostic_status=noop, _flush_status_buffer=noop, _emit_diagnostic_status=noop,
         _cleanup_task_resources=noop, _persist_session=noop)
     verdict = handle_content_policy_refusal(

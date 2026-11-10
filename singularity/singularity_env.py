@@ -1,8 +1,8 @@
 """Singularity/Apptainer persistent container environment.
 
 Security-hardened with --containall, --no-home, capability dropping. Supports
-resource limits and optional persistence via writable overlay dirs that survive sessions
-(until the Hermes process exits, as when this backend shipped in core).
+resource limits and optional persistence via owner/image/task-bound overlay dirs
+that survive sessions and process restarts.
 
 Imported only by :meth:`SingularityProvider.create_environment`, i.e. on a Hermes core that no
 longer ships its own Singularity backend.
@@ -10,20 +10,22 @@ longer ships its own Singularity backend.
 
 from __future__ import annotations
 
-import atexit
 import glob
 import logging
+import hashlib
+import re
 import os
-import shutil
+
 import subprocess
 import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 from hermes_constants import get_hermes_home
 from tools.environments.base import BaseEnvironment
+from tools.environments.local import build_subprocess_env
 # The shared spawn helper (stdin written on a thread, stdin errors surfaced by the base class) and
 # the shared task-id sanitizer (every backend maps a session id to the same directory name, so
 # overlays created while this backend lived in core keep resolving).
@@ -34,15 +36,154 @@ from .provider import find_singularity_executable
 
 logger = logging.getLogger(__name__)
 
+_REGISTRY_AUTH_ENV_VARS = ('APPTAINER_DOCKER_USERNAME', 'APPTAINER_DOCKER_PASSWORD', 'SINGULARITY_DOCKER_USERNAME', 'SINGULARITY_DOCKER_PASSWORD', 'DOCKER_USERNAME', 'DOCKER_PASSWORD')
 
-def run_capture(cmd: list[str], *, timeout: float, env: dict | None = None) -> subprocess.CompletedProcess:
-    """``subprocess.run`` with text capture and stdin closed, so a CLI that prompts cannot hang the agent."""
-    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                          timeout=timeout, check=False, stdin=subprocess.DEVNULL, env=env)
+def _registry_auth_source(
+    owner_home: str | os.PathLike | None = None,
+) -> Mapping[str, str]:
+    """Return registry grants from the exact target profile authority.
+
+    A multiplexed process must bind the grants to the captured artifact owner.
+    Falling back to process-global ``os.environ`` there would reintroduce the
+    launch profile's credentials after the generic child boundary sanitized
+    them. Non-multiplex callers retain the historical ambient fallback.
+    """
+    from agent.secret_scope import (
+        build_profile_secret_scope,
+        current_secret_scope,
+        is_multiplex_active,
+        serves_routed_profile,
+    )
+    from hermes_constants import get_routing_process_hermes_home
+
+    scope = current_secret_scope()
+    owner = Path(owner_home).resolve() if owner_home is not None else None
+    private_authority = (is_multiplex_active() or serves_routed_profile()
+                         or (owner is not None and owner != get_routing_process_hermes_home().resolve()))
+    if scope is not None:
+        if private_authority:
+            if owner is not None and scope.profile_home != owner:
+                raise RuntimeError(
+                    "Singularity registry authority does not match artifact owner"
+                )
+            return scope
+        source = dict(os.environ)
+        source.update({str(key): str(value) for key, value in scope.items()})
+        return source
+    if private_authority:
+        if owner is None:
+            raise RuntimeError(
+                "Singularity image build requested without an active target-profile "
+                "secret scope or explicit artifact owner while multiplexing is enabled"
+            )
+        return build_profile_secret_scope(owner, fail_closed_external=True)
+    return os.environ
 
 
-def bash_argv(cmd_string: str, login: bool = False) -> list[str]:
-    return ["bash", "-l", "-c", cmd_string] if login else ["bash", "-c", cmd_string]
+
+def _singularity_subprocess_env(
+    *,
+    include_registry_auth: bool = False,
+    owner_home: str | os.PathLike | None = None,
+    source_home: str | os.PathLike | None = None,
+) -> dict[str, str]:
+    from agent.secret_scope import is_multiplex_active
+
+    enforce_profile_boundary = owner_home is not None and (
+        is_multiplex_active()
+        or (
+            source_home is not None
+            and Path(source_home).resolve() != Path(owner_home).resolve()
+        )
+    )
+    env = build_subprocess_env(
+        profile_home=owner_home,
+        source_profile_home=source_home,
+        enforce_profile_boundary=enforce_profile_boundary,
+    )
+    if include_registry_auth:
+        auth_names = {name.upper() for name in _REGISTRY_AUTH_ENV_VARS}
+        for key in list(env):
+            if key.upper() in auth_names:
+                env.pop(key, None)
+        source = _registry_auth_source(owner_home)
+        for key in _REGISTRY_AUTH_ENV_VARS:
+            value = source.get(key)
+            if value is not None:
+                env[key] = str(value)
+    return env
+
+
+
+def _profile_artifact_id(owner_home: str | os.PathLike) -> str:
+    return hashlib.sha256(str(Path(owner_home).resolve()).encode()).hexdigest()
+
+
+
+def _image_identity(image: str) -> str:
+    return hashlib.sha256(image.encode()).hexdigest()
+
+
+
+def _resolved_image_identity(
+    image_reference: str,
+    resolved_image: str,
+    *,
+    require_immutable: bool,
+) -> str:
+    """Return immutable image authority or a one-use quarantine identity."""
+    resolved_path = Path(resolved_image)
+    if resolved_path.is_file():
+        digest = hashlib.sha256()
+        with resolved_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    lowered = image_reference.lower()
+    marker = "@sha256:"
+    if marker in lowered:
+        digest = lowered.split(marker, 1)[1]
+        if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError("invalid SHA-256 image identity")
+        return digest
+
+    if require_immutable:
+        # A mutable reference that could not be materialized to a local SIF has
+        # no reusable image authority. Give this environment a one-use identity
+        # so neither overlays nor snapshot registry entries can be reused by a
+        # later resolution of the same tag.
+        return f"quarantine-{uuid.uuid4().hex}"
+    return _image_identity(image_reference)
+
+
+
+def _persistent_overlay_dir(
+    owner_home: Path, image_authority_id: str, task_id: str, *, adopt_legacy: bool,
+) -> Path:
+    """Overlay directory for one owner profile, image authority and task.
+
+    Every component is durable across process restarts: the owner path, the
+    image content/digest identity and the task id. Scope generations are
+    salted per interpreter and must never select persisted state. A genuine
+    image change selects a different directory; a credential rotation does
+    not, because the filesystem belongs to the profile, not to one secret
+    generation. Single-profile callers keep using a pre-existing overlay from
+    the earlier flat layout so upgrading does not strand it.
+    """
+    # A raw session-key task_id carries colons and other characters that are
+    # unsafe in host path components (same class of bug as the docker -v mount
+    # failure); route it through the shared sanitizer so all backends agree.
+    name = f"overlay-{sanitize_task_id_for_path(task_id)}"
+    root = _get_scratch_dir() / "hermes-overlays"
+    overlay = root / _profile_artifact_id(owner_home) / image_authority_id / name
+    legacy = root / name
+    if adopt_legacy and not overlay.exists() and legacy.is_dir():
+        return legacy
+    overlay.mkdir(parents=True, exist_ok=True)
+    return overlay
+
+
 
 
 def _find_singularity_executable() -> str:
@@ -56,19 +197,34 @@ def _find_singularity_executable() -> str:
         "or Singularity and ensure the CLI is available.")
 
 
-def _ensure_singularity_available() -> str:
+def _ensure_singularity_available(
+    *,
+    owner_home: str | os.PathLike | None = None,
+    source_home: str | os.PathLike | None = None,
+) -> str:
     """Preflight check: resolve the executable and verify it responds."""
     exe = _find_singularity_executable()
     try:
-        result = run_capture([exe, "version"], timeout=10)
+        result = subprocess.run(
+            [exe, "version"], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10,
+            env=_singularity_subprocess_env(
+                owner_home=owner_home,
+                source_home=source_home,
+            ),
+            stdin=subprocess.DEVNULL,
+        )
     except FileNotFoundError:
-        raise RuntimeError(f"Singularity backend selected but '{exe}' could not be executed.")
+        raise RuntimeError(
+            f"Singularity backend selected but '{exe}' could not be executed."
+        )
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"'{exe} version' timed out.")
+
     if result.returncode != 0:
         stderr = result.stderr.strip()[:200]
         raise RuntimeError(f"'{exe} version' failed (exit code {result.returncode}): {stderr}")
     return exe
+
 
 
 def _get_sandbox_dir() -> Path:
@@ -148,76 +304,104 @@ def check_disk_usage_warning() -> bool:
         return False
 
 
-# --- Orphaned scratch dirs (overlays included) are removed when the Hermes process exits, as core's
-# exit funnel did while it shipped this backend. Registered on first use, so a process that never
-# starts a Singularity instance never touches /scratch.
-_exit_sweep_lock = threading.Lock()
-_exit_sweep_registered = False
-
-
-def _sweep_scratch_dirs() -> None:
-    for path in _scratch_paths():
-        try:
-            shutil.rmtree(path, ignore_errors=True)
-            logger.info("Removed orphaned: %s", path)
-        except OSError:
-            logger.debug("Failed to remove orphaned path %s", path, exc_info=True)
-
-
-def _register_exit_sweep() -> None:
-    global _exit_sweep_registered
-    with _exit_sweep_lock:
-        if not _exit_sweep_registered:
-            atexit.register(_sweep_scratch_dirs)
-            _exit_sweep_registered = True
-
-
+# Persistent overlays are not swept at process exit: another process may own them.
 _sif_build_lock = threading.Lock()
 
 
-def _get_or_build_sif(image: str, executable: str = "apptainer") -> str:
-    """Build (once, cached) a SIF from a ``docker://`` URL; falls back to the URL on failure."""
-    if (image.endswith('.sif') and Path(image).exists()) or not image.startswith('docker://'):
+def _get_or_build_sif(
+    image: str,
+    executable: str = "apptainer",
+    *,
+    owner_home: str | os.PathLike | None = None,
+    source_home: str | os.PathLike | None = None,
+    policy_generation: str = "",
+) -> str:
+    if image.endswith('.sif') and Path(image).exists():
+        return image
+    if not image.startswith('docker://'):
         return image
 
-    image_name = image.replace('docker://', '').replace('/', '-').replace(':', '-')
+    explicit_owner = Path(owner_home).resolve() if owner_home is not None else None
+    owner = explicit_owner or get_hermes_home().resolve()
+    owner_id = _profile_artifact_id(owner)
+    image_id = _image_identity(image)
     cache_dir = _get_apptainer_cache_dir()
-    sif_path = cache_dir / f"{image_name}.sif"
-    if sif_path.exists():
+    if not policy_generation:
+        # Single-profile installs keep the pre-ownership shared cache entry
+        # instead of re-pulling every image after an upgrade.
+        legacy_name = image.replace('docker://', '').replace('/', '-').replace(':', '-')
+        legacy_sif = cache_dir / f"{legacy_name}.sif"
+        if legacy_sif.is_file():
+            return str(legacy_sif)
+    # The cache is keyed on durable owner + image identity only. A scope
+    # generation is process-local (salted per interpreter), so keying on it
+    # would force a rebuild after every restart without adding authority.
+    profile_cache = cache_dir / "hermes-profile-sif" / owner_id
+    profile_cache.mkdir(parents=True, exist_ok=True)
+    immutable_reference = "@sha256:" in image.lower()
+    cacheable = not policy_generation or immutable_reference
+    sif_path = profile_cache / (
+        f"{image_id}.sif"
+        if cacheable
+        else f"{image_id}-{uuid.uuid4().hex}.sif"
+    )
+
+    # Single-profile callers retain historical mutable-tag reuse. Under a
+    # multiplex authority generation, only digest-pinned references are reused;
+    # mutable tags build into a unique path so artifact existence cannot grant
+    # a later profile action stale image authority.
+    if cacheable and sif_path.exists():
         return str(sif_path)
 
     with _sif_build_lock:
-        if sif_path.exists():
+        if cacheable and sif_path.exists():
             return str(sif_path)
 
         logger.info("Building SIF image (one-time setup)...")
         logger.info("  Source: %s", image)
         logger.info("  Target: %s", sif_path)
 
-        tmp_dir = cache_dir / "tmp"
+        tmp_dir = profile_cache / "tmp"
         tmp_dir.mkdir(parents=True, exist_ok=True)
+        build_path = tmp_dir / f"{image_id}-{uuid.uuid4().hex}.building.sif"
 
-        # External build tool may need registry credentials from the user env: exact preservation.
-        env = os.environ.copy()
+        # Image construction may need private-registry auth, but only the exact
+        # Apptainer/Singularity Docker credential contract is reintroduced.
+        env = _singularity_subprocess_env(
+            include_registry_auth=True,
+            owner_home=explicit_owner,
+            source_home=source_home,
+        )
         env["APPTAINER_TMPDIR"] = str(tmp_dir)
         env["APPTAINER_CACHEDIR"] = str(cache_dir)
 
         try:
-            result = run_capture([executable, "build", str(sif_path), image], timeout=600, env=env)
+            result = subprocess.run(
+                [executable, "build", str(build_path), image],
+                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=600, env=env,
+                stdin=subprocess.DEVNULL,
+            )
             if result.returncode != 0:
+                build_path.unlink(missing_ok=True)
                 logger.warning("SIF build failed, falling back to docker:// URL")
                 logger.warning("  Error: %s", result.stderr[:500])
                 return image
+            if not build_path.exists():
+                raise RuntimeError("Apptainer reported success without publishing a SIF")
+            os.replace(build_path, sif_path)
             logger.info("SIF image built successfully")
             return str(sif_path)
         except subprocess.TimeoutExpired:
             logger.warning("SIF build timed out, falling back to docker:// URL")
-            if sif_path.exists():
-                sif_path.unlink()
+            if build_path.exists():
+                build_path.unlink()
             return image
         except Exception as e:
+            if build_path.exists():
+                build_path.unlink()
             logger.warning("SIF build error: %s, falling back to docker:// URL", e)
             return image
+
 
 
 class SingularityEnvironment(BaseEnvironment):
@@ -229,34 +413,80 @@ class SingularityEnvironment(BaseEnvironment):
 
     # A timed-out `sudo -n true` probe only kills its own exec, never the instance.
     _passwordless_sudo_probe_supported = True
+    _profile_scoped_passthrough = True
 
-    def __init__(self, image: str, cwd: str = "~", timeout: int = 60, cpu: float = 0,
-                 memory: int = 0, disk: int = 0, persistent_filesystem: bool = False,
-                 task_id: str = "default"):
+    def __init__(
+        self,
+        image: str,
+        cwd: str = "~",
+        timeout: int = 60,
+        cpu: float = 0,
+        memory: int = 0,
+        disk: int = 0,
+        persistent_filesystem: bool = False,
+        task_id: str = "default",
+    ):
         super().__init__(cwd=cwd, timeout=timeout)
-        self.executable = _ensure_singularity_available()
-        self.image = _get_or_build_sif(image, self.executable)
+        boundary = getattr(self, "_profile_env_boundary", None)
+        from hermes_constants import get_process_hermes_home
+
+        self._owner_home = (
+            boundary.target_home
+            if boundary is not None
+            else get_hermes_home().resolve()
+        )
+        self._source_home = (
+            boundary.source_home
+            if boundary is not None
+            else Path(get_process_hermes_home()).resolve()
+        )
+        self._owner_generation = (
+            boundary.target_generation if boundary is not None else ""
+        )
+        self.executable = _ensure_singularity_available(
+            owner_home=self._owner_home,
+            source_home=self._source_home,
+        )
+        self.image = _get_or_build_sif(
+            image,
+            self.executable,
+            owner_home=self._owner_home,
+            source_home=self._source_home,
+            policy_generation=self._owner_generation,
+        )
+        self._image_authority_id = _resolved_image_identity(
+            image,
+            self.image,
+            require_immutable=boundary is not None,
+        )
         self.instance_id = f"hermes_{uuid.uuid4().hex[:12]}"
         self._instance_started = False
+        self._control_env: Optional[dict[str, str]] = None
         self._persistent = persistent_filesystem
         self._task_id = task_id
         self._overlay_dir: Optional[Path] = None
         self._cpu = cpu
         self._memory = memory
 
-        _register_exit_sweep()
         if self._persistent:
-            # A raw session-key task_id carries colons etc. unsafe in host path components;
-            # the shared sanitizer keeps all backends agreeing on the mapping.
-            self._overlay_dir = (
-                _get_scratch_dir() / "hermes-overlays" / f"overlay-{sanitize_task_id_for_path(task_id)}")
-            self._overlay_dir.mkdir(parents=True, exist_ok=True)
+            self._overlay_dir = _persistent_overlay_dir(
+                self._owner_home,
+                self._image_authority_id,
+                task_id,
+                adopt_legacy=boundary is None,
+            )
 
         self._start_instance()
         self.init_session()
 
+
     def _start_instance(self):
-        cmd = [self.executable, "instance", "start", "--containall", "--no-home"]
+        owner_home = self._owner_home
+        source_home = self._source_home
+        profile_boundary = self._profile_env_boundary
+        cmd = [self.executable, "instance", "start"]
+        cmd.extend(["--containall", "--no-home"])
+
         if self._persistent and self._overlay_dir:
             cmd.extend(["--overlay", str(self._overlay_dir)])
         else:
@@ -264,8 +494,19 @@ class SingularityEnvironment(BaseEnvironment):
 
         try:
             from tools.credential_files import get_credential_file_mounts, get_skills_directory_mount
-            for entry in (*get_credential_file_mounts(), *get_skills_directory_mount()):
-                cmd.extend(["--bind", f"{entry['host_path']}:{entry['container_path']}:ro"])
+            # The credential-file owner still has a process-global config
+            # cache. Until that separate owner becomes profile/generation keyed,
+            # quarantine credential mounts under multiplex rather than attach a
+            # potentially foreign host capability.
+            credential_mounts = (
+                []
+                if profile_boundary is not None
+                else get_credential_file_mounts()
+            )
+            for mount_entry in credential_mounts:
+                cmd.extend(["--bind", f"{mount_entry['host_path']}:{mount_entry['container_path']}:ro"])
+            for skills_mount in get_skills_directory_mount():
+                cmd.extend(["--bind", f"{skills_mount['host_path']}:{skills_mount['container_path']}:ro"])
         except Exception as e:
             logger.debug("Singularity: could not load credential/skills mounts: %s", e)
 
@@ -273,24 +514,52 @@ class SingularityEnvironment(BaseEnvironment):
             cmd.extend(["--memory", f"{self._memory}M"])
         if self._cpu > 0:
             cmd.extend(["--cpus", str(self._cpu)])
+
         cmd.extend([str(self.image), self.instance_id])
 
         try:
-            result = run_capture(cmd, timeout=120)
+            # The same environment authorizes this instance's later control
+            # commands (cleanup's stop), captured while the owner is current.
+            control_env = _singularity_subprocess_env(
+                owner_home=owner_home,
+                source_home=source_home,
+            )
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120,
+                env=control_env, stdin=subprocess.DEVNULL,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"Failed to start instance: {result.stderr}")
+            self._control_env = dict(control_env)
+            self._instance_started = True
+            logger.info("Singularity instance %s started (persistent=%s)",
+                        self.instance_id, self._persistent)
         except subprocess.TimeoutExpired:
             raise RuntimeError("Instance start timed out")
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to start instance: {result.stderr}")
-        self._instance_started = True
-        logger.info("Singularity instance %s started (persistent=%s)", self.instance_id, self._persistent)
 
-    def _run_bash(self, cmd_string: str, *, login: bool = False, timeout: int = 120,
+
+    def _run_bash(self, cmd_string: str, *, login: bool = False,
+                  timeout: int = 120,
                   stdin_data: str | None = None) -> subprocess.Popen:
         """Spawn a bash process inside the Singularity instance."""
         if not self._instance_started:
             raise RuntimeError("Singularity instance not started")
-        cmd = [self.executable, "exec", f"instance://{self.instance_id}", *bash_argv(cmd_string, login)]
-        return _popen_bash(cmd, stdin_data)
+
+        cmd = [self.executable, "exec",
+               f"instance://{self.instance_id}"]
+        if login:
+            cmd.extend(["bash", "-l", "-c", cmd_string])
+        else:
+            cmd.extend(["bash", "-c", cmd_string])
+
+        return _popen_bash(
+            cmd,
+            stdin_data,
+            profile_home=self._owner_home,
+            source_profile_home=self._source_home,
+            enforce_profile_boundary=self._profile_env_boundary is not None,
+        )
+
 
     def exec_prefix(self, *, user: Optional[str] = None, interactive: bool = True) -> Optional[list[str]]:
         """Local argv running its remainder inside the instance (stdin always open; runs as the caller,
@@ -300,11 +569,38 @@ class SingularityEnvironment(BaseEnvironment):
         return [self.executable, "exec", f"instance://{self.instance_id}"]
 
     def cleanup(self):
-        """Stop the instance. If persistent, the overlay dir survives (until the process exits)."""
+        """Stop the instance. If persistent, the overlay dir survives.
+
+        Stop authority is the control environment captured when this object
+        started the instance, never the caller's current profile scope: teardown
+        may run from another profile's turn or after this owner's credentials
+        rotated, and neither may skip the stop. The handle is cleared only on a
+        confirmed stop, so a failure leaves it for the next cleanup attempt.
+        """
+        owner_home = self._owner_home
+        source_home = self._source_home
         if self._instance_started:
             try:
-                run_capture([self.executable, "instance", "stop", self.instance_id], timeout=30)
-                logger.info("Singularity instance %s stopped", self.instance_id)
+                control_env = getattr(self, "_control_env", None)
+                if control_env is None:
+                    control_env = _singularity_subprocess_env(
+                        owner_home=owner_home,
+                        source_home=source_home,
+                    )
+                result = subprocess.run(
+                    [self.executable, "instance", "stop", self.instance_id],
+                    capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30,
+                    env=dict(control_env),
+                    stdin=subprocess.DEVNULL,
+                )
             except Exception as e:
                 logger.warning("Failed to stop Singularity instance %s: %s", self.instance_id, e)
-            self._instance_started = False
+            else:
+                if result.returncode == 0:
+                    self._instance_started = False
+                    logger.info("Singularity instance %s stopped", self.instance_id)
+                else:
+                    logger.warning(
+                        "Failed to stop Singularity instance %s (exit %s): %s",
+                        self.instance_id, result.returncode, (result.stderr or "").strip()[:200],
+                    )

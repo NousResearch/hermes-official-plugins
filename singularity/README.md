@@ -13,7 +13,7 @@ machine. It is meant for HPC clusters and shared machines where Docker isn't ava
 - **Rootless:** runs as you, through `apptainer` (preferred) or `singularity`.
 - **Limits:** `terminal.container_cpu` and `terminal.container_memory` become `--cpus` / `--memory`.
 - **Persistence:** with `terminal.container_persistent: true` (the default) each session writes to an
-  overlay directory that outlives the container instance until the Hermes process exits; with `false`
+  overlay directory keyed by profile owner, image content/digest and task that survives process restarts; with `false`
   writes go to a tmpfs and vanish with the instance.
 - **Screen and browser:** Bot Desktop, `computer_use` and the browser follow the terminal into the
   container (the image needs the desktop stack; `nousresearch/hermes-sandbox:desktop` has it).
@@ -61,14 +61,29 @@ Batch runs (`batch_runner.py`) that give each prompt its own image register it f
 
 ## What's different from the built-in backend
 
-Nothing you configure. Two internals changed:
+The backend name and config keys are unchanged. The profile-boundary repair also changes these internals:
 
-- Core's process-exit sweep of `<scratch>/hermes-*` (which removed persistent overlays) now runs in the
-  plugin, and only in a process that started a Singularity instance; core no longer creates the
-  scratch directory on every exit.
+- Persistent overlays are not swept at process exit. A shared scratch directory may also contain
+  another process's live state. Existing flat-layout overlays are reused only for single-profile
+  callers; multiplexed callers do not adopt an overlay without a recorded profile/image owner.
+- New overlays and SIF cache entries are partitioned by durable profile/image identity, never by
+  a process-local secret generation. Changing image content selects a new overlay. Rotating a
+  credential does not discard that profile's filesystem. Mutable image references without a local
+  SIF use one-use overlay identities under multiplexing; digest-pinned images are reusable.
+- Host child processes use the core sanitizer. Image builds obtain only the registry-auth grant
+  set from the target profile. Process-global credential-file mounts are withheld under a captured
+  cross-profile boundary until the credential-file owner can supply profile-bound mounts.
+- Teardown uses the control environment captured when the instance started, and retains its
+  handle after a failed stop so cleanup can retry. This is stop-only lifecycle authority, not
+  permission to execute another profile's commands.
 - The write-only `singularity_snapshots.json` file is gone: nothing ever read it.
 
 ## Development
+
+This companion patch depends on the core profile-boundary API from Hermes PR #94878.
+It is not independently installable against the unchanged catalog/core pins. Land and validate
+the core API first, then publish the plugin and update the catalog pin under maintainer approval.
+Local conformance against a patched core is not hosted-CI or native-Apptainer certification.
 
 ```bash
 cd singularity

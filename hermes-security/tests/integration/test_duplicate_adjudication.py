@@ -242,3 +242,23 @@ def test_an_explicit_resume_lets_automatic_continue_run_again_with_the_pair_stil
     assert turn_end() == 'scheduled'
     scan = service.store.get_scan(sid)
     assert scan['reason'] is None and scan['options']['autoResume']['count'] == 1
+
+
+@pytest.mark.parametrize('cancel_first', [True, False], ids=['cancel-then-resume', 'resume'])
+def test_a_resume_from_outside_the_chat_does_not_queue_a_second_continue(tmp_path, cancel_first):
+    service, plan, first, second, kept, other = checked_pair(tmp_path)
+    sid = plan['scanId']
+    open_pair(service, sid, kept, other)
+    sent = []
+
+    def turn_end():
+        return recovery.continue_scan(service, service.store.get_scan(sid), interrupted=False,
+                                      inject=lambda text: sent.append(text) or True)
+
+    assert turn_end() == 'scheduled'
+    # The continue is still waiting in the chat when the scan is resumed from the dashboard.
+    if cancel_first:
+        service.cancel(sid)
+    service.resume(sid)
+    assert turn_end() == 'already-queued'
+    assert len(sent) == 1

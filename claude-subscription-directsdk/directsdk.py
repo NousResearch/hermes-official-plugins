@@ -1028,6 +1028,10 @@ class Client:
                             # Native sometimes drops the prefix on a tool it was offered (#62); carry the
                             # offered name so replayed history does not teach the slip back to the model.
                             block['name'] = PREFIX + block['name']
+                        elif block['name'].startswith('mcp__') and not block['name'].startswith(PREFIX) and block['name'][5:] in hermes_names:
+                            # Native also drops only the server segment (`mcp__tool_call` for
+                            # `mcp__hermes__tool_call`); restore it so core does not log an auto-repair per call.
+                            block['name'] = PREFIX + block['name'][5:]
                         name = block['name'].removeprefix(PREFIX)
                         name = hermes_names.get(name, name)
                         calls.append({'id': block['id'], 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(block['input'], separators=(',', ':'), allow_nan=False)}})

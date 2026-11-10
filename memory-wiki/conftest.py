@@ -40,6 +40,11 @@ def memory_wiki_core():
 
 
 @pytest.fixture(scope="session")
+def memory_wiki_cache():
+    return _load_by_path("hermes_dashboard_plugin_memory_wiki_cache", DASHBOARD_DIR / "memory_wiki_cache.py")
+
+
+@pytest.fixture(scope="session")
 def plugin_api():
     return _load_by_path("hermes_dashboard_plugin_memory_wiki_api", DASHBOARD_DIR / "plugin_api.py")
 

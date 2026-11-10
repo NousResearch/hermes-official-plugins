@@ -103,6 +103,7 @@ hermes-memory-wiki/
 │   ├── manifest.json            # tab declaration (/memory-wiki, icon Database)
 │   ├── plugin_api.py            # FastAPI router, mounted at /api/plugins/memory-wiki/
 │   ├── memory_wiki_core.py      # stdlib-only aggregation over SessionDB rows
+│   ├── memory_wiki_cache.py     # bounded per-session cache + JSON sidecar (#49)
 │   ├── src/index.jsx            # UI source (JSX, uses window.__HERMES_PLUGIN_SDK__)
 │   └── dist/index.js            # committed build artefact the dashboard loads
 ├── desktop/plugin.js            # native Desktop disk plugin, plain ESM (no build)
@@ -113,6 +114,17 @@ hermes-memory-wiki/
 ## Development
 
 Use Node.js 22.12+ for the native DOM tests.
+
+### Caching
+
+Aggregations memoize their per-session extraction in
+`dashboard/memory_wiki_cache.py`, so repeat dashboard requests stop re-reading
+every session's messages (#49). Units persist to an atomic sidecar JSON under
+`HERMES_HOME/cache/memory-wiki/session_units-v1.json` — profile-scoped, bounded
+by unit count and serialized size, evicting least-recently-active sessions
+first — so warm state survives gateway restarts. The plugin stays read-only
+with respect to `state.db`; the sidecar is the only file it writes. Set
+`MEMORY_WIKI_CACHE=off` to fall back to the always-recompute path.
 
 ```bash
 npm ci                      # build/test dependencies only; runtime React comes from Desktop

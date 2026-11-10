@@ -555,7 +555,7 @@ class SecurityService:
             chains_recorded=self.store.get_chains(scan_id) is not None, progress_key=progress_key,
             now=now or datetime.now(timezone.utc), max_parallel=standard.MAX_PARALLEL_WORKERS,
             deep_stopped=scan['mode'] == 'deep' and bool(self._deep_stop(scan, attempts, packets)),
-            duplicates=reducer.possible_duplicates(reduced['retained'], reduced['distinct']) if reduced else ())
+            duplicates=self._open_pairs(reduced)[0] if reduced else ())   # an undecided pair is not asked about again
         if result['step'] == 'finalize':
             unresolved = deployment.pending(self.store.coverage_units(scan_id))
             if unresolved:
@@ -827,11 +827,22 @@ class SecurityService:
             raise Conflict('candidate conservation check failed')
         return result
 
+    @staticmethod
+    def _open_pairs(reduced):
+        """Open possible duplicate pairs as (blocking, undecided, all of them in listing order).
+
+        A pair is undecided while it is still open and either side named the other in
+        provenance.maybeDuplicateOf; it no longer blocks finalize, which seals it as a gap.
+        """
+        parked = {tuple(pair) for pair in reduced['undecided']}
+        pairs = [{**pair, 'verdict': 'undecided'} if tuple(pair['candidateIds']) in parked else pair
+                 for pair in reducer.possible_duplicates(reduced['retained'], reduced['distinct'])]
+        return [p for p in pairs if 'verdict' not in p], [p for p in pairs if 'verdict' in p], pairs
+
     def _possible_duplicates(self, scan_id):
         """Candidate pairs a validator should check for one root cause before finalize."""
         try:
-            reduced = self._reduced(scan_id)
-            return reducer.possible_duplicates(reduced['retained'], reduced['distinct'])
+            return self._open_pairs(self._reduced(scan_id))[2]
         except Conflict:  # a broken conservation check is reported by finalize, not by the summary
             return []
 
@@ -885,14 +896,14 @@ class SecurityService:
             if deployment.pending(self.store.coverage_units(scan_id)):
                 raise ValidationError('deployment evidence requires an explicit parent checkpoint disposition before finalizing')
             reduced = self._reduced(scan_id)
-            open_pairs = reducer.possible_duplicates(reduced['retained'], reduced['distinct'])
+            blocking, _, open_pairs = self._open_pairs(reduced)
             # A target whose reviewed files changed accepts no more results, so no verdict can
             # arrive: the scan still seals what it has, as partial, with the open pairs named.
             stale = not target.is_snapshot_current(scan['target'], scan['snapshot_digest'])
             diff = target.compare_inventory(scan['target'], self.store.inventory(scan_id)) if stale else None
             added_only = diff is not None and not diff['changed']
-            if open_pairs and (not stale or added_only):
-                raise ValidationError(f'{len(open_pairs)} possible duplicate pair(s) need a same-bug-or-different verdict from a validator before finalizing; read security_scan_get section next')
+            if blocking and (not stale or added_only):
+                raise ValidationError(f'{len(blocking)} possible duplicate pair(s) need a same-bug-or-different verdict from a validator before finalizing; read security_scan_get section next')
             findings, retained, gaps = [], [], []
             for row in reduced['retained'] + reduced['rejected']:
                 if row['evidenceState'] in {'source_supported', 'runtime_confirmed'}:
@@ -908,7 +919,7 @@ class SecurityService:
                         row.setdefault('proofGaps', []).append(str(exc))
                         gaps.append('Candidate ' + row['candidateId'] + ' has incomplete report sections.')
                 row.setdefault('proofGaps', []).append('Not promoted to a reportable finding.')
-                for field in ('subsumes', 'duplicateOf', 'distinctFrom'):
+                for field in ('subsumes', 'duplicateOf', 'distinctFrom', 'maybeDuplicateOf'):
                     row.get('provenance', {}).pop(field, None)
                 retained.append(row)
             coverage = self.coverage(scan_id)
@@ -960,7 +971,7 @@ class SecurityService:
             self.store.seal(scan_id, manifest['seal']['digest'], str(directory))
             self.store.add_event(scan_id, 'scan.finalized', 'Verified bundle sealed.', {'status': manifest['status']})
             return {'scanId': scan_id, 'status': manifest['status'], 'manifest': manifest, 'artifactDir': str(directory), 'verified': verified,
-                    'possibleDuplicates': open_pairs}   # empty unless a changed target sealed with pairs open
+                    'possibleDuplicates': open_pairs}   # empty unless pairs were sealed open: undecided, or a changed target
 
     def cancel(self, scan_id):
         with self._mutation(scan_id, canceled=True):

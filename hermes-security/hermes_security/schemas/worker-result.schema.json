@@ -746,6 +746,14 @@
                 "pattern": "^cand_[a-f0-9]{24}$(?![\\s\\S])"
               }
             },
+            "maybeDuplicateOf": {
+              "type": "array",
+              "maxItems": 200,
+              "items": {
+                "type": "string",
+                "pattern": "^cand_[a-f0-9]{24}$(?![\\s\\S])"
+              }
+            },
             "supersedes": {
               "anyOf": [
                 {

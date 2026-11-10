@@ -153,6 +153,10 @@ sealed finding:
   way. The latest record of a candidate that carries the field wins.
 - `distinctFrom: [candidateId, ...]`: checked against these; a different bug. The pair is no longer reported as a
   possible duplicate once either side names the other. The union over every record of the candidate applies.
+- `maybeDuplicateOf: [candidateId, ...]`: checked against these; the code read could not settle whether it is the
+  same bug. The union over every record of the candidate applies. The pair stays open and listed, but is not asked
+  about again and no longer stops `finalize`, which seals the scan `partial` with the pair counted in a gap. A
+  `distinctFrom` on either side, or a `duplicateOf` that merges, wins over it.
 
 A possible duplicate is a pair of live candidates (`candidate|source_supported|runtime_confirmed`) with overlapping
 line spans in one file, comparing each candidate's first location and every location whose `role` is `root_control`
@@ -397,10 +401,14 @@ tools and HTTP API: `start_scan(**opts)`, `get_scan(scan_id, section=None, limit
 header with scanId/root/snapshotDigest/methodologyVersion/submit/packetIds and `next`, always under the tool cap;
 `next` = `next_step(scan_id)`: `{step: dispatch|wait|validate|chains|finalize|done|blocked, items (<=50, to-do
 first then running), total, actionable, reason, progressKey, how}` derived only from stored state (once every
-candidate is checked, `validate` items are the open possible duplicate pairs: `{kind: "duplicate", candidateIds,
-path, lines, titles, state: pending|running}`, each needing a `duplicateOf` or `distinctFrom` verdict; `finalize`
-raises ValidationError while one is open, unless reviewed files changed after the scan started, when no result is
-accepted any more and it seals `partial` with the open pairs as a gap and in `possibleDuplicates`); `packets`
+candidate is checked, `validate` items are the open possible duplicate pairs without a verdict: `{kind:
+"duplicate", candidateIds, path, lines, titles, state: pending|running}`, each needing a `duplicateOf`,
+`distinctFrom` or `maybeDuplicateOf` verdict, and during that step `progressKey` is a string that changes only
+when the set of those pairs changes, not on every saved result; `finalize` raises ValidationError while one has no
+verdict, unless reviewed files changed after the scan started, when no result is accepted any more; a scan sealed
+with pairs still open, undecided or on a changed target, is `partial` with the open pairs as a gap and in
+`possibleDuplicates`, where an undecided pair's entry carries `verdict: "undecided"`, also in `summary`);
+`packets`
 paginated; plus inventory, coverage, candidates, findings, workers, validations, chains, activity, manifest,
 report), `checkpoint(...)`,
 `submit_worker_result(payload)`, `record_validations(scan_id, receipts|plans)`, `propose_chains(scan_id)`,

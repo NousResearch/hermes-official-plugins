@@ -11,16 +11,18 @@ def reduce_candidates(candidates):
     # are repeated observations, not separate source identities. Callers pass rows
     # oldest first, so on an equal state the later review (a validator) wins.
     priority = {'runtime_confirmed': 5, 'source_supported': 4, 'rejected': 3, 'inconclusive': 2, 'candidate': 1}
-    unique, same, distinct = {}, {}, set()
+    unique, same, distinct, undecided = {}, {}, set(), set()
     for raw in candidates:
         cid = raw['candidateId']
         old = unique.get(cid)
         # Validator verdicts outlive the record that carried them: a later record without the
-        # field does not erase one. The latest duplicateOf wins; distinctFrom is a union.
+        # field does not erase one. The latest duplicateOf wins; distinctFrom and maybeDuplicateOf
+        # are unions.
         verdict = raw.get('provenance', {})
         if verdict.get('duplicateOf'):
             same[cid] = verdict['duplicateOf']
         distinct.update(tuple(sorted((cid, other))) for other in verdict.get('distinctFrom') or [] if other != cid)
+        undecided.update(tuple(sorted((cid, other))) for other in verdict.get('maybeDuplicateOf') or [] if other != cid)
         if old is None or priority.get(raw.get('evidenceState'), 0) >= priority.get(old.get('evidenceState'), 0):
             unique[cid] = deepcopy(raw)
         if old:
@@ -67,8 +69,11 @@ def reduce_candidates(candidates):
         provenance.pop('subsumes', None)
         provenance.pop('duplicateOf', None)
         provenance.pop('distinctFrom', None)
-    # The verdict fields never reach a sealed finding, so the pairs judged different are returned here.
-    result = {'retained': kept, 'absorbed': absorbed, 'rejected': rejected, 'distinct': sorted(list(pair) for pair in distinct)}
+        provenance.pop('maybeDuplicateOf', None)
+    # The verdict fields never reach a sealed finding, so the pairs judged different are returned here,
+    # and so are the pairs a validator could not settle (raw verdicts: the caller checks they are still open).
+    result = {'retained': kept, 'absorbed': absorbed, 'rejected': rejected, 'distinct': sorted(list(pair) for pair in distinct),
+              'undecided': sorted(list(pair) for pair in undecided)}
     result['problems'] = conservation_check(candidates, result)
     return result
 
@@ -113,7 +118,9 @@ def possible_duplicates(rows, distinct=()):
     candidates' defining spans pairs them; other roles (callers, entry points) overlap too often
     to mean anything. One entry per pair, reporting its overlap with the lowest path, then the
     lowest line range. Pairs a validator judged different (``distinct`` from reduce_candidates,
-    or provenance.distinctFrom still on a row) are left out.
+    or provenance.distinctFrom still on a row) are left out. Pairs a validator could not settle
+    (provenance.maybeDuplicateOf) stay in: the caller tells them apart with ``undecided`` from
+    reduce_candidates.
 
     Different rule IDs or anchors are never merged here: a validator decides, and records the
     verdict with provenance.duplicateOf, provenance.subsumes or provenance.distinctFrom.

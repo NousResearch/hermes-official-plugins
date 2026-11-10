@@ -1,0 +1,7 @@
+{
+  "name": "grammarly",
+  "label": "Grammarly",
+  "description": "Authenticated proofreading endpoint for the Grammarly Desktop composer plugin.",
+  "version": "0.1.3",
+  "api": "plugin_api.py"
+}

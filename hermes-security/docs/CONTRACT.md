@@ -148,9 +148,9 @@ sealed finding:
 - `duplicateOf: candidateId`: this candidate is the same bug as that one; keep that one. The reducer absorbs this
   candidate into the named survivor exactly as if the survivor had listed it in `subsumes`; the survivor keeps its
   own locations and severity. Chains are followed to their end (A of B, B of C: both end in C). The verdict is
-  ignored, and the pair stays open, when it names the candidate itself, an unknown or rejected candidate, forms a
-  cycle, or does not end at a live survivor. A rejected candidate is never absorbed this way. The latest record of
-  a candidate that carries the field wins.
+  ignored, and the pair stays open, when it names the candidate itself, an unknown or rejected candidate (also one a
+  survivor subsumed), forms a cycle, or does not end at a live survivor. A rejected candidate is never absorbed this
+  way. The latest record of a candidate that carries the field wins.
 - `distinctFrom: [candidateId, ...]`: checked against these; a different bug. The pair is no longer reported as a
   possible duplicate once either side names the other. The union over every record of the candidate applies.
 
@@ -399,7 +399,8 @@ header with scanId/root/snapshotDigest/methodologyVersion/submit/packetIds and `
 first then running), total, actionable, reason, progressKey, how}` derived only from stored state (once every
 candidate is checked, `validate` items are the open possible duplicate pairs: `{kind: "duplicate", candidateIds,
 path, lines, titles, state: pending|running}`, each needing a `duplicateOf` or `distinctFrom` verdict; `finalize`
-raises ValidationError while one is open); `packets`
+raises ValidationError while one is open, unless reviewed files changed after the scan started, when no result is
+accepted any more and it seals `partial` with the open pairs as a gap and in `possibleDuplicates`); `packets`
 paginated; plus inventory, coverage, candidates, findings, workers, validations, chains, activity, manifest,
 report), `checkpoint(...)`,
 `submit_worker_result(payload)`, `record_validations(scan_id, receipts|plans)`, `propose_chains(scan_id)`,

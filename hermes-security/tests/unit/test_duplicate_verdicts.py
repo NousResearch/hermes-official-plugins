@@ -141,6 +141,14 @@ def test_duplicate_of_that_names_no_live_survivor_merges_nothing(target):
     assert [r['candidateId'] for r in reduced['rejected']] == [C]
 
 
+def test_duplicate_of_a_rejected_candidate_is_ignored_even_when_a_survivor_subsumed_it():
+    rows = pair_rows(duplicateOf=C) + [row(C, [loc('z.py', 1, 2)], state='rejected')]
+    rows[0]['provenance']['subsumes'] = [C]
+    reduced, pairs = pairs_of(rows)
+    assert [r['candidateId'] for r in reduced['retained']] == [A, B] and pairs == [[A, B]]
+    assert reduced['absorbed'] == [{'candidateId': C, 'into': A, 'reason': 'explicit remediation subsumption'}]
+
+
 def test_duplicate_of_an_inconclusive_candidate_merges_nothing():
     rows = pair_rows(duplicateOf=C) + [row(C, [loc('route.py', 12, 14, 'sink')], state='inconclusive')]
     reduced, pairs = pairs_of(rows)

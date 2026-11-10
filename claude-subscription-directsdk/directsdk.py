@@ -529,6 +529,21 @@ def _with_login_identity(env):
     return env
 
 
+def _rate_limit_summary(event) -> "dict | None":
+    """Secret-free summary of native's ``rate_limit_event`` (#43).
+
+    ``overageStatus: "allowed"`` only means overage is permitted, not in use;
+    paid use is ``isUsingOverage`` true or the ``overage`` window type.
+    Subscription windows (``five_hour``, ``seven_day``, ``seven_day_opus``,
+    ``seven_day_sonnet``, ``seven_day_overage_included``) are not paid use."""
+    info = event.get('rate_limit_info') if isinstance(event, dict) else None
+    if not isinstance(info, dict):
+        return None
+    window = str(info.get('rateLimitType') or '')
+    return {'window': window, 'overage_status': str(info.get('overageStatus') or ''),
+            'using_overage': bool(info.get('isUsingOverage')) or window == 'overage'}
+
+
 def _stderr_tail(native_stderr):
     """The first native stderr lines, for the raised error - a gateway-only failure with
     stderr sent to DEVNULL is undiagnosable (#44): the reporter had to patch the plugin to
@@ -943,6 +958,7 @@ class Client:
                                 break
                 send(None)
                 assistants, results, stopped, emitted = [], [], False, ''
+                rate_limit = None
                 native_error = native_error_code = None
                 fast = False
                 while True:
@@ -961,6 +977,12 @@ class Client:
                         if _fast_eligible(event, request.admission, stopped, native_error):
                             fast = True
                             break
+                    elif kind == 'rate_limit_event':
+                        # Native reports the subscription window state in-stream;
+                        # dropping it leaves quota policy (#43) with no signal.
+                        summary = _rate_limit_summary(event)
+                        if summary:
+                            rate_limit = summary
                     elif kind == 'stream_event':
                         native = event['event']
                         if native['type'] == 'message_stop':
@@ -1069,6 +1091,8 @@ class Client:
                                     'completion_tokens_details': {'reasoning_tokens': usage.get('output_tokens_details', {}).get('thinking_tokens', 0)},
                                     'native_cost': {'total_cost_usd': final.get('total_cost_usd'), 'modelUsage': final.get('modelUsage')}}
                 normalized_usage['native_admission'] = {'upstream_requests': int(admission.used), 'blocked_requests': admission.denied, 'request_id': admission.request_id}
+                if rate_limit:
+                    normalized_usage['native_admission']['rate_limit'] = rate_limit
                 if admission.unrestored:
                     normalized_usage['native_admission']['unrestored'] = admission.unrestored
                 finish = 'content_filter' if refused else 'tool_calls' if calls else ('length' if any(a.get('stop_reason') in ('max_tokens', 'model_context_window_exceeded') for a in assistants) else 'stop')

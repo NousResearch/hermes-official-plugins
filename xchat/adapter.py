@@ -106,6 +106,55 @@ def _load_cursors() -> Dict[str, str]:
     return {str(k): str(v) for k, v in data.items() if str(v)}
 
 
+def _keys_path() -> Path:
+    return _state_dir() / "conversation_keys.json"
+
+
+def _load_conversation_keys() -> Dict[str, Dict[str, bytes]]:
+    """Verified conversation keys persisted across restarts (base64, mode 600).
+
+    Keys learned from a KeyChange live only in memory today: after a restart
+    the next message under a rotated key fails decrypt until its KeyChange
+    event happens to page in again — and that event may sit behind the
+    cursor. Persisting the verified cache closes the gap."""
+    import base64
+
+    try:
+        data = json.loads(_keys_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    out: Dict[str, Dict[str, bytes]] = {}
+    if isinstance(data, dict):
+        for conv, versions in data.items():
+            if isinstance(versions, dict):
+                decoded = {}
+                for version, blob in versions.items():
+                    try:
+                        decoded[str(version)] = base64.b64decode(str(blob))
+                    except Exception:
+                        continue
+                if decoded:
+                    out[str(conv)] = decoded
+    return out
+
+
+def _save_conversation_keys(conversation_keys: Dict[str, Dict[str, bytes]]) -> None:
+    import base64
+
+    try:
+        path = _keys_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {conv: {v: base64.b64encode(k).decode("ascii") for v, k in versions.items()}
+                   for conv, versions in conversation_keys.items()}
+        tmp = path.with_suffix(".json.tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload) + "\n")
+        tmp.replace(path)
+    except OSError:
+        logger.debug("[xchat] conversation-key persist failed", exc_info=True)
+
+
 def _conv_key(conversation_id: str) -> str:
     """One cache key per conversation: events embed ``A:B``, URL paths and listings use ``A-B``."""
     return str(conversation_id).replace(":", "-")
@@ -297,7 +346,7 @@ class XChatAdapter(BasePlatformAdapter):
         self._live_conversations: Set[str] = set()
         self._cursors: Dict[str, str] = _load_cursors()
         self._seen_event_ids: Dict[str, float] = {}
-        self._conversation_keys: Dict[str, Dict[str, bytes]] = {}
+        self._conversation_keys: Dict[str, Dict[str, bytes]] = _load_conversation_keys()
         # Latest verified key version per conversation — media decrypt must
         # use the key for the EVENT's version, media encrypt the latest.
         self._latest_key_version: Dict[str, str] = {}
@@ -591,10 +640,19 @@ class XChatAdapter(BasePlatformAdapter):
                 event = self._crypto.decrypt_one(
                     event_b64, self._conversation_keys.get(_conv_key(conv_id)) or None
                 )
-            except Exception as e:
-                logger.warning("[xchat] decrypt failed conv=%s event=%s: %s", conv_id, event_id, e)
-                self._set_cursor(conv_id, event_id)
-                continue
+            except Exception:
+                # The key may have rotated while we were offline, with its
+                # KeyChange behind the cursor: rebuild from the event itself
+                # and retry once before dropping the message.
+                self._absorb_key_batch(conv_id, [event_b64], label="key-rebuild")
+                try:
+                    event = self._crypto.decrypt_one(
+                        event_b64, self._conversation_keys.get(_conv_key(conv_id)) or None
+                    )
+                except Exception as e:
+                    logger.warning("[xchat] decrypt failed conv=%s event=%s: %s", conv_id, event_id, e)
+                    self._set_cursor(conv_id, event_id)
+                    continue
 
             etype = event.get("type")
             if etype == "KeyChange":
@@ -677,6 +735,7 @@ class XChatAdapter(BasePlatformAdapter):
         keys = (batch.get("conversation_keys") or {}).get("keys") or {}
         if keys:
             self._conversation_keys.setdefault(_conv_key(conv_id), {}).update(keys)
+            _save_conversation_keys(self._conversation_keys)
         latest = batch.get("latest_key_version")
         if latest:
             self._latest_key_version[_conv_key(conv_id)] = str(latest)

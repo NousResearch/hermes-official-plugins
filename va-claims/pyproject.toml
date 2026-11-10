@@ -1,0 +1,14 @@
+[project]
+name = "hermes-va-claims"
+version = "0.1.0"
+description = "VA benefits claim tracking and filing guidance for Hermes Agent (official plugin)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Bearden / Onyx Systems" }]
+requires-python = ">=3.11"
+dependencies = [
+  "pyjwt[crypto]>=2.8,<3",
+]
+
+[project.urls]
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/va-claims"

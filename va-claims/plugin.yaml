@@ -1,0 +1,37 @@
+name: va-claims
+version: 0.1.0
+description: "Full VA benefits tracker: disability claims (21-526EZ), GI Bill, health, CHAMPVA, SGLI/VGLI, deadlines, via the VA Lighthouse APIs."
+author: lEWFkRAD
+requires_hermes: ">=0.22.6"
+python_dependencies:
+  - pyjwt[crypto]>=2.8,<3
+config_schema:
+  client_id:
+    type: str
+    description: "VA Lighthouse Benefits Claims API client ID (from the sandbox or production access email)."
+  private_key_path:
+    type: str
+    description: "Path to your RSA private key PEM used to sign the client assertion. A file path you choose, not a credential."
+  reference_api_key:
+    type: str
+    secret: true
+    description: "Benefits Reference Data API key (free, developer.va.gov)."
+  default_icn:
+    type: str
+    description: "Default veteran ICN for claim lookups."
+  environment:
+    type: str
+    description: "sandbox or production. Defaults to sandbox."
+requires_env:
+  - name: VA_REFERENCE_API_KEY
+    description: "Free Benefits Reference Data API key from developer.va.gov (optional; enables contention lookup)."
+    url: "https://developer.va.gov/explore/api/benefits-reference-data"
+    secret: true
+provides_tools:
+  - va_claim_status
+  - va_claim_track
+  - va_disability_lookup
+  - va_intent_to_file
+  - va_benefit_track
+  - va_benefit_summary
+  - va_claim_guide

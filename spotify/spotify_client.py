@@ -145,6 +145,28 @@ def normalize_spotify_id(value: str, expected_type: Optional[str] = None) -> str
     return cleaned
 
 
+def spotify_uri_type(value: str) -> Optional[str]:
+    """Return the item type encoded in a Spotify URI/URL, or None for a bare id.
+
+    Lets a caller derive ``expected_type`` from the input instead of hardcoding
+    one type, so a URI keeps the type it came with.
+    """
+    cleaned = (value or "").strip()
+    if cleaned.startswith("spotify:"):
+        parts = cleaned.split(":")
+        if len(parts) >= 3 and parts[1]:
+            return parts[1]
+    elif "open.spotify.com" in cleaned:
+        path_parts = [part for part in urlparse(cleaned).path.split("/") if part]
+        # Localized web players share /intl-<locale>/<type>/<id>; drop the locale
+        # segment so the positional read still finds the type.
+        if path_parts and path_parts[0].startswith("intl-"):
+            path_parts = path_parts[1:]
+        if len(path_parts) >= 2:
+            return path_parts[0]
+    return None
+
+
 def normalize_spotify_uri(value: str, expected_type: Optional[str] = None) -> str:
     """Like normalize_spotify_id but returns a URI; bare ids need *expected_type* to become one."""
     cleaned = (value or "").strip()

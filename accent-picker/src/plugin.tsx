@@ -22,20 +22,29 @@ const plugin: HermesPlugin = {
   id: 'accent',
   name: 'Accent Picker',
   description:
-    'Pick the theme accent from an OKLCH color picker in the status bar; the palette re-derives live. Authoring tool — the color is not persisted.',
+    'Pick the theme accent from an OKLCH color picker in the status bar; the palette re-derives live. The choice persists across reloads via ctx.storage.',
   defaultEnabled: false,
   register(ctx) {
-    // The override is a scratch value, not a setting. Dropping it on unregister
-    // means disabling the plugin (or reloading) returns every surface to the
-    // authored theme instead of stranding a color with no control to clear it.
-    ctx.onDispose(() => setAccentOverride(null))
-
+    // Restore persisted accent as soon as the plugin loads (not only when the
+    // picker popover is opened), so the colour is active on startup.
+    try {
+      const saved = ctx && ctx.storage && ctx.storage.get('hermes-accent-picker', null)
+      if (saved) $accentOverride.set(saved)
+    } catch (e) {}
+    if (ctx && ctx.files) {
+      ctx.files.readText('data', 'accent.txt').then((r: any) => {
+        if (r && r.ok && r.text) {
+          const v = r.text.trim()
+          if (v) $accentOverride.set(v)
+        }
+      }).catch(() => {})
+    }
     ctx.registerMany([
       {
         id: 'picker',
         area: STATUSBAR_AREAS.right,
         order: 90,
-        render: () => <AccentPickerTrigger />
+        render: () => <AccentPickerTrigger ctx={ctx} />
       },
       {
         id: 'reset',
@@ -44,7 +53,7 @@ const plugin: HermesPlugin = {
           id: 'accent.reset',
           label: 'Accent: reset to the theme default',
           keywords: ['accent', 'color', 'theme', 'reset', 'default'],
-          run: () => setAccentOverride(null)
+          run: () => { $accentOverride.set(null); try { if (ctx && ctx.storage) ctx.storage.set('hermes-accent-picker', null) } catch (e) {}; try { if (ctx && ctx.files) void ctx.files.writeText('data', 'accent.txt', '') } catch (e) {} }
         } satisfies PaletteContribution
       },
       {

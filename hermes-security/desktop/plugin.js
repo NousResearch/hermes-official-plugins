@@ -999,10 +999,20 @@ export function NewScan({ onClose, onStarted }) {
 export function Coverage({ data }) {
   const coverage = data?.coverage || data || {}
   const gaps = list(coverage.gaps)
+  const deployment = list(coverage.units).filter((u) => u.kind === 'deployment')
   return jsxs(Block, { children: [
     jsx(Paragraph, {
       value: `${coverage.completeness || 'Unknown'} coverage · ${coverage.files?.reviewed ?? 'Unknown'} of ${coverage.files?.total ?? 'unknown'} files reviewed. Zero findings does not establish that the code is safe.`
     }),
+    deployment.length ? jsxs('section', { 'aria-label': 'Deployment evidence', children: [
+      jsx('h3', { children: 'Deployment evidence' }),
+      jsx(Bullets, { values: deployment.map((u) => {
+        const d = u.deployment || {}
+        const disposition = { pending: 'Needs review', resolved: 'Evidence reviewed', deferred: 'Unresolved' }[d.disposition] || 'Unresolved'
+        return `${d.component}: ${d.ingress} ingress · ${disposition}. ${d.actor} → ${d.asset}. ${d.reviewNote || u.reason || ''}`
+          + (list(d.missingEvidence).length ? ` Missing evidence: ${d.missingEvidence.join('; ')}.` : '')
+      }) })
+    ] }) : null,
     // Partial scans can carry hundreds of gaps; keep them behind a count.
     gaps.length > 5
       ? jsxs('details', { children: [jsx('summary', { children: `${gaps.length} coverage gaps recorded` }), jsx(Bullets, { values: gaps })] })
@@ -1075,6 +1085,12 @@ export function reportSummary(scan, coverageData) {
   const lines = [total
     ? `${plural(total, 'finding')}: ${SEVERITIES.filter((s) => counts[s]).map((s) => `${counts[s]} ${sevName(s)}`).join(', ')}.`
     : 'No reportable findings.']
+  const deploymentUnresolved = list(coverage.units).some((u) => u.kind === 'deployment' && u.state !== 'reviewed')
+  const filesDone = Number.isFinite(files.total) && (files.reviewed || 0) + (files.notApplicable || 0) === files.total
+  if (deploymentUnresolved) {
+    lines.push(filesDone ? 'All in-scope files read; deployment security unresolved.'
+      : 'Deployment security unresolved; in-scope file review is also incomplete.')
+  }
   if (coverage.completeness === 'complete') {
     lines.push(Number.isFinite(files.total) ? `Fully reviewed: all ${files.total} files in scope were read.` : 'Fully reviewed.')
   } else if (coverage.completeness) {
@@ -1082,7 +1098,9 @@ export function reportSummary(scan, coverageData) {
       files.deferred ? `${plural(files.deferred, 'file')} not read in full to stay within the review budget` : null,
       files.unsupported ? `${plural(files.unsupported, 'file')} in a format it can't review (such as a binary)` : null
     ].filter(Boolean)
-    lines.push(`Partly reviewed: ${files.reviewed ?? '?'} of ${files.total ?? '?'} files were read. `
+    lines.push((deploymentUnresolved && filesDone
+      ? 'Review incomplete. '
+      : `Partly reviewed: ${files.reviewed ?? '?'} of ${files.total ?? '?'} files were read. `)
       + (left.length ? `Not covered: ${left.join('; ')}.` : 'Some review work was not finished; see Coverage below.')
       + (total ? '' : ' No findings here does not mean the code is safe.'))
   }

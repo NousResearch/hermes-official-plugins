@@ -1,0 +1,8 @@
+services:
+  collector:
+    image: example.invalid/telemetry:synthetic
+    environment:
+      MANAGEMENT_BIND: 0.0.0.0:9090
+      MANAGEMENT_AUTH: disabled
+      RAW_EVENTS: enabled
+    networks: [shared-workloads]

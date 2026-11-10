@@ -99,6 +99,26 @@ function render(node) {
   return render(node.props?.children)
 }
 
+test('deployment evidence separates file completion from unresolved private ingress', () => {
+  const coverage = { completeness: 'partial', files: { total: 1, reviewed: 1 }, gaps: [], units: [
+    { kind: 'deployment', state: 'reviewed', deployment: { component: 'collector', ingress: 'public',
+      actor: 'internet user', asset: 'telemetry', disposition: 'resolved', reviewNote: 'No public ingress.', missingEvidence: [] } },
+    { kind: 'deployment', state: 'deferred', deployment: { component: 'collector', ingress: 'private',
+      actor: 'customer-controlled workload', asset: 'organization-wide telemetry', disposition: 'deferred',
+      reviewNote: 'Private path not established.', missingEvidence: ['effective image config', 'network isolation'] } }
+  ] }
+  const view = render(plugin.Coverage({ data: coverage }))
+  for (const text of ['Deployment evidence', 'public ingress', 'Evidence reviewed', 'private ingress', 'Unresolved',
+    'customer-controlled workload', 'organization-wide telemetry', 'effective image config', 'network isolation']) assert.ok(view.includes(text), text)
+  for (const extra of [{}, { workers: [{ status: 'missing' }], gaps: ['Worker packet has no accepted result.'] },
+    { gaps: ['lane:A01:2025 is deferred'], units: [...coverage.units, { kind: 'lane', state: 'deferred' }] }]) {
+    const summary = plugin.reportSummary({}, { ...coverage, ...extra }).join(' ')
+    assert.match(summary, /All in-scope files read; deployment security unresolved\./)
+    assert.doesNotMatch(summary, /Repository review complete|Partly reviewed: 1 of 1/)
+    assert.match(summary, /review work was not finished|deployment security unresolved/)
+  }
+})
+
 test('validation controls explain tests and offer optional app testing on open scans', () => {
   const local = render(plugin.ValidationControls({ id: 'scan_test', scan: { safetyLevel: 'local-safe', status: 'awaiting_analysis' } }))
   assert.match(local, /runs small tests from this repo/)

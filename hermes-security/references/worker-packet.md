@@ -63,6 +63,63 @@ coverage gaps, and blockers. Summaries are progress only, not results.
 
 For `baseline`, independently threat-model the whole scope and follow entry points, trust boundaries and sensitive operations across areas, including secret exposure in docs/examples/inactive code; mark reviewed only files read fully. When the packet brief asks for an entry-point map, you are not expected to read every file: map entry points and trust boundaries, follow the riskiest flows, and check the files standard skipped for committed secrets and missed entry points. For `investigator` area, second and remainder packets, review every listed file against every lane; read outside the area only to follow a data flow, report findings only for listed files, mark each file you read fully `reviewed`, and mark the rest `deferred` with the reason so the plugin queues them for a fresh worker. Record out-of-area leads in notes for the parent. For `flow` and `control` question packets (planner 4), answer the packet's question instead: trace the named path, or the shared check and its callers, by reading the functions that pass data between the listed files rather than every line; report findings anywhere on that path, record a negative result naming the control when the attack fails, and mark a file `reviewed` only if you read it fully. Question packets never queue remainders, so files you only traced through need no coverage state. A dependency lead is an advisory for a package version, not a finding: submit a candidate only after tracing that this code reaches the affected behaviour, otherwise record a negative result naming the control (not imported, affected API unused, build-only). For `deep-pass`, perform one complete independent pass with its own coverage, no recursive orchestration. For `diff`, preserve both pinned SHAs, deleted-file coverage, and introduced/inherited attribution. For `validator`, independently re-read each candidate, preserve identity/provenance, and return a source-supported verdict or exact rejection/proof gap; never silently drop an input.
 
+## Deployment evidence inside existing area reviews
+
+Deployment questions stay in the existing deployment area packet. Do not create an
+extra review round or repeat workers for missing runtime artifacts. Review manifests,
+overlays and image references only as inert data; never pull/run an image, probe a
+listener, fetch external configuration, or widen static/offline authorization.
+Trace public and direct private ingress separately, including API, metrics, debug,
+health and raw-event/event-tap listeners. An unexposed public address does not prove
+private isolation. Consider a customer-controlled workload reaching shared services
+and organization-wide data; cite enforced bind/authentication/network controls,
+not comments or intended use.
+
+A fully read file may have `file:<path>` state `reviewed` while deployment security
+is unresolved. Add an **optional coverage unit**, not a finding-state upgrade:
+
+```jsonc
+{
+  "unit": "deployment:deploy/service.yml#collector-private",
+  "state": "unknown",
+  "note": "Image-owned management listener is not established by this manifest.",
+  "deployment": {
+    "component": "collector",
+    "ingress": "private",
+    "actor": "customer-controlled workload",
+    "asset": "organization-wide telemetry",
+    "missingEvidence": ["deployed image digest", "effective configuration and overrides", "listener bind/authentication", "raw-event API capability", "private-network policy"],
+    "disposition": "pending",
+    "reviewNote": ""
+  }
+}
+```
+
+Use `deployment:<exact inventory path>#<stable-key>` (key: lowercase letters,
+digits, hyphen/underscore, at most 64 characters); keep component/ingress/boundary
+keys stable across observations. `ingress` is `public`, `private`, or `local`.
+Use separate units for independent public/private paths or independently missing
+controls; do not bundle management exposure with image pinning. Workers submit
+only `pending`/`unknown`, with the exact missing artifacts. No file remainder is
+created by these units. Source-supported, rejected or inconclusive candidates
+remain separate and must retain their own evidence and proof gaps.
+
+The parent reads coverage, re-reads important cross-tenant/shared-service claims,
+and records each deployment unit through `security_scan_checkpoint` before finish:
+`disposition: resolved`, `state: reviewed`, empty `missingEvidence` and a nonempty
+`reviewNote` explaining the source/control evidence; **or** `disposition: deferred`,
+`state: deferred`, remaining `missingEvidence` and a nonempty adjudication note.
+Resolved means the evidence question was reviewed, not that a vulnerability was
+fixed or runtime-tested. Deferral permits finalization but keeps the report partial.
+Pending evidence blocks finalization, not by starting more workers. A later worker
+reopens that unit as pending, so adjudicate only after all relevant workers finish.
+This asks for a parent checkpoint, never another worker or review round.
+
+Do not mark every inconclusive candidate a coverage gap: record deployment units
+only for material missing deployment/control evidence. Retain other inconclusive
+claims visibly without inventing runtime coverage obligations. Existing workers
+and scans that omit deployment units keep their previous contract.
+
 ## Worker-result JSON shape
 
 Exactly these top-level keys are accepted (camelCase; no root or revision keys in the envelope):

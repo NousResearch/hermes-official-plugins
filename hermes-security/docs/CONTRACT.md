@@ -163,6 +163,32 @@ excerpt's range, and `codeEvidence.code` must match the snapshot
 file lines (whitespace-trimmed line-by-line compare) — mismatches are rejected per-candidate with reasons
 returned, not silently fixed.
 
+### Optional deployment evidence (no new worker or round)
+
+Coverage accepts `deployment:<inventory path>#<stable-key>` units alongside file,
+lane and ASVS units. The unit carries optional structured `deployment` detail:
+`component`, `ingress` (`public|private|local`), `actor`, `asset`, `missingEvidence`
+(bounded list of exact absent artifacts), `disposition` (`pending|resolved|deferred`),
+and `reviewNote`. See `references/worker-packet.md` for the complete example.
+Workers may submit only `pending`/`unknown`. Parent checkpoints record
+`resolved`/`reviewed` (empty missing list plus evidence note), or
+`deferred`/`deferred` (nonempty missing list plus adjudication note). Pending units
+block finalization; deferred units keep completeness partial. Existing payloads
+without these units remain valid. There is no DB migration or new safety authority.
+Same-key observations merge missing facts, reasons, review notes and evidence references
+inside the store write transaction; differing component/ingress/actor/asset identities
+are rejected, not overwritten. Deferring a subset cannot erase prior missing facts.
+Explicit parent resolution clears the active missing list but retains internal fact
+history; a later pending observation reopens the boundary with all historical facts.
+Merged values exceeding schema bounds reject the write rather than truncate evidence.
+
+Deployment units never alter file counts or queue file remainders. A read manifest
+may be complete file coverage with unresolved deployment evidence. Public and
+private ingress need independent dispositions. Resolved means evidence reviewed,
+not vulnerability fixed or runtime confirmed. Do not infer deployment units from
+all inconclusive candidates. Material missing evidence must be explicitly recorded;
+important inconclusive claims retain their proof gaps in the human report.
+
 ### coverage.json
 
 ```jsonc
@@ -241,7 +267,7 @@ finish_attempt(scan_id, attempt_id, status, *, result_digest=None, error=None)
 upsert_candidates(scan_id, attempt_id, candidates: list[dict]) -> {"inserted":n,"duplicates":n}  # idempotent on candidate_id+attempt
 list_candidates(scan_id, *, states=None) -> list[dict]
 set_candidate_state(scan_id, candidate_id, state, *, reason) -> dict
-record_coverage(scan_id, units: list[dict], *, source: str)   # last-writer-wins per unit only if not sealed; keeps history in events
+record_coverage(scan_id, units: list[dict], *, source: str, monotonic=False)   # unsealed only; deployment observations merge in the write transaction; other units upsert (optionally monotonic)
 coverage_units(scan_id) -> list[dict]
 record_validation(scan_id, receipt: dict) -> dict ; validations(scan_id, candidate_id=None) -> list[dict]
 record_chains(scan_id, chains_doc: dict) -> dict ; get_chains(scan_id) -> dict | None

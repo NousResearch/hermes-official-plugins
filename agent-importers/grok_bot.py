@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import re
 import shutil
 import sys
@@ -508,8 +509,12 @@ class GrokBotImporter(AgentImporter):
                 job_skills = [skills[s.lower()] for s in _strings(routine.get("skills")) if s.lower() in skills]
                 paused = not self.activate_routines or bool(routine.get("paused"))
                 kwargs = _create_job_kwargs(cron_jobs.create_job, routine, paused, self.PRODUCT)
+                deliver = _delivery_target(self.target_root)
+                if deliver and "deliver" in inspect.signature(cron_jobs.create_job).parameters:
+                    kwargs["deliver"] = deliver
 
-                details: dict[str, Any] = {"schedule": schedule, "paused": paused, "skills": job_skills}
+                details: dict[str, Any] = {"schedule": schedule, "paused": paused, "skills": job_skills,
+                                           "deliver": deliver or "local"}
                 if zone_note := _zone_note(routine, kwargs):  # imported rows print only where they went
                     details["timezone_note"] = zone_note
                     where = f"{where} ({zone_note})"
@@ -522,7 +527,8 @@ class GrokBotImporter(AgentImporter):
                     details["job_id"] = job.get("id")
 
                 self.apply("routine", f"{source} / {label}", where,
-                           f"Would create a {'paused ' if paused else ''}cron job ({schedule})",
+                           f"Would create a {'paused ' if paused else ''}cron job ({schedule}, "
+                           f"delivers to {deliver or 'local'})",
                            create, details)
         if unscheduled:
             self._note_event_routines(source, bot_name, unscheduled)
@@ -592,6 +598,44 @@ def _routine_schedule(routine: dict[str, Any], parse_schedule) -> Optional[str]:
         except (ValueError, TypeError):
             continue
         return candidate
+    return None
+
+
+_HOME_CHANNEL_PLATFORMS = ("TELEGRAM", "DISCORD", "SLACK", "WHATSAPP", "SIGNAL",
+                           "MATRIX", "QQBOT", "QQ", "FEISHU", "DINGTALK", "MATTERMOST")
+
+
+def _delivery_target(target_root: Path) -> Optional[str]:
+    """First delivery target the target profile can actually receive on: a platform whose home
+    channel is configured (``<PLATFORM>_HOME_CHANNEL`` in the process env or the profile's
+    ``.env``, or a ``home_channel`` in its config), else None — the job then stays ``local``
+    and the summary must say where its output lands instead of staying silent (#264)."""
+    env: dict[str, str] = {}
+
+    dotenv = target_root / ".env"
+    if dotenv.is_file():
+        for line in read_text(dotenv).splitlines():
+            key, _, value = line.strip().partition("=")
+            if key.strip() and value.strip():
+                env[key.strip()] = value.strip().strip("'\"")
+
+    for name in _HOME_CHANNEL_PLATFORMS:
+        if str(env.get(f"{name}_HOME_CHANNEL") or os.environ.get(f"{name}_HOME_CHANNEL") or "").strip():
+            return name.lower()
+
+    config = target_root / "config.yaml"
+    if config.is_file():
+        try:
+            import yaml
+
+            data = yaml.safe_load(read_text(config)) or {}
+            platforms = data.get("platforms") if isinstance(data, dict) else None
+            if isinstance(platforms, dict):
+                for name, section in platforms.items():
+                    if isinstance(section, dict) and str(section.get("home_channel") or "").strip():
+                        return str(name).strip().lower()
+        except Exception:
+            pass
     return None
 
 

@@ -22,6 +22,12 @@
 
 ### Fixed
 
+- Session mode: a kept process's place against `max_sessions` is taken under the lock before the launch, so agents
+  starting together can no longer all pass the check and keep more processes than the cap (with `max_sessions: 1`,
+  three agents kept three). A client dropped without `close()` no longer keeps its process for the idle hour: the idle
+  timer holds no reference to the client and a finalizer ends the process when the client is collected. A `close()`
+  that lands while a step is finishing cannot publish a kept process on the closed client, and resuming a kept process
+  no longer reaps it behind the reader thread's back.
 - A tool call cut at the output cap or streamed as invalid JSON reaches Hermes with its raw arguments and finish
   `length`, so Hermes retries the request and never runs it. Before, the turn failed with `error_max_turns` (#164, #221),
   and a reply with one valid and one invalid call silently lost the invalid one. After invalid JSON, that conversation

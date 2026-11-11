@@ -590,6 +590,25 @@ def _hand_off(native):
 # this long, the prompt cache's own lifetime.
 _live, _live_lock = set(), threading.Lock()
 SESSION_IDLE_S = 3600.0
+
+
+class _Reservation:
+    """A kept process's place in ``_live`` from the cap check until the process exists (nothing to kill yet)."""
+
+    def kill(self):
+        pass
+
+
+def _end_orphan_native(native):
+    native.kill()
+    native.release()
+
+
+def _end_orphan(kept):
+    """End the process a collected client still held (``kept`` is the client's holder, not the client)."""
+    native = kept.pop('native', None)
+    if native is not None:
+        _end_orphan_native(native)
 _LAUNCH_DIR = re.compile(r'claude-directsdk-launch-(\d+)-')
 _swept = []
 
@@ -792,7 +811,9 @@ class Native:
             try:
                 event = self.events.get_nowait()
             except queue.Empty:
-                return self.process.poll() is None
+                # Never poll() here: that reaps the child, and the reader thread owns reaping (its group kill after an
+                # exited launcher needs the leader unreaped). The reader ends only after native has exited.
+                return self.reader.is_alive()
             if event is None or isinstance(event, Exception):
                 return False
 
@@ -1077,6 +1098,10 @@ class Client:
         self._lock, self._requests, self._closed = threading.Lock(), set(), False
         # The one native kept alive for this client (Hermes keeps a client per agent), and whether a step uses it.
         self._session, self._stepping = None, False
+        # A client Hermes drops without close() must not keep its process for the idle hour: the finalizer ends
+        # whatever this holder names once the client is collected (the holder, not the client, is what it references).
+        self._kept = {'native': None}
+        weakref.finalize(self, _end_orphan, self._kept)
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
 
     def cancel(self):
@@ -1104,22 +1129,38 @@ class Client:
         with self._lock:
             if self._session is None or (native is not None and self._session is not native):
                 return
-            native, self._session = self._session, None
+            native, self._session, self._kept['native'] = self._session, None, None
         native.kill()
         native.release()
 
     def _keep(self, native, frames, expect):
         native.frames, native.expect = frames, expect
-        native.idle = threading.Timer(SESSION_IDLE_S, self._end_session, args=(native,))
+        # The timer holds no reference to this client: a bound method would keep a dropped client, and with it the
+        # process, alive for the whole idle hour. Once the client is gone the timer ends the process itself.
+        end = weakref.WeakMethod(self._end_session)
+
+        def expire():
+            method = end()
+            (method if method is not None else _end_orphan_native)(native)
+        native.idle = threading.Timer(SESSION_IDLE_S, expire)
         native.idle.daemon = True
-        native.idle.start()
         with self._lock:
-            self._session, self._stepping = native, False
+            closed = self._closed
+            if not closed:
+                self._session, self._stepping, self._kept['native'] = native, False, native
+        if closed:
+            # close() ran during this step: nothing of it may outlive the client.
+            native.kill()
+            native.release()
+            with self._lock:
+                self._stepping = False
+            return
+        native.idle.start()
 
     def _resume(self, ident, frames):
         """The kept session and how this step continues it, else (None, None) after ending it."""
         with self._lock:
-            native, self._session = self._session, None
+            native, self._session, self._kept['native'] = self._session, None, None
         if native is not None:
             native.idle.cancel()
             how = native.resumes(frames) if native.ident == ident and native.settled() else None
@@ -1255,10 +1296,15 @@ class Client:
             native, how = self._resume(ident, frames) if session else (None, None)
             while True:
                 if native is None:
+                    reservation = None
                     with _live_lock:
-                        # At the process cap this step runs one-shot: the same bytes at the per-call cost.
+                        # At the process cap this step runs one-shot: the same bytes at the per-call cost. The place is
+                        # taken here, under the lock: concurrent launches checked against an empty set used to all pass.
                         session = session and len(_live) < cap
-                    native = self._launch(request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id, session)
+                        if session:
+                            reservation = _Reservation()
+                            _live.add(reservation)
+                    native = self._launch(request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id, session, reservation)
                     native.ident = ident
                     native.replay(request, frames, timeout)
                     if not session:
@@ -1292,8 +1338,9 @@ class Client:
                 if stepping and outcome != 'kept':
                     self._stepping = False
 
-    def _launch(self, request, env, resolved, upstream, kwargs, body, tools, system, frames, timeout, session_id, session):
-        """Start native for one step: a session (kept for the next step) or a one-shot (ends after this one)."""
+    def _launch(self, request, env, resolved, upstream, kwargs, body, tools, system, frames, timeout, session_id, session, reservation=None):
+        """Start native for one step: a session (kept for the next step, taking the place ``reservation`` holds in
+        ``_live``) or a one-shot (ends after this one)."""
         queried = frames[-1]['message']['content']
         # The queried frame lets the relay keep the cache breakpoint off native's per-request context.
         admission = relay(upstream, timeout, queried=queried)
@@ -1336,9 +1383,12 @@ class Client:
             native = Native(request, command, env, self._workdir(), admission, root, tools if session else None)
             if session:
                 with _live_lock:
+                    _live.discard(reservation)
                     _live.add(native)
             return native
         except BaseException:
+            with _live_lock:
+                _live.discard(reservation)
             admission.close()
             shutil.rmtree(root, ignore_errors=True)
             raise

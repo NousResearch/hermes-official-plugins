@@ -310,6 +310,26 @@ python evals/directsdk_cache_wire.py /path/to/claude
 
 CI runs both evals on Linux and macOS through `evals/ci.sh`, against a pinned Claude Code installed from npm (`CLAUDE_CODE_VERSION`, default 2.1.292). They need no credentials and make no inference calls. Bump the pin to qualify a new Claude Code release: a change in native's wire shape fails here before it reaches users.
 
+The long-session bench compares the per-call and kept-process paths on the real CLI against a scripted loopback
+upstream, with no credentials and no inference:
+
+```sh
+python evals/directsdk_session_bench.py /path/to/claude --rounds 200 --park 150 --out bench.json
+python evals/directsdk_replay_bench.py        # the per-call replay cost alone, on the synthetic CLI fixture
+```
+
+It runs one turn of 200 tool rounds, a compaction and a second turn, then an edited tool result, in both modes with one
+HOME, and reports wall time per model step as the history grows (min, median, p95, by fifty-round bucket), Claude Code
+processes started and alive at once, the kept process's RSS, whether the kept process restarted after the compaction
+and the edit, whether a tool parked for `--park` seconds continued on the same process, and whether every upstream body
+was byte-identical to per-call's. Linux, 2.1.292 and 2.1.322: a per-call tool round takes 0.35 s (median) in the first
+fifty rounds and 0.86 to 0.93 s in rounds 150 to 199; a kept-process round 0.020 to 0.032 s; 406 processes started
+per-call against 3 kept; the kept process grows from about 180 MB to 280 to 306 MB RSS over 200 rounds; a 150 s park
+continues on the same process; every body identical. The replay bench on the synthetic CLI puts the plugin's own share
+of a per-call replay at 0.06 s for one frame and 0.11 s for 401 frames, so the growth above is Claude Code's.
+`tests/test_directsdk_session_parked.py` covers a parked call and idle eviction during a park (`DIRECTSDK_PARK_SECONDS`,
+default 2 s).
+
 Transport invariant tests cover signed replay and harmless normalization, transformed projections, final tool batches/usage, async use, lazy failure, invalid parameters, conflicting auth, and active/paused/unstarted stream cleanup. The admission regression fails on the previous implementation (two upstream requests) and passes with one request, preserving first-response usage including zero values. Its cancellation control verifies upstream socket closure. A real-native ten-case loopback qualification covers normal text, tools, output/context limits, thinking-only recovery, refusal, HTTP errors, disconnects and cancellation, with one upstream request per call. Its responses are synthetic protocol fixtures, not paid-model evidence.
 
 Installed-plugin discovery (`$HERMES_HOME/plugins/<name>/`) and every missing-`claude` path are covered against a temporary `HERMES_HOME`, including constructing the bundled client without spawning native or accessing auth. A fresh subscription-backed AIAgent loop completed two API calls with host `read_file` execution and SQLite persistence; separate service requests accepted edited-assistant replay. Native loopback qualification also accepted 182K of tool schemas plus a 176K system prompt through file-backed settings. Loopback responses remain fixtures, not paid-model evidence.

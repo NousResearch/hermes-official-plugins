@@ -33,7 +33,21 @@ def results(message):
 
 
 def alive(pid):
-    return psutil.pid_exists(pid) and psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+    try:
+        return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+    except psutil.Error:
+        return False
+
+
+def parked(native, within=10):
+    """Native has asked for the call over the control protocol and the plugin holds it."""
+    deadline = time.monotonic() + within
+    while time.monotonic() < deadline:
+        with native.lock:
+            if native.parked:
+                return set(native.parked)
+        time.sleep(.02)
+    return set()
 
 
 def test_a_parked_tool_continues_on_the_same_process(home, upstream, monkeypatch):
@@ -44,6 +58,7 @@ def test_a_parked_tool_continues_on_the_same_process(home, upstream, monkeypatch
         first = step(kept, messages)
         assert first['tool_calls'] and session_pids(kept)
         pid = next(iter(session_pids(kept)))
+        assert parked(kept._session) == {call['id'] for call in first['tool_calls']}, 'native did not park the call'
         time.sleep(PARK)
         assert alive(pid), 'the kept process did not survive the park'
         sent = len(upstream.bodies)

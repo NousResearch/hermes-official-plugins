@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import directsdk
 
-VERBOSE, ROUNDS = False, 200
+VERBOSE = False
 MODEL = 'claude-sonnet-5-5'
 TOOLS = [{'type': 'function', 'function': {'name': 'read_file', 'description': 'Read a file',
           'parameters': {'type': 'object', 'properties': {'path': {'type': 'string'}}, 'required': ['path']}}}]
@@ -109,23 +109,30 @@ class Upstream(BaseHTTPRequestHandler):
 
 
 class Spawns:
-    """Exact count of Claude Code processes started: wraps the Popen the plugin uses."""
+    """Exact count of Claude Code turn processes started: wraps the plugin's own spawn, not every Popen."""
 
     def __init__(self):
-        self.pids, self.real = [], subprocess.Popen
+        self.pids, self.real = [], directsdk.Request.spawn
 
     def __enter__(self):
         bench = self
 
-        class Counting(self.real):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, **kwargs)
-                bench.pids.append(self.pid)
-        directsdk.subprocess.Popen = Counting
+        def counting(request, *args, **kwargs):
+            process = bench.real(request, *args, **kwargs)
+            bench.pids.append(process.pid)
+            return process
+        directsdk.Request.spawn = counting
         return self
 
     def __exit__(self, *_):
-        directsdk.subprocess.Popen = self.real
+        directsdk.Request.spawn = self.real
+
+
+def drained(within=15):
+    """Wait for one-shots handed off by the previous mode to exit, so they do not count as the next mode's processes."""
+    deadline = time.monotonic() + within
+    while directsdk._draining and time.monotonic() < deadline:
+        time.sleep(.05)
 
 
 class Sampler(threading.Thread):
@@ -161,12 +168,12 @@ def client(binary, home, upstream, session):
         'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1', 'DISABLE_TELEMETRY': '1', 'DISABLE_ERROR_REPORTING': '1'})
 
 
-def turn(c, messages, rows, *, phase, park=0, park_at=None):
+def turn(c, messages, rows, *, phase, rounds, park=0, park_at=None):
     """Hermes' loop for one user turn: one create() per model step, the tool results appended for each call."""
-    budget = len(messages) + 2 * (ROUNDS + 2)
+    budget = len(messages) + 2 * (rounds + 2)
     while True:
         if len(messages) > budget:
-            raise RuntimeError(f'{phase}: the turn did not end after {ROUNDS} tool rounds')
+            raise RuntimeError(f'{phase}: the turn did not end after {rounds} tool rounds')
         pid_before = c._session.process.pid if c._session is not None else None
         started = time.perf_counter()
         message = c.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000).choices[0].message.model_dump()
@@ -191,22 +198,23 @@ def turn(c, messages, rows, *, phase, park=0, park_at=None):
 def scenario(binary, home, upstream, session, rounds, park):
     """One full run of a mode. Returns the per-step rows, the upstream bodies and the process counts."""
     rows, sampler = [], Sampler()
+    drained()
     c = client(binary, home, upstream, session)
     sampler.start()
     try:
         with Spawns() as spawns:
             messages = [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': 'go'}]
-            turn(c, messages, rows, phase='turn1', park=park, park_at=3 if park else None)
+            turn(c, messages, rows, phase='turn1', rounds=rounds, park=park, park_at=3 if park else None)
             # Hermes compaction: the finished tool loop becomes a summary; the kept process cannot continue this.
             compacted = messages[:2] + [{'role': 'user', 'content': f'Summary of earlier work: read f0..f{rounds - 1}.'}]
             compacted.append({'role': 'user', 'content': 'and now?'})
-            turn(c, compacted, rows, phase='after_compaction')
+            turn(c, compacted, rows, phase='after_compaction', rounds=3)
             # An edited history (a changed tool result): refused by the relay before upstream, replayed into a new process.
             edited = list(compacted)
             index = next(i for i, m in enumerate(edited) if m.get('role') == 'tool')
             edited[index] = {**edited[index], 'content': edited[index]['content'] + ' (edited)'}
             edited.append({'role': 'user', 'content': 'once more'})
-            turn(c, edited, rows, phase='after_edit')
+            turn(c, edited, rows, phase='after_edit', rounds=3)
     finally:
         c.close()
         sampler.stop.set()
@@ -291,7 +299,7 @@ if __name__ == '__main__':
     parser.add_argument('--out', help='write the full report (every step) here; stdout gets the summary')
     parser.add_argument('--verbose', action='store_true', help='print every step to stderr as it completes')
     args = parser.parse_args()
-    VERBOSE, ROUNDS = args.verbose, args.rounds
+    VERBOSE = args.verbose
     result = run(args.binary, args.rounds, args.park, args.repeats, args.out)
     if args.out:
         for r in result['runs']:

@@ -323,8 +323,9 @@ HOME, and reports wall time per model step as the history grows (min, median, p9
 processes started and alive at once, the kept process's RSS, whether the kept process restarted after the compaction
 and the edit, whether a tool parked for `--park` seconds continued on the same process, and whether every upstream body
 was byte-identical to per-call's. Linux, 2.1.292 and 2.1.322: a per-call tool round takes 0.35 s (median) in the first
-fifty rounds and 0.86 to 0.93 s in rounds 150 to 199; a kept-process round 0.020 to 0.032 s; 406 processes started
-per-call against 3 kept; the kept process grows from about 180 MB to 280 to 306 MB RSS over 200 rounds; a 150 s park
+fifty rounds and 0.86 to 0.93 s in rounds 150 to 199; a kept-process round 0.020 to 0.033 s; one process per model
+step per-call (209 for the scenario) against 3 kept; the kept process grows from about 180 MB to 280 to 306 MB RSS over
+200 rounds; a 150 s park
 continues on the same process; every body identical. The replay bench on the synthetic CLI puts the plugin's own share
 of a per-call replay at 0.06 s for one frame and 0.11 s for 401 frames, so the growth above is Claude Code's.
 `tests/test_directsdk_session_parked.py` covers a parked call and idle eviction during a park (`DIRECTSDK_PARK_SECONDS`,

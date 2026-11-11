@@ -59,16 +59,20 @@ class Upstream(BaseHTTPRequestHandler):
         raw = self.rfile.read(int(self.headers['Content-Length']))
         self.server.bodies.append(raw)
         body = json.loads(raw)
-        rounds = turns = total = 0
+        rounds = total = 0
+        opening = ''
         for message in body['messages']:
             if opens_turn(message):
-                rounds, turns = 0, turns + 1
+                rounds = 0
+                content = message['content']
+                opening = content if isinstance(content, str) else ''.join(b.get('text', '') for b in content if b.get('type') == 'text')
             elif message.get('role') == 'assistant':
                 rounds, total = rounds + 1, total + 1
             elif VERBOSE and extra_text(message):
                 print(json.dumps({'extra_text_beside_tool_results': extra_text(message)}), file=sys.stderr, flush=True)
-        # The first turn is the long one; later turns (after compaction, after an edit) take three rounds each.
-        tool = rounds < (self.server.rounds if turns <= 1 else 3)
+        # The turn opened by "go" is the long one; later turns (after compaction, after an edit) take three rounds each.
+        # Consecutive user texts merge into one wire message, so the opening text is read from its end.
+        tool = rounds < (self.server.rounds if opening.endswith('go') else 3)
         # Ids unique across the whole conversation: a duplicate tool_use id makes native drop the block and replace
         # the orphaned tool result with "(no content)" (2.1.322), which no real Hermes history produces.
         rounds = total

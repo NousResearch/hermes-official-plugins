@@ -12,9 +12,15 @@ from providers.base import ProviderProfile
 try:
     from .model_catalog import ALIASES, MODEL_METADATA, MODEL_CAPABILITIES, PICKER_ROUTES, native_model
     from .directsdk_setup import INSTALL_HINT, _resolve
+    # Resolve once at module import: plugin re-discovery can evict this package from sys.modules,
+    # and a lazy relative import inside a method then fails as "No module named 'directsdk'".
+    from . import directsdk as _directsdk
+    from . import directsdk_setup as _directsdk_setup
 except ImportError:
     from model_catalog import ALIASES, MODEL_METADATA, MODEL_CAPABILITIES, PICKER_ROUTES, native_model
     from directsdk_setup import INSTALL_HINT, _resolve
+    import directsdk as _directsdk
+    import directsdk_setup as _directsdk_setup
 
 logger = logging.getLogger(__name__)
 
@@ -110,11 +116,7 @@ class ClaudeOAuthDirectSDKProfile(ProviderProfile):
                           label=format_cost_label(amount), notes=('native API list-price equivalent; not subscription invoice; extra usage unknown',))
 
     def create_client(self, **client_kwargs):
-        try:
-            from .directsdk import Client
-        except ImportError:
-            from directsdk import Client
-        return Client(**client_kwargs)
+        return _directsdk.Client(**client_kwargs)
 
     def fetch_models(self, **kwargs):
         # No HTTP /models endpoint: the account's own picker (CLI `initialize` handshake) is the
@@ -123,18 +125,10 @@ class ClaudeOAuthDirectSDKProfile(ProviderProfile):
         return [row["id"] for row in rows] if rows else None
 
     def setup_status(self, **kwargs):
-        try:
-            from .directsdk_setup import setup_status
-        except ImportError:
-            from directsdk_setup import setup_status
-        return setup_status(**kwargs)
+        return _directsdk_setup.setup_status(**kwargs)
 
     def discover_models(self, **kwargs):
-        try:
-            from .directsdk_setup import discover_models
-        except ImportError:
-            from directsdk_setup import discover_models
-        return discover_models(**kwargs)
+        return _directsdk_setup.discover_models(**kwargs)
 
     def build_api_kwargs_extras(self, *, reasoning_config=None, **context):
         extra = {'reasoning': dict(reasoning_config)} if reasoning_config else {}
@@ -147,12 +141,7 @@ class ClaudeOAuthDirectSDKProfile(ProviderProfile):
     def fetch_account_usage(self, *, base_url=None, api_key=None):
         """`/usage` plan limits, asked of Claude Code itself; every failure is an `Unavailable:` line, never a raise."""
         from agent.account_usage import AccountUsageSnapshot
-        try:
-            from .directsdk_setup import fetch_usage
-        except ImportError:
-            from directsdk_setup import fetch_usage
-
-        limits, reason = fetch_usage()
+        limits, reason = _directsdk_setup.fetch_usage()
         windows, details = usage_windows(limits) if limits is not None else ((), ())
         return AccountUsageSnapshot(provider=self.name, source='claude_code_get_usage', fetched_at=datetime.now(timezone.utc),
                                     title='Claude plan limits', windows=tuple(windows), details=tuple(details),

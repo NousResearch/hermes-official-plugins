@@ -168,6 +168,12 @@ keeps one Claude Code process alive between model calls:
   this Hermes process (about 200 MB each).
 - The process ends on `cancel()`, `close()`, Hermes releasing the client, an hour idle (the prompt cache's lifetime),
   and when Hermes exits, even by `SIGKILL`: its standard input closes, which ends Claude Code's session.
+- A tool parked on a human (an approval, a hand-off) keeps its call open: the plugin holds Claude Code's `tools/call`
+  until Hermes brings the result, and Claude Code waits for it (`MCP_TOOL_TIMEOUT` is set to 24 hours on a kept
+  process). Hermes' request timeout and stale timer run only inside a model call, not while a tool is parked. The one
+  idle hour above counts from the end of the last model step, so a tool parked longer than that ends the process; the
+  next step then starts a new one with the per-call bytes, as a one-shot would have, and nothing else changes. Measured
+  on Linux and macOS: a call parked for 150 s continued on the same process with the same upstream bytes.
 - Claude Code reports list price per process and only when a turn ends, so a tool step has no price of its own and the
   turn's last step carries the turn's.
 

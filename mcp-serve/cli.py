@@ -11,6 +11,10 @@ def setup_cli(parser) -> None:
              "MCP client, under this profile's credentials (off by default; never terminal, file or "
              "kanban tools)")
     parser.add_argument(
+        "--bot-chat", action="store_true",
+        help="Also expose bots_list, bot_message_send and bot_reply_get: message this install's Bot Mode "
+             "agents in their Bot Chat and get their replies (off by default)")
+    parser.add_argument(
         "--accept-hooks", action="store_true",
         help="With --tools: run the shell hooks in config.yaml without the first-use consent check")
 
@@ -19,4 +23,5 @@ def handle_cli(args) -> None:
     from .bridge import run_mcp_server
 
     run_mcp_server(verbose=bool(getattr(args, "verbose", False)), include_tools=bool(getattr(args, "tools", False)),
-                   accept_hooks=bool(getattr(args, "accept_hooks", False)))
+                   accept_hooks=bool(getattr(args, "accept_hooks", False)),
+                   include_bot_chat=bool(getattr(args, "bot_chat", False)))

@@ -10,7 +10,9 @@ description: >
   conversations, poll live events, send messages and answer approvals over
   stdio. `--tools` (off by default) also exposes Hermes' web, browser, vision,
   image generation, skills and TTS tools under your profile's credentials;
-  terminal, file and kanban tools are never exposed. Formerly built into
+  terminal, file and kanban tools are never exposed. `--bot-chat` (off by
+  default) lets the client message this install's Bot Mode agents and get
+  their replies. Formerly built into
   Hermes core as `hermes mcp serve`.
 requires_hermes: ">=0.22.0"
 provides_tools: []

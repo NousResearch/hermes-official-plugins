@@ -8,7 +8,7 @@ channels_list. Client config: {"mcpServers": {"hermes": {"command": "hermes", "a
 
 Formerly ``mcp_serve.py`` in hermes-agent core (``hermes mcp serve``); the tool names, schemas and
 descriptions are unchanged. ``--tools`` (see :mod:`.hermes_tools`) also exposes a curated slice of
-Hermes' own tool surface.
+Hermes' own tool surface; ``--bot-chat`` (see :mod:`.bot_chat`) lets the client message Bot Mode agents.
 """
 
 from __future__ import annotations
@@ -739,26 +739,39 @@ _TOOLS_INSTRUCTIONS = (
     " Also exposes Hermes' own capabilities (web search/extract, browser automation, "
     "vision analysis, image generation, skills and text-to-speech) as directly callable tools."
 )
+_BOT_CHAT_INSTRUCTIONS = (
+    " bots_list, bot_message_send and bot_reply_get message this install's Bot Mode agents in their "
+    "Bot Chat and return their replies."
+)
 
 
-def create_mcp_server(event_bridge: Optional[EventBridge] = None, include_tools: bool = False) -> MCPServer:
+def create_mcp_server(event_bridge: Optional[EventBridge] = None, include_tools: bool = False,
+                      include_bot_chat: bool = False) -> MCPServer:
     """Create and return the Hermes MCP server with all tools registered.
 
     *include_tools* (``--tools``) also registers the curated Hermes tool surface
-    (:data:`.hermes_tools.EXPOSED_TOOLS`) after the bridge tools; off by default."""
+    (:data:`.hermes_tools.EXPOSED_TOOLS`) after the bridge tools; *include_bot_chat* (``--bot-chat``)
+    registers the Bot Mode messaging tools (:data:`.bot_chat.BOT_CHAT_TOOL_NAMES`). Both off by default."""
     if not _MCP_SERVER_AVAILABLE:
         raise ImportError(f"MCP server requires the 'mcp' package. {_MCP_INSTALL_HINT}")
-    mcp = MCPServer("hermes", instructions=_BRIDGE_INSTRUCTIONS + (_TOOLS_INSTRUCTIONS if include_tools else ""))
+    mcp = MCPServer("hermes", instructions=_BRIDGE_INSTRUCTIONS + (_TOOLS_INSTRUCTIONS if include_tools else "")
+                    + (_BOT_CHAT_INSTRUCTIONS if include_bot_chat else ""))
     handlers = _ToolHandlers(event_bridge or EventBridge())
     for name in _TOOL_NAMES:
         mcp.tool()(getattr(handlers, name))
+    if include_bot_chat:
+        from .bot_chat import register_bot_chat_tools
+        register_bot_chat_tools(mcp, reserved=_TOOL_NAMES)
     if include_tools:
         from .hermes_tools import register_hermes_tools
-        logger.info("exposed %d Hermes tools over MCP", register_hermes_tools(mcp, reserved=_TOOL_NAMES))
+        from .bot_chat import BOT_CHAT_TOOL_NAMES
+        logger.info("exposed %d Hermes tools over MCP",
+                    register_hermes_tools(mcp, reserved=_TOOL_NAMES + BOT_CHAT_TOOL_NAMES))
     return mcp
 
 
-def run_mcp_server(verbose: bool = False, include_tools: bool = False, accept_hooks: bool = False) -> None:
+def run_mcp_server(verbose: bool = False, include_tools: bool = False, accept_hooks: bool = False,
+                   include_bot_chat: bool = False) -> None:
     """Start the Hermes MCP server on stdio."""
     if not _MCP_SERVER_AVAILABLE:
         print(f"Error: MCP server requires the 'mcp' package.\n{_MCP_INSTALL_HINT}", file=sys.stderr)
@@ -769,7 +782,7 @@ def run_mcp_server(verbose: bool = False, include_tools: bool = False, accept_ho
         prepare_tool_process(accept_hooks=accept_hooks)
     bridge = EventBridge()
     bridge.start()
-    server = create_mcp_server(event_bridge=bridge, include_tools=include_tools)
+    server = create_mcp_server(event_bridge=bridge, include_tools=include_tools, include_bot_chat=include_bot_chat)
     import asyncio
 
     async def _run():

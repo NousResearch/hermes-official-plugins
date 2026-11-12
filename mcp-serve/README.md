@@ -65,11 +65,32 @@ Adds these Hermes tools next to the bridge, using this profile's configured prov
 - **Your hooks still apply.** Shell hooks and plugin `pre_tool_call` hooks run around every call; `--accept-hooks` skips the first-use consent check for shell hooks, as it does for the gateway.
 - Tool output is secret-redacted (`HERMES_REDACT_SECRETS`), and calls cost whatever the configured provider charges.
 
+## `--bot-chat`: message your Bot Mode agents
+
+```json
+{ "command": "hermes", "args": ["mcp-serve", "--bot-chat"] }
+```
+
+Adds three tools for talking to the profiles on this install that are in Bot Mode, in their canonical Bot Chat:
+
+| Tool | What it does |
+|---|---|
+| `bots_list` | Bot Mode profiles with their `@handle`, display name and role (Bot Mode title and profile description), read from disk on every call |
+| `bot_message_send` | DM one of them (`profile`: profile id, `@handle` or friendly name). Returns the reply if it lands within `wait_seconds` (default 60, max 300), else `status: queued`/`claimed` with a `delivery_id` |
+| `bot_reply_get` | The reply for a `delivery_id`, or `pending: true` while the agent is still working; `wait_seconds` (default 0) waits for it |
+
+- **Off by default.** Without `--bot-chat` none of these tools exist.
+- **Bot Mode profiles only.** A profile without Bot Mode is refused, so no chat is ever opened in a profile that did not opt in.
+- **Delivered the way one bot messages another.** The message takes Hermes' own `message_agent` delivery path to the target's live Bot Chat and arrives signed `Message from 🤖 <sender_name> (@<handle>):` (`sender_name` defaults to `MCP client`), with a `bot:<handle>` author for the recipient's memory hooks. The handle is the sender name slugified; one that matches a local profile, handle or friendly name gets an `mcp-` prefix, so a client cannot sign as a teammate.
+- **Needs the target's gateway running**: it owns the Bot Chat. A target that is down is reported as not sent (safe to resend); an admission whose outcome is unknown says so and must not be resent. A reply that is late is never lost: fetch it with `bot_reply_get`, from this server or a later one.
+- The agent runs a full turn under its own profile, tools and model, at that profile's cost.
+
 ## Options
 
 ```bash
 hermes mcp-serve                 # conversation bridge only
 hermes mcp-serve --tools         # plus Hermes' tools (see above)
+hermes mcp-serve --bot-chat      # plus Bot Mode messaging (see above)
 hermes mcp-serve --verbose       # debug logging on stderr
 ```
 

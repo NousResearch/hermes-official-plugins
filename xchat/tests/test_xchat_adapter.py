@@ -7,6 +7,7 @@ network, no gateway process.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -1342,7 +1343,10 @@ def test_known_conversations_persist_across_restart(monkeypatch, tmp_path):
 
     path = tmp_path / "conversations.json"
     assert path.exists()
-    assert oct(path.stat().st_mode)[-3:] == "600"
+    # chmod(0o600) does not change the mode Windows reports (666). The mode is a
+    # POSIX property; the restart check below is what this test exists to prove.
+    if os.name != "nt":
+        assert oct(path.stat().st_mode)[-3:] == "600"
 
     second = _make_adapter(monkeypatch)
     second._load_conversations()

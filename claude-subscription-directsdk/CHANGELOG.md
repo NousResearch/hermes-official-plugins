@@ -32,6 +32,8 @@
   out of place) is refused before upstream and the step replays into a new process, as a request that does not extend
   the previous one is. Before, that request went upstream with native's own tool-result shape in the replayed rows. A
   fresh process's first request, the replay itself, still forwards as native built it.
+- The session cancel test checked the process state regardless of the request's error (an `and`/`or` without
+  parentheses) and could fail on a pid that vanished between two checks.
 - A tool call cut at the output cap or streamed as invalid JSON reaches Hermes with its raw arguments and finish
   `length`, so Hermes retries the request and never runs it. Before, the turn failed with `error_max_turns` (#164, #221),
   and a reply with one valid and one invalid call silently lost the invalid one. After invalid JSON, that conversation

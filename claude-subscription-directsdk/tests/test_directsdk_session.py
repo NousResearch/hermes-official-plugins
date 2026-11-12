@@ -130,6 +130,14 @@ def session_pids(c):
     return {native.process.pid} if native is not None else set()
 
 
+def ended(pid):
+    """Gone, or a zombie waiting on its reap; a pid that vanishes between two checks counts as gone."""
+    try:
+        return psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    except psutil.Error:
+        return True
+
+
 # claude_ai is the live A/B's shape: the kept native replayed its opening turn with the reminder per-call never sent,
 # so every session restarted after its first step (two processes per conversation, slower than per-call).
 @pytest.mark.parametrize('login', ['api_key', 'claude_ai'])
@@ -188,7 +196,7 @@ def test_a_kept_session_never_outlives_its_turn_or_its_owner(home, upstream, mon
         time.sleep(.1)
         kept.cancel()
         worker.join(5)
-        assert errors == ['Claude request cancelled'] and not psutil.pid_exists(pid) or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+        assert errors == ['Claude request cancelled'] and ended(pid)
         upstream.slow = 0
         kept.create(model=MODEL, messages=list(history), tools=TOOLS, max_tokens=1000)
     finally:
@@ -212,6 +220,6 @@ time.sleep(60)
     owner.send_signal(signal.SIGKILL)
     owner.wait()
     deadline = time.monotonic() + 15
-    while time.monotonic() < deadline and psutil.pid_exists(pid) and psutil.Process(pid).status() != psutil.STATUS_ZOMBIE:
+    while time.monotonic() < deadline and not ended(pid):
         time.sleep(.05)
-    assert not psutil.pid_exists(pid) or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    assert ended(pid)

@@ -7,6 +7,7 @@ network, no gateway process.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -215,6 +216,88 @@ def test_adapter_reads_config_extra_over_defaults(monkeypatch):
 def test_poll_interval_floor(monkeypatch):
     adapter = _make_adapter(monkeypatch, poll_interval="0.1")
     assert adapter._poll_interval == 2.0
+
+
+def test_adaptive_pacing_reads_config(monkeypatch):
+    # Non-default values on purpose: defaults would mask a key-mapping mistake
+    # between ``extra`` ("poll_interval_active") and env ("XCHAT_POLL_INTERVAL_ACTIVE").
+    adapter = _make_adapter(
+        monkeypatch,
+        poll_interval="300",
+        poll_interval_active="20",
+        active_window="900",
+        daily_call_budget="1200",
+    )
+    assert adapter._poll_interval == 300.0
+    assert adapter._active_interval == 20.0
+    assert adapter._active_window == 900.0
+    assert adapter._daily_call_budget == 1200
+
+
+def test_adaptive_pacing_reads_env(monkeypatch):
+    monkeypatch.setenv("XCHAT_POLL_INTERVAL_ACTIVE", "25")
+    monkeypatch.setenv("XCHAT_ACTIVE_WINDOW", "1200")
+    monkeypatch.setenv("XCHAT_DAILY_CALL_BUDGET", "700")
+    adapter = _make_adapter(monkeypatch, poll_interval="300")
+    assert adapter._active_interval == 25.0
+    assert adapter._active_window == 1200.0
+    assert adapter._daily_call_budget == 700
+
+
+def test_idle_interval_until_traffic_then_window_expires(monkeypatch):
+    adapter = _make_adapter(
+        monkeypatch,
+        poll_interval="300",
+        poll_interval_active="15",
+        active_window="600",
+    )
+    adapter._last_refill_at = 1000.0
+    assert adapter._next_poll_interval(now=1000.0) == 300.0  # no traffic yet
+    adapter._last_activity_at = 1000.0
+    assert adapter._next_poll_interval(now=1005.0) == 15.0  # inside the window
+    assert adapter._next_poll_interval(now=1600.0) == 15.0  # boundary still counts
+    assert adapter._next_poll_interval(now=1601.0) == 300.0  # window expired
+
+
+def test_outbound_send_opens_the_active_window(monkeypatch):
+    monkeypatch.setattr(xchat_adapter, "_remember_sent", lambda message_id: None)
+    adapter = _make_adapter(
+        monkeypatch, poll_interval="300", poll_interval_active="15", active_window="600"
+    )
+    adapter._last_refill_at = time.monotonic()
+    adapter._record_sent("m1")
+    assert adapter._last_activity_at > 0
+    assert adapter._next_poll_interval() == 15.0
+
+
+def test_exhausted_budget_holds_the_idle_interval(monkeypatch):
+    adapter = _make_adapter(
+        monkeypatch,
+        poll_interval="300",
+        poll_interval_active="15",
+        daily_call_budget="10",
+    )
+    adapter._last_refill_at = 1000.0
+    adapter._last_activity_at = 1000.0
+    adapter._charge_calls(1000, now=1000.0)
+    assert adapter._call_tokens < 1.0
+    # Active window is open, but the allowance is spent: never poll faster than idle.
+    assert adapter._next_poll_interval(now=1000.0) == 300.0
+
+
+def test_budget_refills_at_the_allowance_rate(monkeypatch):
+    # 8,640 calls a day is one call every ten seconds.
+    adapter = _make_adapter(
+        monkeypatch,
+        poll_interval="300",
+        poll_interval_active="15",
+        daily_call_budget="8640",
+    )
+    adapter._last_refill_at = 1000.0
+    adapter._last_activity_at = 1000.0
+    adapter._charge_calls(int(adapter._call_capacity) + 5, now=1000.0)
+    assert adapter._next_poll_interval(now=1000.0) == 300.0
+    assert adapter._next_poll_interval(now=1060.0) == 15.0  # six tokens in a minute
 
 
 # ---------------------------------------------------------------------------
@@ -1209,3 +1292,71 @@ def test_send_target_forms():
     assert parse("999") == ("999", None)
     assert parse("g12345") == ("g12345", None)
     assert parse("#general") is None
+
+
+@pytest.mark.asyncio
+async def test_degraded_discovery_polls_known_conversations(monkeypatch, tmp_path):
+    monkeypatch.setattr(xchat_adapter, "_state_dir", lambda: tmp_path)
+    adapter = _make_adapter(monkeypatch)
+    api, _crypto = _wire(adapter)
+    adapter._conversations = {"111:999"}
+
+    calls = {"n": 0}
+
+    async def throttled(**_kw):
+        calls["n"] += 1
+        raise xchat_adapter.XChatRateLimited("rate limited", int(time.time()) + 600)
+
+    api.get_conversations = throttled
+
+    # The throttled list degrades to the known set instead of ending the cycle.
+    assert await adapter._discover_or_degrade() == {}
+    assert calls["n"] == 1
+    assert adapter._discovery_blocked_until > 0
+
+    # While the block is live the list is not called again.
+    assert await adapter._discover_or_degrade() == {}
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_degraded_discovery_without_known_conversations_raises(monkeypatch, tmp_path):
+    monkeypatch.setattr(xchat_adapter, "_state_dir", lambda: tmp_path)
+    adapter = _make_adapter(monkeypatch)
+    api, _crypto = _wire(adapter)
+    adapter._conversations = set()
+
+    async def throttled(**_kw):
+        raise xchat_adapter.XChatRateLimited("rate limited", int(time.time()) + 600)
+
+    api.get_conversations = throttled
+
+    with pytest.raises(RuntimeError):
+        await adapter._discover_or_degrade()
+
+
+def test_known_conversations_persist_across_restart(monkeypatch, tmp_path):
+    monkeypatch.setattr(xchat_adapter, "_state_dir", lambda: tmp_path)
+    adapter = _make_adapter(monkeypatch)
+    adapter._conversations = {"111:999"}
+    adapter._persist_conversations()
+
+    path = tmp_path / "conversations.json"
+    assert path.exists()
+    # chmod(0o600) does not change the mode Windows reports (666). The mode is a
+    # POSIX property; the restart check below is what this test exists to prove.
+    if os.name != "nt":
+        assert oct(path.stat().st_mode)[-3:] == "600"
+
+    second = _make_adapter(monkeypatch)
+    second._load_conversations()
+    assert "111:999" in second._conversations
+
+
+def test_known_conversations_recover_from_cursor_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(xchat_adapter, "_state_dir", lambda: tmp_path)
+    adapter = _make_adapter(monkeypatch)
+    adapter._conversations = set()
+    adapter._cursors = {"111-999": "e1"}
+    adapter._load_conversations()
+    assert "111-999" in adapter._conversations

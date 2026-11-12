@@ -160,7 +160,11 @@ keeps one Claude Code process alive between model calls:
   roughly a quarter to a half of each round.
 - What goes upstream is byte for byte what a fresh process would send for the same history, so prompt caching and cost
   are the same either way. The relay rewrites each replayed tool result to Hermes' own bytes, and refuses, before it
-  reaches Anthropic, any request that does not extend the previous one. That step is then replayed into a new process.
+  reaches Anthropic, any request that does not extend the previous one or whose rows no longer line up with Hermes'
+  history. That step is then replayed into a new process. The identity is measured offline: the bench's loopback
+  answers a minimal stream (no `ping`, no cache usage detail, no stop sequence) to an API-key login, and the session
+  tests add a claude.ai login with its account reminder on the opening turn. A real login has not been run through
+  the bench.
 - Any change Claude Code cannot continue from restarts it with a replay, exactly as a fresh call would: an edited or
   compacted history, a `/steer` message, a different model, system prompt, tool list, effort or output cap.
 - These calls still start a fresh process for one step (a one-shot): auxiliary calls (titles, summaries), calls without

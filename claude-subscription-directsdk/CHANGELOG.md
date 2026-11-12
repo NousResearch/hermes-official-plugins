@@ -28,6 +28,10 @@
   timer holds no reference to the client and a finalizer ends the process when the client is collected. A `close()`
   that lands while a step is finishing cannot publish a kept process on the closed client, and resuming a kept process
   no longer reaps it behind the reader thread's back.
+- Session mode: a kept process whose own history no longer lines up with Hermes' frames (a row more or fewer, a role
+  out of place) is refused before upstream and the step replays into a new process, as a request that does not extend
+  the previous one is. Before, that request went upstream with native's own tool-result shape in the replayed rows. A
+  fresh process's first request, the replay itself, still forwards as native built it.
 - A tool call cut at the output cap or streamed as invalid JSON reaches Hermes with its raw arguments and finish
   `length`, so Hermes retries the request and never runs it. Before, the turn failed with `error_max_turns` (#164, #221),
   and a reply with one valid and one invalid call silently lost the invalid one. After invalid JSON, that conversation

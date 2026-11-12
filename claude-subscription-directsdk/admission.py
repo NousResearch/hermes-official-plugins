@@ -101,6 +101,10 @@ class QueriedTurnMismatch(ValueError):
     """The native request could not be reconciled with Hermes' tool results."""
 
 
+class HistoryMisaligned(ValueError):
+    """A kept-alive native's own history does not line up with Hermes' frames (``canonical_history``)."""
+
+
 # Winsock: shutdown() does not wake a recv blocked in another thread; closesocket() cancels pending calls.
 # Without it close() waits for a hung upstream (the single-threaded relay is stuck in getresponse()).
 # socket.close() is not enough: http.client holds makefile() refs, so it never reaches closesocket().
@@ -570,17 +574,19 @@ def canonical_history(payload, frames):
 
     Native holds tool results as it built them from MCP replies (text-block lists), and a fresh native replays
     Hermes' frames verbatim, so the two would differ from the second request on. Mapping is positional over
-    non-system messages; native's cache mark stays; anything that does not line up forwards as is."""
+    non-system messages; native's cache mark stays. Raises ``HistoryMisaligned`` when the rows do not line up (one
+    more or fewer than Hermes holds, a role out of place, a body this cannot read): the caller decides whether such
+    a request still forwards."""
     try:
         body = json.loads(payload)
         messages = body['messages']
         changed = _fold_replayed_date(messages)
         convo = [(i, m) for i, m in enumerate(messages) if m.get('role') != 'system']
         if len(convo) != len(frames):
-            return payload
+            raise HistoryMisaligned(f'{len(convo)} native rows against {len(frames)} Hermes frames')
         for k, ((i, sent), frame) in enumerate(zip(convo, frames)):
             if sent.get('role') != frame['type']:
-                return payload
+                raise HistoryMisaligned(f'row {k}: native {sent.get("role")!r} against Hermes {frame["type"]!r}')
             opens_turn = any(b.get('type') != 'tool_result' for b in frame['message']['content'])
             # Assistant turns are native's own; a new user turn keeps the per-call transforms that follow.
             if frame['type'] != 'user' or (k == len(frames) - 1 and opens_turn):
@@ -598,8 +604,10 @@ def canonical_history(payload, frames):
                 messages[i] = {'role': 'user', 'content': want}
                 changed = True
         return json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8') if changed else payload
-    except (ValueError, TypeError, KeyError, AttributeError, IndexError):
-        return payload
+    except HistoryMisaligned:
+        raise
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError) as error:
+        raise HistoryMisaligned(f'{type(error).__name__}: {error}') from error
 
 
 def _unmarked(value):
@@ -942,7 +950,18 @@ class Handler(BaseHTTPRequestHandler):
             if getattr(gate, 'one_shot', False):
                 payload = drop_message_breakpoints(payload)
             if gate.frames is not None:
-                payload = canonical_history(payload, gate.frames)
+                try:
+                    payload = canonical_history(payload, gate.frames)
+                except HistoryMisaligned as misaligned:
+                    if gate.last_forwarded is not None:
+                        # Native's own history no longer lines up with Hermes' frames, so its replayed rows cannot be
+                        # rewritten to the bytes a fresh replay sends. Refuse before upstream, as a request that does
+                        # not extend the previous one is refused; the client replays the step into a new process. A
+                        # fresh native's first request is that replay itself, so it forwards as native built it.
+                        gate.diverged = True
+                        logging.getLogger(__name__).info('kept session history misaligned, replaying: %s', misaligned)
+                        self._refuse(b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_SESSION_DIVERGED"}}')
+                        return
             try:
                 payload = restore_queried_turn(payload, gate.queried)
             except QueriedTurnMismatch as exc:

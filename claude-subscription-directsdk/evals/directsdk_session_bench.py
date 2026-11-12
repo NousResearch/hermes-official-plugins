@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import shutil
 import statistics
 import subprocess
 import sys
@@ -174,13 +175,15 @@ def turn(c, messages, rows, *, phase, rounds, park=0, park_at=None):
     while True:
         if len(messages) > budget:
             raise RuntimeError(f'{phase}: the turn did not end after {rounds} tool rounds')
-        pid_before = c._session.process.pid if c._session is not None else None
+        # The last known kept pid comes from the previous row, not from the client: once idle eviction has cleared
+        # ``_session`` (during a park), the client no longer knows which process served the step before.
+        previous = rows[-1]['kept_pid'] if rows else None
         started = time.perf_counter()
         message = c.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000).choices[0].message.model_dump()
         wall = time.perf_counter() - started
         kept = c._session.process.pid if c._session is not None else None
         row = {'phase': phase, 'history': len(messages), 'wall_s': round(wall, 4), 'tool': bool(message.get('tool_calls')),
-               'kept_pid': kept, 'restarted': pid_before is not None and kept != pid_before, 'kept_rss': rss_of(kept) if kept else None}
+               'kept_pid': kept, 'restarted': previous is not None and kept != previous, 'kept_rss': rss_of(kept) if kept else None}
         rows.append(row)
         if VERBOSE:
             print(json.dumps(row), file=sys.stderr, flush=True)
@@ -238,13 +241,16 @@ def summarize(rows, rounds):
         if bucket:
             buckets[f'rounds_{lo}_{lo + len(bucket) - 1}'] = dist(bucket)
     rss = [r['kept_rss'] for r in rows if r.get('kept_rss')]
+    parked = next((i for i, r in enumerate(rows) if r.get('parked_s')), None)
+    # The process that answered the parked call is the one the next step ran on: it must be the one that made the call.
+    same_after = parked is not None and parked + 1 < len(rows) and rows[parked + 1]['kept_pid'] is not None \
+        and rows[parked + 1]['kept_pid'] == rows[parked]['kept_pid']
     return {'tool_round_wall_s': dist([r['wall_s'] for r in steps]), 'by_history': buckets,
             'first_step_wall_s': rows[0]['wall_s'], 'restarts': sum(r['restarted'] for r in rows),
             'restart_after_compaction': next((r['restarted'] for r in rows if r['phase'] == 'after_compaction'), None),
             'restart_after_edit': next((r['restarted'] for r in rows if r['phase'] == 'after_edit'), None),
             'kept_rss_mb': dist([v / 2**20 for v in rss]) if rss else None,
-            'parked': next(({'seconds': r['parked_s'], 'same_process_after': not rows[rows.index(r) + 1]['restarted']}
-                            for r in rows if r.get('parked_s')), None)}
+            'parked': None if parked is None else {'seconds': rows[parked]['parked_s'], 'same_process_after': same_after}}
 
 
 def save(report, out):
@@ -254,7 +260,7 @@ def save(report, out):
 
 
 def run(binary, rounds, park, repeats, out=None):
-    binary = str(Path(binary).absolute())
+    binary = shutil.which(binary) or str(Path(binary).absolute())  # a bare `claude` resolves on PATH
     version = subprocess.check_output([binary, '--version'], text=True, stdin=subprocess.DEVNULL,
                                       env={'PATH': os.defpath, 'HOME': tempfile.gettempdir()}).strip()
     report = {'native_version': version, 'rounds': rounds, 'park_s': park, 'repeats': repeats, 'runs': [], 'modes': {}}

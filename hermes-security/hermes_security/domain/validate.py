@@ -130,6 +130,11 @@ def _load_schema(name):
     return json.loads((_SCHEMA_DIR / f'{name}.schema.json').read_text(encoding='utf-8'))
 
 
+def validate_deployment_evidence(value):
+    """Shared bounded deployment detail contract for workers and checkpoints."""
+    return validate_schema(value, _load_schema('coverage')['$defs']['deploymentEvidence'])
+
+
 @lru_cache(maxsize=1)
 def _schema_field_names():
     names = set()

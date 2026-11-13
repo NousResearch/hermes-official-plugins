@@ -20,6 +20,9 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     setup = sub.add_parser("setup", help="Save CAMOFOX_URL (and an optional CAMOFOX_API_KEY) to this profile's .env")
     setup.add_argument("--url", help="Camofox server URL (default: prompt, http://localhost:9377)")
     sub.add_parser("status", help="Show the configured Camofox server and whether it answers")
+    identity = sub.add_parser(
+        "identity", help="Delete the durable browser identity of a scheduled agent (its cron job)")
+    identity.add_argument("job", help="Cron job id (or cron:<job_id>): its Camofox profile is removed")
 
 
 def _identity_mode() -> str:
@@ -65,8 +68,21 @@ def cmd_setup(url: str | None) -> int:
     return cmd_status()
 
 
+def cmd_identity(job: str) -> int:
+    key = job.strip() if job.strip().startswith("cron:") else f"cron:{job.strip()}"
+    result = client.forget_agent_identity(key)
+    print(f"Agent:    {result['agent_key']}")
+    print(f"Identity: {result['user_id']}")
+    print(f"Server session deleted: {'yes' if result['session_deleted'] else 'no (server down or already gone)'}")
+    print(f"Profile:  {result['profile_dir']} "
+          f"({'removed' if result['profile_removed'] else 'not present'})")
+    return 0
+
+
 def handle_cli(args: argparse.Namespace) -> int:
     command = getattr(args, "camofox_command", None)
     if command == "setup":
         return cmd_setup(getattr(args, "url", None))
+    if command == "identity":
+        return cmd_identity(getattr(args, "job", ""))
     return cmd_status()

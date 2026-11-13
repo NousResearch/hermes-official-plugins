@@ -13,8 +13,11 @@ several profiles never hands one profile's tab to another.
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import logging
+import os
+import shutil
 import threading
 import uuid
 from pathlib import Path
@@ -110,6 +113,40 @@ def get_camofox_identity(task_id: Optional[str] = None) -> dict[str, str]:
     user_digest = uuid.uuid5(uuid.NAMESPACE_URL, f"camofox-user:{scope_root}").hex[:10]
     session_digest = uuid.uuid5(uuid.NAMESPACE_URL, f"camofox-session:{scope_root}:{task_id or 'default'}").hex[:16]
     return {"user_id": f"hermes_{user_digest}", "session_key": f"task_{session_digest}"}
+
+
+def get_agent_identity(agent_key: str) -> dict[str, str]:
+    """Stable identity for an agent that outlives a single run, derived from its key.
+
+    A cron job fires under ``cron:<job_id>:<execution_id>`` and the execution id changes on every
+    run, so the job id is the durable half. Deriving (not storing) the identity means every run
+    resolves to the same Camofox profile — cookies, logins and the agent's own tab survive — and
+    nothing can drift or duplicate. ``forget_agent_identity`` is what removes it.
+    """
+    scope_root = str(get_camofox_state_dir())
+    digest = uuid.uuid5(uuid.NAMESPACE_URL, f"camofox-agent:{scope_root}:{agent_key}").hex[:16]
+    return {"user_id": f"hermes_ag_{digest[:12]}", "session_key": f"agent_{digest}"}
+
+
+# Task-id prefixes whose agent outlives one run, so its browser identity has to persist.
+_AGENT_TASK_PREFIXES = ("cron:",)
+
+
+def agent_key_from_task(task_id: Optional[str]) -> Optional[str]:
+    """Durable agent key for a task that represents an agent (cron job), else None.
+
+    Cron sessions run as ``cron:<job_id>:<execution_id>``; the trailing execution id is unique per
+    fire, so the job id identifies the agent. Any other task id is a one-off conversation or
+    subagent and gets no durable identity.
+    """
+    if not task_id:
+        return None
+    for prefix in _AGENT_TASK_PREFIXES:
+        if task_id.startswith(prefix):
+            parts = task_id.split(":")
+            if len(parts) >= 2 and parts[1]:
+                return f"{prefix}{parts[1]}"
+    return None
 
 
 def _camofox_identity_override(task_id: Optional[str], camofox_cfg: dict[str, Any]) -> Optional[dict[str, str]]:
@@ -328,8 +365,8 @@ def _adopt_existing_tab(session: dict[str, Any]) -> dict[str, Any]:
 
 def get_session(task_id: Optional[str]) -> dict[str, Any]:
     """Get or create the task's session. Identity precedence: external override
-    (``CAMOFOX_USER_ID`` / config) → profile-scoped identity when managed persistence is on →
-    random ephemeral userId."""
+    (``CAMOFOX_USER_ID`` / config) → durable agent identity (cron job) → profile-scoped identity
+    when managed persistence is on → random ephemeral userId."""
     key = _session_key(task_id)
     with _sessions_lock:
         session = _sessions.get(key)
@@ -340,13 +377,19 @@ def get_session(task_id: Optional[str]) -> dict[str, Any]:
             return _sessions[key]
         camofox_cfg = get_camofox_config()
         identity = _camofox_identity_override(key[1], camofox_cfg)
+        agent_key = None if identity else agent_key_from_task(key[1])
+        if agent_key:
+            identity = get_agent_identity(agent_key)
         if identity is None and _managed_persistence_enabled(camofox_cfg):
             identity = get_camofox_identity(key[1])
         if identity is None:
             identity = {"user_id": f"hermes_{uuid.uuid4().hex[:10]}", "session_key": f"task_{key[1][:16]}"}
             managed, adopt = False, False
         else:
-            managed, adopt = True, _flag("CAMOFOX_ADOPT_EXISTING_TAB", camofox_cfg, "adopt_existing_tab")
+            # An agent's identity is its own profile, so adopting its own tab across runs is safe
+            # and keeps one tab instead of leaking a new one on every fire.
+            managed = True
+            adopt = True if agent_key else _flag("CAMOFOX_ADOPT_EXISTING_TAB", camofox_cfg, "adopt_existing_tab")
         session = {"user_id": identity["user_id"], "tab_id": None, "session_key": identity["session_key"],
                    "managed": managed, "adopt_existing_tab": adopt}
         _sessions[key] = session
@@ -391,6 +434,39 @@ def drop_session(task_id: Optional[str]) -> Optional[dict[str, Any]]:
     """Remove and return the task's session entry for the active profile."""
     with _sessions_lock:
         return _sessions.pop(_session_key(task_id), None)
+
+
+def camofox_profile_dir(user_id: str) -> Path:
+    """On-disk profile directory Camofox's persistence plugin keeps for ``user_id``."""
+    root = os.environ.get("CAMOFOX_PROFILE_DIR", "").strip() or str(Path.home() / ".camofox" / "profiles")
+    return Path(root) / hashlib.sha256(user_id.encode()).hexdigest()[:32]
+
+
+def forget_agent_identity(agent_key: str) -> dict[str, Any]:
+    """Delete everything a durable agent's browser identity owns.
+
+    The identity has no lifecycle of its own: run this after removing the agent (its cron job) so
+    the cookies, tabs and persisted profile disappear instead of lingering as an orphan.
+    """
+    identity = get_agent_identity(agent_key)
+    user_id = identity["user_id"]
+    result: dict[str, Any] = {"agent_key": agent_key, "user_id": user_id,
+                              "session_deleted": False, "profile_removed": False}
+    if get_camofox_url():
+        try:
+            delete(f"/sessions/{user_id}", timeout=10)
+            result["session_deleted"] = True
+        except Exception as exc:
+            logger.debug("Camofox session delete failed for %s: %s", user_id, exc)
+    with _sessions_lock:
+        for key in [k for k, s in _sessions.items() if s.get("user_id") == user_id]:
+            _sessions.pop(key, None)
+    profile_dir = camofox_profile_dir(user_id)
+    result["profile_dir"] = str(profile_dir)
+    if profile_dir.is_dir():
+        shutil.rmtree(profile_dir, ignore_errors=True)
+        result["profile_removed"] = not profile_dir.exists()
+    return result
 
 
 def soft_cleanup(task_id: Optional[str] = None) -> bool:

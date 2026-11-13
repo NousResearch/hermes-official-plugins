@@ -77,7 +77,9 @@ trusted. Then it reviews the code, checks each candidate against the code (and
 with tests, if you allowed them), and traces whether an attacker can actually
 reach it. You don't need to install a scanner, because the review is done by the
 model. Vendored code, symlinks, special files, and files over 8 MB are skipped,
-and the report lists them.
+and the report lists them. An unreadable subfolder is listed as a coverage gap;
+the review continues through readable siblings, but cannot report full coverage.
+If the repository root itself cannot be enumerated, preparation still fails.
 
 The work is split by folder into chunks of about 4,000 lines, roughly what one
 reviewer can read at once. One more reviewer looks across the whole scope for

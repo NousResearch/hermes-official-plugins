@@ -984,6 +984,18 @@ class SecurityService:
 
     def resume(self, scan_id):
         with self._mutation(scan_id, canceled=True) as scan:
+            if not scan['snapshot_digest']:
+                # An initial inventory failure has no pinned evidence to resume.
+                # Retry preparation, never dispatch empty packets or replace a snapshot.
+                if self.store.inventory(scan_id) or self._attempts(scan_id):
+                    raise Conflict('missing snapshot with saved review data; start a new scan')
+                self.store.update_scan_options(scan_id, {'preparing': True, 'dependenciesPending': True})
+                self.store.update_scan_option(scan_id, 'autoResume',
+                                              lambda old: {**(old or {}), 'count': 0, 'stoppedAt': None, 'offAt': None})
+                scan = self.store.set_scan_status(scan_id, 'created')
+                self.store.add_event(scan_id, 'scan.preparing', 'Retrying the initial target inventory.')
+                self._start_dependency_check(scan_id)
+                return {**self._plan(scan, packets=[]), 'status': 'created', 'stopReason': None}
             self._current(scan)
             attempts = self._attempts(scan_id)
             accepted = {a['packet_id'] for a in attempts if a['status'] == 'accepted'}

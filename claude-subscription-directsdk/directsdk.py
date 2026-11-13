@@ -61,13 +61,16 @@ def _request_id(value):
 class ClaudeAPIError(RuntimeError):
     """A failed upstream or native-answered request; status_code is None when there is no HTTP equivalent."""
 
-    def __init__(self, message, status_code=None, *, request_id=None):
+    def __init__(self, message, status_code=None, *, request_id=None, resets_at=None):
         request_id = _request_id(request_id)
         if request_id:
             message += f' (request_id={request_id})'
         super().__init__(message)
         self.status_code = status_code
         self.request_id = request_id
+        # Core reads a limit's reopening (epoch seconds) from body['resets_at']; native's own text names a
+        # clock time (`resets 3:45pm`) that core cannot parse.
+        self.body = {'resets_at': resets_at} if resets_at else None
 
 
 class RequestRejected(ValueError):
@@ -1152,7 +1155,7 @@ class Client:
                         # The first attempt's real HTTP status; a 200 cut short or a relay failure has none.
                         status = admission.status if isinstance(admission.status, int) and admission.status >= 400 else None
                         raise ClaudeAPIError(f'Incomplete upstream response ({first})' + (': ' + native_error if native_error else ''),
-                                             status, request_id=admission.request_id)
+                                             status, request_id=admission.request_id, resets_at=admission.reset_at)
                     assistants = [admission.capture.message]
                     stopped = True
                 native_failure_handled = admission.denied or (admission.used and assistants[0].get('stop_reason') == 'refusal')

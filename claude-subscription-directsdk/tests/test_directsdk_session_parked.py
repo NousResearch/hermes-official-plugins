@@ -4,10 +4,16 @@ Hermes approvals and hand-offs can hold a tool for minutes. The kept process mus
 continue on the same process once the result arrives; when the plugin's own idle eviction fires first, the next step
 must run anew with the bytes per-call sends. No credentials, no inference. Skipped without the CLI; ``CLAUDE_CODE_BIN``
 picks a binary. ``DIRECTSDK_PARK_SECONDS`` sets the park (default 2 s; run it at 150 to prove minutes).
+
+The result of a parked call goes to native as one control write. A healthy native takes 250,000 bytes in full on the
+same process; one that has stopped reading its stdin must not hold that write past the request timeout.
 """
+from contextlib import suppress
 import os
 from pathlib import Path
+import signal
 import sys
+import threading
 import time
 
 import psutil
@@ -20,6 +26,7 @@ from test_directsdk_session import MODEL, TOOLS, client, home, session_pids, ups
 pytestmark = pytest.mark.skipif(not (os.environ.get('CLAUDE_CODE_BIN') or __import__('shutil').which('claude')),
                                 reason='needs the Claude Code CLI')
 PARK = float(os.environ.get('DIRECTSDK_PARK_SECONDS', '2'))
+LARGE = 250_000  # several times what a pipe holds, so the write waits on native reading it
 
 
 def step(c, messages):
@@ -99,3 +106,58 @@ def test_idle_eviction_during_a_park_falls_back_to_per_call_bytes(home, upstream
         kept.close()
         if one_shot is not None:
             one_shot.close()
+
+
+def large_results(message):
+    return [{'role': 'tool', 'tool_call_id': call['id'], 'content': 'x' * LARGE} for call in message['tool_calls']]
+
+
+def test_a_large_tool_result_arrives_in_full_on_the_same_process(home, upstream, monkeypatch):
+    """The healthy control for the bounded write: all 250,000 bytes reach upstream, from the process that parked."""
+    kept = client(home, upstream, monkeypatch, session=True)
+    try:
+        messages = [{'role': 'system', 'content': 'You are a fixture agent.'}, {'role': 'user', 'content': 'go'}]
+        first = step(kept, messages)
+        pid = next(iter(session_pids(kept)))
+        assert parked(kept._session), 'native did not park the call'
+        messages += large_results(first)
+        step(kept, messages)
+        assert session_pids(kept) == {pid}
+        assert b'x' * LARGE in upstream.bodies[-1]
+    finally:
+        kept.close()
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX SIGSTOP stands in for a native that stops reading')
+def test_a_tool_result_native_never_reads_times_out(home, upstream, monkeypatch):
+    """Native parks a call, then stops reading its stdin. The result does not fit the pipe, so its write waits; at
+    the request timeout the process must end and the step must raise the timeout error. Before, that write had no
+    bound and the step waited until someone cancelled it."""
+    kept = client(home, upstream, monkeypatch, session=True)
+    messages = [{'role': 'system', 'content': 'You are a fixture agent.'}, {'role': 'user', 'content': 'go'}]
+    first = step(kept, messages)
+    pid = next(iter(session_pids(kept)))
+    assert parked(kept._session), 'native did not park the call'
+    messages += large_results(first)
+    errors = []
+
+    def deliver():
+        try:
+            kept.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000, timeout=.2)
+        except Exception as error:  # noqa: BLE001
+            errors.append(f'{type(error).__name__}: {error}')
+    worker = threading.Thread(target=deliver, daemon=True)
+    try:
+        os.killpg(pid, signal.SIGSTOP)
+        worker.start()
+        worker.join(5)
+        assert not worker.is_alive(), 'the result was still being written 5 s after a 0.2 s timeout'
+        assert errors == ['TimeoutError: Claude request timed out']
+        assert not session_pids(kept) and not alive(pid)
+        with directsdk._live_lock:
+            assert not directsdk._live
+    finally:
+        with suppress(ProcessLookupError, PermissionError):
+            os.killpg(pid, signal.SIGKILL)
+        worker.join(10)
+        kept.close()

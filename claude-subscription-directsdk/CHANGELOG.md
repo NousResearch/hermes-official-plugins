@@ -35,6 +35,9 @@
 - Session mode: a `cancel()` or `close()` that lands while a finished step's process becomes the kept session ends that
   process, and the step raises the cancellation error. Ownership moves from the request to the client under both
   locks, so a stop finds one owner or the other; before, it could find neither and the process stayed kept.
+- Session mode: writing a parked call's result to Claude Code is bounded by the request timeout, as sending a frame
+  is. A Claude Code that stops reading its input no longer holds a large tool result's write until someone cancels:
+  the process ends and the step raises `Claude request timed out`.
 - The session cancel test checked the process state regardless of the request's error (an `and`/`or` without
   parentheses) and could fail on a pid that vanished between two checks.
 - A tool call cut at the output cap or streamed as invalid JSON reaches Hermes with its raw arguments and finish

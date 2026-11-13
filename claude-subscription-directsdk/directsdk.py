@@ -685,9 +685,20 @@ class Native:
             self.events.put(None)
 
     def _write(self, row):
-        with self.writing, suppress(OSError, ValueError):
-            self.process.stdin.write(json.dumps(row, allow_nan=False) + '\n')
-            self.process.stdin.flush()
+        """One control row to native, bounded by the step's timeout as send() is: a native that stops reading stdin
+        would hold a large tool result's write, on the step's thread or the reader's, until someone cancelled."""
+        stalled = threading.Event()
+        timer = threading.Timer(self.admission.timeout, lambda: (stalled.set(), self.kill()))
+        timer.daemon = True
+        timer.start()
+        try:
+            with self.writing, suppress(OSError, ValueError):
+                self.process.stdin.write(json.dumps(row, allow_nan=False) + '\n')
+                self.process.stdin.flush()
+        finally:
+            timer.cancel()
+        if stalled.is_set():
+            raise TimeoutError('Claude request timed out')
 
     def _control(self, event):
         """Answer native's MCP traffic for the hermes server; park each tools/call until Hermes has its result."""
@@ -766,6 +777,8 @@ class Native:
                 event = self.events.get(timeout=min(remaining, .2))
             except queue.Empty:
                 continue
+            if isinstance(event, TimeoutError):
+                raise event  # The reader's own control write gave up: a timeout, not bad output.
             if isinstance(event, Exception):
                 # The offending stdout line is the whole diagnosis (a shim banner, a stray print); keep it.
                 raise RuntimeError('Invalid native stream-json output: ' + repr((getattr(event, 'doc', None) or str(event))[:300]) + _stderr_tail(self.stderr)) from event

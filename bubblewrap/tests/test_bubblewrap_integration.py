@@ -60,6 +60,13 @@ def isolated_tool(tmp_path, work_dir, monkeypatch, bwrap_provider):
     monkeypatch.setenv("TERMINAL_ENV", "bubblewrap")
     monkeypatch.setenv("TERMINAL_CWD", str(work_dir))
 
+    # A gateway session key can be inherited by pytest, collapsing distinct
+    # task_ids onto one cwd record. Environment teardown does not clear it.
+    from tools.terminal_tool import _session_cwd, _session_cwd_lock
+
+    with _session_cwd_lock:
+        session_cwd_before = dict(_session_cwd)
+
     def _clear():
         with tt._env_lock:
             for env in list(tt._active_environments.values()):
@@ -69,6 +76,8 @@ def isolated_tool(tmp_path, work_dir, monkeypatch, bwrap_provider):
                     pass
             tt._active_environments.clear()
             tt._last_activity.clear()
+        with _session_cwd_lock:
+            _session_cwd.clear()
         # Core's own cleanup drops the file tools' cached ShellFileOperations with the environment;
         # clearing the dict above does not, and a shell-path file op would reuse a dead sandbox.
         from tools.file_tools import clear_file_ops_cache
@@ -77,6 +86,8 @@ def isolated_tool(tmp_path, work_dir, monkeypatch, bwrap_provider):
     _clear()
     yield tt
     _clear()
+    with _session_cwd_lock:
+        _session_cwd.update(session_cwd_before)
 
 
 def _no_spawn(monkeypatch):
@@ -405,7 +416,10 @@ class TestExecuteCodeIntegration:
             except MemoryError:
                 print("ALLOC MemoryError")
         """)
-        r = json.loads(execute_code(code, task_id=task_id, enabled_tools=["terminal"]))
+        stub_llm_response = MagicMock()
+        stub_llm_response.choices[0].message.content = "APPROVE"
+        with patch("agent.auxiliary_client.call_llm", return_value=stub_llm_response):
+            r = json.loads(execute_code(code, task_id=task_id, enabled_tools=["terminal"]))
         assert r["status"] == "success", r
         lines = r["output"].strip().splitlines()
         pids = int(next(l for l in lines if l.startswith("PIDS ")).split()[1])

@@ -49,6 +49,9 @@ def _isolated_hermes_home(tmp_path, monkeypatch):
     home = tmp_path / "hermes_test"
     home.mkdir()
     monkeypatch.setenv("HERMES_HOME", str(home))
+    # The host may export this to preserve its login HOME for subprocesses;
+    # plugin tests that monkeypatch HOME must resolve that fake home instead.
+    monkeypatch.delenv("HERMES_REAL_HOME", raising=False)
     import hermes_constants
 
     monkeypatch.setattr(hermes_constants, "_PINNED_PROCESS_HERMES_HOME", None, raising=False)

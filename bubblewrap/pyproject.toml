@@ -8,5 +8,8 @@ authors = [{ name = "Nous Research" }]
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+test = ["pytest>=8", "pytest-asyncio>=0.23", "PyYAML>=6"]
+
 [project.urls]
 Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/bubblewrap"

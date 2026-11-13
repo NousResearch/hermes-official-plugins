@@ -54,7 +54,7 @@ class ClaudeCodeLoggedOut(RuntimeError):
 class ClaudeAPIError(RuntimeError):
     """A failed upstream or native-answered request; status_code is None when there is no HTTP equivalent."""
 
-    def __init__(self, message, status_code=None, *, request_id=None):
+    def __init__(self, message, status_code=None, *, request_id=None, resets_at=None):
         # Only a bounded opaque ID may enter diagnostics, never arbitrary header contents.
         if not isinstance(request_id, str) or re.fullmatch(r'req_[A-Za-z0-9_-]{1,124}', request_id) is None:
             request_id = None
@@ -63,6 +63,9 @@ class ClaudeAPIError(RuntimeError):
         super().__init__(message)
         self.status_code = status_code
         self.request_id = request_id
+        # Core reads a limit's reopening (epoch seconds) from body['resets_at']; native's own text names a
+        # clock time (`resets 3:45pm`) that core cannot parse.
+        self.body = {'resets_at': resets_at} if resets_at else None
 
 
 # Native's own error codes for errors it answers without a relayed upstream status.
@@ -1001,7 +1004,7 @@ class Client:
                         # The first attempt's real HTTP status; a 200 cut short or a relay failure has none.
                         status = admission.status if isinstance(admission.status, int) and admission.status >= 400 else None
                         raise ClaudeAPIError(f'Incomplete upstream response ({first})' + (': ' + native_error if native_error else ''),
-                                             status, request_id=admission.request_id)
+                                             status, request_id=admission.request_id, resets_at=admission.reset_at)
                     assistants = [admission.capture.message]
                     stopped = True
                 native_failure_handled = admission.denied or (admission.used and assistants[0].get('stop_reason') == 'refusal')

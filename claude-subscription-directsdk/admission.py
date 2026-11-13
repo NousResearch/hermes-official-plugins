@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -78,6 +79,21 @@ def _rejection_kind(response, body):
     elif value.get('reason') == 'bad_json' and isinstance(error, str) and _GO_BAD_JSON.match(error):
         return 'invalid_json_at_origin'
     return None
+
+
+def rejected_window_reset(response):
+    """Epoch seconds a used-up plan window reopens, from the 429 that rejected it; None for any other answer.
+
+    Every answer carries the window's reset, so only a rejected window makes it this 429's reset: a throttle
+    while the window is open must not bench the route for hours.
+    """
+    if response.status != 429 or (response.getheader('anthropic-ratelimit-unified-status') or '').strip() != 'rejected':
+        return None
+    try:
+        reset = float(response.getheader('anthropic-ratelimit-unified-reset') or '')
+    except ValueError:
+        return None
+    return round(reset) if math.isfinite(reset) and reset > 0 else None
 
 
 class UpstreamIdle(OSError):
@@ -691,6 +707,7 @@ class Admission:
         self.auth_retry_used = False
         self.request_id = None
         self.status = None
+        self.reset_at = None
         self.failure = None
         self.unrestored = None
         self.capture = Capture()
@@ -887,6 +904,7 @@ class Handler(BaseHTTPRequestHandler):
             del headers, payload, wire
             gate.request_id = response.getheader('request-id') or response.getheader('x-request-id')
             gate.status = response.status
+            gate.reset_at = rejected_window_reset(response)
             self.send_response(response.status)
             for key, value in response.getheaders():
                 if key.lower() not in ('connection','transfer-encoding','server','date'):

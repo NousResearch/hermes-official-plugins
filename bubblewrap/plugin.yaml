@@ -51,3 +51,8 @@ config_schema:
     default: []
     label: Extra home entries
     description: "More dot entries of the home directory to show read-only, for example [\".zz-tool\", \".config/nvim\"]. Dot entries off the shipped allowlist are hidden; credential stores stay hidden."
+  cron_dir:
+    type: str
+    default: ""
+    label: Sandbox cron directory
+    description: "Optional absolute path to an existing external directory, mounted read-write at $HERMES_HOME/cron inside Bubblewrap. It must be outside HERMES_HOME, credential stores, hidden HOME paths, and sandbox-writable roots. This only exposes that directory inside the sandbox; it does not relocate the host scheduler's cron storage. Leave empty to keep cron hidden."

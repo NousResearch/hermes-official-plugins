@@ -403,14 +403,41 @@ def home_layout_args(
             if os.path.lexists(child_path) and not any(_is_within(child_path, root) for root in hidden):
                 argv += _entry_args(child_path, "--ro-bind-try", visible)
 
+    # A bind can create a child beneath a dot entry that was omitted from
+    # the HOME tmpfs (notably HERMES_HOME/cron). Materialize that hidden
+    # directory, apply the bind, then overlay it below so the bind cannot
+    # punch through the sensitive-path boundary.
+    bind_hidden_roots = {
+        path
+        for path in hidden
+        if not os.path.islink(path)
+        and (os.path.isdir(path) or not os.path.lexists(path))
+        and any(dest != path and _is_within(dest, path) for _flag, _src, dest in binds)
+    }
+    for path in sorted(bind_hidden_roots):
+        materialized_dirs = {path}
+        for _flag, src, dest in binds:
+            if dest == path or not _is_within(dest, path):
+                continue
+            # Bind a directory onto a directory, but for a file bind create
+            # only its parent. Making the file target a directory first
+            # breaks Bubblewrap's file-on-directory mount semantics.
+            target_dir = dest if os.path.isdir(src) else os.path.dirname(dest)
+            if target_dir != path:
+                materialized_dirs.add(target_dir)
+        for directory in sorted(materialized_dirs):
+            argv += ["--dir", directory]
+
     for flag, src, dest in binds:
         argv += [flag, src, dest]
         visible.append(dest)
 
     for path in hidden:
-        if os.path.islink(path) or not any(path != root and _is_within(path, root) for root in visible):
+        covered_by_bind = path in bind_hidden_roots
+        visible_through_layout = any(path != root and _is_within(path, root) for root in visible)
+        if os.path.islink(path) or not (covered_by_bind or visible_through_layout):
             continue
-        if os.path.isdir(path):
+        if os.path.isdir(path) or path in bind_hidden_roots:
             argv += ["--tmpfs", path]
         elif os.path.exists(path):
             argv += ["--ro-bind", empty_file, path]

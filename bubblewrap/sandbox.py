@@ -165,6 +165,7 @@ SETTING_MEMORY_MB = "memory_mb"
 SETTING_CPU_SECONDS = "cpu_seconds"
 SETTING_MAX_PROCS = "max_procs"
 SETTING_HOME_ALLOW = "home_allow"
+SETTING_CRON_DIR = "cron_dir"
 SETTINGS_PREFIX = "plugins.entries.bubblewrap.settings"
 # terminal.home_mode is a core setting; core bridges it to this env name and
 # hermes_constants.get_subprocess_home reads it. The spellings that
@@ -225,6 +226,8 @@ class BubblewrapConfig:
     # The home_allow setting: more allowlist units under HOME
     # (bubblewrap_home.allow_unit), shown read-only.
     home_allow: tuple[str, ...] = ()
+    # Optional external directory exposed only at HERMES_HOME/cron in bwrap.
+    cron_dir: str = ""
 
 
 def _setting_name(key: str) -> str:
@@ -272,6 +275,16 @@ def _parse_string_list(key: str, raw: object) -> tuple[str, ...]:
     return tuple(entries)
 
 
+def _parse_optional_path(key: str, raw: object) -> str:
+    """An optional path string; an unset or empty setting disables the mount."""
+    name = _setting_name(key)
+    if raw is None or raw == "":
+        return ""
+    if not isinstance(raw, str):
+        raise ValueError(f"{name} must be a string path or empty, got {raw!r}")
+    return raw
+
+
 def _parse_limit(key: str, raw: object, default: int) -> int:
     name = _setting_name(key)
     if raw is None:
@@ -311,6 +324,7 @@ def load_bubblewrap_config(settings: Mapping[str, object] | None = None, home_mo
         max_procs=_parse_limit(SETTING_MAX_PROCS, settings.get(SETTING_MAX_PROCS), DEFAULT_MAX_PROCS),
         home_mode=(home_mode or "").strip().lower() or DEFAULT_HOME_MODE,
         home_allow=_parse_string_list(SETTING_HOME_ALLOW, settings.get(SETTING_HOME_ALLOW)),
+        cron_dir=_parse_optional_path(SETTING_CRON_DIR, settings.get(SETTING_CRON_DIR)),
     )
 
 
@@ -679,8 +693,9 @@ def _late_mounts(
     ca_bundles: Sequence[tuple[str, str]],
     profile_home: tuple[str, str] | None,
     sandbox_root: str | None,
+    cron_dir: tuple[str, str] | None = None,
 ) -> list[tuple[str, ...]]:
-    """The mounts that go on top of every overlay, in order: the sandbox dir, trust anchors, scratch, the profile home, the state dir."""
+    """Mounts layered after sensitive overlays, including the optional cron directory."""
     late: list[tuple[str, ...]] = []
     # The sandbox dir holds the state dir, the empty file and the scratch
     # name of every environment. Outside the hidden set it gets an empty
@@ -708,6 +723,13 @@ def _late_mounts(
     # stays hidden.
     if profile_home is not None:
         late.append(("--bind-try", *profile_home))
+    # Expose only the selected external directory at HERMES_HOME/cron. The
+    # host scheduler continues using its own HERMES_HOME; this is a sandbox
+    # mount, not a scheduler-storage relocation.
+    if cron_dir is not None:
+        source, dest = cron_dir
+        late.append(("--dir", dest))
+        late.append(("--bind", source, dest))
     # The state dir holds the shell snapshot and the cwd file between
     # commands (and the execute_code sandbox dir during a call); it is
     # bound after the overlays so it stays writable at the same path in
@@ -829,11 +851,16 @@ def build_bwrap_args(
     if home_root is not None and home_replaced_by_bind(home_root, binds):  # type: ignore[arg-type]
         home_root = None
 
+    cron_dir_bind = (
+        (config.cron_dir, os.path.join(os.path.abspath(os.path.expanduser(hermes_home)), "cron"))
+        if config.cron_dir else None
+    )
     late = _late_mounts(
         profile, state_dir,
         scratch_dir=scratch_dir, scratch_private=scratch_private, ca_bundles=ca_bundles,
         profile_home=profile_home,  # type: ignore[arg-type]
         sandbox_root=sandbox_root,
+        cron_dir=cron_dir_bind,
     )
 
     if home_root is None:
@@ -1210,6 +1237,7 @@ class BubblewrapEnvironment(LocalEnvironment):
         # Without a config (direct construction), the defaults plus terminal.home_mode as core
         # exports it: that is what decides the subprocess HOME the overlays must leave reachable.
         self._config = load_bubblewrap_config({}, os.environ.get(ENV_HOME_MODE, "")) if config is None else config
+
         # The cwd Hermes asked for when it was not a host directory (Hermes
         # before 0.22.3 hands plugin backends /root); execute() maps it to the
         # tracked cwd, since commands keep arriving with it.
@@ -1323,6 +1351,10 @@ class BubblewrapEnvironment(LocalEnvironment):
                 roots.setdefault(_real_host_path(bind.src), "the read-write bind source")
         if self._config.home_mode in PROFILE_HOME_MODES:
             roots.setdefault(os.path.realpath(os.path.join(self._hermes_home, "home")), "the profile home")
+        if self._config.cron_dir:
+            expanded_cron_dir = os.path.expanduser(self._config.cron_dir)
+            if os.path.isabs(expanded_cron_dir):
+                roots.setdefault(os.path.realpath(expanded_cron_dir), "the configured cron directory")
         return roots
 
     def _validate_host_binds(self, sandbox_root: str) -> None:
@@ -1372,6 +1404,23 @@ class BubblewrapEnvironment(LocalEnvironment):
                 "the Hermes scratch dir", self._scratch_dir, guard, kind=bubblewrap_binds.DIRECTORY,
                 public=(os.path.join(self._hermes_home, "cache", "scratch"),),
             )
+        if self._config.cron_dir:
+            expanded = os.path.expanduser(self._config.cron_dir)
+            if not os.path.isabs(expanded):
+                raise ValueError(
+                    f"{_setting_name(SETTING_CRON_DIR)} must be an absolute path to an existing external "
+                    f"directory, got {self._config.cron_dir!r}"
+                )
+            dest = os.path.join(self._hermes_home, "cron")
+            real, reason = bubblewrap_binds.bind_refusal(
+                expanded, guard, kind=bubblewrap_binds.DIRECTORY, dest=dest,
+            )
+            if reason is not None:
+                raise ValueError(
+                    f"{_setting_name(SETTING_CRON_DIR)} cannot be bound safely: {reason}. Choose an existing "
+                    "directory outside HERMES_HOME, credential stores, hidden HOME paths, and sandbox-writable roots."
+                )
+            self._config = replace(self._config, cron_dir=real)
 
     def _validated_profile_home(self, guard: bubblewrap_binds.BindGuard) -> tuple[str, str] | None:
         """(source, destination) of the profile home bind under a profile home_mode, else None.

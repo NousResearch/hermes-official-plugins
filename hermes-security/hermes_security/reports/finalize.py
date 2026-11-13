@@ -128,6 +128,17 @@ def finalize_bundle(*, manifest: dict, findings_doc: dict, coverage: dict, chain
         validate(kind, doc)
         if doc.get('scanId') != manifest.get('scanId'):
             raise ReportError(f'{kind}.scanId does not match manifest')
+    # Deployment questions need a recorded parent disposition even when files are all read.
+    from ..orchestration import deployment
+    for unit in coverage.get('units', []):
+        if unit.get('kind') == 'deployment':
+            match = deployment.UNIT.fullmatch(unit['unitId'])
+            try:
+                deployment.check_unit(unit['unitId'], unit, {match[1]} if match else set(), worker=False)
+            except ValidationError as exc:
+                raise ReportError(str(exc)) from None
+    if deployment.pending(coverage.get('units', [])):
+        raise ReportError('deployment evidence requires a parent disposition')
     # Bind excerpts to their recorded bytes; snapshot membership is the submit
     # boundary's responsibility because finalization deliberately has no target I/O.
     for finding in reported:

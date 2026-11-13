@@ -118,3 +118,29 @@ def test_resume_reissues_canceled_deep_attempt(tmp_path):
     assert replacement['attemptId'] != packet['attemptId']
     payload = worker(plan, [], role='deep-pass', attempt=replacement['attemptId']); payload['packetId'] = packet['packetId']
     assert service.submit_worker_result(payload)['inserted'] == 0
+
+
+def _lane_after(tmp_path, first):
+    root, service, plan = setup(tmp_path)
+    sid = plan['scanId']
+    service.submit_worker_result(worker(plan, [candidate_for(root)], coverage=[{'unit': 'lane:A01:2025', 'state': first, 'note': 'Ownership checks read.'}]))
+    service.submit_worker_result(worker(plan, [], attempt='att_data', role='validator', coverage=[{'unit': 'lane:A01:2025', 'state': 'not_applicable', 'note': 'Only a data file.'}]))
+    coverage = service.coverage(sid)
+    lane = next(c for c in coverage['standards']['owaspTop10']['categories'] if c['id'] == 'A01:2025')
+    updates = [e['data'] for e in service.store.events(sid) if e['kind'] == 'coverage.updated']
+    return lane, [g for g in coverage['gaps'] if 'A01:2025' in g], updates
+
+
+def test_a_reviewed_lane_with_a_finding_is_not_contradicted_by_a_data_only_worker(tmp_path):
+    lane, gaps, updates = _lane_after(tmp_path, 'reviewed')
+    assert (lane['state'], lane['reason'], lane['evidence']) == ('reviewed', 'Ownership checks read.', ['att_baseline'])
+    assert gaps == []
+    # The data-only worker's report is still in the activity log.
+    assert [(u['source'], u['unit']['state']) for u in updates] == [('att_baseline', 'reviewed'), ('att_data', 'not_applicable')]
+
+
+def test_a_lane_nobody_reviewed_is_still_contradicted_by_its_finding(tmp_path):
+    lane, gaps, updates = _lane_after(tmp_path, 'not_applicable')
+    assert (lane['state'], lane['reason']) == ('unknown', 'finding contradicts not_applicable lane')
+    assert gaps == ['OWASP lane A01:2025 is unknown: finding contradicts not_applicable lane.']
+    assert len(updates) == 2

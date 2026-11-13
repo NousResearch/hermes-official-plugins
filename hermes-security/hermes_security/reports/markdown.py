@@ -404,6 +404,10 @@ def render_markdown(manifest: dict, findings_doc: dict, coverage: dict, chains_d
     units = {theme: _units(themes[theme]) for theme in order}
     totals = Counter(f['severity']['level'] for f in findings)
     parts.append('## Summary')
+    duplicates = sum(len(f.get('provenance', {}).get('supersedes') or [])
+                     for f in findings + list(findings_doc.get('retained', [])))
+    if duplicates:
+        parts.append(f"{_plural(duplicates, 'duplicate or subsumed report')} merged into their retained source records; not false-positive rejections.")
     if findings:
         counts = ', '.join(f'{totals[s]} {human_label(s).lower()}' for s in SEVERITIES if totals[s])
         parts.append(f"**{_plural(len(findings), 'finding')}:** {counts}.")
@@ -424,6 +428,15 @@ def render_markdown(manifest: dict, findings_doc: dict, coverage: dict, chains_d
         parts.append('| # | Severity | Finding | Where | Fix |\n|---:|---|---|---|---|\n' + '\n'.join(rows))
     else:
         parts.append('No reportable findings.')
+    important = [f for f in findings_doc.get('retained', [])
+                 if f.get('evidenceState') == 'inconclusive' and f.get('severity', {}).get('level') in {'critical', 'high'}]
+    if important:
+        parts.append('## Important unresolved candidates')
+        parts.append('These claims are inconclusive, not confirmed findings. Their severity describes potential impact.')
+        for f in important:
+            parts.extend([f"### {_text(f.get('title'))}", _text(f.get('summary')),
+                          'Remaining proof gaps:\n' + _bullets(f.get('proofGaps', [])),
+                          'Counterevidence:\n' + _bullets(f.get('counterEvidence', []))])
     number = 0
     for theme in order:
         parts.append(f"## {theme} ({len(themes[theme])})")
@@ -445,6 +458,22 @@ def render_markdown(manifest: dict, findings_doc: dict, coverage: dict, chains_d
     if dependency:
         parts.append('<a id="dependency-check"></a>')
         parts.extend(dependency)
+
+    deployment_units = [u for u in coverage.get('units', []) if u.get('kind') == 'deployment']
+    if deployment_units:
+        parts.append('## Deployment evidence')
+        if any(u.get('state') != 'reviewed' for u in deployment_units):
+            files = coverage.get('files', {})
+            if files.get('reviewed', 0) + files.get('notApplicable', 0) == files.get('total', 0):
+                parts.append('All in-scope files read; deployment security unresolved.')
+        parts.append('These are source-review dispositions, not runtime confirmation; runtime evidence requires separate validation receipts.')
+        for unit in deployment_units:
+            d = unit.get('deployment', {})
+            parts.extend([f"### {_text(d.get('component'))}: {_text(d.get('ingress'))} ingress",
+                          f"Actor: {_text(d.get('actor'))}. Asset: {_text(d.get('asset'))}.",
+                          f"Disposition: {_text(d.get('disposition'))}. {_text(d.get('reviewNote') or unit.get('reason'))}"])
+            if d.get('missingEvidence'):
+                parts.append('Missing evidence:\n' + _bullets(d['missingEvidence']))
 
     parts.extend(['## Coverage', f"Review coverage: {human_label(coverage.get('completeness', 'unknown'))}."])
     started, finished = manifest.get('startedAt'), manifest.get('finishedAt')
@@ -522,6 +551,8 @@ def render_markdown(manifest: dict, findings_doc: dict, coverage: dict, chains_d
     for f in retained:
         reason = f.get('reason') or f.get('rejectionReason') or f.get('summary') or 'No reason recorded.'
         parts.append(f"- {_text(f.get('title', f.get('candidateId')))}: {human_label(f.get('evidenceState', 'candidate'))} — {_text(reason)}")
+        if f not in important and f.get('evidenceState') == 'inconclusive':
+            parts.append('Remaining proof gaps:\n' + _bullets(f.get('proofGaps', [])))
     gaps = coverage.get('gaps') or ([f"The scan ended with status {manifest.get('status', 'unknown')}; not all requested review work was established as complete."] if incomplete else [])
     parts.extend(['## Limitations', _bullets(_gap_lines(gaps), 'No coverage gaps were recorded.'),
                   'Source review alone does not establish runtime exploitability. Validation that was not performed is marked NOT RUN.'])

@@ -99,6 +99,26 @@ function render(node) {
   return render(node.props?.children)
 }
 
+test('deployment evidence separates file completion from unresolved private ingress', () => {
+  const coverage = { completeness: 'partial', files: { total: 1, reviewed: 1 }, gaps: [], units: [
+    { kind: 'deployment', state: 'reviewed', deployment: { component: 'collector', ingress: 'public',
+      actor: 'internet user', asset: 'telemetry', disposition: 'resolved', reviewNote: 'No public ingress.', missingEvidence: [] } },
+    { kind: 'deployment', state: 'deferred', deployment: { component: 'collector', ingress: 'private',
+      actor: 'customer-controlled workload', asset: 'organization-wide telemetry', disposition: 'deferred',
+      reviewNote: 'Private path not established.', missingEvidence: ['effective image config', 'network isolation'] } }
+  ] }
+  const view = render(plugin.Coverage({ data: coverage }))
+  for (const text of ['Deployment evidence', 'public ingress', 'Evidence reviewed', 'private ingress', 'Unresolved',
+    'customer-controlled workload', 'organization-wide telemetry', 'effective image config', 'network isolation']) assert.ok(view.includes(text), text)
+  for (const extra of [{}, { workers: [{ status: 'missing' }], gaps: ['Worker packet has no accepted result.'] },
+    { gaps: ['lane:A01:2025 is deferred'], units: [...coverage.units, { kind: 'lane', state: 'deferred' }] }]) {
+    const summary = plugin.reportSummary({}, { ...coverage, ...extra }).join(' ')
+    assert.match(summary, /All in-scope files read; deployment security unresolved\./)
+    assert.doesNotMatch(summary, /Repository review complete|Partly reviewed: 1 of 1/)
+    assert.match(summary, /review work was not finished|deployment security unresolved/)
+  }
+})
+
 test('validation controls explain tests and offer optional app testing on open scans', () => {
   const local = render(plugin.ValidationControls({ id: 'scan_test', scan: { safetyLevel: 'local-safe', status: 'awaiting_analysis' } }))
   assert.match(local, /runs small tests from this repo/)
@@ -744,12 +764,15 @@ test('model and subagent pickers reach the scan and its chat; subagents only wit
     assert.deepEqual(create.options.body, { path: '/remote/repo', mode: 'standard', model: 'x/fast', provider: 'openrouter',
       delegate: { backend: 'model_map', name: 'deep' } })
     assert.deepEqual(env.rpc[0], ['session.create', { cwd: '/remote/repo', title: 'Security scan · repo · new', model: 'x/fast', provider: 'openrouter' }])
-    // Default model: the scan records it, the chat is created without a model override.
+    // Default model: the scan records it and its chat is created on it, not on the profile's default.
     env.states = [{ path: '/remote/repo', otherPath: '', changes: false, deep: false, tests: false, folder: '', context: '', model: '', delegate: '' }, null, false]
     env.rpc = []
     await nodes(plugin.NewScan({})).find((n) => n.type === 'button' && n.props.children === 'Start scan').props.onClick()
     assert.deepEqual(env.calls.filter((c) => c.path === '/scans').at(-1).options.body, { path: '/remote/repo', mode: 'standard', model: 'claude-opus-5-5' })
-    assert.deepEqual(env.rpc[0], ['session.create', { cwd: '/remote/repo', title: 'Security scan · repo · new' }])
+    assert.deepEqual(env.rpc[0], ['session.create', { cwd: '/remote/repo', title: 'Security scan · repo · new', model: 'claude-opus-5-5', provider: 'anthropic' }])
+    assert.deepEqual(plugin.chatRoute('x/fast', env.fixtures['model-options']), { model: 'x/fast', provider: 'openrouter' })
+    assert.deepEqual(plugin.chatRoute('unlisted', env.fixtures['model-options']), { model: 'unlisted' })
+    assert.deepEqual(plugin.chatRoute('', env.fixtures['model-options']), {})
     // A titled create reopens the chat holding that title, so each scan of a repo gets its own.
     assert.equal(plugin.scanChatTitle('scan_c9bf4ff6a0f8d33338f432c7', '/remote/repo'), 'Security scan · repo · c9bf4f')
     assert.notEqual(plugin.scanChatTitle('scan_c9bf4ff6a0f8d33338f432c7', '/remote/repo'),

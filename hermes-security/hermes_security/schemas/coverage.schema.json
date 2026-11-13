@@ -92,7 +92,8 @@
               "file",
               "lane",
               "asvs",
-              "worker"
+              "worker",
+              "deployment"
             ]
           },
           "state": {
@@ -115,6 +116,9 @@
               "type": "string",
               "maxLength": 20000
             }
+          },
+          "deployment": {
+            "$ref": "#/$defs/deploymentEvidence"
           }
         },
         "required": [
@@ -345,5 +349,64 @@
     "workers",
     "gaps"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "deploymentEvidence": {
+      "type": "object",
+      "properties": {
+        "component": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "ingress": {
+          "enum": [
+            "public",
+            "private",
+            "local"
+          ]
+        },
+        "actor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "asset": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "missingEvidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "maxItems": 16
+        },
+        "disposition": {
+          "enum": [
+            "pending",
+            "resolved",
+            "deferred"
+          ]
+        },
+        "reviewNote": {
+          "type": "string",
+          "maxLength": 4000
+        }
+      },
+      "required": [
+        "component",
+        "ingress",
+        "actor",
+        "asset",
+        "missingEvidence",
+        "disposition",
+        "reviewNote"
+      ],
+      "additionalProperties": false
+    }
+  }
 }

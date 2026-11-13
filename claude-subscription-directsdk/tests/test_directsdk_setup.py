@@ -207,7 +207,8 @@ def test_an_inherited_backend_override_keeps_discovery_behind_the_relay(profile,
 
 # The served catalog's Fable rows carry taglines, never billing language.
 SERVED_FABLE = [
-    {"value": "fable", "resolvedModel": "claude-fable-5-1", "displayName": "Fable 5.1", "description": "For your toughest challenges"},
+    {"value": "fable", "resolvedModel": "claude-fable-5-2", "displayName": "Fable 5.2", "description": "For your toughest challenges"},
+    {"value": "claude-fable-5-1", "resolvedModel": "claude-fable-5-1", "displayName": "Fable 5.1", "description": "For your toughest challenges"},
     {"value": "claude-fable-5", "resolvedModel": "claude-fable-5", "displayName": "Fable 5", "description": "Most capable for your hardest and longest-running tasks"},
 ]
 
@@ -217,12 +218,13 @@ SERVED_FABLE = [
     # The handshake names the plan, not the seat tier: premium seats include Fable, standard seats do not.
     ("Claude Team", "usage credits on standard seats"), ("Claude Enterprise", "usage credits on standard seats"),
 ])
-def test_fable_5_and_5_1_follow_the_documented_plan_rule(profile, tmp_path, plan, note):
-    """Fable 5 and 5.1 are a standard part of Max and Ultra; Pro (and standard seats) bill both to usage
+def test_fable_5_5_1_and_5_2_follow_the_documented_plan_rule(profile, tmp_path, plan, note):
+    """Fable 5, 5.1 and 5.2 are a standard part of Max and Ultra; Pro (and standard seats) bill them to usage
     credits from the first request, and under -p Claude Code bills without asking. The rule must reach a
     served Fable 5 row too, whose description says nothing about billing."""
     command, env = _cli(tmp_path, {**PRO, "account": {"subscriptionType": plan}, "models": PINNED_PICKER, "served": SERVED_FABLE})
     rows = {m["id"]: m for m in profile.discover_models(command=command, env=env)}
+    assert rows["claude-fable-5-2[1m]"]["note"] == note and rows["claude-fable-5-2[1m]"]["label"] == "Fable 5.2"
     assert rows["claude-fable-5-1[1m]"]["note"] == note
     assert rows["claude-fable-5"]["note"] == (note + " · unpinned" if note else "unpinned")
 

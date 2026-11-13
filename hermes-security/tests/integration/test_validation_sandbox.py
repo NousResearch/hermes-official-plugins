@@ -36,6 +36,33 @@ def test_disposable_paired_controls(tmp_path):
     assert any('network isolation:' in n for n in r['notes'])
     assert not list(tmp_path.glob('validation-*'))
 
+# Names that hold no secret themselves but point a tool at one: agent sockets, credential files, profile selectors.
+CREDENTIAL_POINTERS=('SSH_AUTH_SOCK','SSH_ASKPASS','GIT_ASKPASS','GNUPGHOME','GPG_AGENT_INFO','KUBECONFIG','AWS_PROFILE',
+                     'AWS_DEFAULT_PROFILE','AWS_CONFIG_FILE','AZURE_CONFIG_DIR','CLOUDSDK_CONFIG','DOCKER_CONFIG','NETRC',
+                     'PGPASSFILE','PGSERVICEFILE','DATABASE_URL')
+
+def test_test_commands_do_not_inherit_credential_pointers(tmp_path,monkeypatch):
+    for name in CREDENTIAL_POINTERS: monkeypatch.setenv(name,'operator-value')
+    monkeypatch.setenv('AWS_SECRET_ACCESS_KEY','operator-value')   # a secret by name: already removed before this change
+    monkeypatch.setenv('HS_TEST_HARMLESS','kept')
+    target=tmp_path/'source';target.mkdir()
+    # The command reports which of the names it was given exist in its own environment.
+    code='import os,sys; print("VULN-MARKER"); print("SEEN="+",".join(n for n in sys.argv[1:] if n in os.environ))'
+    asked=[*CREDENTIAL_POINTERS,'AWS_SECRET_ACCESS_KEY','HS_TEST_HARMLESS','PATH']
+    p=local_plan([[sys.executable,'-c',code,*asked],[sys.executable,'-c','print("SAFE")']])
+    r=run_local(p,target=target,workdir_parent=tmp_path)
+    assert r['status']=='passed', r['outputExcerpt']
+    seen=next(line for line in r['outputExcerpt'].splitlines() if line.startswith('SEEN='))
+    assert seen=='SEEN=HS_TEST_HARMLESS,PATH'
+
+def test_credential_pointers_are_removed_whatever_their_case(tmp_path,monkeypatch):
+    from hermes_security.validation.runner import _test_env
+    monkeypatch.setenv('kubeconfig','operator-value'); monkeypatch.setenv('Ssh_Auth_Sock','operator-value')
+    monkeypatch.setenv('HS_TEST_HARMLESS','kept')
+    env=_test_env(tmp_path)
+    assert not {'KUBECONFIG','SSH_AUTH_SOCK'} & {name.upper() for name in env}
+    assert env['HS_TEST_HARMLESS']=='kept' and env['TMPDIR']==str(tmp_path)
+
 @pytest.mark.skipif(sys.platform == 'win32', reason='POSIX fork//proc variant; see test_timeout_kills_job_tree')
 def test_timeout_kills_process_group(tmp_path):
     import os

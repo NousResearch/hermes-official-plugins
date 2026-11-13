@@ -89,6 +89,9 @@ def derive(*, scan, packets, attempts, dispatches, reduced, receipts, chains_rec
         return _result(scan, 'wait', why, progress_key, actionable=0,
                        slots=0, running=0, how='Wait about 30 seconds, then read security_scan_get section next '
                                                'again. Do not dispatch workers until the step changes.')
+    if 'snapshot_digest' in scan and not scan['snapshot_digest']:
+        return _result(scan, 'blocked', scan.get('reason') or
+                       'The target has no inventory snapshot; resume preparation before reviewing.', progress_key)
     accepted = [a for a in attempts if a.get('status') == 'accepted']
     accepted_ids = [a['attempt_id'] for a in accepted]
 

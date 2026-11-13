@@ -1324,7 +1324,12 @@ class Client:
                         if session:
                             reservation = _Reservation()
                             _live.add(reservation)
-                    native = self._launch(request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id, session, reservation)
+                    try:
+                        native = self._launch(request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id, session, reservation)
+                    finally:
+                        # However the launch ended, the reservation is spent: native holds the place now, or nothing does.
+                        with _live_lock:
+                            _live.discard(reservation)
                     native.ident = ident
                     native.replay(request, frames, timeout)
                     if not session:
@@ -1409,8 +1414,6 @@ class Client:
                     _live.add(native)
             return native
         except BaseException:
-            with _live_lock:
-                _live.discard(reservation)
             admission.close()
             if root is not None:
                 shutil.rmtree(root, ignore_errors=True)

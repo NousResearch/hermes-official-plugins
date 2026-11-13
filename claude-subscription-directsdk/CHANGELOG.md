@@ -24,10 +24,11 @@
 
 - Session mode: a kept process's place against `max_sessions` is taken under the lock before the launch, so agents
   starting together can no longer all pass the check and keep more processes than the cap (with `max_sessions: 1`,
-  three agents kept three). A client dropped without `close()` no longer keeps its process for the idle hour: the idle
-  timer holds no reference to the client and a finalizer ends the process when the client is collected. A `close()`
-  that lands while a step is finishing cannot publish a kept process on the closed client, and resuming a kept process
-  no longer reaps it behind the reader thread's back.
+  three agents kept three). The place is given back however the launch ends, a relay that cannot start included. A
+  client dropped without `close()` no longer keeps its process for the idle hour: the idle timer holds no reference to
+  the client and a finalizer ends the process when the client is collected. A `close()` that lands while a step is
+  finishing cannot publish a kept process on the closed client, and resuming a kept process no longer reaps it behind
+  the reader thread's back.
 - Session mode: a kept process whose own history no longer lines up with Hermes' frames (a row more or fewer, a role
   out of place) is refused before upstream and the step replays into a new process, as a request that does not extend
   the previous one is. Before, that request went upstream with native's own tool-result shape in the replayed rows. A

@@ -70,3 +70,17 @@ def test_a_launch_that_fails_before_the_spawn_leaves_no_relay(first_step, monkey
         with directsdk._live_lock:
             directsdk._live.clear()
 
+
+def test_a_launch_that_fails_before_its_relay_gives_its_place_back(first_step, monkeypatch):
+    """The place against ``max_sessions`` is taken before the launch; a relay that cannot start (no socket to bind)
+    must not keep it, or the cap shrinks by one for the life of the Hermes process."""
+    def no_relay(*_, **__):
+        raise OSError(24, 'Too many open files')
+    monkeypatch.setattr(directsdk, 'relay', no_relay)
+    try:
+        with pytest.raises(OSError, match='Too many open files'):
+            first_step()
+        assert held() == 0, 'the failed launch kept its place'
+    finally:
+        with directsdk._live_lock:
+            directsdk._live.clear()

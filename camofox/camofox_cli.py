@@ -20,15 +20,20 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     setup = sub.add_parser("setup", help="Save CAMOFOX_URL (and an optional CAMOFOX_API_KEY) to this profile's .env")
     setup.add_argument("--url", help="Camofox server URL (default: prompt, http://localhost:9377)")
     sub.add_parser("status", help="Show the configured Camofox server and whether it answers")
+    identity = sub.add_parser(
+        "identity", help="Close the browser session of a scheduled agent (its cron job)")
+    identity.add_argument("job", help="Cron job id (or cron:<job_id>): that job's Camofox session is closed")
 
 
 def _identity_mode() -> str:
     cfg = client.get_camofox_config()
     if client._camofox_identity_override(None, cfg):
         return "external (CAMOFOX_USER_ID / browser.camofox.user_id)"
-    if client._managed_persistence_enabled(cfg):
-        return "managed persistence (stable per-profile Camofox profile)"
-    return "ephemeral (new Camofox profile per session)"
+    mode = ("managed persistence (stable per-profile Camofox profile)"
+            if client._managed_persistence_enabled(cfg) else "ephemeral (new Camofox profile per session)")
+    if client._durable_agent_identity_enabled(cfg):
+        mode += "; scheduled agents get a profile of their own (durable_agent_identity)"
+    return mode
 
 
 def cmd_status() -> int:
@@ -65,8 +70,22 @@ def cmd_setup(url: str | None) -> int:
     return cmd_status()
 
 
+def cmd_identity(job: str) -> int:
+    key = job.strip() if job.strip().startswith("cron:") else f"cron:{job.strip()}"
+    result = client.forget_agent_identity(key)
+    print(f"Agent:    {result['agent_key']}")
+    print(f"Identity: {result['user_id']}")
+    print(f"Server session closed: {'yes' if result['session_closed'] else 'no (server unreachable)'}")
+    print("Profile:  left in place. The Camofox server owns the profile directory and has no")
+    print("          endpoint that deletes one; to drop the cookies too, remove this userId's")
+    print("          directory under its profile dir (CAMOFOX_PROFILE_DIR, default ~/.camofox/profiles).")
+    return 0
+
+
 def handle_cli(args: argparse.Namespace) -> int:
     command = getattr(args, "camofox_command", None)
     if command == "setup":
         return cmd_setup(getattr(args, "url", None))
+    if command == "identity":
+        return cmd_identity(getattr(args, "job", ""))
     return cmd_status()

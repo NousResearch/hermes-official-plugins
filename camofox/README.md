@@ -122,6 +122,43 @@ Headed login, then headless reuse:
    `CAMOFOX_ADMIN_KEY` is unset: shut Node down gracefully instead, then start Camofox again.
 4. Set `interactive.mode` to `off`, restart Camofox, and start a new Hermes browser task.
 
+## Scheduled agents keep their own identity
+
+A cron job is an agent that outlives one run, so it can get a Camofox identity of its own instead of
+borrowing the profile's: the `userId` is derived from the job id (`cron:<job_id>`, the stable half of
+the `cron:<job_id>:<execution_id>` task id), so every fire lands in the same browser profile with the
+cookies the previous fire left. The identity is derived, never stored, so nothing drifts or
+duplicates, and one-off tasks (interactive chats, subagents) never inherit a job's profile.
+
+It is **off by default** — it puts a job's cookies on disk, so turn it on deliberately:
+
+```yaml
+browser:
+  camofox:
+    durable_agent_identity: true
+```
+
+With it on, a scheduled agent's `userId` is no longer the profile-scoped one, so a job that was
+signed in through `managed_persistence` starts signed out once and keeps its own login after that.
+Add `adopt_existing_tab: true` if you also want each fire to reuse the job's own tab instead of
+opening a new one.
+
+The identity has no lifecycle of its own: it goes away when you delete the agent and forget it.
+
+```bash
+hermes camofox identity <job_id>     # closes that job's Camofox session (tabs included)
+```
+
+Run that after `hermes cron remove <job_id>`: the plugin API has no cron-removal hook, so teardown is
+an explicit step rather than an automatic one.
+
+**The profile directory stays.** The Camofox server owns the on-disk profile (one directory per
+`userId` under its profile dir — `CAMOFOX_PROFILE_DIR` on the server, `~/.camofox/profiles` by
+default) and exposes no endpoint that deletes one; `DELETE /sessions/<userId>` closes tabs and
+checkpoints state, it does not erase it. So Hermes closes the session through the API and leaves the
+directory alone rather than guessing at the server's private layout: to drop the cookies as well,
+remove that `userId`'s directory by hand after the session is closed.
+
 ## Externally managed sessions
 
 When another app drives the visible Camofox browser, Hermes can work inside that same identity:
@@ -169,6 +206,7 @@ ephemeral identity they last only while the same Camofox session lives.
 | `browser.snapshot_threshold` | `15000` | Snapshots longer than this are cut at a line boundary; the full tree is saved under `cache/web` and the cut says how to page it with `read_file`. |
 | `browser.restrict_evaluate` | `false` | Refuse `browser_console(expression=...)` that names sensitive primitives (cookies, storage, network calls). `browser.allow_unsafe_evaluate: true` overrides it. |
 | `browser.camofox.cookies_dir` | `~/.camofox/cookies` | Where `browser_import_cookies` reads cookie files. |
+| `browser.camofox.durable_agent_identity` | `false` | Give each scheduled agent (cron job) a Camofox profile of its own, derived from the job id. Off by default: see "Scheduled agents keep their own identity". |
 | `auxiliary.camofox_vision.*` | inherits `auxiliary.vision` | Model used by `browser_vision`. |
 
 Navigation refuses URLs that carry a Hermes secret, cloud-metadata endpoints, and hosts in your

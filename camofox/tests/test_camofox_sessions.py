@@ -165,3 +165,86 @@ class TestDeadTab:
         result = json.loads(t.browser_click("@e9", task_id="t1"))
         assert result["success"] is False and "404" in result["error"]
         assert client.get_session("t1")["tab_id"] == "tab-1"
+
+
+class TestDurableAgentIdentity:
+    """A cron job outlives a run, so it can own one Camofox profile across every fire — opt-in,
+    because that writes the job's cookies to disk."""
+
+    ENABLED = "browser:\n  camofox:\n    durable_agent_identity: true\n"
+
+    def test_the_same_job_keeps_one_identity_across_runs(self, camofox, write_config):
+        write_config(self.ENABLED)
+        first = client.get_session("cron:job123:exec-a")
+        second = client.get_session("cron:job123:exec-b")
+        assert first["user_id"] == second["user_id"]
+        assert first["session_key"] == second["session_key"]
+        assert first["user_id"] == client.get_agent_identity("cron:job123")["user_id"]
+        # Neither the profile-scoped jar nor the task-scoped one: a job's cookies are its own.
+        assert first["user_id"] != client.get_camofox_identity("cron:job123:exec-a")["user_id"]
+
+    def test_off_by_default_leaves_cron_on_the_profile_identity(self, camofox, write_config):
+        """Nothing about a default cron fire changes: no profile of its own, no cookies on disk."""
+        write_config("browser:\n  camofox:\n    managed_persistence: true\n")
+        session = client.get_session("cron:job123:exec-a")
+        assert session["user_id"] == client.get_camofox_identity("cron:job123:exec-a")["user_id"]
+        assert session["user_id"] != client.get_agent_identity("cron:job123")["user_id"]
+
+    def test_two_jobs_never_share_a_profile(self, camofox, write_config):
+        write_config(self.ENABLED)
+        a = client.get_session("cron:joba:exec-a")
+        b = client.get_session("cron:jobb:exec-a")
+        assert (a["user_id"], a["session_key"]) != (b["user_id"], b["session_key"])
+
+    def test_one_off_tasks_do_not_get_a_durable_identity(self, camofox, write_config):
+        write_config(self.ENABLED)
+        assert client.agent_key_from_task("subagent-0-abc123") is None
+        assert client.agent_key_from_task("cron:") is None
+        subagent = client.get_session("subagent-0-abc123")
+        assert subagent["user_id"].startswith("hermes_")
+        assert subagent["user_id"] != client.get_agent_identity("cron:abc123")["user_id"]
+
+    def test_adoption_stays_the_agents_own_choice(self, camofox, write_config):
+        """A durable identity does not silently force tab adoption: an opt-in flag is still a flag."""
+        write_config(self.ENABLED)
+        assert client.get_session("cron:job7:exec-a")["adopt_existing_tab"] is False
+        client.drop_session("cron:job7:exec-a")
+        write_config(self.ENABLED + "    adopt_existing_tab: true\n")
+        assert client.get_session("cron:job7:exec-a")["adopt_existing_tab"] is True
+
+    def test_forget_closes_the_server_session_through_the_api(self, camofox, write_config):
+        write_config(self.ENABLED)
+        t.browser_navigate("https://example.com", task_id="cron:job9:exec-a")
+        user_id = client.get_agent_identity("cron:job9")["user_id"]
+
+        result = client.forget_agent_identity("cron:job9")
+
+        assert result["session_closed"] is True
+        assert [c["path"] for c in camofox.calls("DELETE") if c["path"].startswith("/sessions/")] == \
+            [f"/sessions/{user_id}"]
+        assert client.get_session("cron:job9:exec-b")["tab_id"] is None
+
+    def test_end_of_session_cleanup_keeps_the_jobs_profile(self, camofox, write_config):
+        """A fire ends without killing its own session: the next fire lands in the same profile,
+        on the same tab."""
+        write_config(self.ENABLED + "    adopt_existing_tab: true\n")
+        t.browser_navigate("https://example.com", task_id="cron:job5:exec-a")
+        tab_id = client.get_session("cron:job5:exec-a")["tab_id"]
+
+        t.cleanup_task("cron:job5:exec-a")
+
+        assert camofox.calls("DELETE") == []
+        again = client.get_session("cron:job5:exec-b")
+        assert again["user_id"] == client.get_agent_identity("cron:job5")["user_id"]
+        assert again["tab_id"] == tab_id
+
+    def test_without_the_opt_in_cleanup_still_closes_the_session(self, camofox):
+        t.browser_navigate("https://example.com", task_id="cron:job5:exec-a")
+        t.cleanup_task("cron:job5:exec-a")
+        assert client.get_session("cron:job5:exec-b")["tab_id"] is None
+
+    def test_forget_without_a_server_does_not_raise(self, camofox, write_config, monkeypatch):
+        """Teardown is best-effort against a server that may already be gone."""
+        write_config(self.ENABLED)
+        monkeypatch.delenv("CAMOFOX_URL")
+        assert client.forget_agent_identity("cron:job9")["session_closed"] is False

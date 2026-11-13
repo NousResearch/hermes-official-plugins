@@ -78,6 +78,13 @@ def _managed_persistence_enabled(camofox_cfg: dict[str, Any]) -> bool:
     return bool(camofox_cfg.get("managed_persistence"))
 
 
+def _durable_agent_identity_enabled(camofox_cfg: dict[str, Any]) -> bool:
+    """``browser.camofox.durable_agent_identity``: give each scheduled agent (cron job) a Camofox
+    profile of its own instead of the profile-scoped one. Opt-in, off by default: it puts cookies
+    on disk for a job that did not ask for it before, and those profiles outlive the job."""
+    return bool(camofox_cfg.get("durable_agent_identity"))
+
+
 def _env_or_cfg(env_name: str, camofox_cfg: dict[str, Any], cfg_key: str) -> str:
     """Env/secret-scope value first, then the ``browser.camofox`` config key, else ""."""
     return _env(env_name) or str(camofox_cfg.get(cfg_key) or "").strip()
@@ -110,6 +117,40 @@ def get_camofox_identity(task_id: Optional[str] = None) -> dict[str, str]:
     user_digest = uuid.uuid5(uuid.NAMESPACE_URL, f"camofox-user:{scope_root}").hex[:10]
     session_digest = uuid.uuid5(uuid.NAMESPACE_URL, f"camofox-session:{scope_root}:{task_id or 'default'}").hex[:16]
     return {"user_id": f"hermes_{user_digest}", "session_key": f"task_{session_digest}"}
+
+
+def get_agent_identity(agent_key: str) -> dict[str, str]:
+    """Stable identity for an agent that outlives a single run, derived from its key.
+
+    A cron job fires under ``cron:<job_id>:<execution_id>`` and the execution id changes on every
+    run, so the job id is the durable half. Deriving (not storing) the identity means every run
+    resolves to the same Camofox profile — cookies, logins and the agent's own tab survive — and
+    nothing can drift or duplicate. ``forget_agent_identity`` is what removes it.
+    """
+    scope_root = str(get_camofox_state_dir())
+    digest = uuid.uuid5(uuid.NAMESPACE_URL, f"camofox-agent:{scope_root}:{agent_key}").hex[:16]
+    return {"user_id": f"hermes_ag_{digest[:12]}", "session_key": f"agent_{digest}"}
+
+
+# Task-id prefixes whose agent outlives one run, so its browser identity has to persist.
+_AGENT_TASK_PREFIXES = ("cron:",)
+
+
+def agent_key_from_task(task_id: Optional[str]) -> Optional[str]:
+    """Durable agent key for a task that represents an agent (cron job), else None.
+
+    Cron sessions run as ``cron:<job_id>:<execution_id>``; the trailing execution id is unique per
+    fire, so the job id identifies the agent. Any other task id is a one-off conversation or
+    subagent and gets no durable identity.
+    """
+    if not task_id:
+        return None
+    for prefix in _AGENT_TASK_PREFIXES:
+        if task_id.startswith(prefix):
+            parts = task_id.split(":")
+            if len(parts) >= 2 and parts[1]:
+                return f"{prefix}{parts[1]}"
+    return None
 
 
 def _camofox_identity_override(task_id: Optional[str], camofox_cfg: dict[str, Any]) -> Optional[dict[str, str]]:
@@ -329,8 +370,9 @@ def _adopt_existing_tab(session: dict[str, Any], *, task_scoped: bool = False) -
 
 def get_session(task_id: Optional[str]) -> dict[str, Any]:
     """Get or create the task's session. Identity precedence: external override
-    (``CAMOFOX_USER_ID`` / config) → profile-scoped identity when managed persistence is on →
-    deterministic per-task userId (random only for unkeyed calls)."""
+    (``CAMOFOX_USER_ID`` / config) → durable agent identity when
+    ``durable_agent_identity`` is on (a cron job) → profile-scoped identity when managed
+    persistence is on → deterministic per-task userId (random only for unkeyed calls)."""
     key = _session_key(task_id)
     with _sessions_lock:
         session = _sessions.get(key)
@@ -342,6 +384,10 @@ def get_session(task_id: Optional[str]) -> dict[str, Any]:
         camofox_cfg = get_camofox_config()
         task_scoped = False
         identity = _camofox_identity_override(key[1], camofox_cfg)
+        if identity is None and _durable_agent_identity_enabled(camofox_cfg):
+            agent_key = agent_key_from_task(key[1])
+            if agent_key:
+                identity = get_agent_identity(agent_key)
         if identity is None and _managed_persistence_enabled(camofox_cfg):
             identity = get_camofox_identity(key[1])
         if identity is None:
@@ -405,11 +451,36 @@ def drop_session(task_id: Optional[str]) -> Optional[dict[str, Any]]:
         return _sessions.pop(_session_key(task_id), None)
 
 
+def forget_agent_identity(agent_key: str) -> dict[str, Any]:
+    """Close a durable agent's live Camofox session, through the server's API.
+
+    Run this after removing the agent (its cron job) so its tabs and session stop existing. Only the
+    live session is torn down: the server owns the on-disk profile and exposes no route that deletes
+    one, so the directory (one per userId under its profile dir) is left in place — remove it by hand
+    if the cookies must go too. See the README for the location and why Hermes does not touch it.
+    """
+    identity = get_agent_identity(agent_key)
+    user_id = identity["user_id"]
+    result: dict[str, Any] = {"agent_key": agent_key, "user_id": user_id, "session_closed": False}
+    if get_camofox_url():
+        try:
+            delete(f"/sessions/{user_id}", timeout=10)
+            result["session_closed"] = True
+        except Exception as exc:
+            logger.debug("Camofox session delete failed for %s: %s", user_id, exc)
+    with _sessions_lock:
+        for key in [k for k, s in _sessions.items() if s.get("user_id") == user_id]:
+            _sessions.pop(key, None)
+    return result
+
+
 def soft_cleanup(task_id: Optional[str] = None) -> bool:
-    """Drop only the local entry (``True``) for managed identities, whose browser profile must
-    survive across agent tasks; ``False`` for ephemeral sessions so the caller closes them."""
+    """Drop only the local entry (``True``) for identities whose browser profile has to outlive the
+    task — managed persistence, an externally owned browser, or a scheduled agent's own profile —
+    and ``False`` for ephemeral sessions, so the caller closes the server session."""
     camofox_cfg = get_camofox_config()
-    if _managed_persistence_enabled(camofox_cfg) or _camofox_identity_override(task_id, camofox_cfg):
+    durable = (_durable_agent_identity_enabled(camofox_cfg) and agent_key_from_task(task_id) is not None)
+    if _managed_persistence_enabled(camofox_cfg) or _camofox_identity_override(task_id, camofox_cfg) or durable:
         drop_session(task_id)
         logger.debug("Camofox soft cleanup for task %s (managed persistence)", task_id)
         return True

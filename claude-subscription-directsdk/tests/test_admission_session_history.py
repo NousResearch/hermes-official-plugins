@@ -45,8 +45,8 @@ OPEN = frame('user', {'type': 'text', 'text': 'go'})
 FRAMES = [OPEN, call(1), result(1), call(2), result(2)]
 
 
-def wire(messages):
-    return json.dumps({'model': 'fixture', 'messages': copy.deepcopy(messages)}, ensure_ascii=False, separators=(',', ':')).encode()
+def wire(messages, model='fixture'):
+    return json.dumps({'model': model, 'messages': copy.deepcopy(messages)}, ensure_ascii=False, separators=(',', ':')).encode()
 
 
 def native_rows(frames):
@@ -84,10 +84,10 @@ def peer():
         server.server_close()
 
 
-def post(gate, messages):
+def post(gate, messages, model='fixture'):
     conn = http.client.HTTPConnection('127.0.0.1', gate.server.server_port, timeout=5)
     try:
-        conn.request('POST', gate.prefix + '/v1/messages', wire(messages), {'Content-Type': 'application/json'})
+        conn.request('POST', gate.prefix + '/v1/messages', wire(messages, model), {'Content-Type': 'application/json'})
         response = conn.getresponse()
         return response.status, response.read()
     finally:
@@ -149,6 +149,20 @@ def test_a_misaligned_prefix_is_refused_as_not_extending_the_previous_request(pe
         rows = native_rows(FRAMES)
         rows.insert(3, {'role': 'assistant', 'content': [{'type': 'text', 'text': 'a row Hermes never saw'}]})
         status, body = post(gate, rows)
+        assert status == 400 and DIVERGED in body
+        assert gate.diverged and len(peer.received) == forwarded
+    finally:
+        gate.close()
+
+
+def test_a_changed_model_on_aligned_rows_is_refused_as_not_extending_the_previous_request(peer):
+    """Every row lines up, so the extension check alone stands before upstream: the kept native asks for another
+    model than its previous request did. ``test_admission_session_drift`` drifts the model against no frames at all,
+    which the alignment refusal now answers first; this case keeps the extension check itself under test."""
+    gate = kept(peer, FRAMES)
+    forwarded = len(peer.received)
+    try:
+        status, body = post(gate, native_rows(FRAMES), model='another')
         assert status == 400 and DIVERGED in body
         assert gate.diverged and len(peer.received) == forwarded
     finally:

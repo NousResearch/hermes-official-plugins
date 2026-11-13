@@ -20,7 +20,7 @@ def test_manifest_identity_and_tools():
     # JSON is a YAML subset: keep this contract independent of a YAML package.
     manifest = json.loads((ROOT / "plugin.yaml").read_text(encoding='utf-8'))
     assert manifest["name"] == "hermes-security"
-    assert manifest["version"] == "0.1.2"
+    assert manifest["version"] == "0.1.3"
     assert manifest["license"] == "Apache-2.0"
     assert manifest["requires_hermes"] == ">=0.21.5"
     assert manifest["kind"] == "standalone"

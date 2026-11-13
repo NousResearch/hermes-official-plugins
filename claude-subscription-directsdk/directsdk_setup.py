@@ -453,13 +453,13 @@ def discover_models(command=None, env=None, timeout=40):
             gate.close()
     if upstream or not native:
         return None
-    # Fable 5 and 5.1 are a standard part of Max and Ultra and of premium Team/Enterprise seats; Pro and
-    # standard seats bill both to usage credits from the first request, and under -p Claude Code bills
+    # Fable 5, 5.1 and 5.2 are a standard part of Max and Ultra and of premium Team/Enterprise seats; Pro and
+    # standard seats bill them to usage credits from the first request, and under -p Claude Code bills
     # without asking. The CLI says so only at request time, so apply the documented rule here
     # (https://support.claude.com/en/articles/15424964). The handshake names the plan, not the seat
     # tier, so a Team/Enterprise row says the rule applies to standard seats instead of guessing.
     plan = str((response.get("response", {}).get("account") or {}).get("subscriptionType") or "").lower()
-    fable = {"claude-fable-5", "claude-fable-5-1"}
+    fable = {"claude-fable-5", "claude-fable-5-1", "claude-fable-5-2"}
     if "pro" in plan:
         credit_billed_on_plan, credit_note = fable, "usage credits"
     elif "team" in plan or "enterprise" in plan:

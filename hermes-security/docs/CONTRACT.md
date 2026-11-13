@@ -141,6 +141,27 @@ Workers may submit partially filled candidates; finalization requires the Findin
 any candidate promoted to a reported finding (evidenceState in source_supported/runtime_confirmed). Rejected and
 inconclusive candidates are retained in `findings.json` under `"retained"` with their reasons, not dropped.
 
+Candidate `provenance` may also carry a validator's verdict on a possible duplicate. None of these fields reaches a
+sealed finding:
+- `subsumes: [candidateId, ...]`: this candidate absorbs those. It remains the way to carry the other candidate's
+  locations over: resubmit the survivor with them.
+- `duplicateOf: candidateId`: this candidate is the same bug as that one; keep that one. The reducer absorbs this
+  candidate into the named survivor exactly as if the survivor had listed it in `subsumes`; the survivor keeps its
+  own locations and severity. Chains are followed to their end (A of B, B of C: both end in C). The verdict is
+  ignored, and the pair stays open, when it names the candidate itself, an unknown or rejected candidate (also one a
+  survivor subsumed), forms a cycle, or does not end at a live survivor. A rejected candidate is never absorbed this
+  way. The latest record of a candidate that carries the field wins.
+- `distinctFrom: [candidateId, ...]`: checked against these; a different bug. The pair is no longer reported as a
+  possible duplicate once either side names the other. The union over every record of the candidate applies.
+- `maybeDuplicateOf: [candidateId, ...]`: checked against these; the code read could not settle whether it is the
+  same bug. The union over every record of the candidate applies. The pair stays open and listed, but is not asked
+  about again and no longer stops `finalize`, which seals the scan `partial` with the pair counted in a gap. A
+  `distinctFrom` on either side, or a `duplicateOf` that merges, wins over it.
+
+A possible duplicate is a pair of live candidates (`candidate|source_supported|runtime_confirmed`) with overlapping
+line spans in one file, comparing each candidate's first location and every location whose `role` is `root_control`
+or `sink`. Nothing is merged without one of the verdicts above.
+
 ### Worker result (input to `security_scan_submit_worker_result`)
 
 ```jsonc
@@ -162,6 +183,32 @@ Citation check on submit: every `locations[*].path` / `codeEvidence[*].path` mus
 excerpt's range, and `codeEvidence.code` must match the snapshot
 file lines (whitespace-trimmed line-by-line compare) — mismatches are rejected per-candidate with reasons
 returned, not silently fixed.
+
+### Optional deployment evidence (no new worker or round)
+
+Coverage accepts `deployment:<inventory path>#<stable-key>` units alongside file,
+lane and ASVS units. The unit carries optional structured `deployment` detail:
+`component`, `ingress` (`public|private|local`), `actor`, `asset`, `missingEvidence`
+(bounded list of exact absent artifacts), `disposition` (`pending|resolved|deferred`),
+and `reviewNote`. See `references/worker-packet.md` for the complete example.
+Workers may submit only `pending`/`unknown`. Parent checkpoints record
+`resolved`/`reviewed` (empty missing list plus evidence note), or
+`deferred`/`deferred` (nonempty missing list plus adjudication note). Pending units
+block finalization; deferred units keep completeness partial. Existing payloads
+without these units remain valid. There is no DB migration or new safety authority.
+Same-key observations merge missing facts, reasons, review notes and evidence references
+inside the store write transaction; differing component/ingress/actor/asset identities
+are rejected, not overwritten. Deferring a subset cannot erase prior missing facts.
+Explicit parent resolution clears the active missing list but retains internal fact
+history; a later pending observation reopens the boundary with all historical facts.
+Merged values exceeding schema bounds reject the write rather than truncate evidence.
+
+Deployment units never alter file counts or queue file remainders. A read manifest
+may be complete file coverage with unresolved deployment evidence. Public and
+private ingress need independent dispositions. Resolved means evidence reviewed,
+not vulnerability fixed or runtime confirmed. Do not infer deployment units from
+all inconclusive candidates. Material missing evidence must be explicitly recorded;
+important inconclusive claims retain their proof gaps in the human report.
 
 ### coverage.json
 
@@ -241,7 +288,7 @@ finish_attempt(scan_id, attempt_id, status, *, result_digest=None, error=None)
 upsert_candidates(scan_id, attempt_id, candidates: list[dict]) -> {"inserted":n,"duplicates":n}  # idempotent on candidate_id+attempt
 list_candidates(scan_id, *, states=None) -> list[dict]
 set_candidate_state(scan_id, candidate_id, state, *, reason) -> dict
-record_coverage(scan_id, units: list[dict], *, source: str)   # last-writer-wins per unit only if not sealed; keeps history in events
+record_coverage(scan_id, units: list[dict], *, source: str, monotonic=False)   # unsealed only; deployment observations merge in the write transaction; other units upsert (optionally monotonic; a monotonic not_applicable leaves a reviewed lane and its closedBy unchanged, and the event is still recorded)
 coverage_units(scan_id) -> list[dict]
 record_validation(scan_id, receipt: dict) -> dict ; validations(scan_id, candidate_id=None) -> list[dict]
 record_chains(scan_id, chains_doc: dict) -> dict ; get_chains(scan_id) -> dict | None
@@ -353,7 +400,15 @@ Banned copy words in generated text: comprehensive, robust, seamless, delve, cri
 tools and HTTP API: `start_scan(**opts)`, `get_scan(scan_id, section=None, limit, offset)` (sections: `summary` = small
 header with scanId/root/snapshotDigest/methodologyVersion/submit/packetIds and `next`, always under the tool cap;
 `next` = `next_step(scan_id)`: `{step: dispatch|wait|validate|chains|finalize|done|blocked, items (<=50, to-do
-first then running), total, actionable, reason, progressKey, how}` derived only from stored state; `packets`
+first then running), total, actionable, reason, progressKey, how}` derived only from stored state (once every
+candidate is checked, `validate` items are the open possible duplicate pairs without a verdict: `{kind:
+"duplicate", candidateIds, path, lines, titles, state: pending|running}`, each needing a `duplicateOf`,
+`distinctFrom` or `maybeDuplicateOf` verdict, and during that step `progressKey` is a string that changes only
+when the set of those pairs changes, not on every saved result; `finalize` raises ValidationError while one has no
+verdict, unless reviewed files changed after the scan started, when no result is accepted any more; a scan sealed
+with pairs still open, undecided or on a changed target, is `partial` with the open pairs as a gap and in
+`possibleDuplicates`, where an undecided pair's entry carries `verdict: "undecided"`, also in `summary`);
+`packets`
 paginated; plus inventory, coverage, candidates, findings, workers, validations, chains, activity, manifest,
 report), `checkpoint(...)`,
 `submit_worker_result(payload)`, `record_validations(scan_id, receipts|plans)`, `propose_chains(scan_id)`,

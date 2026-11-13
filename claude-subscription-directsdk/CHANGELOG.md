@@ -41,6 +41,8 @@
 - Session mode: a kept process that exits while idle gives its relay and its place against `max_sessions` back at
   once. Before, it held both until its agent's next step, `close()` or the idle hour, so with the cap reached the
   next agent ran per-call beside a dead process.
+- Session mode: a launch that fails after its relay is up and before Claude Code starts (the launch directory cannot
+  be made) closes that relay. Before, its listener and thread stayed for the life of the Hermes process.
 - The session cancel test checked the process state regardless of the request's error (an `and`/`or` without
   parentheses) and could fail on a pid that vanished between two checks.
 - A tool call cut at the output cap or streamed as invalid JSON reaches Hermes with its raw arguments and finish

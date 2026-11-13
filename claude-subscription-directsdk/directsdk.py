@@ -1377,8 +1377,10 @@ class Client:
         if session:
             # A parked call waits as long as Hermes runs the tool; Hermes bounds tool output itself.
             env.update(MCP_TOOL_TIMEOUT='86400000', MAX_MCP_OUTPUT_TOKENS='100000000')
-        root = _launch_dir()
+        root = None
         try:
+            # Inside the relay's cleanup: a launch directory that cannot be made must not leave the relay listening.
+            root = _launch_dir()
             # Native settings apply env inside the process, avoiding execve's
             # per-argument/environment-string limit for full Hermes schemas.
             (root / 'settings.json').write_text(json.dumps({'env': {'CLAUDE_CODE_EXTRA_BODY': body}}), encoding='utf-8')
@@ -1410,7 +1412,8 @@ class Client:
             with _live_lock:
                 _live.discard(reservation)
             admission.close()
-            shutil.rmtree(root, ignore_errors=True)
+            if root is not None:
+                shutil.rmtree(root, ignore_errors=True)
             raise
 
     def _step(self, request, native, state, kwargs, hermes_names, session, session_id, resolved, env, frames, timeout):

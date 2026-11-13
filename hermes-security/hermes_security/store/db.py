@@ -11,6 +11,7 @@ import uuid
 
 from ..canonical import canonical_json, stable_id, utcnow
 from ..errors import Conflict, NotFound, SealedError, ValidationError
+from ..domain.validate import validate_deployment_evidence
 from .migrations import migrate
 from . import leases
 from ..fsutil import is_link, set_private
@@ -608,8 +609,43 @@ class SecurityStore:
                 r["data"] = json.loads(r["data"])
             return rows
 
+    @staticmethod
+    def _merge_deployment(old, unit, source):
+        """Conserve same-boundary observations; only explicit parent resolution clears gaps.
+
+        The private fact history survives resolution so a later observation reopens the
+        whole boundary, not just the last reviewer's subset. It is not report schema.
+        Called inside record_coverage's write transaction, including for checkpoints.
+        """
+        detail = dict(unit['deployment'])
+        previous = old.get('deployment', {})
+        if old and (not previous or any(previous.get(k) != detail[k]
+                                          for k in ('component', 'ingress', 'actor', 'asset'))):
+            raise ValidationError('deployment coverage identity conflicts with existing unit')
+        facts = sorted(set(old.get('_deploymentMissingEvidence', []))
+                       | set(previous.get('missingEvidence', [])) | set(detail['missingEvidence']))
+        if detail['disposition'] != 'resolved':
+            detail['missingEvidence'] = facts
+        # Preserve observations and adjudication notes rather than replacing them with
+        # the latest worker's narrative. Sorting/deduplication makes retries harmless.
+        def notes(*values):
+            text = '\n'.join(sorted({line for value in values for line in value.splitlines() if line}))
+            if len(text) > 20000:
+                raise ValidationError('merged deployment coverage notes exceed limit')
+            return text
+        detail['reviewNote'] = notes(previous.get('reviewNote', ''), detail['reviewNote'])
+        if validate_deployment_evidence(detail):
+            raise ValidationError('merged deployment evidence exceeds contract bounds')
+        return {**unit, 'deployment': detail, '_deploymentMissingEvidence': facts,
+                'reason': notes(old.get('reason', ''), unit.get('reason', '')),
+                'evidence': sorted(set(old.get('evidence', [])) | set(unit.get('evidence', [])) | {source})}
+
     def record_coverage(self, scan_id, units, *, source, monotonic=False):
-        """Upsert coverage. ``monotonic`` keeps a reviewed/not_applicable unit from being downgraded."""
+        """Upsert coverage; deployment observations merge transactionally, never last-writer-wins.
+
+        ``monotonic`` keeps other reviewed/not_applicable units from being downgraded, and
+        keeps a reviewed lane reviewed when a later worker calls it not_applicable.
+        """
         guard = (" WHERE coverage_units.state NOT IN ('reviewed','not_applicable')"
                  " OR excluded.state IN ('reviewed','not_applicable')") if monotonic else ""
         with self.transaction() as c:
@@ -618,15 +654,27 @@ class SecurityStore:
                 uid = unit.get("unitId") or unit.get("unit")
                 if not uid or unit.get("state") not in COVERAGE:
                     raise ValidationError("invalid coverage unit")
+                old = c.execute("SELECT source,state,data FROM coverage_units WHERE scan_id=? AND unit_id=?", (scan_id, uid)).fetchone()
+                previous = json.loads(old['data']) if old else {}
+                is_deployment = uid.startswith('deployment:')
+                if is_deployment:
+                    if 'deployment' not in unit:
+                        raise ValidationError('deployment coverage requires structured identity')
+                    unit = self._merge_deployment(previous, unit, source)
+                # A worker's lane state covers only its own packet: "not applicable to my files"
+                # neither undoes a lane another worker reviewed nor counts as a review of it.
+                # A checkpoint (not monotonic) is the parent's own disposition and still replaces.
+                mixed = monotonic and uid.startswith('lane:') and old is not None and {old[1], unit["state"]} == {"reviewed", "not_applicable"}
+                kept = mixed and old[1] == "reviewed"
                 # Keep every review that closed a unit, not only the latest one.
-                if unit["state"] in ("reviewed", "not_applicable"):
-                    old = c.execute("SELECT source,state,data FROM coverage_units WHERE scan_id=? AND unit_id=?", (scan_id, uid)).fetchone()
-                    prior = (json.loads(old[2]).get("closedBy") or [old[0]]) if old and old[1] in ("reviewed", "not_applicable") else []
+                if unit["state"] in ("reviewed", "not_applicable") and not kept:
+                    prior = (json.loads(old[2]).get("closedBy") or [old[0]]) if old and old[1] in ("reviewed", "not_applicable") and not mixed else []
                     unit = {**unit, "closedBy": sorted(set(prior) | {source})}
-                c.execute(
-                    "INSERT INTO coverage_units VALUES(?,?,?,?,?) ON CONFLICT(scan_id,unit_id) DO UPDATE SET source=excluded.source,state=excluded.state,data=excluded.data" + guard,
-                    (scan_id, uid, source, unit["state"], self._json(unit)),
-                )
+                if not kept:
+                    c.execute(
+                        "INSERT INTO coverage_units VALUES(?,?,?,?,?) ON CONFLICT(scan_id,unit_id) DO UPDATE SET source=excluded.source,state=excluded.state,data=excluded.data" + ("" if is_deployment else guard),
+                        (scan_id, uid, source, unit["state"], self._json(unit)),
+                    )
                 self._event(
                     c,
                     scan_id,

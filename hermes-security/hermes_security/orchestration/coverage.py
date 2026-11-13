@@ -21,6 +21,8 @@ def build_coverage(scan, inventory, units, attempts, packets, findings):
         by_id[ident] = {'unitId': ident, 'kind': ident.split(':', 1)[0], 'state': unit['state'],
                         'reason': reason,
                         'evidence': unit.get('evidence', [])}
+        if 'deployment' in unit:
+            by_id[ident]['deployment'] = unit['deployment']
     review_paths = {f['path'] for f in inventory}
     diff = scan['options'].get('diff', {})
     review_paths.update(diff.get('deleted', []))

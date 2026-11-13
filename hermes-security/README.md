@@ -172,9 +172,12 @@ early.
 - Every finding quotes the exact code from the scanned snapshot.
 - Finished reports are sealed, and later triage doesn't change them.
 
-Tests run as your user, in a temporary copy, with environment variables that
-look like credentials removed. That is a convenience, not a sandbox, so only
-allow tests on code you trust.
+Tests run as your user, in a temporary copy. Environment variables whose names
+look like credentials are removed, and so is a fixed list of names that point at
+credentials, such as `SSH_AUTH_SOCK`, `KUBECONFIG`, `AWS_PROFILE` and
+`DATABASE_URL`. Any other variable passes through and your home directory stays
+readable, so that is a convenience, not a sandbox: only allow tests on code you
+trust.
 
 A finding is marked "Confirmed by test" only when its test passes and a matching
 negative test behaves as expected. A test that never ran is recorded as

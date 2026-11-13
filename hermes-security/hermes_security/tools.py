@@ -47,7 +47,7 @@ TOOL_SCHEMAS = [
         "offset": _field("integer", "Zero-based page offset.", minimum=0, default=0),
     }, ["scan_id"]),
     _schema("checkpoint", "Save review coverage and an optional progress note during analysis. Mark units reviewed only when supported by actual review.", {
-        "scan_id": _SCAN, "coverage": {**_OBJECTS, "description": "Coverage units with unit, state, and note."},
+        "scan_id": _SCAN, "coverage": {**_OBJECTS, "description": "Coverage units with unit, state, and note. Optional deployment:<inventory path>#<key> units carry structured deployment detail; parent checkpoints resolve or defer pending evidence (see worker-packet.md)."},
         "note": _field("string", "Progress note without literal secrets.", maxLength=4000),
         "blocked": _field("boolean", "True when the scan cannot go on (for example a plugin error after one retry); the note becomes the plain reason the workbench shows.", default=False),
     }, ["scan_id", "coverage"]),

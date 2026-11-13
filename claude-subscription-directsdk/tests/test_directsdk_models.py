@@ -15,11 +15,13 @@ EXPECTED = {
     'claude-opus-5-5[1m]': 1_000_000,
     'claude-opus-5[1m]': 1_000_000,
     'claude-opus-4-8[1m]': 1_000_000,
+    'claude-fable-5-2[1m]': 1_000_000,
     'claude-fable-5-1[1m]': 1_000_000,
 }
 # Pinned like any route (window, thinking, capabilities) but granted per organization: never in the
 # static fallback picker, listed only when the account's own picker offers it (test_directsdk_setup).
 GATED = {
+    'claude-mythos-5-2[1m]': 1_000_000,
     'claude-mythos-5-1[1m]': 1_000_000,
 }
 
@@ -46,8 +48,10 @@ def test_native_argv_enables_only_known_long_context_models(profile, tmp_path):
                'opus-5-5':'claude-opus-5-5[1m]', 'haiku':'claude-haiku-5-5[1m]',
                'haiku-5.5':'claude-haiku-5-5[1m]', 'claude-haiku-4-5':'claude-haiku-4-5-20251001',
                'haiku-4-5':'claude-haiku-4-5-20251001', 'haiku-4.5':'claude-haiku-4-5-20251001',
-               'opus-4.8':'claude-opus-4-8[1m]', 'fable':'claude-fable-5-1[1m]',
+               'opus-4.8':'claude-opus-4-8[1m]', 'fable':'claude-fable-5-2[1m]', 'fable-5.2':'claude-fable-5-2[1m]',
+               'claude-fable-5-1':'claude-fable-5-1[1m]', 'fable-5-1':'claude-fable-5-1[1m]',
                'claude-mythos-5-1':'claude-mythos-5-1[1m]', 'mythos-5.1':'claude-mythos-5-1[1m]',
+               'claude-mythos-5-2':'claude-mythos-5-2[1m]', 'mythos-5.2':'claude-mythos-5-2[1m]',
                'unqualified-future-model':'unqualified-future-model'}
     with_client = profile.create_client(command=[sys.executable,str(native)], env={'PATH':os.defpath,'HOME':str(tmp_path),'ARGV_CAPTURE':str(capture)})
     try:
@@ -99,7 +103,8 @@ def test_haiku_5_5_never_receives_the_thinking_disable():
     'sonnet', 'claude-sonnet-5-5', 'claude-sonnet-5-5[1m]',
     'haiku', 'claude-haiku-5-5', 'claude-haiku-5-5[1m]',
     'opus', 'claude-opus-5-5', 'claude-opus-5-5[1m]',
-    'fable', 'claude-fable-5-1', 'claude-fable-5-1[1m]',
+    'fable', 'claude-fable-5-2', 'claude-fable-5-2[1m]', 'claude-fable-5-1', 'claude-fable-5-1[1m]',
+    'claude-mythos-5-2', 'claude-mythos-5-2[1m]',
 ])
 def test_every_pinned_adaptive_route_asks_for_summarized_display(route):
     """4.7+ answers adaptive thinking with a signature and no text unless `display` is requested, so

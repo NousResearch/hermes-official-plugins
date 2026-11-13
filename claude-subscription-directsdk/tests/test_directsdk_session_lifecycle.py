@@ -112,3 +112,45 @@ def test_a_stop_while_a_process_becomes_the_kept_session_ends_it(home, upstream,
         proceed.set()
         worker.join(30)
         c.close()
+
+
+def test_an_idle_kept_process_that_dies_gives_its_place_back(home, upstream, monkeypatch):
+    """A kept process that exits while idle (a crash, an OOM kill) frees its relay and its place at once: with
+    ``max_sessions`` 1 the next agent keeps a process. Before, the dead one held the place until its own client's
+    next step, close or the idle hour, and the next agent ran per-call."""
+    first = client(home, upstream, monkeypatch, session=True, cap=1)
+    second = client(home, upstream, monkeypatch, session=True, cap=1)
+    try:
+        first.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+        native = first._session
+        directsdk.kill_process_tree(native.process)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and (directsdk._live or native.admission.thread.is_alive()):
+            time.sleep(.02)
+        assert not directsdk._live, 'the dead process still holds its place'
+        assert first._session is None and not native.admission.thread.is_alive(), 'its relay is still up'
+        second.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+        assert session_pids(second), 'the next agent ran per-call beside a dead process'
+    finally:
+        first.close()
+        second.close()
+
+
+def test_a_process_that_dies_as_it_becomes_the_kept_session_gives_its_place_back(home, upstream, monkeypatch):
+    """The process exits after the step has its answer and before it is the kept session, so its reader finds no
+    session to end. The hand-over itself must then end it: the step still returns, and no place stays held."""
+    c = client(home, upstream, monkeypatch, session=True, cap=1)
+    keep = directsdk.Client._keep
+
+    def dead_first(self, native, *rest):
+        directsdk.kill_process_tree(native.process)
+        native.reader.join(10)
+        return keep(self, native, *rest)
+    monkeypatch.setattr(directsdk.Client, '_keep', dead_first)
+    try:
+        assert c.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000).choices
+        assert c._session is None
+        with directsdk._live_lock:
+            assert not directsdk._live, 'the dead process holds a place'
+    finally:
+        c.close()

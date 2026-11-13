@@ -648,7 +648,7 @@ class Native:
         self.lock, self.writing = threading.Lock(), threading.Lock()
         self.parked, self.results = {}, {}
         # A kept session: what it was launched with, the frames it holds, and what the next step must bring.
-        self.ident = self.frames = self.expect = self.idle = None
+        self.ident = self.frames = self.expect = self.idle = self.on_exit = None
         self.cost = 0
         self.process = request.spawn(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      text=True, encoding='utf-8', cwd=workdir, env=env)
@@ -683,6 +683,9 @@ class Native:
                 kill_process_tree(process)
             process.wait()
             self.events.put(None)
+            # A kept native that exits while idle gives its relay and its place back now, not at its next use.
+            if self.on_exit is not None:
+                self.on_exit()
 
     def _write(self, row):
         """One control row to native, bounded by the step's timeout as send() is: a native that stops reading stdin
@@ -847,7 +850,9 @@ class Native:
         self.admission.close()
         with suppress(subprocess.TimeoutExpired):
             self.process.wait(timeout=5)
-        self.reader.join(timeout=5)
+        if threading.current_thread() is not self.reader:
+            # The reader itself releases a native that exited while idle.
+            self.reader.join(timeout=5)
         for pipe in (self.process.stdin, self.process.stdout):
             # Closing stdin re-flushes bytes a dead child never read; that BrokenPipe must not replace the error raised.
             with suppress(OSError, ValueError):
@@ -1156,10 +1161,11 @@ class Client:
         # process, alive for the whole idle hour. Once the client is gone the timer ends the process itself.
         end = weakref.WeakMethod(self._end_session)
 
-        def expire():
+        def ended():
+            """The idle hour passed, or native exited on its own (its reader calls this)."""
             method = end()
             (method if method is not None else _end_orphan_native)(native)
-        native.idle = threading.Timer(SESSION_IDLE_S, expire)
+        native.idle, native.on_exit = threading.Timer(SESSION_IDLE_S, ended), ended
         native.idle.daemon = True
         with self._lock, request.lock:
             if self._closed or request.cancelled.is_set():
@@ -1167,6 +1173,8 @@ class Client:
             self._session, self._stepping, self._kept['native'] = native, False, native
             request.process = request.admission = None
             native.idle.start()
+        if native.process.returncode is not None:
+            ended()  # It exited before it was the session, so its reader found nothing to end.
         return True
 
     def _resume(self, ident, frames):

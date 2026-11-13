@@ -1,4 +1,4 @@
-"""Kept processes never outnumber ``max_sessions`` and never outlive a dropped client.
+"""Kept processes never outnumber ``max_sessions`` and never outlive a dropped client, a cancel or a close.
 
 Real Claude Code CLI against the scripted loopback upstream of ``test_directsdk_session``; no credentials, no
 inference. Skipped without the CLI; ``CLAUDE_CODE_BIN`` picks a binary.
@@ -71,3 +71,44 @@ def test_a_dropped_client_ends_its_kept_process(home, upstream, monkeypatch):
     del c
     gc.collect()
     assert gone(pid), 'the kept process outlived its dropped client'
+
+
+@pytest.mark.parametrize('stop', ['close', 'cancel'])
+def test_a_stop_while_a_process_becomes_the_kept_session_ends_it(home, upstream, monkeypatch, stop):
+    """close() or cancel() lands after the step has its answer and before its process is the kept session. The stop
+    must still find an owner: the process ends and the step raises the cancellation error. Before, the request had
+    already let go of the process and the client did not hold it yet, so the stop found neither and it stayed kept."""
+    c = client(home, upstream, monkeypatch, session=True)
+    reached, proceed, natives, errors = threading.Event(), threading.Event(), [], []
+    keep = directsdk.Client._keep
+
+    def paused(self, native, *rest):
+        natives.append(native)
+        reached.set()
+        proceed.wait(30)
+        return keep(self, native, *rest)
+    monkeypatch.setattr(directsdk.Client, '_keep', paused)
+
+    def step():
+        try:
+            c.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+        except Exception as error:  # noqa: BLE001
+            errors.append(f'{type(error).__name__}: {error}')
+    worker = threading.Thread(target=step)
+    try:
+        worker.start()
+        assert reached.wait(30), 'the step never reached the hand-over'
+        pid = natives[0].process.pid
+        getattr(c, stop)()
+        proceed.set()
+        worker.join(30)
+        assert not worker.is_alive()
+        assert errors == ['RuntimeError: Claude request cancelled']
+        assert not session_pids(c), 'the stopped step left a kept session'
+        assert gone(pid), 'the process outlived the stop'
+        with directsdk._live_lock:
+            assert not directsdk._live
+    finally:
+        proceed.set()
+        worker.join(30)
+        c.close()

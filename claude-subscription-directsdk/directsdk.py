@@ -1133,7 +1133,11 @@ class Client:
         native.kill()
         native.release()
 
-    def _keep(self, native, frames, expect):
+    def _keep(self, native, frames, expect, request):
+        """Make ``native`` this client's kept session; False when cancel() or close() got there first.
+
+        Ownership moves from the request to the client in one step, under both locks: a stop lands wholly before
+        (it kills through the request, and the step ends cancelled) or wholly after (it finds the session)."""
         native.frames, native.expect = frames, expect
         # The timer holds no reference to this client: a bound method would keep a dropped client, and with it the
         # process, alive for the whole idle hour. Once the client is gone the timer ends the process itself.
@@ -1144,18 +1148,13 @@ class Client:
             (method if method is not None else _end_orphan_native)(native)
         native.idle = threading.Timer(SESSION_IDLE_S, expire)
         native.idle.daemon = True
-        with self._lock:
-            closed = self._closed
-            if not closed:
-                self._session, self._stepping, self._kept['native'] = native, False, native
-        if closed:
-            # close() ran during this step: nothing of it may outlive the client.
-            native.kill()
-            native.release()
-            with self._lock:
-                self._stepping = False
-            return
-        native.idle.start()
+        with self._lock, request.lock:
+            if self._closed or request.cancelled.is_set():
+                return False
+            self._session, self._stepping, self._kept['native'] = native, False, native
+            request.process = request.admission = None
+            native.idle.start()
+        return True
 
     def _resume(self, ident, frames):
         """The kept session and how this step continues it, else (None, None) after ending it."""
@@ -1584,11 +1583,12 @@ class Client:
                 request.process = request.admission = None
             _hand_off(native)
         if clean:
-            with request.lock:
-                request.process = request.admission = None
             reply = {k: v for k, v in copy.deepcopy(assistants[0]).items() if k != 'usage'}
-            self._keep(native, frames + [{'type': 'assistant', 'message': reply}],
-                       frozenset(c['id'] for c in calls) if parked else 'user')
+            if not self._keep(native, frames + [{'type': 'assistant', 'message': reply}],
+                              frozenset(c['id'] for c in calls) if parked else 'user', request):
+                # The stop still held this step's process: it ends as any cancelled step does, native with it.
+                state['outcome'] = 'done'
+                raise RuntimeError('Claude request cancelled')
         native.forget_launch()
         yield chunk
     @staticmethod

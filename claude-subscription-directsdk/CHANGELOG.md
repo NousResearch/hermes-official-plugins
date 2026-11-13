@@ -32,6 +32,9 @@
   out of place) is refused before upstream and the step replays into a new process, as a request that does not extend
   the previous one is. Before, that request went upstream with native's own tool-result shape in the replayed rows. A
   fresh process's first request, the replay itself, still forwards as native built it.
+- Session mode: a `cancel()` or `close()` that lands while a finished step's process becomes the kept session ends that
+  process, and the step raises the cancellation error. Ownership moves from the request to the client under both
+  locks, so a stop finds one owner or the other; before, it could find neither and the process stayed kept.
 - The session cancel test checked the process state regardless of the request's error (an `and`/`or` without
   parentheses) and could fail on a pid that vanished between two checks.
 - A tool call cut at the output cap or streamed as invalid JSON reaches Hermes with its raw arguments and finish

@@ -1,6 +1,8 @@
 """Start scan answers before the inventory: large repositories take minutes to read."""
 import threading
 
+import pytest
+
 from hermes_security import target
 from hermes_security.errors import TargetError
 from hermes_security.orchestration import standard
@@ -67,6 +69,38 @@ def test_an_unreadable_target_fails_the_scan_instead_of_waiting_forever(tmp_path
     assert scan['status'] == 'failed' and 'enumerate' in scan['reason']
     assert not scan['options']['preparing'] and not scan['options']['dependenciesPending']
     assert 'scan.failed' in [e['kind'] for e in service.activity(sid)['items']]
+    step = service.next_step(sid)
+    assert step['step'] == 'blocked'
+    assert 'inventor' in step['reason'].lower()
+    assert step['items'] == []
+
+
+@pytest.mark.parametrize('mode', ['standard', 'deep'])
+def test_resume_retries_failed_inventory_before_dispatching(tmp_path, monkeypatch, mode):
+    real = target.build_inventory
+
+    def broken(*args, **kwargs):
+        raise TargetError('Unable to enumerate target directory')
+
+    monkeypatch.setattr(target, 'build_inventory', broken)
+    service = SecurityService(tmp_path / 'data')
+    sid = service.start_scan(path=repo(tmp_path), mode=mode, background=True)['scanId']
+    join(service, sid)
+    assert service._scan(sid)['snapshot_digest'] is None
+
+    monkeypatch.setattr(target, 'build_inventory', real)
+    plan = service.resume(sid)
+    assert plan['scanId'] == sid
+    join(service, sid)
+
+    scan = service._scan(sid)
+    assert scan['status'] == 'awaiting_analysis'
+    assert scan['snapshot_digest'].startswith('sha256:')
+    assert [f['path'] for f in service.store.inventory(sid)] == ['app.py']
+    assert not scan['options']['preparing'] and not scan['options']['dependenciesPending']
+    assert service.next_step(sid)['step'] == 'dispatch'
+    assert all(packet.get('filesFrom') == 'inventory' or packet['files']
+               for packet in service._packets(scan))
 
 
 def test_without_background_the_tool_path_stays_synchronous(tmp_path):

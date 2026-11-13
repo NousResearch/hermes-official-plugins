@@ -122,6 +122,27 @@ Headed login, then headless reuse:
    `CAMOFOX_ADMIN_KEY` is unset: shut Node down gracefully instead, then start Camofox again.
 4. Set `interactive.mode` to `off`, restart Camofox, and start a new Hermes browser task.
 
+## Scheduled agents keep their own identity
+
+A cron job is an agent that outlives one run, so it gets a Camofox identity of its own instead of
+borrowing the profile's: the `userId` is derived from the job id (`cron:<job_id>`, the stable half of
+the `cron:<job_id>:<execution_id>` task id), so every fire lands in the same browser profile with the
+cookies the previous fire left, and its tab is adopted instead of a new one being opened each time.
+
+This needs no configuration and no shared state — the identity is derived, never stored, so nothing
+drifts or duplicates. One-off tasks (interactive chats, subagents) keep their own identity and never
+inherit a job's profile.
+
+The identity has no lifecycle of its own: it goes away when you delete the agent and forget it.
+
+```bash
+hermes camofox identity <job_id>     # deletes that job's Camofox profile, tab and server session
+```
+
+Do that after `hermes cron remove <job_id>`: the plugin API has no cron-removal hook, so teardown is
+an explicit step rather than an automatic one. Skipping it only leaves an orphaned profile directory
+under the Camofox server's profile dir; no process or tab stays alive.
+
 ## Externally managed sessions
 
 When another app drives the visible Camofox browser, Hermes can work inside that same identity:

@@ -149,3 +149,45 @@ class TestDeadTab:
         result = json.loads(t.browser_click("@e9", task_id="t1"))
         assert result["success"] is False and "404" in result["error"]
         assert client.get_session("t1")["tab_id"] == "tab-1"
+
+
+class TestDurableAgentIdentity:
+    """A cron job is an agent that outlives a run: one Camofox profile across every fire."""
+
+    def test_the_same_job_keeps_one_identity_across_runs(self, camofox, write_config):
+        write_config("browser:\n  camofox:\n    managed_persistence: true\n")
+        first = client.get_session("cron:job123:exec-a")
+        second = client.get_session("cron:job123:exec-b")
+        assert first["user_id"] == second["user_id"]
+        assert first["session_key"] == second["session_key"]
+        assert first["user_id"] == client.get_agent_identity("cron:job123")["user_id"]
+        # Not the profile-scoped jar: an agent's cookies must not be every other task's cookies.
+        assert first["user_id"] != client.get_camofox_identity("cron:job123:exec-a")["user_id"]
+
+    def test_two_jobs_never_share_a_profile(self, camofox, write_config):
+        write_config("browser:\n  camofox:\n    managed_persistence: true\n")
+        a = client.get_session("cron:joba:exec-a")
+        b = client.get_session("cron:jobb:exec-a")
+        assert (a["user_id"], a["session_key"]) != (b["user_id"], b["session_key"])
+
+    def test_one_off_tasks_do_not_get_a_durable_identity(self, camofox, write_config):
+        write_config("browser:\n  camofox:\n    managed_persistence: true\n")
+        assert client.agent_key_from_task("subagent-0-abc123") is None
+        assert client.agent_key_from_task("cron:") is None
+        assert client.get_session("subagent-0-abc123")["user_id"] == \
+            client.get_camofox_identity("subagent-0-abc123")["user_id"]
+
+    def test_forget_removes_the_profile_and_the_server_session(self, camofox, monkeypatch, tmp_path):
+        monkeypatch.setenv("CAMOFOX_PROFILE_DIR", str(tmp_path / "profiles"))
+        t.browser_navigate("https://example.com", task_id="cron:job9:exec-a")
+        user_id = client.get_agent_identity("cron:job9")["user_id"]
+        profile_dir = client.camofox_profile_dir(user_id)
+        profile_dir.mkdir(parents=True)
+        (profile_dir / "storage-state.json").write_text(json.dumps({"cookies": []}))
+
+        result = client.forget_agent_identity("cron:job9")
+
+        assert result["session_deleted"] is True
+        assert result["profile_removed"] is True and not profile_dir.exists()
+        assert [c["path"] for c in camofox.calls("DELETE", f"/sessions/{user_id}")]
+        assert client.get_session("cron:job9:exec-b")["tab_id"] is None

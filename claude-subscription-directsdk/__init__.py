@@ -1,7 +1,6 @@
 """Claude Subscription DirectSDK (Experimental) — standalone Hermes model-provider registration."""
 from datetime import datetime, timezone
 import logging
-import math
 import os
 import shutil
 
@@ -12,9 +11,11 @@ from providers.base import ProviderProfile
 try:
     from .model_catalog import ALIASES, MODEL_METADATA, MODEL_CAPABILITIES, PICKER_ROUTES, native_model
     from .directsdk_setup import INSTALL_HINT, _resolve
+    from .extra_usage import usage_percent as _percent
 except ImportError:
     from model_catalog import ALIASES, MODEL_METADATA, MODEL_CAPABILITIES, PICKER_ROUTES, native_model
     from directsdk_setup import INSTALL_HINT, _resolve
+    from extra_usage import usage_percent as _percent
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +33,6 @@ LEGACY_WINDOWS = (('five_hour', 'Current session'), ('seven_day', 'Current week'
                   ('seven_day_opus', 'Opus week'), ('seven_day_sonnet', 'Sonnet week'))
 
 
-def _percent(value, fraction=False):
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-        return None
-    return value * 100.0 if fraction and value <= 1 else float(value)
-
-
 def _reset_at(value):
     if not isinstance(value, str) or not value.strip():
         return None
@@ -48,34 +43,74 @@ def _reset_at(value):
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def _money(value):
+    """``{amount_minor, currency, exponent}`` -> ``"12.34 USD"``; anything else -> None."""
+    if not isinstance(value, dict):
+        return None
+    minor, exponent = value.get('amount_minor'), value.get('exponent', 2)
+    if _percent(minor) is None or isinstance(exponent, bool) or not isinstance(exponent, int) or not 0 <= exponent <= 6:
+        return None
+    return f"{minor / 10 ** exponent:.{exponent}f} {value.get('currency') or 'USD'}"
+
+
+def _usage_details(payload, windows):
+    """Extra usage, spend, per-surface and per-model lines; shown whatever shape the windows came in."""
+    from agent.account_usage import AccountUsageWindow
+    details = []
+    extra = payload.get('extra_usage') if isinstance(payload.get('extra_usage'), dict) else None
+    if extra is not None:
+        spent, cap = _percent(extra.get('used_credits')), _percent(extra.get('monthly_limit'))
+        currency = extra.get('currency') or 'USD'
+        if not extra.get('is_enabled'):
+            reason = extra.get('disabled_reason')
+            details.append('Extra usage: off' + (f' ({reason})' if isinstance(reason, str) and reason else ''))
+        elif spent is not None and cap is not None:
+            details.append(f'Extra usage: {spent:.2f} / {cap:.2f} {currency}')
+        else:
+            details.append('Extra usage: on' + (f', {spent:.2f} {currency} used' if spent is not None else ''))
+    spend = payload.get('spend') if isinstance(payload.get('spend'), dict) else {}
+    used, limit = _money(spend.get('used')), _money(spend.get('limit'))
+    if used:
+        details.append(f'Usage credits spent: {used}' + (f' of {limit}' if limit else ''))
+    breakdown = payload.get('seven_day_breakdown') if isinstance(payload.get('seven_day_breakdown'), dict) else {}
+    rows = breakdown.get('rows') if isinstance(breakdown.get('rows'), list) else []
+    rows = [row for row in rows if isinstance(row, dict)]
+    shares = [f"{row.get('display_name') or row.get('key')} {round(_percent(row.get('percent')))}%"
+              for row in rows if _percent(row.get('percent')) is not None]
+    if shares:
+        details.append('This week by surface: ' + ', '.join(shares))
+    # get_usage's model_scoped utilization is a 0-100 percent, like limits[].percent (Fable 0 / 0 on 2.1.319).
+    shown = {window.label for window in windows}
+    for row in payload.get('model_scoped') if isinstance(payload.get('model_scoped'), list) else ():
+        name = row.get('display_name') if isinstance(row, dict) else None
+        if isinstance(name, str) and name and f'{name} week' not in shown:
+            windows.append(AccountUsageWindow(label=f'{name} week', used_percent=_percent(row.get('utilization')),
+                                              reset_at=_reset_at(row.get('resets_at'))))
+    return details
+
+
 def usage_windows(payload):
     """Plan-limits body (Claude Code's `get_usage` `rate_limits`, the `/api/oauth/usage` shape) -> (windows, detail lines). Untrusted shapes degrade, never raise."""
     from agent.account_usage import AccountUsageWindow
     limits = payload.get('limits')
     limits = [entry for entry in limits if isinstance(entry, dict)] if isinstance(limits, list) else []
-    if limits:
-        windows = []
-        for entry in limits:
-            kind = entry.get('kind')
-            scope = entry.get('scope') if isinstance(entry.get('scope'), dict) else {}
-            model = scope.get('model') if isinstance(scope.get('model'), dict) else {}
-            name = model.get('display_name')
-            label = (LIMIT_LABELS.get(kind) if isinstance(kind, str) else None) or (
-                f'{name} week' if isinstance(name, str) and name else str(kind or 'unknown'))
-            windows.append(AccountUsageWindow(label=label, used_percent=_percent(entry.get('percent')),
-                                              reset_at=_reset_at(entry.get('resets_at'))))
-        return windows, []
     windows = []
-    for key, label in LEGACY_WINDOWS:
-        window = payload.get(key)
-        used = _percent(window.get('utilization'), fraction=True) if isinstance(window, dict) else None
-        if used is not None:
-            windows.append(AccountUsageWindow(label=label, used_percent=used, reset_at=_reset_at(window.get('resets_at'))))
-    extra = payload.get('extra_usage') if isinstance(payload.get('extra_usage'), dict) else {}
-    spent, cap = _percent(extra.get('used_credits')), _percent(extra.get('monthly_limit'))
-    details = [f"Extra usage: {spent:.2f} / {cap:.2f} {extra.get('currency') or 'USD'}"] if (
-        extra.get('is_enabled') and spent is not None and cap is not None) else []
-    return windows, details
+    for entry in limits:
+        kind = entry.get('kind')
+        scope = entry.get('scope') if isinstance(entry.get('scope'), dict) else {}
+        model = scope.get('model') if isinstance(scope.get('model'), dict) else {}
+        name = model.get('display_name')
+        label = (LIMIT_LABELS.get(kind) if isinstance(kind, str) else None) or (
+            f'{name} week' if isinstance(name, str) and name else str(kind or 'unknown'))
+        windows.append(AccountUsageWindow(label=label, used_percent=_percent(entry.get('percent')),
+                                          reset_at=_reset_at(entry.get('resets_at'))))
+    if not limits:
+        for key, label in LEGACY_WINDOWS:
+            window = payload.get(key)
+            used = _percent(window.get('utilization'), fraction=True) if isinstance(window, dict) else None
+            if used is not None:
+                windows.append(AccountUsageWindow(label=label, used_percent=used, reset_at=_reset_at(window.get('resets_at'))))
+    return windows, _usage_details(payload, windows)
 
 
 class ClaudeOAuthDirectSDKProfile(ProviderProfile):
@@ -159,12 +194,35 @@ class ClaudeOAuthDirectSDKProfile(ProviderProfile):
                                     unavailable_reason=reason)
 
 
+# The server's 400 when it bills a request to extra usage the account cannot draw (P#296; Team/Enterprise
+# "Ask your workspace admin", individual plans "Add more at claude.ai/settings/usage").
+THIRD_PARTY_EXTRA_USAGE = 'third-party apps now draw from'
+
+
+def _plan_limit(message):
+    # usage_window keeps core from switching providers on a plan limit and shows the message verbatim;
+    # no fallback: the next provider in the chain may be paid API usage.
+    return {'reason': 'billing', 'retryable': False, 'should_fallback': False,
+            'error_context': {'usage_window': True, 'display_message': message}}
+
+
 def classify_api_error(error, **_):
     # Hermes' stale-call watchdog stops a hung call through Client.cancel(), so its kill comes back as our cancel
     # error, which Hermes would retry as unknown: classify it as the timeout it is. A user interrupt never arrives
     # as this error; Hermes marks its request cancelled first, drops ours and raises InterruptedError.
     if isinstance(error, RuntimeError) and str(error) == 'Claude request cancelled':
         return {'reason': 'timeout'}
+    if type(error).__name__ == 'ClaudeUpstreamConfigError':
+        # The profile's gateway setting is wrong: no retry fixes it, and no provider switch should hide it.
+        return {'reason': 'format_error', 'retryable': False, 'should_fallback': False}
+    if type(error).__name__ == 'ClaudeExtraUsageBlocked':
+        return _plan_limit(str(error))
+    if type(error).__name__ == 'ClaudeAPIError' and THIRD_PARTY_EXTRA_USAGE in str(error).lower():
+        return _plan_limit(
+            'Claude refused this request and would bill it to extra usage ("Third-party apps now draw from your '
+            'extra usage"), which this account cannot draw now. Claude Code runs as `hermes-agent` for this '
+            'provider. Check the plan and extra-usage settings at https://claude.ai/settings/usage (on Team or '
+            f'Enterprise, your workspace admin controls them). Upstream said: {str(error)[:400]}')
     return None
 
 

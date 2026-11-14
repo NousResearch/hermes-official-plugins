@@ -1,5 +1,5 @@
-"""#86: Claude Code's telemetry and feature-flag fetch stay on unless the user turns the plugin's
-``claude_code_telemetry`` setting off; either way the plugin never lets the CLI update itself.
+"""#331: Claude Code's telemetry stays off unless the user turns the plugin's ``claude_code_telemetry``
+setting on; the picker handshake still fetches feature flags (#86), and the CLI never updates itself.
 
 Each test reads the environment the fake CLI actually received, on the setup probe and on a turn.
 """
@@ -59,30 +59,16 @@ def _turn_env(profile, tmp_path, **extra):
     return env
 
 
-@pytest.mark.parametrize("child", ["discovery", "turn"])
-def test_telemetry_and_feature_flags_are_on_by_default(profile, tmp_path, child):
-    envs = _discovery_envs(profile, tmp_path) if child == "discovery" else [_turn_env(profile, tmp_path)]
-    for env in envs:
-        assert not set(QUIET) & set(env), {k: env[k] for k in QUIET if k in env}
-        assert env["DISABLE_AUTOUPDATER"] == "1"
-        assert env["DISABLE_FEEDBACK_COMMAND"] == "1"
-
-
-@pytest.mark.parametrize("value", ["false", "'off'"])
-@pytest.mark.parametrize("child", ["discovery", "turn"])
-def test_turning_the_setting_off_restores_the_quiet_flags(profile, tmp_path, child, value):
-    _set_telemetry(value)
-    envs = _discovery_envs(profile, tmp_path) if child == "discovery" else [_turn_env(profile, tmp_path)]
-    for env in envs:
-        assert {k: env.get(k) for k in QUIET} == dict.fromkeys(QUIET, "1")
-        assert env["DISABLE_AUTOUPDATER"] == "1"
-
-
-@pytest.mark.parametrize("child", ["discovery", "turn"])
-def test_explicit_true_matches_the_default(profile, tmp_path, child):
-    _set_telemetry("true")
-    envs = _discovery_envs(profile, tmp_path) if child == "discovery" else [_turn_env(profile, tmp_path)]
-    assert all(not set(QUIET) & set(env) for env in envs)
+@pytest.mark.parametrize("value", [None, "false", "'off'"])
+def test_the_picker_handshake_fetches_feature_flags_with_telemetry_off(profile, tmp_path, value):
+    """#86: DISABLE_TELEMETRY or the nonessential-traffic flag shrinks the CLI picker 13 -> 5 (2.1.319), so the
+    zero-inference handshake leaves both unset; error reporting stays off and auth status stays quiet."""
+    if value:
+        _set_telemetry(value)
+    status, handshake = _discovery_envs(profile, tmp_path)
+    assert {k: status.get(k) for k in QUIET} == dict.fromkeys(QUIET, "1")
+    assert "DISABLE_TELEMETRY" not in handshake and "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in handshake
+    assert handshake["DISABLE_ERROR_REPORTING"] == "1" and handshake["DISABLE_AUTOUPDATER"] == "1"
 
 
 @pytest.mark.parametrize("value", [None, "false"])
@@ -124,25 +110,25 @@ def test_a_users_own_opt_out_is_never_stripped(profile, tmp_path, child):
 
 def test_the_setting_is_read_per_spawn_from_the_active_profile(profile, tmp_path):
     """No import-time caching: flipping the setting changes the very next spawn."""
-    assert "DISABLE_TELEMETRY" not in _turn_env(profile, tmp_path)
-    _set_telemetry("false")
-    (tmp_path / "env.jsonl").unlink()
     assert _turn_env(profile, tmp_path)["DISABLE_TELEMETRY"] == "1"
+    _set_telemetry("true")
+    (tmp_path / "env.jsonl").unlink()
+    assert "DISABLE_TELEMETRY" not in _turn_env(profile, tmp_path)
 
 
 def test_a_multi_profile_gateway_reads_each_profiles_own_setting(profile, tmp_path):
     """One process, two profiles: the context-local home override decides whose config is read."""
     import directsdk_setup
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
-    quiet_home = tmp_path / "quiet-profile"
-    quiet_home.mkdir()
-    token = set_hermes_home_override(quiet_home)
+    loud_home = tmp_path / "loud-profile"
+    loud_home.mkdir()
+    token = set_hermes_home_override(loud_home)
     try:
-        _set_telemetry("false")
-        assert directsdk_setup.apply_traffic_policy({})["DISABLE_TELEMETRY"] == "1"
+        _set_telemetry("true")
+        assert "DISABLE_TELEMETRY" not in directsdk_setup.apply_traffic_policy({})
     finally:
         reset_hermes_home_override(token)
-    assert "DISABLE_TELEMETRY" not in directsdk_setup.apply_traffic_policy({})
+    assert directsdk_setup.apply_traffic_policy({})["DISABLE_TELEMETRY"] == "1"
 
 
 def test_manifest_declares_the_setting_under_the_key_the_code_reads():
@@ -155,4 +141,4 @@ def test_manifest_declares_the_setting_under_the_key_the_code_reads():
     (field,) = [field for field in plugin_settings_fields(PLUGIN_NAME, root)
                if field["key"] == directsdk_setup.TELEMETRY_SETTING]
     assert field["key"] == directsdk_setup.TELEMETRY_SETTING
-    assert field["type"] == "boolean" and field["default"] is True
+    assert field["type"] == "boolean" and field["default"] is False

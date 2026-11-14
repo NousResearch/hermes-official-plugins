@@ -45,6 +45,16 @@ def test_path_and_explicit_commands_take_precedence_over_the_probe(tmp_path):
     assert _resolve(["custom-claude-wrapper"], env) is None
 
 
+@pytest.mark.parametrize("home", ["", "relative-home"])
+def test_relative_home_does_not_discover_cwd_binary(tmp_path, monkeypatch, home):
+    from directsdk_setup import _resolve
+
+    _install(tmp_path / home / ".local/bin")
+    monkeypatch.chdir(tmp_path)
+    resolved = _resolve(["claude"], {"HOME": home, "USERPROFILE": home, "PATH": str(tmp_path / "empty")})
+    assert resolved is None or os.path.isabs(resolved[0])
+
+
 def test_core_finds_a_cli_that_is_only_in_an_install_prefix(tmp_path, monkeypatch):
     """Core checks `process_command` with a PATH-only which() before the plugin runs (#32): the agent build of a
     service-launched backend must not fail with "Could not find ... CLI command 'claude'"."""
@@ -269,9 +279,9 @@ def test_pinned_models_the_picker_omits_stay_selectable(profile, tmp_path):
 
 
 # What a CLI started with DISABLE_TELEMETRY / CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC advertises
-# (#86): its feature-flag fetch is off, so only each family's current model is offered. The plugin
-# sets those flags only when the user turns its claude_code_telemetry setting off (or exports one
-# themselves); the pinned table fills the gap then.
+# (#86): its feature-flag fetch is off, so only each family's current model is offered. The plugin's
+# handshake leaves both unset, so this happens only when the user exports one; the pinned table fills
+# the gap then.
 PRIVACY_PICKER = [
     {"value": "opus", "resolvedModel": "claude-opus-5-5", "displayName": "Opus", "description": "Opus 5.5 · Best for everyday, complex tasks"},
     {"value": "opus[1m]", "resolvedModel": "claude-opus-5-5[1m]", "displayName": "Opus (1M context)", "description": "Opus 5.5 with 1M context"},
@@ -312,6 +322,31 @@ def test_hermes_never_budgets_a_discovered_row_past_the_native_window(profile, t
     for m in models:
         native = 1_000_000 if m["id"].endswith("[1m]") else 200_000
         assert get_model_context_length(m["id"], provider=profile.name, base_url=profile.base_url) <= native, m["id"]
+
+
+@pytest.mark.parametrize("auth", [
+    {"loggedIn": True, "authMethod": "api_key", "apiProvider": "firstParty"},
+    {"loggedIn": True, "authMethod": "api_key_helper", "apiProvider": "firstParty"},
+    {"loggedIn": True, "authMethod": "third_party", "apiProvider": "anthropicAws"},
+    {"loggedIn": True, "authMethod": "third_party", "apiProvider": "bedrock"},  # CLAUDE_CODE_USE_BEDROCK=1, 2.1.319
+    {"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "gateway", "subscriptionType": "max"},
+])
+def test_a_login_that_bills_api_usage_is_not_a_subscription_login(profile, tmp_path, auth):
+    """`auth status` reports loggedIn for a Console key or cloud backend too; setup must not pass it as a subscription."""
+    command, env = _cli(tmp_path, {"auth": auth, "account": {}, "models": PINNED_PICKER})
+    status = profile.setup_status(command=command, env=env)
+    assert status["available"] and not status["logged_in"]
+    assert "bills API usage instead of your Claude subscription" in status["detail"]
+    assert status["login_command"] == command + ["auth", "login"]
+    assert profile.discover_models(command=command, env=env) is None
+
+
+def test_a_setup_token_login_without_a_plan_is_a_subscription_login(profile, tmp_path):
+    """`claude setup-token` / CLAUDE_CODE_OAUTH_TOKEN reports oauth_token and no subscriptionType; it stays valid."""
+    command, env = _cli(tmp_path, {"auth": {"loggedIn": True, "authMethod": "oauth_token", "apiProvider": "firstParty"},
+                                   "account": {"subscriptionType": "Claude Max"}, "models": PINNED_PICKER})
+    status = profile.setup_status(command=command, env=env)
+    assert status["logged_in"] and status["detail"] == ""
 
 
 def test_logged_out_or_missing_cli_degrades_to_pinned_catalog(profile, tmp_path):

@@ -15,7 +15,6 @@ from pathlib import Path
 import queue
 import re
 import shutil
-import signal
 import stat
 import subprocess
 import sys
@@ -27,28 +26,25 @@ import weakref
 from types import SimpleNamespace
 
 try:
-    from .admission import Admission
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
+    from .process_tree import kill_process_tree, own_process_group, unreaped
     from .directsdk_setup import (
-        INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy,
-        drop_api_credentials)
+        ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
+        apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, observe_rate_limit, reap_orphaned_refresh_lock, relay,
+        resolve_upstream, Upstream)
 except ImportError:
-    from admission import Admission
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
+    from process_tree import kill_process_tree, own_process_group, unreaped
     from directsdk_setup import (
-        INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy,
-        drop_api_credentials)
+        ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
+        apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, observe_rate_limit, reap_orphaned_refresh_lock, relay,
+        resolve_upstream, Upstream)
 
 
 # Hermes picks retry vs fallback from an error's status_code (main loop and auxiliary ladder alike).
 class ClaudeCodeMissing(RuntimeError):
     """The official Claude Code CLI this transport drives is not installed (or not on PATH)."""
     status_code = 503
-
-
-class ClaudeCodeLoggedOut(RuntimeError):
-    """Claude Code refused before any upstream request because it has no usable login where Hermes runs it."""
-    status_code = 401
 
 
 class ClaudeAPIError(RuntimeError):
@@ -390,50 +386,8 @@ class Request:
         with self.lock:
             if self.cancelled.is_set():
                 raise RuntimeError('Claude request cancelled')
-            self.process = subprocess.Popen(command, stdin=stdin, **kwargs, **_own_process_group())
+            self.process = subprocess.Popen(command, stdin=stdin, **kwargs, **own_process_group())
         return self.process
-
-
-def _own_process_group():
-    """Popen kwargs that put native (and the node/cmd children it spawns) in a group we can kill as one."""
-    if os.name == 'nt':
-        return {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
-    return {'start_new_session': True}
-
-
-def _unreaped(process, block=False):
-    """Whether our leader is still unreaped (exited or not), observed without reaping it.
-
-    While our unreaped leader holds the PID, its group id cannot be recycled, so signalling the
-    group is safe even after a launcher exited and left children behind. Already reaped (by us or
-    a host-wide ``waitpid(-1)`` reaper such as core's Kanban dispatcher): the PID is no longer
-    proof of ownership, so the caller does nothing. ``os.waitid`` is missing on macOS before
-    Python 3.13; there the old ``poll()`` guard stays.
-    """
-    if not hasattr(os, 'waitid'):
-        return process.poll() is None
-    try:
-        os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT | (0 if block else os.WNOHANG))
-    except ChildProcessError:
-        return False
-    return True
-
-
-def kill_process_tree(process):
-    """Kill native and every descendant: the npm shim is cmd.exe -> node on Windows, and a plain
-    Popen.kill() would orphan the node child that holds the real request open."""
-    if os.name == 'nt':
-        if process.poll() is not None:
-            return
-        subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-        return
-    if not _unreaped(process):
-        return
-    try:
-        os.killpg(process.pid, signal.SIGKILL)  # windows-footgun: ok — the nt branch above never reaches this line
-    except (ProcessLookupError, PermissionError):
-        # ESRCH: already gone. EPERM: macOS answers killpg with EPERM once the group leader is a zombie.
-        pass
 
 
 DRAIN_GRACE_S = 10.0
@@ -527,6 +481,27 @@ def _with_login_identity(env):
         env.setdefault('USER', name)
         env.setdefault('LOGNAME', name)
     return env
+
+
+def _rate_limit_summary(event) -> "dict | None":
+    """Secret-free summary of native's ``rate_limit_event`` (#43).
+
+    ``overageStatus: "allowed"`` only means overage is permitted, not in use;
+    paid use is ``isUsingOverage`` true or the ``overage`` window type.
+    Subscription windows (``five_hour``, ``seven_day``, ``seven_day_opus``,
+    ``seven_day_sonnet``, ``seven_day_overage_included``) are not paid use."""
+    info = event.get('rate_limit_info') if isinstance(event, dict) else None
+    if not isinstance(info, dict):
+        return None
+    window = str(info.get('rateLimitType') or '')
+    summary = {'window': window, 'overage_status': str(info.get('overageStatus') or ''),
+               'using_overage': bool(info.get('isUsingOverage')) or window == 'overage'}
+    # Epoch seconds: when the plan window frees up, and when the extra-usage allowance does.
+    for key, source in (('resets_at', 'resetsAt'), ('overage_resets_at', 'overageResetsAt')):
+        value = info.get(source)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            summary[key] = value
+    return summary
 
 
 def _stderr_tail(native_stderr):
@@ -812,12 +787,23 @@ class Client:
                 if resolved is None:
                     raise ClaudeCodeMissing(INSTALL_HINT)
                 apply_config_dir(env)
+                if self.env is None:
+                    # The serving profile's own token, or none when its claude_config_dir picks the login.
+                    apply_profile_credential(env)
+                # A refresh lock an earlier native left mid-refresh would fail this request (claude-code#95236).
+                reap_orphaned_refresh_lock(env)
+                # Anthropic or the profile's opted-in gateway; an explicit Client(env=...) fixture may name its own.
+                upstream = (Upstream(env['ANTHROPIC_BASE_URL'], None, None, False) if env.get('ANTHROPIC_BASE_URL')
+                            else resolve_upstream())
+                # The extra_usage setting refuses here, before anything is billed (#43).
+                check_extra_usage(resolved, dict(env), upstream)
                 # An inherited effort level would override the --effort Hermes passes below.
                 for key in ('CLAUDE_CODE_EXTRA_BODY', 'CLAUDE_CODE_EFFORT_LEVEL'):
                     env.pop(key, None)
                 env.update(ENABLE_TOOL_SEARCH='false', CLAUDE_CODE_MAX_RETRIES='0', DISABLE_AUTO_COMPACT='1', DISABLE_COMPACT='1')
                 # Telemetry and feature flags follow the user's claude_code_telemetry setting, read per spawn.
                 apply_traffic_policy(env)
+                egress_env(env, upstream)
                 # Hermes owns budgets; native's replayed reminder invalidates cached history.
                 env['CLAUDE_CODE_TOTAL_TOKENS_REMINDER'] = 'off'
                 # Hermes owns memory and instructions. --setting-sources '' leaves auto memory and the managed
@@ -825,7 +811,7 @@ class Client:
                 # turn, where Claude reads Claude Code's notes as text smuggled into the user's message (#195).
                 env.update(CLAUDE_CODE_DISABLE_AUTO_MEMORY='1', CLAUDE_CODE_DISABLE_CLAUDE_MDS='1')
                 # The queried frame lets the relay keep the cache breakpoint off native's per-request context.
-                request.admission = Admission(env.get('ANTHROPIC_BASE_URL', 'https://api.anthropic.com'), timeout, queried=frames[-1]['message']['content'])
+                request.admission = relay(upstream, timeout, queried=frames[-1]['message']['content'])
                 # A Hermes auxiliary one-shot (summary, title: marked by the profile hook, one turn, no tools) is
                 # never replayed, so the relay drops its message cache marks instead of moving them.
                 request.admission.one_shot = kwargs.get('hermes_auxiliary') is True and not manifest and len(frames) == 1
@@ -878,7 +864,7 @@ class Client:
                         # The consumer may close while paused at a yielded chunk.
                         # Reaping belongs to this owner thread, never cancel(). Clear the group
                         # first: a launcher that exits leaves children the reap would orphan.
-                        if os.name != 'nt' and hasattr(os, 'waitid') and _unreaped(process, block=True):
+                        if os.name != 'nt' and hasattr(os, 'waitid') and unreaped(process, block=True):
                             kill_process_tree(process)
                         process.wait()
                         events.put(None)
@@ -943,6 +929,7 @@ class Client:
                                 break
                 send(None)
                 assistants, results, stopped, emitted = [], [], False, ''
+                rate_limit = None
                 native_error = native_error_code = None
                 fast = False
                 while True:
@@ -961,6 +948,13 @@ class Client:
                         if _fast_eligible(event, request.admission, stopped, native_error):
                             fast = True
                             break
+                    elif kind == 'rate_limit_event':
+                        # Native reports the subscription window state in-stream;
+                        # dropping it leaves quota policy (#43) with no signal.
+                        summary = _rate_limit_summary(event)
+                        if summary:
+                            rate_limit = summary
+                            observe_rate_limit(env, summary)
                     elif kind == 'stream_event':
                         native = event['event']
                         if native['type'] == 'message_stop':
@@ -1069,6 +1063,8 @@ class Client:
                                     'completion_tokens_details': {'reasoning_tokens': usage.get('output_tokens_details', {}).get('thinking_tokens', 0)},
                                     'native_cost': {'total_cost_usd': final.get('total_cost_usd'), 'modelUsage': final.get('modelUsage')}}
                 normalized_usage['native_admission'] = {'upstream_requests': int(admission.used), 'blocked_requests': admission.denied, 'request_id': admission.request_id}
+                if rate_limit:
+                    normalized_usage['native_admission']['rate_limit'] = rate_limit
                 if admission.unrestored:
                     normalized_usage['native_admission']['unrestored'] = admission.unrestored
                 finish = 'content_filter' if refused else 'tool_calls' if calls else ('length' if any(a.get('stop_reason') in ('max_tokens', 'model_context_window_exceeded') for a in assistants) else 'stop')

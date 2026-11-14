@@ -671,7 +671,9 @@ class _Server(HTTPServer):
 
 
 class Admission:
-    def __init__(self, upstream, timeout, queried=None):
+    def __init__(self, upstream, timeout, queried=None, *, proxy=None, context=None):
+        """``proxy`` (``(host, port, tunnel_headers)``) replaces the proxy-variable lookup and ``context`` the
+        default TLS context; both come from the plugin's upstream settings (``directsdk_setup.resolve_upstream``)."""
         self.upstream = urlsplit(upstream)
         self.queried = queried
         host = self.upstream.hostname
@@ -682,7 +684,8 @@ class Admission:
         if (self.upstream.scheme != 'https' and not (self.upstream.scheme == 'http' and local)) or not host or self.upstream.username or self.upstream.password or self.upstream.query or self.upstream.fragment:
             raise ValueError('Native upstream must be HTTPS or a loopback HTTP fixture')
         self.timeout = timeout
-        self.proxy = upstream_proxy(self.upstream)
+        self.proxy = proxy if proxy is not None else upstream_proxy(self.upstream)
+        self.context = context
         self.lock = threading.Lock()
         self.sockets = set()
         self.cancelled = False
@@ -766,10 +769,10 @@ class Handler(BaseHTTPRequestHandler):
         if target.scheme == 'https':
             if gate.proxy:
                 proxy_host, proxy_port, tunnel_headers = gate.proxy
-                conn = http.client.HTTPSConnection(proxy_host, proxy_port, timeout=gate.timeout, context=ssl.create_default_context())
+                conn = http.client.HTTPSConnection(proxy_host, proxy_port, timeout=gate.timeout, context=gate.context or ssl.create_default_context())
                 conn.set_tunnel(target.hostname, target.port or 443, headers=tunnel_headers)
             else:
-                conn = http.client.HTTPSConnection(target.hostname, target.port, timeout=gate.timeout, context=ssl.create_default_context())
+                conn = http.client.HTTPSConnection(target.hostname, target.port, timeout=gate.timeout, context=gate.context or ssl.create_default_context())
         else:
             conn = http.client.HTTPConnection(target.hostname, target.port, timeout=gate.timeout)
         try:

@@ -1,6 +1,6 @@
 name: claude-subscription-directsdk-experimental
 kind: model-provider
-version: 0.3.5
+version: 0.4.0
 manifest_version: 2
 description: Claude Subscription DirectSDK (Experimental) — drive your Claude Pro/Max subscription through the official Claude Code CLI; Hermes owns tools, approvals and compaction
 author: Nous Research
@@ -11,6 +11,8 @@ requires_hermes: ">=0.21.4"
 platforms: []
 optional_env:
   - CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND
+  - CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY_AUTH
+  - ANTHROPIC_CUSTOM_HEADERS
   - CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR
   - CLAUDE_CONFIG_DIR
 external_dependencies:
@@ -25,9 +27,52 @@ config_schema:
     description: Select this profile's logged-in Claude config directory, overriding process environment directories.
   claude_code_telemetry:
     type: bool
-    default: true
-    label: Claude Code telemetry and feature flags
+    default: false
+    label: Claude Code telemetry and error reporting
     description: >-
-      Let Claude Code send its usage telemetry and fetch feature flags. Feature flags unlock newer
-      models in the model picker; turn off to keep Claude Code quiet (the picker may then list fewer
-      models).
+      Let Claude Code send its usage telemetry and error reports. Off by default. The model picker and
+      /usage stay complete either way: their zero-inference probes still fetch Claude Code's feature
+      flags and plan limits.
+  extra_usage:
+    type: string
+    default: notify
+    choices: [allow, notify, ask, stop]
+    label: When the plan limit is reached and extra usage starts
+    description: >-
+      What to do once Claude Code reports that this account is drawing paid extra usage. allow: carry on.
+      notify: carry on and log one warning per limit window. ask: refuse each request until you allow the
+      current window (extra_usage_allowed_until). stop: refuse every request until the plan limit resets.
+      The request that crosses the limit is already billed; the setting acts on the next one. In ask and stop,
+      a request is also refused when Claude Code cannot say whether the account is drawing extra usage.
+  extra_usage_allowed_until:
+    type: string
+    default: ""
+    label: Extra usage allowed until (ask mode)
+    description: >-
+      An ISO 8601 time. In ask mode, requests drawing extra usage are sent until then. The refusal message
+      prints the exact command with the current window's reset time.
+  upstream_url:
+    type: string
+    default: ""
+    label: Organization LLM gateway URL
+    description: >-
+      Send this profile's Claude Messages requests to your organization's gateway instead of
+      https://api.anthropic.com. Claude Code's own account calls (/usage, bootstrap, MCP directory) still go to
+      api.anthropic.com, through upstream_proxy when set. The Claude login's bearer token goes to this host. https:// only
+      (http:// only for a loopback host), no user:password, query or fragment. Empty means Anthropic directly. An invalid value refuses every
+      request rather than falling back.
+  upstream_proxy:
+    type: string
+    default: ""
+    label: Upstream CONNECT proxy
+    description: >-
+      http://host:port of an HTTP CONNECT proxy for the upstream hop (TLS still ends at the upstream host) and
+      for Claude Code's own calls to api.anthropic.com. Put its user:password in
+      CLAUDE_SUBSCRIPTION_DIRECTSDK_PROXY_AUTH in the profile's .env.
+  upstream_ca_file:
+    type: string
+    default: ""
+    label: Extra CA bundle for the upstream hop
+    description: >-
+      A PEM file added to the system roots, for a TLS-inspecting proxy or a gateway with a private CA.
+      Certificate and hostname checks stay on. An unreadable file refuses every request.

@@ -28,6 +28,8 @@ for line in sys.stdin:
     frame = json.loads(line)
     if frame.get("shouldQuery") is False:
         print(json.dumps({"type": "result", "subtype": "success", "num_turns": 0, "is_error": False}), flush=True)
+    elif frame["type"] == "user":
+        break
 print(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}], "id": "m", "stop_reason": "end_turn"}}), flush=True)
 print(json.dumps({"type": "stream_event", "event": {"type": "message_stop"}}), flush=True)
 print(json.dumps({"type": "result", "subtype": "success", "usage": {"input_tokens": 1, "output_tokens": 1}}), flush=True)

@@ -330,6 +330,8 @@ for line in sys.stdin:
     messages.append(frame['message'])
     if frame.get('shouldQuery') is False:
         print(json.dumps({'type': 'result', 'num_turns': 0}), flush=True)
+    elif frame['type'] == 'user':
+        break
 results = [b for b in messages[-1]['content'] if b.get('type') == 'tool_result']
 if results:
     for b in results:

@@ -76,3 +76,16 @@ config_schema:
     description: >-
       A PEM file added to the system roots, for a TLS-inspecting proxy or a gateway with a private CA.
       Certificate and hostname checks stay on. An unreadable file refuses every request.
+  session_mode:
+    type: bool
+    default: true
+    label: Keep one Claude Code process per agent
+    description: >-
+      Keep one Claude Code process alive per Hermes agent (subagents get their own) and hand it each tool round,
+      instead of starting and replaying a new one on every model call. Requests are byte-identical either way.
+  max_sessions:
+    type: int
+    default: 4
+    label: Kept Claude Code processes per Hermes process
+    description: >-
+      At most this many kept processes (about 200 MB each); a call past the cap runs as a one-shot.

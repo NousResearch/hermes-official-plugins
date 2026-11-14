@@ -17,9 +17,11 @@ import directsdk
 NATIVE = r'''
 import json, os, pathlib, sys, urllib.request
 for line in sys.stdin:
-    if json.loads(line).get('shouldQuery', True):
+    row = json.loads(line)
+    if row.get('shouldQuery') is False:
+        print(json.dumps({'type': 'result', 'num_turns': 0}), flush=True)
+    elif row['type'] == 'user':
         break
-    print(json.dumps({'type': 'result', 'num_turns': 0}), flush=True)
 settings = json.loads(pathlib.Path(sys.argv[sys.argv.index('--settings') + 1]).read_text())
 body = json.loads(settings['env']['CLAUDE_CODE_EXTRA_BODY'])
 body.update(model='sonnet', stream=True, messages=[{'role': 'user', 'content': 'fixture'}])

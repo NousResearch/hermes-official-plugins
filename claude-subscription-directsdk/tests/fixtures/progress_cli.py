@@ -24,8 +24,11 @@ def delta(body):
 
 
 for line in sys.stdin:
-    if json.loads(line).get('shouldQuery') is False:
+    row = json.loads(line)
+    if row.get('shouldQuery') is False:
         emit({'type': 'result', 'num_turns': 0, 'is_error': False})
+    elif row.get('type') == 'user':
+        break  # Native queries on the newest frame; stdin stays open for its MCP server.
 
 if mode == 'silent':  # accepted the request, then never produces anything
     time.sleep(30)

@@ -166,6 +166,63 @@ def test_a_messy_split_reply_pasted_on_stdin_imports_each_thing_once(tmp_path, m
     assert "unknown time zone 'Mars/Olympus'" in capsys.readouterr().out
 
 
+def test_several_bots_are_offered_one_profile_each(tmp_path, monkeypatch, capsys):
+    """Two Bots in one export: each gets a profile of its own — its role in that profile's SOUL.md,
+    only its own routines, the credentials cloned so it can chat — and each printed resume hint
+    carries the selector that makes it work when pasted (#265)."""
+    import sys
+
+    from hermes_cli.default_soul import DEFAULT_SOUL_MD
+    home = tmp_path / ".hermes"
+    (home / "SOUL.md").write_text(DEFAULT_SOUL_MD, encoding="utf-8")
+    (home / ".env").write_text("OPENROUTER_API_KEY=sk-test\n", encoding="utf-8")
+    export = {"format": "grok-bot-export", "version": 1, "bots": [
+        {"name": "Ava", "instructions": "You are Ava. Stay silent otherwise.",
+         "routines": [{"name": "Morning", "instruction": "Say good morning.", "trigger": "schedule",
+                       "schedule_cron": "0 7 * * *"}]},
+        {"name": "Scout", "instructions": "You are Scout. Dig into the inbox.",
+         "routines": [{"name": "Digest", "instruction": "Summarise the inbox.", "trigger": "schedule",
+                       "schedule_cron": "0 8 * * *"}]},
+    ]}
+    path = tmp_path / "Downloads" / "grok-bot-export.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps(export), encoding="utf-8")
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("hermes_cli.cli_output.prompt_yes_no", lambda *a, **k: True)
+
+    _run(["grok-bot", "--source", str(path)])
+
+    ava, scout = home / "profiles" / "ava", home / "profiles" / "scout"
+    assert "You are Ava" in (ava / "SOUL.md").read_text(encoding="utf-8")
+    assert "You are Scout" in (scout / "SOUL.md").read_text(encoding="utf-8")
+    assert [j["name"] for j in _jobs(ava)] == ["Ava: Morning"]
+    assert [j["name"] for j in _jobs(scout)] == ["Scout: Digest"]
+    # Cloned like `hermes profile create --clone`: credentials travel, so the profile chats at once.
+    assert "OPENROUTER_API_KEY=sk-test" in (ava / ".env").read_text(encoding="utf-8")
+    assert not _jobs(home)  # nothing was merged into the profile that ran the import
+    out = capsys.readouterr().out
+    assert "hermes -p ava cron resume" in out and "hermes -p scout cron resume" in out
+
+
+def test_several_bots_without_a_prompt_are_imported_into_this_profile(tmp_path, capsys):
+    """Nobody to answer (-y): no profile is created behind the user's back, and the import says what
+    the Bots lose so the choice can be made deliberately."""
+    home = tmp_path / ".hermes"
+    export = {"format": "grok-bot-export", "version": 1, "bots": [
+        {"name": "Ava", "instructions": "You are Ava."},
+        {"name": "Scout", "instructions": "You are Scout."}]}
+    path = tmp_path / "grok-bot-export.json"
+    path.write_text(json.dumps(export), encoding="utf-8")
+
+    _run(["grok-bot", "--source", str(path), "-y"])
+
+    assert not (home / "profiles").exists()
+    memory = (home / "memories" / "MEMORY.md").read_text(encoding="utf-8")
+    assert "Grok Bot Ava: You are Ava." in memory and "Grok Bot Scout: You are Scout." in memory
+    assert "Re-run interactively (no --dry-run, no -y)" in capsys.readouterr().out
+
+
 def _cache_blob(folder: Path, slice_id: str, value) -> None:
     import base64
     name = base64.b32encode(slice_id.encode()).decode().rstrip("=").lower()

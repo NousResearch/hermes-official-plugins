@@ -79,7 +79,13 @@ def _write(mutate: Callable[[dict[str, Any]], None]) -> None:
     if is_managed():
         raise RuntimeError(format_managed_message("change delegation settings"))
     path = get_config_path()
-    data = require_readable_config_before_write(path)
+    require_readable_config_before_write(path)
+    try:
+        from hermes_cli.config import read_raw_config
+        data = read_raw_config() or {}
+    except Exception:
+        from hermes_cli.config import load_config
+        data = load_config() or {}
     section = data.get("delegation")
     if not isinstance(section, dict):
         section = data["delegation"] = {}

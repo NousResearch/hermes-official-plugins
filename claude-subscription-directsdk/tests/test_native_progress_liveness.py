@@ -39,7 +39,7 @@ def native(tmp_path, monkeypatch):
     clients, initial = [], set(threading.enumerate())
 
     def make(mode, timeout=5, **knobs):
-        env = {'HOME': str(tmp_path), 'PATH': '', 'ANTHROPIC_BASE_URL': 'http://127.0.0.1:9',
+        env = {'HOME': str(tmp_path), 'PATH': '', 'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM': 'http://127.0.0.1:9',
                'PROGRESS_PIDS': str(pids), 'PROGRESS_MODE': mode,
                **{'PROGRESS_' + key.upper(): str(value) for key, value in knobs.items()}}
         client = ds.Client(command=command, env=env, timeout=timeout)

@@ -360,7 +360,7 @@ print(json.dumps({'type': 'result', 'subtype': 'success', 'usage': {'input_token
     thread = threading.Thread(target=peer.serve_forever, daemon=True)
     thread.start()
     env = {"PATH": os.defpath, "HOME": str(tmp_path),
-           "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{peer.server_port}"}
+           "CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM": f"http://127.0.0.1:{peer.server_port}"}
     client = directsdk.Client(command=[sys.executable, str(script)], env=env)
     messages = [{"role": "user", "content": "Run parallel tools."}]
     tools = [{"type": "function", "function": {"name": "probe", "parameters": {"type": "object", "properties": {}}}}]

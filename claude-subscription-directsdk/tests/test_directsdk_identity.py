@@ -50,7 +50,7 @@ def _client(tmp_path, mode):
     # Deliberately identity-free: the parent test env must not leak USER/USERNAME in.
     return directsdk.Client(
         command=[sys.executable, str(native), mode],
-        env={'PATH': os.defpath, 'HOME': str(tmp_path), 'ANTHROPIC_BASE_URL': 'http://127.0.0.1:9'},
+        env={'PATH': os.defpath, 'HOME': str(tmp_path), 'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM': 'http://127.0.0.1:9'},
         timeout=25,
     )
 

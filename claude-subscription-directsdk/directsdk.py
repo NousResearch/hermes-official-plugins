@@ -27,13 +27,13 @@ import weakref
 from types import SimpleNamespace
 
 try:
-    from .admission import Admission
+    from .admission import Admission, upstream_from_env
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from .directsdk_setup import (
         INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy,
         drop_api_credentials)
 except ImportError:
-    from admission import Admission
+    from admission import Admission, upstream_from_env
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from directsdk_setup import (
         INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy,
@@ -825,7 +825,10 @@ class Client:
                 # turn, where Claude reads Claude Code's notes as text smuggled into the user's message (#195).
                 env.update(CLAUDE_CODE_DISABLE_AUTO_MEMORY='1', CLAUDE_CODE_DISABLE_CLAUDE_MDS='1')
                 # The queried frame lets the relay keep the cache breakpoint off native's per-request context.
-                request.admission = Admission(env.get('ANTHROPIC_BASE_URL', 'https://api.anthropic.com'), timeout, queried=frames[-1]['message']['content'])
+                # Upstream selection is the plugin's explicit opt-in only:
+                # an inherited ANTHROPIC_BASE_URL is refused above and is
+                # never read here as an upstream.
+                request.admission = Admission(upstream_from_env(env), timeout, queried=frames[-1]['message']['content'])
                 # A Hermes auxiliary one-shot (summary, title: marked by the profile hook, one turn, no tools) is
                 # never replayed, so the relay drops its message cache marks instead of moving them.
                 request.admission.one_shot = kwargs.get('hermes_auxiliary') is True and not manifest and len(frames) == 1

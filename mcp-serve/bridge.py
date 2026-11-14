@@ -741,8 +741,9 @@ _TOOLS_INSTRUCTIONS = (
 )
 _TOOLS_ONLY_INSTRUCTIONS = (
     "Hermes Agent tool face. Exposes Hermes' own capabilities (web search/extract, vision "
-    "analysis, image generation, skills and text-to-speech) as directly callable tools. No "
-    "messaging, conversation or approval tools are served in this mode."
+    "analysis, image generation, skills and text-to-speech) as directly callable tools, plus "
+    "three read-only state tools (hermes_status, hermes_config_get on an allowlist, "
+    "hermes_plugins_list). No messaging, conversation or approval tools are served in this mode."
 )
 
 
@@ -767,6 +768,12 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None, include_tools:
         from .hermes_tools import register_hermes_tools
         reserved = () if tools_only else _TOOL_NAMES
         logger.info("exposed %d Hermes tools over MCP", register_hermes_tools(mcp, reserved=reserved))
+    if tools_only:
+        # Three read-only state tools (hermes_status, hermes_config_get, hermes_plugins_list): the
+        # version, an allowlisted config slice and the installed plugins, without exposing the
+        # profile home or a shell. Registered here only; the --tools surface is unchanged.
+        from .state_tools import register_state_tools
+        logger.info("exposed %d Hermes state tools over MCP", register_state_tools(mcp))
     return mcp
 
 

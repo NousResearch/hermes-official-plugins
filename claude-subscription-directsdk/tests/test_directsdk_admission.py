@@ -57,7 +57,7 @@ def test_first_response_owns_usage_and_stops_recovery(tmp_path, stop):
     peer=ThreadingHTTPServer(('127.0.0.1',0),Peer)
     thread=threading.Thread(target=peer.serve_forever,daemon=True); thread.start()
     native=tmp_path/'native.py'; native.write_text(NATIVE)
-    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'ANTHROPIC_BASE_URL':f'http://127.0.0.1:{peer.server_port}'})
+    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM':f'http://127.0.0.1:{peer.server_port}'})
     try:
         result=client.create(model='sonnet',messages=[{'role':'user','content':'fixture'}])
         assert len(calls)==1
@@ -112,7 +112,7 @@ def _sse_answer():
 
 
 def _auth_client(tmp_path, peer, attempts):
-    env = {'PATH':os.defpath,'HOME':str(tmp_path),'ANTHROPIC_BASE_URL':f'http://127.0.0.1:{peer.server_port}',
+    env = {'PATH':os.defpath,'HOME':str(tmp_path),'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM':f'http://127.0.0.1:{peer.server_port}',
            'AUTH_ATTEMPTS': str(attempts)}
     native=tmp_path/'native_auth.py'; native.write_text(NATIVE_AUTH_RETRY)
     return directsdk.Client(command=[sys.executable,str(native)],env=env)
@@ -229,7 +229,7 @@ def test_contentless_refusal_is_a_terminal_content_filter(tmp_path, details, ref
     peer=ThreadingHTTPServer(('127.0.0.1',0),Peer)
     thread=threading.Thread(target=peer.serve_forever,daemon=True); thread.start()
     native=tmp_path/'native.py'; native.write_text(NATIVE)
-    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'ANTHROPIC_BASE_URL':f'http://127.0.0.1:{peer.server_port}'})
+    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM':f'http://127.0.0.1:{peer.server_port}'})
     try:
         if details:
             # A tool call the classifier cut off must not reach Hermes as tool_calls: Hermes would run it.
@@ -281,7 +281,7 @@ def test_a_thinking_only_turn_reaches_hermes_without_reasoning(tmp_path, text):
     peer=ThreadingHTTPServer(('127.0.0.1',0),Peer)
     thread=threading.Thread(target=peer.serve_forever,daemon=True); thread.start()
     native=tmp_path/'native.py'; native.write_text(NATIVE)
-    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'ANTHROPIC_BASE_URL':f'http://127.0.0.1:{peer.server_port}'})
+    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM':f'http://127.0.0.1:{peer.server_port}'})
     try:
         result=client.create(model='sonnet',messages=[{'role':'user','content':'fixture'}])
         message=result.choices[0].message
@@ -370,7 +370,7 @@ def test_refusal_after_a_tool_call_reaches_the_user(tmp_path, stream, details, r
     peer=ThreadingHTTPServer(('127.0.0.1',0),Peer)
     thread=threading.Thread(target=peer.serve_forever,daemon=True); thread.start()
     native=tmp_path/'native.py'; native.write_text(NATIVE)
-    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'ANTHROPIC_BASE_URL':f'http://127.0.0.1:{peer.server_port}'})
+    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM':f'http://127.0.0.1:{peer.server_port}'})
     tools=[{'type':'function','function':{'name':'list_things','description':'list','parameters':{'type':'object','properties':{}}}}]
     try:
         request = dict(model='sonnet', messages=[{'role':'user','content':'fixture'}], tools=tools)
@@ -423,7 +423,7 @@ def test_empty_tool_input_completes_the_capture(tmp_path):
     thread=threading.Thread(target=peer.serve_forever,daemon=True); thread.start()
     native=tmp_path/'native.py'; native.write_text(NATIVE)
     tools=[{'type':'function','function':{'name':'list_things','description':'list','parameters':{'type':'object','properties':{}}}}]
-    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'ANTHROPIC_BASE_URL':f'http://127.0.0.1:{peer.server_port}'})
+    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM':f'http://127.0.0.1:{peer.server_port}'})
     try:
         result=client.create(model='sonnet',messages=[{'role':'user','content':'fixture'}],tools=tools)
         assert len(calls)==1
@@ -453,7 +453,7 @@ def test_cancel_closes_the_active_upstream_socket(tmp_path, monkeypatch):
     thread.start()
     native = tmp_path / 'native.py'
     native.write_text(NATIVE)
-    client = directsdk.Client(command=[sys.executable, str(native)], env={'PATH':os.defpath, 'HOME':str(tmp_path), 'ANTHROPIC_BASE_URL':f'http://127.0.0.1:{peer.server_port}'})
+    client = directsdk.Client(command=[sys.executable, str(native)], env={'PATH':os.defpath, 'HOME':str(tmp_path), 'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM':f'http://127.0.0.1:{peer.server_port}'})
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
             result = pool.submit(client.create, model='sonnet', messages=[{'role':'user', 'content':'fixture'}])
@@ -528,7 +528,7 @@ def test_incomplete_upstream_error_names_the_first_attempt(tmp_path):
     peer=ThreadingHTTPServer(('127.0.0.1',0),Peer)
     thread=threading.Thread(target=peer.serve_forever,daemon=True); thread.start()
     native=tmp_path/'native.py'; native.write_text(NATIVE)
-    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'ANTHROPIC_BASE_URL':f'http://127.0.0.1:{peer.server_port}'})
+    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM':f'http://127.0.0.1:{peer.server_port}'})
     try:
         with pytest.raises(RuntimeError, match=r'status 529, capture incomplete.*upstream said: prompt is too long: 213000 tokens'):
             client.create(model='sonnet',messages=[{'role':'user','content':'fixture'}])
@@ -553,7 +553,7 @@ def test_incomplete_upstream_error_carries_the_first_status(tmp_path, status):
     peer=ThreadingHTTPServer(('127.0.0.1',0),Peer)
     thread=threading.Thread(target=peer.serve_forever,daemon=True); thread.start()
     native=tmp_path/'native.py'; native.write_text(NATIVE)
-    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'ANTHROPIC_BASE_URL':f'http://127.0.0.1:{peer.server_port}'})
+    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM':f'http://127.0.0.1:{peer.server_port}'})
     try:
         with pytest.raises(RuntimeError, match=rf'^Incomplete upstream response \(first upstream attempt: status {status}, capture incomplete') as raised:
             client.create(model='sonnet',messages=[{'role':'user','content':'fixture'}])
@@ -614,7 +614,7 @@ def test_incomplete_stream_preserves_only_a_safe_request_id(tmp_path, monkeypatc
                                     "'Content-Type':'application/json','Authorization':'Bearer fixture-private-token'"))
     client = directsdk.Client(command=[sys.executable, str(native)],
                              env={'PATH': os.defpath, 'HOME': str(tmp_path),
-                                  'ANTHROPIC_BASE_URL': f'http://127.0.0.1:{peer.server_port}'})
+                                  'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM': f'http://127.0.0.1:{peer.server_port}'})
     try:
         with pytest.raises(directsdk.ClaudeAPIError, match=r'status 200, capture incomplete') as raised:
             result = client.create(model='sonnet', messages=[{'role': 'user', 'content': 'fixture-private-prompt'}],
@@ -644,7 +644,7 @@ def test_incomplete_stream_preserves_only_a_safe_request_id(tmp_path, monkeypatc
 def test_invalid_stream_json_error_names_the_offending_line(tmp_path):
     """A native that prints a non-JSON stdout line (a shim banner) fails with that line in the error, not a bare label."""
     native=tmp_path/'native.py'; native.write_text("import sys\nprint('mise WARN tool not activated')\nsys.exit(0)\n")
-    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'ANTHROPIC_BASE_URL':'http://127.0.0.1:9'})
+    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM':'http://127.0.0.1:9'})
     try:
         with pytest.raises(RuntimeError, match=r"Invalid native stream-json output: 'mise WARN tool not activated"):
             client.create(model='sonnet',messages=[{'role':'user','content':'fixture'}])
@@ -670,7 +670,7 @@ def test_silent_upstream_fails_fast_instead_of_hanging(tmp_path, monkeypatch):
     peer=ThreadingHTTPServer(('127.0.0.1',0),Peer)
     thread=threading.Thread(target=peer.serve_forever,daemon=True); thread.start()
     native=tmp_path/'native.py'; native.write_text(NATIVE.replace('timeout=5', 'timeout=60'))
-    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'ANTHROPIC_BASE_URL':f'http://127.0.0.1:{peer.server_port}'})
+    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM':f'http://127.0.0.1:{peer.server_port}'})
     began = time.monotonic()
     try:
         with pytest.raises(RuntimeError, match=r'status 200, capture incomplete, relay failure UpstreamIdle'):
@@ -702,7 +702,7 @@ def test_pings_keep_a_slow_upstream_alive(tmp_path, monkeypatch):
     peer=ThreadingHTTPServer(('127.0.0.1',0),Peer)
     thread=threading.Thread(target=peer.serve_forever,daemon=True); thread.start()
     native=tmp_path/'native.py'; native.write_text(NATIVE.replace('timeout=5', 'timeout=60'))
-    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'ANTHROPIC_BASE_URL':f'http://127.0.0.1:{peer.server_port}'})
+    client=directsdk.Client(command=[sys.executable,str(native)],env={'PATH':os.defpath,'HOME':str(tmp_path),'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM':f'http://127.0.0.1:{peer.server_port}'})
     try:
         assert client.create(model='sonnet',messages=[{'role':'user','content':'fixture'}],timeout=20).choices[0].message.content == 'FIRST'
     finally:

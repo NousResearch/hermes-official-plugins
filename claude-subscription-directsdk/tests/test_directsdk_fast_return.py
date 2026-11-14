@@ -162,7 +162,7 @@ def native_case(tmp_path, monkeypatch):
                                         "'text': ''}}}), flush=True)") if config.get('tool') else NATIVE)
         state.client = directsdk.Client(command=[sys.executable, str(native)], timeout=2,
             env={'PATH': os.defpath, 'HOME': str(root), 'FIXTURE': json.dumps({'root': str(root), **config}),
-                 'ANTHROPIC_BASE_URL': f'http://127.0.0.1:{peer.server_port}'})
+                 'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM': f'http://127.0.0.1:{peer.server_port}'})
         try:
             yield state
         finally:

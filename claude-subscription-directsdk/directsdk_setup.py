@@ -16,10 +16,10 @@ import tempfile
 from collections.abc import Mapping
 
 try:
-    from .admission import Admission
+    from .admission import Admission, upstream_from_env
     from .model_catalog import MODEL_METADATA, PICKER_ROUTES, native_model
 except ImportError:
-    from admission import Admission
+    from admission import Admission, upstream_from_env
     from model_catalog import MODEL_METADATA, PICKER_ROUTES, native_model
 
 INSTALL_HINT = ("Claude Code is not installed (no `claude` on PATH or in the usual install directories). Install it with "
@@ -199,7 +199,7 @@ def discover_models(command=None, env=None, timeout=40):
     # stdin, so native has no user turn to query; its debug log shows bootstrap, MCP-directory and
     # telemetry fetches and no Messages request. An inherited auth/backend override keeps the relay,
     # since the request path refuses those environments anyway and the bearer must not leave for them.
-    gate = None if _first_party(child) else Admission("https://api.anthropic.com", timeout)
+    gate = None if _first_party(child) else Admission(upstream_from_env(), timeout)
     try:
         if gate is not None:
             child["ANTHROPIC_BASE_URL"] = gate.url

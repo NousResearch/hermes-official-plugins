@@ -45,7 +45,7 @@ def living(pid):
 @pytest.fixture
 def cli(tmp_path, monkeypatch):
     monkeypatch.setattr(ds, 'apply_traffic_policy', lambda env: env)
-    env = {'HOME': str(tmp_path), 'PATH': '', 'ANTHROPIC_BASE_URL': 'http://127.0.0.1:9',
+    env = {'HOME': str(tmp_path), 'PATH': '', 'CLAUDE_SUBSCRIPTION_DIRECTSDK_UPSTREAM': 'http://127.0.0.1:9',
            'REVIEW_PIDS': str(tmp_path / 'pids.jsonl'), 'REVIEW_STARTED': str(tmp_path / 'started'),
            'REVIEW_ENV': str(tmp_path / 'env.json')}
     command = [sys.executable, '-I', str(Path(__file__).parent / 'fixtures/lifecycle_cli.py')]

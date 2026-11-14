@@ -162,10 +162,11 @@ def _frame_first(messages, queried):
     return True
 
 
-# The only trailing system text the relay moves: native 2.1.299's date line, exactly as its opening request ends the
-# environment message. Any other trailing text stays put, since moving text that varies per request into the
-# environment message would change the prefix from message 1 on every request.
-_DATE_LINE = re.compile(r"Today's date is \d{4}-\d{2}-\d{2}\.")
+# The only trailing system text the relay moves: native's date line, exactly as its opening request ends the
+# environment message (bare on 2.1.299, wrapped in a system-reminder on 2.1.292 and 2.1.319). Any other trailing
+# text stays put, since moving text that varies per request into the environment message would change the prefix
+# from message 1 on every request.
+_DATE_LINE = re.compile(r"(?:<system-reminder>\n)?Today's date is \d{4}-\d{2}-\d{2}\.(?:\n</system-reminder>)?")
 
 
 def stable_request_context(payload, queried):
@@ -552,6 +553,8 @@ class Capture:
         self.decoder = codecs.getincrementaldecoder('utf-8')()
         self.arguments = {}
         self.unparsed = []
+        # (id, native name, raw arguments) of each call whose streamed arguments did not parse.
+        self.unparsed_calls = []
 
     def feed(self, chunk):
         self.pending += self.decoder.decode(chunk)
@@ -599,10 +602,12 @@ class Capture:
             try:
                 self.message['content'][index]['input'] = json.loads(raw) if raw.strip() else {}
             except ValueError:
-                # Streamed tool input is not validated (``eager_input_streaming``): a reply cut off at
-                # max_tokens ends mid-argument. The call is dropped at message_stop, never run with guessed
-                # arguments, and the stop reason (finish ``length``) tells Hermes the reply was cut short.
+                # Streamed tool input is not validated (``eager_input_streaming``): a reply cut at max_tokens ends
+                # mid-argument, and the API can stream invalid JSON. Dropped from native's turn at message_stop; the
+                # client hands it to Hermes with finish ``length``, so it is never run.
+                block = self.message['content'][index]
                 self.unparsed.append(index)
+                self.unparsed_calls.append((block.get('id'), block.get('name'), raw))
 
     def _delta(self, event):
         self.message.update(event.get('delta', {}))
@@ -691,6 +696,8 @@ class Admission:
         self.cancelled = False
         self.used = False
         self.denied = 0
+        # Ask the API to stream tool arguments; off for a conversation whose streamed arguments came back invalid.
+        self.eager = True
         self.auth_retry_used = False
         self.request_id = None
         self.status = None
@@ -846,7 +853,8 @@ class Handler(BaseHTTPRequestHandler):
                 gate.unrestored = str(exc)
             payload = stable_request_context(payload, gate.queried)
             payload = pin_message_breakpoint(payload, gate.queried)
-            payload = stream_tool_input(payload)
+            if gate.eager:
+                payload = stream_tool_input(payload)
             target = gate.upstream
             conn, upstream_socket = self._connect_upstream()
             if conn is None:

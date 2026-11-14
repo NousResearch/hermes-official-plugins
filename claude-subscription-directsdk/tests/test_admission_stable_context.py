@@ -10,7 +10,8 @@ import pytest
 from admission import Admission, stable_request_context
 
 ENV = 'Fixture environment'
-DATE = "Today's date is 2031-01-01."
+# Native's wire text on 2.1.292 and 2.1.319 (#38); 2.1.299's bare line is covered below.
+DATE = "<system-reminder>\nToday's date is 2031-01-01.\n</system-reminder>"
 FRAME = {'type': 'text', 'text': 'Next user question'}
 REMINDER = {'type': 'text', 'text': 'Native context reminder'}
 MARK = {'type': 'ephemeral', 'ttl': '1h'}
@@ -31,14 +32,15 @@ def native(env=ENV, tail=None):
 
 
 @pytest.mark.parametrize('env', [ENV, [{'type': 'text', 'text': 'Earlier'}, {'type': 'text', 'text': ENV}]])
-@pytest.mark.parametrize('tail', [DATE, [{'type': 'text', 'text': DATE}]])
+@pytest.mark.parametrize('tail', [DATE, [{'type': 'text', 'text': DATE}], "Today's date is 2031-01-01."])
 def test_date_returns_to_string_or_list_environment(env, tail):
+    line = tail if isinstance(tail, str) else tail[0]['text']
     out = json.loads(stable_request_context(wire(native(env, tail)), [FRAME]))['messages']
     assert len(out) == 3
     if isinstance(env, list):
-        assert out[0]['content'] == [env[0], {'type': 'text', 'text': ENV + '\n\n' + DATE}]
+        assert out[0]['content'] == [env[0], {'type': 'text', 'text': ENV + '\n\n' + line}]
     else:
-        assert out[0]['content'] == ENV + '\n\n' + DATE
+        assert out[0]['content'] == ENV + '\n\n' + line
     assert out[1] == ASSISTANT
     assert out[2]['content'] == [FRAME]
 

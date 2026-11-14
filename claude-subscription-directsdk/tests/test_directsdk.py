@@ -218,6 +218,25 @@ class Contract(unittest.TestCase):
             self.assertEqual(client.chat.completions.create(**req).choices[0].message.content, "done")
             client.close()
 
+    def test_server_segment_slip_maps_to_the_tool_and_replays_with_the_offered_name(self):
+        # Native also drops only the server segment (`mcp__tool_call` for `mcp__hermes__tool_call`).
+        # The plugin restores it, so core sees the clean name and logs no auto-repair per call.
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self.client(tmp, TOOL_NAME="mcp__probe", REPLAY_NAME="mcp__hermes__probe")
+            for streaming in (False, True):
+                req = self.request()
+                result = client.chat.completions.create(**req, stream=streaming)
+                if streaming:
+                    chunks = list(result)
+                    calls = [tc for c in chunks if c.choices for tc in (c.choices[0].delta.tool_calls or [])]
+                    details = [d for c in chunks if c.choices for d in (getattr(c.choices[0].delta, "reasoning_details", None) or [])]
+                else:
+                    calls, details = result.choices[0].message.tool_calls, result.choices[0].message.reasoning_details
+                self.assertEqual([c.function.name for c in calls], ["probe"])
+                carried = [b["name"] for m in details[0]["messages"] for b in m["content"] if b["type"] == "tool_use"]
+                self.assertEqual(carried, ["mcp__hermes__probe"])
+            client.close()
+
     def test_logged_out_native_raises_the_login_hint(self):
         import directsdk
         from directsdk_setup import LOGGED_OUT_HINT

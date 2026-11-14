@@ -4,11 +4,12 @@ from __future__ import annotations
 import asyncio
 import atexit
 import copy
-from collections import deque
+from collections import OrderedDict, deque
 from contextlib import suppress
 import hashlib
 import inspect
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -41,24 +42,34 @@ except ImportError:
         resolve_upstream, Upstream)
 
 
+logger = logging.getLogger(__name__)
+
+
 # Hermes picks retry vs fallback from an error's status_code (main loop and auxiliary ladder alike).
 class ClaudeCodeMissing(RuntimeError):
     """The official Claude Code CLI this transport drives is not installed (or not on PATH)."""
     status_code = 503
 
 
+def _request_id(value):
+    """Only a bounded opaque ID may enter diagnostics, never arbitrary header contents."""
+    return value if isinstance(value, str) and re.fullmatch(r'req_[A-Za-z0-9_-]{1,124}', value) else None
+
+
 class ClaudeAPIError(RuntimeError):
     """A failed upstream or native-answered request; status_code is None when there is no HTTP equivalent."""
 
     def __init__(self, message, status_code=None, *, request_id=None):
-        # Only a bounded opaque ID may enter diagnostics, never arbitrary header contents.
-        if not isinstance(request_id, str) or re.fullmatch(r'req_[A-Za-z0-9_-]{1,124}', request_id) is None:
-            request_id = None
+        request_id = _request_id(request_id)
         if request_id:
             message += f' (request_id={request_id})'
         super().__init__(message)
         self.status_code = status_code
         self.request_id = request_id
+
+
+class RequestRejected(ValueError):
+    """A request this transport cannot serve, refused before Claude Code starts: the same input fails every time."""
 
 
 # Native's own error codes for errors it answers without a relayed upstream status.
@@ -123,13 +134,13 @@ def content_blocks(content):
                                'Call vision_analyze with this URL to see it.]'})
                 continue
             if not url.startswith('data:') or ';base64,' not in url:
-                raise ValueError('Only base64 data image_url inputs are supported')
+                raise RequestRejected('Only base64 data image_url inputs are supported')
             media, data = url[5:].split(';base64,', 1)
             result.append({'type': 'image', 'source': {'type': 'base64', 'media_type': media, 'data': data}})
         elif kind in ('image', 'document', 'tool_result'):
             result.append(copy.deepcopy(block))
         else:
-            raise ValueError(f'Unsupported content block: {kind}')
+            raise RequestRejected(f'Unsupported content block: {kind}')
     return result
 
 
@@ -143,15 +154,49 @@ def conversation_session_id(system, frames):
     return str(uuid.UUID(bytes=digest[:16], version=4))
 
 
+def _normalize_history_tool_ids(frames):
+    """Map foreign IDs only on the outgoing wire; keep calls/results paired.
+
+    Anthropic rejects IDs containing e.g. ':' from another provider's history.
+    Preserve valid native IDs (and signed replay blocks), reserve them before
+    assigning deterministic foreign IDs, and avoid collisions in this request.
+    Never rewrite the source history, tool arguments, or result bodies.
+    """
+    references = []
+    for frame in frames:
+        for block in frame['message']['content']:
+            field = {'tool_use': 'id', 'tool_result': 'tool_use_id'}.get(block.get('type'))
+            if field is None:
+                continue
+            tool_id = block.get(field)
+            if not isinstance(tool_id, str) or not tool_id:
+                raise RequestRejected('Tool call/result IDs must be nonempty strings')
+            references.append((block, field, tool_id))
+    original_ids = {tool_id for _, _, tool_id in references}
+    used = {tool_id for tool_id in original_ids if re.fullmatch(r'[a-zA-Z0-9_-]+', tool_id)}
+    mapping = {}
+    for tool_id in sorted(original_ids - used):
+        base = 'toolu_hermes_' + hashlib.sha256(tool_id.encode('utf-8')).hexdigest()[:32]
+        candidate, suffix = base, 0
+        while candidate in used:
+            suffix += 1
+            candidate = f'{base}_{suffix}'
+        mapping[tool_id] = candidate
+        used.add(candidate)
+    for block, field, tool_id in references:
+        if tool_id in mapping:
+            block[field] = mapping[tool_id]
+
+
 def prepare_history(messages, names=None):
     system, frames = [], []
     for message in messages:
         role = message.get('role')
         if role in ('system', 'developer'):
             if frames:
-                raise ValueError('System/developer messages must precede conversation history')
+                raise RequestRejected('System/developer messages must precede conversation history')
             if not isinstance(message.get('content'), str):
-                raise ValueError('System content must be text')
+                raise RequestRejected('System content must be text')
             system.append(message['content'])
             continue
         if role == 'assistant':
@@ -159,7 +204,7 @@ def prepare_history(messages, names=None):
             carriers = [d for d in details if isinstance(d, dict) and d.get('type') == CARRIER]
             if carriers:
                 if len(carriers) != 1 or carriers[0].get('version') != 1:
-                    raise ValueError('Unsupported native assistant carrier version')
+                    raise RequestRejected('Unsupported native assistant carrier version')
                 carrier = carriers[0]
                 expected = {**carrier['projection'], 'content': carrier['projection']['content'].strip()}
                 if projection(message) == expected:
@@ -190,13 +235,14 @@ def prepare_history(messages, names=None):
         elif role == 'user':
             blocks = content_blocks(message.get('content'))
         else:
-            raise ValueError(f'Unsupported message role: {role}')
+            raise RequestRejected(f'Unsupported message role: {role}')
         if frames and frames[-1]['type'] == role and role == 'user':
             frames[-1]['message']['content'].extend(blocks)
         else:
             frames.append({'type': role, 'message': {'role': role, 'content': blocks}})
     if not frames or frames[-1]['type'] != 'user' or not frames[-1]['message']['content']:
-        raise ValueError('History must end in a nonempty user/tool-result message; assistant prefill is unsupported')
+        raise RequestRejected('History must end in a nonempty user/tool-result message; assistant prefill is unsupported')
+    _normalize_history_tool_ids(frames)
     return '\n\n'.join(system), frames
 
 
@@ -258,39 +304,39 @@ def request_body(kwargs):
                'hermes_auxiliary'}
     unknown = set(kwargs) - allowed
     if unknown:
-        raise ValueError('Unsupported request parameters: ' + ', '.join(sorted(unknown)))
+        raise RequestRejected('Unsupported request parameters: ' + ', '.join(sorted(unknown)))
     # Hermes Relay attaches host tracing to chat-completions clients. Keep it host-local:
     # never project it into generation fields or override the official CLI's identity.
     headers = kwargs.get('extra_headers')
     if headers is not None and (not isinstance(headers, dict) or any(
             not isinstance(key, str) or key.lower() != 'traceparent' or not isinstance(value, str)
             for key, value in headers.items())):
-        raise ValueError('extra_headers supports host traceparent metadata only')
+        raise RequestRejected('extra_headers supports host traceparent metadata only')
     if kwargs.get('n', 1) != 1 or kwargs.get('tool_choice', 'auto') not in ('auto', None):
-        raise ValueError('Only n=1 and tool_choice=auto are supported')
+        raise RequestRejected('Only n=1 and tool_choice=auto are supported')
     if kwargs.get('parallel_tool_calls') is False:
-        raise ValueError('parallel_tool_calls=False is unsupported')
+        raise RequestRejected('parallel_tool_calls=False is unsupported')
     if kwargs.get('stream_options') not in (None, {}, {'include_usage': True}, {'include_usage': False}):
-        raise ValueError('Unsupported stream_options')
+        raise RequestRejected('Unsupported stream_options')
     extra = kwargs.get('extra_body')
     if extra is None:
         extra = {}
     if not isinstance(extra, dict):
-        raise ValueError('extra_body must be an object')
+        raise RequestRejected('extra_body must be an object')
     unknown_extra = set(extra) - {'max_tokens', 'temperature', 'top_p', 'stop_sequences', 'reasoning', 'response_format'}
     if unknown_extra:
-        raise ValueError('Unsupported extra_body fields: ' + ', '.join(sorted(unknown_extra)))
+        raise RequestRejected('Unsupported extra_body fields: ' + ', '.join(sorted(unknown_extra)))
     body = copy.deepcopy(extra)
     reasoning = body.pop('reasoning', None)
     if reasoning is not None:
         if not isinstance(reasoning, dict) or set(reasoning) - {'enabled', 'effort'}:
-            raise ValueError('reasoning supports enabled and effort only')
+            raise RequestRejected('reasoning supports enabled and effort only')
         if 'enabled' in reasoning and type(reasoning['enabled']) is not bool:
-            raise ValueError('reasoning.enabled must be boolean')
+            raise RequestRejected('reasoning.enabled must be boolean')
         from agent.reasoning_effort import clamp_effort
         effort = clamp_effort(reasoning.get('effort'), ('none', 'low', 'medium', 'high', 'xhigh', 'max'))
         if effort not in (None, 'none', 'low', 'medium', 'high', 'xhigh', 'max'):
-            raise ValueError('Unsupported native reasoning effort')
+            raise RequestRejected('Unsupported native reasoning effort')
         if reasoning.get('enabled') is False or effort == 'none':
             if accepts_thinking_disable(kwargs.get('model')):
                 body['thinking'] = {'type': 'disabled'}
@@ -313,50 +359,50 @@ def request_body(kwargs):
     response_format = kwargs.get('response_format', body.pop('response_format', None))
     if response_format and response_format.get('type') != 'text':
         if response_format.get('type') != 'json_schema':
-            raise ValueError('Only json_schema structured output is supported')
+            raise RequestRejected('Only json_schema structured output is supported')
         schema = response_format.get('json_schema', {}).get('schema')
         if not isinstance(schema, dict):
-            raise ValueError('response_format requires a JSON Schema object')
+            raise RequestRejected('response_format requires a JSON Schema object')
         body.setdefault('output_config', {})['format'] = {'type': 'json_schema', 'schema': native_format_schema(schema)}
     for key in ('max_tokens', 'temperature', 'top_p'):
         if kwargs.get(key) is not None:
             body[key] = kwargs[key]
     if kwargs.get('max_completion_tokens') is not None:
         if 'max_tokens' in body:
-            raise ValueError('Specify only one output-token limit')
+            raise RequestRejected('Specify only one output-token limit')
         body['max_tokens'] = kwargs['max_completion_tokens']
     if kwargs.get('stop') is not None:
         stop = kwargs['stop']
         body['stop_sequences'] = [stop] if isinstance(stop, str) else stop
     for key in ('temperature', 'top_p'):
         if key in body and (isinstance(body[key], bool) or not isinstance(body[key], (int, float)) or not math.isfinite(body[key]) or not 0 <= body[key] <= 1):
-            raise ValueError(f'{key} must be finite and between zero and one')
+            raise RequestRejected(f'{key} must be finite and between zero and one')
         # Subscription models reject sampling controls, including Hermes' title
         # generator default. Match the host's sampling-forbidden model behavior.
         body.pop(key, None)
     if 'max_tokens' in body and (type(body['max_tokens']) is not int or body['max_tokens'] < 1):
-        raise ValueError('max_tokens must be a positive integer')
+        raise RequestRejected('max_tokens must be a positive integer')
     if 'stop_sequences' in body and (not isinstance(body['stop_sequences'], list) or not all(isinstance(x, str) and x for x in body['stop_sequences'])):
-        raise ValueError('stop_sequences must be a list of nonempty strings')
+        raise RequestRejected('stop_sequences must be a list of nonempty strings')
     manifest, tools, names = [], [], {}
     native_names = {}
     for tool in kwargs.get('tools') or []:
         if tool.get('type') != 'function':
-            raise ValueError('Only function tools are supported')
+            raise RequestRejected('Only function tools are supported')
         f = tool['function']
         name = f['name']
         if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', name) or name in names:
-            raise ValueError('Tool names must be unique ASCII identifiers of at most 64 characters')
+            raise RequestRejected('Tool names must be unique ASCII identifiers of at most 64 characters')
         if f.get('strict'):
-            raise ValueError('Strict function schemas are unsupported')
+            raise RequestRejected('Strict function schemas are unsupported')
         native_name = name if len(name) <= 50 else name[:41] + '_' + hashlib.sha256(name.encode()).hexdigest()[:8]
         if native_name in native_names:
-            raise ValueError(f'Tool name collision: {name!r} and {native_names[native_name]!r} map to {native_name!r}')
+            raise RequestRejected(f'Tool name collision: {name!r} and {native_names[native_name]!r} map to {native_name!r}')
         names[name] = native_name
         native_names[native_name] = name
         schema, description = f.get('parameters', {'type': 'object'}), f.get('description', '')
         if not isinstance(schema, dict) or not isinstance(description, str):
-            raise ValueError('Tool schema must be an object and description a string')
+            raise RequestRejected('Tool schema must be an object and description a string')
         # The manifest (inert MCP server) and the request body must advertise the same shape.
         schema = normalize_input_schema(schema)
         manifest.append({'name': native_name, 'description': description, 'inputSchema': schema})
@@ -410,7 +456,104 @@ def _fast_eligible(result, admission, stopped, native_error):
             and admission.capture.message.get('stop_reason') != 'refusal'
             and ((result.get('subtype') == 'success' and not result.get('is_error'))
                  or (result.get('subtype') == 'error_max_turns' and any(
-                     b.get('type') == 'tool_use' for b in admission.capture.message['content']))))
+                     b.get('type') == 'tool_use' for b in admission.capture.message['content'])
+                     or bool(admission.capture.unparsed))))
+
+
+# Conversations whose streamed tool input came back invalid: their next requests ask the API to buffer and validate
+# arguments (no eager_input_streaming), as core's Anthropic transport does on the same failure. Bounded; compaction
+# starts a new conversation id, and with it streaming again.
+_BUFFER_TOOL_INPUT = OrderedDict()
+
+
+def _buffer_tool_input(session_id):
+    _BUFFER_TOOL_INPUT[session_id] = True
+    _BUFFER_TOOL_INPUT.move_to_end(session_id)
+    while len(_BUFFER_TOOL_INPUT) > 256:
+        _BUFFER_TOOL_INPUT.popitem(last=False)
+
+
+def offered_tool_name(name, hermes_names):
+    """``(name to carry in native's history, name Hermes runs)`` for a tool_use native streamed."""
+    if name in hermes_names:
+        # Native sometimes drops the prefix on a tool it was offered (#62); carry the offered name so replayed
+        # history does not teach the slip back to the model.
+        name = PREFIX + name
+    elif name.startswith('mcp__') and not name.startswith(PREFIX) and name[5:] in hermes_names:
+        # Or only the server segment (`mcp__tool_call`); restore it so core does not log an auto-repair per call.
+        name = PREFIX + name[5:]
+    # Any other name is the model's (a Tool Search-deferred tool called directly, #39); Hermes answers it.
+    bare = name.removeprefix(PREFIX)
+    return name, hermes_names.get(bare, bare)
+
+
+def _json_suffix(prefix):
+    """A suffix that makes a cut-off JSON text parse, or None. Used only for a refused call's streamed arguments:
+    Hermes cannot take back a streamed fragment, and one it cannot repair turns the refusal into a truncation
+    that it retries. The call is never run."""
+    stack, in_string, escaped, unicode = [], False, False, 0
+    for ch in prefix:
+        if unicode:
+            unicode = unicode - 1 if ch in '0123456789abcdefABCDEF' else 0
+        elif in_string:
+            escaped, in_string, unicode = (False, True, 4 if ch == 'u' else 0) if escaped else (ch == '\\', ch != '"', 0)
+        elif ch == '"':
+            in_string = True
+        elif ch in '{[':
+            stack.append('}' if ch == '{' else ']')
+        elif ch in '}]' and stack:
+            stack.pop()
+    head = '0' * unicode + ('\\' if escaped else '') + ('"' if in_string else '')
+    closers = ''.join(reversed(stack))
+    for filler in ('', 'null', ':null', '"":null', '0', 'e', 'ue', 'rue', 'l', 'll', 'ull', 'se', 'lse', 'alse'):
+        try:
+            json.loads(prefix + head + filler + closers)
+        except ValueError:
+            continue
+        return head + filler + closers
+    return None
+
+
+class _ToolStream:
+    """Stream each tool call to Hermes as native streams it: the header (id and name) at ``content_block_start``,
+    so Hermes shows the tool being prepared at once (#326), then each argument fragment."""
+
+    def __init__(self, hermes_names):
+        self.hermes_names, self.slots, self.raw = hermes_names, {}, {}
+
+    def deltas(self, native):
+        """The ``tool_calls`` deltas for one native stream event, or None when it is not a tool event."""
+        index, block = native.get('index'), native.get('content_block') or {}
+        if native['type'] == 'content_block_start' and block.get('type') == 'tool_use':
+            self.slots[index], self.raw[index] = (len(self.slots), block.get('id')), ''
+            name = offered_tool_name(block.get('name', ''), self.hermes_names)[1]
+            return [{'index': self.slots[index][0], 'id': block.get('id'), 'type': 'function', 'function': {'name': name, 'arguments': ''}}]
+        if index not in self.slots:
+            return None
+        if native.get('delta', {}).get('type') == 'input_json_delta':
+            fragment = native['delta'].get('partial_json', '')
+            self.raw[index] += fragment
+            return [{'index': self.slots[index][0], 'function': {'arguments': fragment}}] if fragment else []
+        if native['type'] == 'content_block_stop' and not self.raw[index].strip():
+            self.raw[index] = '{}'  # A no-argument call streams nothing; Hermes runs '{}'.
+            return [{'index': self.slots[index][0], 'function': {'arguments': '{}'}}]
+        return None
+
+    def streamed(self, call_id):
+        return any(slot[1] == call_id for slot in self.slots.values())
+
+    def close_refused(self):
+        """Deltas that make every refused call's streamed arguments parse, so Hermes still sees one refusal."""
+        out = []
+        for index, (slot, _) in self.slots.items():
+            raw = self.raw[index]
+            try:
+                json.loads(raw)
+            except ValueError:
+                suffix = _json_suffix(raw) if raw.strip() else '{}'
+                if suffix:
+                    out.append({'index': slot, 'function': {'arguments': suffix}})
+        return out
 
 
 def _hand_off(process, admission, reader, err_drain):
@@ -737,7 +880,7 @@ class Client:
             body, manifest, names = request_body(kwargs)
             system, frames = prepare_history(kwargs.get('messages', []), names)
             if not isinstance(kwargs.get('model'), str) or not kwargs['model']:
-                raise ValueError('model is required')
+                raise RequestRejected('model is required')
         except BaseException:
             with self._lock:
                 self._requests.discard(request)
@@ -763,7 +906,7 @@ class Client:
             timeout = kwargs.get('timeout', self.timeout)
             timeout = getattr(timeout, 'read', timeout)
             if not isinstance(timeout, (int, float)) or timeout <= 0:
-                raise ValueError('timeout must be positive seconds')
+                raise RequestRejected('timeout must be positive seconds')
             # Per-request files only; native runs in the stable cwd from _workdir. Windows stragglers
             # can still hold these open for a moment, and cleanup must not fail the request.
             with tempfile.TemporaryDirectory(prefix='claude-directsdk-', ignore_cleanup_errors=True) as tmp:
@@ -781,7 +924,7 @@ class Client:
                     conflicts = [key for key in ('ANTHROPIC_BASE_URL',) if env.get(key)]
                     conflicts += [key for key in ('CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY') if env.get(key, '').lower() not in ('', '0', 'false', 'no', 'off')]
                     if conflicts:
-                        raise ValueError('OAuth provider refuses conflicting native auth/backend overrides: ' + ', '.join(conflicts))
+                        raise RequestRejected('OAuth provider refuses conflicting native auth/backend overrides: ' + ', '.join(conflicts))
                 # Fail with the install hint, not a Popen FileNotFoundError, when Claude Code is absent.
                 resolved = resolve_claude(self.command, env)
                 if resolved is None:
@@ -833,7 +976,9 @@ class Client:
                 # One native session per conversation: native names a per-session scratchpad directory in the
                 # environment message near the top of every request, so a new session id per spawn moved the cache
                 # prefix on every call while feature flags are on.
-                command += ['--session-id', conversation_session_id(system, frames)]
+                session_id = conversation_session_id(system, frames)
+                request.admission.eager = session_id not in _BUFFER_TOOL_INPUT
+                command += ['--session-id', session_id]
                 p = request.spawn(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', cwd=self._workdir(), env=env)
                 # Native's stderr is diagnosis, not noise: a gateway-only failure (issue #44)
                 # previously vanished into DEVNULL, and the reporter had to patch the plugin to
@@ -930,6 +1075,7 @@ class Client:
                 send(None)
                 assistants, results, stopped, emitted = [], [], False, ''
                 rate_limit = None
+                tool_stream = _ToolStream(hermes_names)
                 native_error = native_error_code = None
                 fast = False
                 while True:
@@ -960,7 +1106,10 @@ class Client:
                         if native['type'] == 'message_stop':
                             stopped = True
                         delta = native.get('delta', {})
-                        if delta.get('type') == 'text_delta':
+                        tool_deltas = tool_stream.deltas(native)
+                        if tool_deltas:
+                            yield self._chunk(kwargs['model'], {'tool_calls': tool_deltas})
+                        elif delta.get('type') == 'text_delta':
                             emitted += delta['text']
                             yield self._chunk(kwargs['model'], {'content': delta['text']})
                         elif delta.get('type') == 'thinking_delta':
@@ -1015,17 +1164,23 @@ class Client:
                 calls = []
                 for block in blocks:
                     if block.get('type') == 'tool_use':
-                        # Native built-ins are off (--tools '', inert MCP, dontAsk), so any other name is
-                        # the model's, e.g. a Tool Search-deferred tool called directly (#39). Hermes owns
-                        # validation and answers an unknown name with a recoverable error.
-                        if block['name'] in hermes_names:
-                            # Native sometimes drops the prefix on a tool it was offered (#62); carry the
-                            # offered name so replayed history does not teach the slip back to the model.
-                            block['name'] = PREFIX + block['name']
-                        name = block['name'].removeprefix(PREFIX)
-                        name = hermes_names.get(name, name)
+                        block['name'], name = offered_tool_name(block['name'], hermes_names)
                         calls.append({'id': block['id'], 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(block['input'], separators=(',', ':'), allow_nan=False)}})
-                boundary = bool(calls) and final.get('subtype') == 'error_max_turns' and (fast or proc_returncode == 1)
+                refused = any(a.get('stop_reason') == 'refusal' for a in assistants)
+                parsed_calls = list(calls)
+                # A call whose arguments did not parse (cut at max_tokens, or invalid streamed JSON) reaches Hermes with
+                # its raw arguments and finish length: Hermes never runs a call from a length reply, it re-sends the
+                # request with a larger output cap (#164, #221). A refused call stays out (below).
+                unparsed = [] if refused or not admission.used else admission.capture.unparsed_calls
+                for call_id, native_name, raw in unparsed:
+                    calls.append({'id': call_id, 'type': 'function', 'function': {'name': offered_tool_name(native_name or '', hermes_names)[1], 'arguments': raw}})
+                if unparsed and not any(a.get('stop_reason') == 'max_tokens' for a in assistants):
+                    # Not a cut: the API streamed invalid JSON. This conversation's next requests buffer and validate.
+                    _buffer_tool_input(session_id)
+                # Native answers a call it cannot parse locally, which sets a follow-up turn --max-turns 1 stops
+                # (error_max_turns, exit 1): the same boundary as a kept call.
+                turn_with_calls = bool(calls) or bool(admission.capture.unparsed)
+                boundary = turn_with_calls and final.get('subtype') == 'error_max_turns' and (fast or proc_returncode == 1)
                 if not boundary and not native_failure_handled and ((not fast and proc_returncode != 0) or final.get('is_error') or final.get('subtype') != 'success'):
                     raise RuntimeError('Native request failed: ' + str(final.get('subtype')) + _stderr_tail(native_stderr))
                 usage = assistants[0]['usage'] if admission.used else final.get('usage')
@@ -1043,17 +1198,20 @@ class Client:
                 # recovery nudges the model on, as before summarized display. The signed thinking still replays.
                 message = {'role': 'assistant', 'content': text or None, 'tool_calls': calls or None,
                            'reasoning_content': thinking if text or calls else None}
-                carrier = {'type': CARRIER, 'version': 1, 'messages': assistants, 'projection': projection(message)}
+                carrier = {'type': CARRIER, 'version': 1, 'messages': assistants, 'projection': projection({**message, 'tool_calls': parsed_calls or None})}
                 message['reasoning_details'] = [carrier]
                 # An upstream refusal is Hermes' content_filter, as core's Anthropic transport maps it (even with a tool
                 # call cut off by the classifier, which must not run): terminal, one fallback try, never retried as an
                 # empty reply. Its reason rides stop_details, not a content block.
-                refused = any(a.get('stop_reason') == 'refusal' for a in assistants)
                 if refused:
                     details = next((a['stop_details'] for a in assistants if isinstance(a.get('stop_details'), dict)), {})
                     explanation, category = details.get('explanation'), details.get('category')
-                    message['refusal'] = (explanation.strip() if isinstance(explanation, str) and explanation.strip() else
-                                          f'provider refusal category: {category}' if isinstance(category, str) and category else None)
+                    reason = (explanation.strip() if isinstance(explanation, str) and explanation.strip() else
+                              f'provider refusal category: {category}' if isinstance(category, str) and category else None)
+                    # The request id is what Anthropic support needs to look a refusal up (#341).
+                    request_id = _request_id(admission.request_id)
+                    logger.warning('Claude refused the request: model=%s request_id=%s category=%s', kwargs['model'], request_id, category)
+                    message['refusal'] = f'{reason or "provider refusal"} (request_id={request_id})' if request_id else reason
                     # The cut-off call stays out of what Hermes acts on: Hermes promotes a refusal to the text it shows
                     # only when nothing else is in the message, so with the call kept the user read "no explanation".
                     # The carrier above still holds native's turn as sent, refused tool_use included.
@@ -1067,9 +1225,12 @@ class Client:
                     normalized_usage['native_admission']['rate_limit'] = rate_limit
                 if admission.unrestored:
                     normalized_usage['native_admission']['unrestored'] = admission.unrestored
-                finish = 'content_filter' if refused else 'tool_calls' if calls else ('length' if any(a.get('stop_reason') in ('max_tokens', 'model_context_window_exceeded') for a in assistants) else 'stop')
+                finish = 'content_filter' if refused else 'length' if unparsed else 'tool_calls' if calls else ('length' if any(a.get('stop_reason') in ('max_tokens', 'model_context_window_exceeded') for a in assistants) else 'stop')
                 response = obj({'id': assistants[-1].get('id', 'claude-native'), 'model': kwargs['model'], 'object': 'chat.completion', 'choices': [{'index': 0, 'finish_reason': finish, 'message': message}], 'usage': normalized_usage})
-                chunk = self._chunk(kwargs['model'], {'content': None, 'tool_calls': [dict(tc, index=i) for i, tc in enumerate(calls)] or None, 'reasoning_details': [carrier], **({'refusal': message['refusal']} if refused else {})}, finish, normalized_usage)
+                # Calls already streamed are not repeated; a refused one gets only what makes its arguments parse.
+                late = tool_stream.close_refused() if refused else [
+                    dict(tc, index=len(tool_stream.slots) + i) for i, tc in enumerate(c for c in calls if not tool_stream.streamed(c['id']))]
+                chunk = self._chunk(kwargs['model'], {'content': None, 'tool_calls': late or None, 'reasoning_details': [carrier], **({'refusal': message['refusal']} if refused else {})}, finish, normalized_usage)
                 chunk._response = response
                 # Fast return removes these per-request files while native drains: safe on POSIX;
                 # ignore_cleanup_errors already tolerates files still held open on Windows.

@@ -223,6 +223,10 @@ def classify_api_error(error, **_):
             'extra usage"), which this account cannot draw now. Claude Code runs as `hermes-agent` for this '
             'provider. Check the plan and extra-usage settings at https://claude.ai/settings/usage (on Team or '
             f'Enterprise, your workspace admin controls them). Upstream said: {str(error)[:400]}')
+    # A request refused before Claude Code starts fails the same way on every retry; another provider may serve it.
+    # Matched by class name: the plugin can load as a package or as top-level modules, so the class may be either copy.
+    if type(error).__name__ == 'RequestRejected':
+        return {'reason': 'format_error', 'retryable': False, 'should_fallback': True}
     return None
 
 
@@ -252,6 +256,8 @@ profile = ClaudeOAuthDirectSDKProfile(
 # Attribute assignment keeps the plugin loadable on hosts predating this capability.
 # Newer hosts use it to avoid buffering a healthy native stream behind a stale-call timer.
 profile.supports_streaming = True
+# Schema-less json_object is refused (only json_schema maps to native structured output); Hermes drops it up front.
+profile.unsupported_response_formats = ('json_object',)
 register_provider(profile)
 
 # The provider stays registered when Claude Code is missing so `hermes model` can show the

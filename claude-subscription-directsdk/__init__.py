@@ -165,6 +165,10 @@ def classify_api_error(error, **_):
     # as this error; Hermes marks its request cancelled first, drops ours and raises InterruptedError.
     if isinstance(error, RuntimeError) and str(error) == 'Claude request cancelled':
         return {'reason': 'timeout'}
+    # Errors raised before Claude Code starts (unsupported params, missing model, bad timeout, ...) are
+    # deterministic input errors: classify them as format_error so Hermes does not retry them.
+    if isinstance(error, (ValueError, TypeError)):
+        return {'reason': 'format_error'}
     return None
 
 
@@ -188,6 +192,9 @@ profile = ClaudeOAuthDirectSDKProfile(
     # Access-gated models (Mythos) stay out: an account sees one only when its own picker offers it.
     fallback_models=PICKER_ROUTES,
     model_aliases={alias: native_model(alias) for alias in ALIASES},
+    # Only json_schema is supported; json_object (schema-less) raises ValueError.
+    # Declare it unsupported so Hermes falls back to a compatible format instead.
+    unsupported_response_formats=("json_object",),
     # A dataclass field (Hermes >= 0.21.4), so a method on the subclass would be shadowed by its None default.
     classify_api_error=classify_api_error,
 )

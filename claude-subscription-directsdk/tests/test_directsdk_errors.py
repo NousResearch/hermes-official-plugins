@@ -93,5 +93,9 @@ def test_watchdog_kill_classifies_like_a_timeout(profile):
     assert verdict(killed, provider='')[0] == FailoverReason.unknown
     assert verdict(killed) == verdict(TimeoutError('Claude request timed out')) == (FailoverReason.timeout, True, False)
     for other in (RuntimeError('Native request failed: error_during_execution'), InterruptedError('Agent interrupted during API call'),
-                  TimeoutError('Claude request timed out'), ValueError('model is required')):
+                  TimeoutError('Claude request timed out')):
         assert profile.classify_api_error(other) is None
+    # A pre-start input error (missing model, unsupported param, bad timeout) is deterministic:
+    # it is format_error, so Hermes does not retry it against a credential that cannot help.
+    assert profile.classify_api_error(ValueError('model is required')) == {'reason': 'format_error'}
+    assert profile.classify_api_error(TypeError('model must be a string')) == {'reason': 'format_error'}

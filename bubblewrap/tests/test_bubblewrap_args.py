@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from bubblewrap_plugin import binds as bubblewrap_binds
+from bubblewrap_plugin.home import DENY_ALL, DENY_DOT
 from bubblewrap_plugin.sandbox import (
     BindMount,
     BubblewrapConfig,
@@ -25,6 +27,7 @@ from bubblewrap_plugin.sandbox import (
     masked_inside,
     resolve_bind_dests,
     runtime_overlay_args,
+    sandbox_dir_views,
     sensitive_paths,
 )
 
@@ -296,6 +299,16 @@ class TestLoadConfig:
         with pytest.raises(ValueError, match=f"plugins.entries.bubblewrap.settings.{name}"):
             load_bubblewrap_config({name: value})
 
+    def test_home_default_deny_defaults_to_dot_and_is_normalized(self):
+        assert load_bubblewrap_config({}).home_default_deny == DENY_DOT
+        assert load_bubblewrap_config({"home_default_deny": " "}).home_default_deny == DENY_DOT
+        assert load_bubblewrap_config({"home_default_deny": " ALL "}).home_default_deny == DENY_ALL
+
+    @pytest.mark.parametrize("value", ["none", True])
+    def test_bad_home_default_deny_raises(self, value):
+        with pytest.raises(ValueError, match=r"settings\.home_default_deny must be one of dot, all"):
+            load_bubblewrap_config({"home_default_deny": value})
+
     def test_home_mode_comes_from_terminal_home_mode(self):
         assert load_bubblewrap_config({}).home_mode == "auto"
         assert load_bubblewrap_config({}, " Profile ").home_mode == "profile"
@@ -385,6 +398,24 @@ class TestAncestorPins:
         assert (str(home / "docs"), str(home / "docs")) in triples(argv, "--bind-try")
         assert str(keys) in singles(argv, "--tmpfs")
 
+    @pytest.mark.parametrize("allow", [(), ("docs", ".keep")])
+    def test_layout_and_pins_agree_on_an_entry_under_all(self, paths, home, allow):
+        keys, dot_keys = home / "docs" / "deep" / "keys", home / ".keep" / "deep" / "keys"
+        for path in (keys, dot_keys):
+            path.mkdir(parents=True)
+        hidden = (*sensitive_paths(paths["home"], paths["hermes_home"]), str(keys), str(dot_keys))
+        argv = build(
+            BubblewrapConfig(home_default_deny=DENY_ALL), paths=paths, initial_cwd=str(home),
+            tracked_cwd=str(home), hidden_paths=hidden, home_allow=allow,
+        )
+        # A dot entry is read-only; a pin, a read-write bind, would make part of it writable.
+        assert (str(dot_keys.parent),) * 2 not in triples(argv, "--bind")
+        docs = str(home / "docs")
+        if allow:
+            assert (docs, docs) in triples(argv, "--bind-try")
+            assert (str(home / "docs" / "deep"),) * 2 in triples(argv, "--bind")
+        else:
+            assert not [token for token in argv if token == docs or token.startswith(docs + os.sep)]
 
     def test_cwd_above_home_needs_no_pin_for_home(self, paths, home):
         # HOME is a tmpfs mount point on top of the writable parent: it
@@ -734,3 +765,63 @@ class TestHiddenCaBundles:
         assert not masked_inside(argv, str(bundle))
         assert masked_inside(argv, str(hermes_home / "config.yaml"))
         assert str(bundle) not in build(paths=paths, hidden_paths=hidden, ca_bundles=())
+
+
+class TestSandboxDirViews:
+    def test_a_bind_of_a_parent_elsewhere_is_a_second_view(self, tmp_path):
+        stage = tmp_path / "stage"
+        root = stage / "sandboxes"
+        root.mkdir(parents=True)
+        binds = (
+            BindMount(str(stage), "/mnt/mirror", True),
+            BindMount(str(stage), str(stage), True),  # at its own path: the same view
+            BindMount(str(tmp_path / "other"), "/mnt/other", True),
+        )
+        assert sandbox_dir_views(str(root), binds) == ("/mnt/mirror/sandboxes",)
+
+    def test_each_view_gets_a_tmpfs_and_a_read_only_remount(self, paths, tmp_path):
+        stage = tmp_path / "stage"
+        root = stage / "sandboxes"
+        root.mkdir(parents=True)
+        config = BubblewrapConfig(binds=(BindMount(str(stage), "/mnt/mirror", True),))
+        argv = build(config, paths=paths, sandbox_root=str(root))
+        view = "/mnt/mirror/sandboxes"
+        i_bind = next(i for i, a in enumerate(argv) if a == "--ro-bind" and argv[i + 2] == "/mnt/mirror")
+        i_tmpfs = next(i for i, a in enumerate(argv) if a == "--tmpfs" and argv[i + 1] == view)
+        i_remount = next(i for i, a in enumerate(argv) if a == "--remount-ro" and argv[i + 1] == view)
+        assert i_bind < i_tmpfs < i_remount < argv.index("--chdir")
+        assert build(config, paths=paths).count(view) == 0
+
+
+class TestBindGuardHomeDefaultDeny:
+    @pytest.mark.parametrize(("mode", "rel", "words"), [
+        (DENY_ALL, "Private/profile/ca.pem", "an entry of HOME"),
+        (DENY_ALL, "server/profile/ca.pem", None),
+        (DENY_DOT, ".certs/ca.pem", "a dot entry of HOME"),
+    ])
+    def test_an_unlisted_entry_is_refused_by_mode(self, tmp_path, mode, rel, words):
+        (tmp_path / rel).parent.mkdir(parents=True)
+        (tmp_path / rel).write_text("# anchors")
+        guard = bubblewrap_binds.BindGuard(home_root=str(tmp_path), home_allow=("server",), home_default_deny=mode)
+        _real, reason = bubblewrap_binds.bind_refusal(str(tmp_path / rel), guard)
+        assert (reason is None) if words is None else (words in reason)
+
+    def test_an_allowed_entry_under_a_covering_root_stays_swappable(self, tmp_path):
+        # Only dot entries are read-only in every layout; an allowed non-dot entry is writable there.
+        (tmp_path / "server" / "sub").mkdir(parents=True)
+        guard = bubblewrap_binds.BindGuard(
+            writable=(str(tmp_path),), home_root=str(tmp_path), home_allow=("server",), home_default_deny=DENY_ALL,
+        )
+        assert guard.writable_root(str(tmp_path / "server" / "sub")) == str(tmp_path)
+
+    @pytest.mark.parametrize(("mode", "bound"), [(DENY_DOT, True), (DENY_ALL, False)])
+    def test_the_builder_guards_a_ca_bundle_with_the_configured_mode(self, paths, monkeypatch, mode, bound):
+        home = Path(paths["home"])
+        real = home / "Private" / "ca.pem"
+        real.parent.mkdir(parents=True)
+        real.write_text("# anchors")
+        (home / ".ssh").mkdir()
+        (home / ".ssh" / "ca.pem").symlink_to(real)
+        monkeypatch.setenv("SSL_CERT_FILE", str(home / ".ssh" / "ca.pem"))
+        argv = build(BubblewrapConfig(home_default_deny=mode), paths=paths)
+        assert ((str(real), str(home / ".ssh" / "ca.pem")) in triples(argv, "--ro-bind-try")) is bound

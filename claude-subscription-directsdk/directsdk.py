@@ -29,11 +29,15 @@ from types import SimpleNamespace
 try:
     from .admission import Admission
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
-    from .directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy
+    from .directsdk_setup import (
+        INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy,
+        drop_api_credentials)
 except ImportError:
     from admission import Admission
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
-    from directsdk_setup import INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy
+    from directsdk_setup import (
+        INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_traffic_policy,
+        drop_api_credentials)
 
 
 # Hermes picks retry vs fallback from an error's status_code (main loop and auxiliary ladder alike).
@@ -50,9 +54,15 @@ class ClaudeCodeLoggedOut(RuntimeError):
 class ClaudeAPIError(RuntimeError):
     """A failed upstream or native-answered request; status_code is None when there is no HTTP equivalent."""
 
-    def __init__(self, message, status_code=None):
+    def __init__(self, message, status_code=None, *, request_id=None):
+        # Only a bounded opaque ID may enter diagnostics, never arbitrary header contents.
+        if not isinstance(request_id, str) or re.fullmatch(r'req_[A-Za-z0-9_-]{1,124}', request_id) is None:
+            request_id = None
+        if request_id:
+            message += f' (request_id={request_id})'
         super().__init__(message)
         self.status_code = status_code
+        self.request_id = request_id
 
 
 # Native's own error codes for errors it answers without a relayed upstream status.
@@ -783,11 +793,17 @@ class Client:
             # can still hold these open for a moment, and cleanup must not fail the request.
             with tempfile.TemporaryDirectory(prefix='claude-directsdk-', ignore_cleanup_errors=True) as tmp:
                 root = Path(tmp)
-                (root / 'tools.json').write_text(json.dumps(manifest), encoding='utf-8')
-                mcp = {'mcpServers': {'hermes': {'command': sys.executable, 'args': [str(Path(__file__).with_name('inert_mcp.py')), str(root / 'tools.json')]}}}
+                # No tools means no inert MCP helper: skipping it drops its interpreter start (~0.6 s)
+                # and one server handshake from every tool-less call, e.g. titles and summaries (#42).
+                mcp = {'mcpServers': {}}
+                if manifest:
+                    (root / 'tools.json').write_text(json.dumps(manifest), encoding='utf-8')
+                    mcp = {'mcpServers': {'hermes': {'command': sys.executable, 'args': [str(Path(__file__).with_name('inert_mcp.py')), str(root / 'tools.json')]}}}
                 env = _with_login_identity(_with_windows_essentials(dict(self.env if self.env is not None else os.environ)))
                 if self.env is None:
-                    conflicts = [key for key in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_FOUNDRY_API_KEY') if env.get(key)]
+                    # Explicit env= is a controlled fixture and keeps its login; only Hermes' own env is filtered.
+                    drop_api_credentials(env)
+                    conflicts = [key for key in ('ANTHROPIC_BASE_URL',) if env.get(key)]
                     conflicts += [key for key in ('CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY') if env.get(key, '').lower() not in ('', '0', 'false', 'no', 'off')]
                     if conflicts:
                         raise ValueError('OAuth provider refuses conflicting native auth/backend overrides: ' + ', '.join(conflicts))
@@ -955,6 +971,12 @@ class Client:
                             yield self._chunk(kwargs['model'], {'content': delta['text']})
                         elif delta.get('type') == 'thinking_delta':
                             yield self._chunk(kwargs['model'], {'reasoning_content': delta['thinking']})
+                        elif native['type'] not in ('message_stop', 'ping'):
+                            # The model is working but has nothing to show: tool-call arguments (input_json_delta),
+                            # thinking signatures, block boundaries. Hermes' stale detector only sees chunks, so
+                            # without this a long tool call looks like a stall and the host kills a healthy request.
+                            # A ping stays silent: it proves the connection is open, not that the model is working.
+                            yield self._chunk(kwargs['model'], {})
                 if fast:
                     with request.lock:
                         admission = request.admission
@@ -978,14 +1000,19 @@ class Client:
                             first += ', upstream said: ' + admission.error_text()[:500]
                         # The first attempt's real HTTP status; a 200 cut short or a relay failure has none.
                         status = admission.status if isinstance(admission.status, int) and admission.status >= 400 else None
-                        raise ClaudeAPIError(f'Incomplete upstream response ({first})' + (': ' + native_error if native_error else ''), status)
+                        raise ClaudeAPIError(f'Incomplete upstream response ({first})' + (': ' + native_error if native_error else ''),
+                                             status, request_id=admission.request_id)
                     assistants = [admission.capture.message]
                     stopped = True
                 native_failure_handled = admission.denied or (admission.used and assistants[0].get('stop_reason') == 'refusal')
                 if native_error and not native_failure_handled:
                     if native_error_code == 'authentication_failed' and not admission.used:
                         # No usable login where Hermes runs native: it refuses before any upstream request; only its /api/hello pre-flight reaches the relay.
-                        raise ClaudeCodeLoggedOut(f'{LOGGED_OUT_HINT} (native: {native_error}){_stderr_tail(native_stderr)}')
+                        # Name what was tried: bot surfaces resolve a different environment than the user's shell (#47).
+                        # The child's own HOME, not Hermes': that is where native looked for ~/.claude.
+                        home = env.get('HOME') or env.get('USERPROFILE')
+                        login = env.get('CLAUDE_CONFIG_DIR') or str((Path(home) if home else Path.home()) / '.claude')
+                        raise ClaudeCodeLoggedOut(f'{LOGGED_OUT_HINT} (native: {native_error}; cli: {resolved[0]}; login: {login}){_stderr_tail(native_stderr)}')
                     raise ClaudeAPIError('Native API error: ' + native_error, NATIVE_ERROR_STATUS.get(str(native_error_code)))
                 if len(results) != 1 or not assistants or not stopped:
                     raise RuntimeError('Incomplete native response: assistant, message_stop and one result required')

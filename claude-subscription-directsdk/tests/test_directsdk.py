@@ -231,6 +231,8 @@ class Contract(unittest.TestCase):
                         list(result)
                 self.assertIn(LOGGED_OUT_HINT, str(raised.exception))
                 self.assertIn("Not logged in", str(raised.exception))
+                self.assertIn(f"cli: {sys.executable}", str(raised.exception))
+                self.assertIn(f"login: {Path(tmp) / '.claude'}", str(raised.exception))
                 self.assertEqual(raised.exception.status_code, 401)
             client.close()
             # Any other error native answers itself keeps its own text.
@@ -326,8 +328,8 @@ class Contract(unittest.TestCase):
         self.assertEqual(routed.command, ["/native/test"])
         from unittest.mock import patch
 
-        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "fake-conflicting-key"}):
-            with self.assertRaisesRegex(ValueError, "OAuth"):
+        with patch.dict(os.environ, {"ANTHROPIC_BASE_URL": "https://proxy.invalid"}):
+            with self.assertRaisesRegex(ValueError, "OAuth.*ANTHROPIC_BASE_URL"):
                 directsdk.Client(command="/does/not/exist").create(**self.request())
         client = directsdk.Client(command="/does/not/exist", env={})
         with self.assertRaises((FileNotFoundError, RuntimeError)):

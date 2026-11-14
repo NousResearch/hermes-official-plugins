@@ -215,6 +215,27 @@ def stable_request_context(payload, queried):
                 if mark is not None and isinstance(previous, list) and previous:
                     previous[-1].setdefault('cache_control', mark)
                 changed = True
+        elif last.get('role') == 'system' and env is not None and isinstance(content, list) and len(content) > 1 \
+                and content[0].get('type') == 'text' and _DATE_LINE.fullmatch(content[0].get('text', '')):
+            # Native 2.1.311 on Fable sends the date line first in the same
+            # trailing system message as a per-step reminder. Moving only
+            # the date into the environment message keeps messages[1]
+            # identical on user turns and tool-result steps alike; the
+            # reminder stays trailing, where later requests never replay it.
+            date_block = content[0]
+            original = env['content']
+            target = {'type': 'text', 'text': original} if isinstance(original, str) else (original[-1] if original else {})
+            if target.get('type') == 'text' and not target['text'].endswith(date_block['text']):
+                if isinstance(original, str):
+                    env['content'] = original + '\n\n' + date_block['text']
+                else:
+                    target['text'] += '\n\n' + date_block['text']
+                del content[0]
+                mark = date_block.get('cache_control')
+                previous = messages[-2]['content'] if len(messages) > 1 else None
+                if mark is not None and isinstance(previous, list) and previous:
+                    previous[-1].setdefault('cache_control', mark)
+                changed = True
         newest = next((m for m in reversed(messages) if m.get('role') == 'user'), {})
         blocks = newest.get('content')
         if queried and any(b.get('type') != 'tool_result' for b in queried) and isinstance(blocks, list) \
@@ -667,6 +688,7 @@ class Admission:
         self.cancelled = False
         self.used = False
         self.denied = 0
+        self.auth_retry_used = False
         self.request_id = None
         self.status = None
         self.failure = None
@@ -764,6 +786,29 @@ class Handler(BaseHTTPRequestHandler):
             conn.close()
             raise
 
+    def _allows_auth_retry(self):
+        """One extra upstream round for native to refresh a revoked OAuth login and re-issue (#162).
+
+        Claude Code refreshes the shared login and re-issues the whole request when Anthropic
+        rejects its token with 401; the one-per-call gate denied that retry and the refreshed
+        token never reached upstream, so every later request failed the same way. Only a first
+        attempt that was itself an auth error buys the retry: a retried 401, any other status
+        (rate limit, 5xx, stall) and any other body shape stay denied as before.
+        """
+        gate = self.server.admission
+        if gate.auth_retry_used or gate.status != 401:
+            return False
+        try:
+            answer = json.loads(gate.error_body.decode('utf-8', errors='replace').strip())
+        except ValueError:
+            return False
+        error = answer.get('error') if isinstance(answer, dict) else None
+        if not isinstance(error, dict) or error.get('type') != 'authentication_error':
+            return False
+        gate.auth_retry_used = True
+        gate.error_body = b''  # The retry's own answer is the one Hermes reports.
+        return True
+
     def do_POST(self):
         global _gzip_latched
         gate = self.server.admission
@@ -772,7 +817,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         with gate.lock:
-            if gate.cancelled or gate.used:
+            if gate.cancelled or (gate.used and not self._allows_auth_retry()):
                 gate.denied += 1
                 body = b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_MODEL_ADMISSION_CONSUMED"}}'
                 self.send_response(400)

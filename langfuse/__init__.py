@@ -19,6 +19,7 @@ import os
 import re
 import threading
 import time
+import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -75,6 +76,8 @@ _LANGFUSE_CLIENT_BY_HOME: dict[str, Any] = {}
 # Separate from _STATE_LOCK (hot path) so the two never nest; serializes the
 # first client build so racing callers can't each construct a client.
 _LANGFUSE_CLIENT_LOCK = threading.Lock()
+# Clients already shut down. Weak references: an id() could be reused by a later client.
+_SHUT_DOWN_CLIENTS: "weakref.WeakSet[Any]" = weakref.WeakSet()
 # The registering PluginContext: the public seam for the served profile and the running cron job.
 _PLUGIN_CTX: Any = None
 _READ_FILE_LINE_RE = re.compile(r"^\s*(\d+)\|(.*)$")
@@ -387,17 +390,31 @@ def _build_client() -> Optional[Langfuse]:
             os.environ.pop("OTEL_SERVICE_NAME", None)
 
 
+def _profile_state_prefix() -> str:
+    """Namespace live trace state by the same home as the cached SDK client."""
+    from hermes_constants import hermes_home_key
+    return f"profile:{hermes_home_key()}:"
+
+
+def _exported_key(task_key: str) -> str:
+    """``task_key`` without the in-process profile namespace, for anything sent to
+    Langfuse: the namespace is the profile's home path, which must not leave the machine."""
+    prefix = _profile_state_prefix()
+    return task_key[len(prefix):] if task_key.startswith(prefix) else task_key
+
+
 def _trace_key(task_id: str, session_id: str, *, turn_id: str = "", api_request_id: str = "") -> str:
     """In-process trace scope key for one agent turn. ``turn_id`` wins over
     ``api_request_id`` so the turn-level post_llm_call hook (no api_request_id)
     resolves to the same key as request-level hooks; a bare ``task_id`` is the
     legacy shape from before turn/request scoping."""
+    prefix = _profile_state_prefix()
     scope = f"task:{task_id}" if task_id else f"session:{session_id}" if session_id else f"thread:{threading.get_ident()}"
     if turn_id:
-        return f"{scope}:turn:{turn_id}"
+        return f"{prefix}{scope}:turn:{turn_id}"
     if api_request_id:
-        return f"{scope}:api:{api_request_id}"
-    return task_id or scope
+        return f"{prefix}{scope}:api:{api_request_id}"
+    return prefix + (task_id or scope)
 
 
 def _remember_locked(mapping: OrderedDict, key: str, value: str) -> None:
@@ -417,11 +434,12 @@ def _turn_user_locked(turn_id: str, session_id: str) -> str:
 def _state_for_turn(turn_id: str) -> Optional[TraceState]:
     """Live trace state for a turn id alone (caller holds ``_STATE_LOCK``). Subagent
     hooks carry ``parent_turn_id`` but no ``task_id``, so rebuilding the key would
-    miss; match on the unique ``:turn:<id>`` suffix instead."""
+    miss; match on the ``:turn:<id>`` suffix within the current profile instead."""
     if not turn_id:
         return None
-    suffix = f":turn:{turn_id}"
-    return next((state for key, state in _TRACE_STATE.items() if key.endswith(suffix)), None)
+    prefix, suffix = _profile_state_prefix(), f":turn:{turn_id}"
+    return next((state for key, state in _TRACE_STATE.items()
+                 if (key.startswith(prefix) or not key.startswith("profile:")) and key.endswith(suffix)), None)
 
 
 def _truncate_text(value: str, max_chars: int) -> Any:
@@ -609,6 +627,8 @@ def _serialize_assistant_message(message: Any) -> dict[str, Any]:
     reasoning = next((getattr(message, attr, None) for attr in ("reasoning", "reasoning_content", "reasoning_details")
                       if getattr(message, attr, None) is not None), None)
     return {
+        # Normalized provider responses may omit role; this hook always represents the assistant.
+        "role": "assistant",
         "content": _capture_content(getattr(message, "content", None)),
         "reasoning": None if reasoning is None else _capture_content(reasoning),
         "tool_calls": [_serialize_tool_call(tc) for tc in getattr(message, "tool_calls", None) or ()],
@@ -737,7 +757,7 @@ def _start_root_trace(task_key: str, *, task_id: str, session_id: str, platform:
                                         input=trace_input, metadata=metadata)
 
     root_span = None
-    propagated = {"session_id": session_id or task_key, "trace_name": "Hermes turn", "tags": _trace_tags(platform)}
+    propagated = {"session_id": session_id or _exported_key(task_key), "trace_name": "Hermes turn", "tags": _trace_tags(platform)}
     # Langfuse userId is the end user (hermes-agent#44639): the platform's own sender id, verbatim, so
     # the Users view matches what the chat shows. The profile stays in metadata (hermes-agent#26455).
     if user_id:
@@ -1051,9 +1071,9 @@ def on_post_llm_call(*, task_id: str = "", session_id: str = "", provider: str =
     if assistant_message is not None:
         output = _serialize_assistant_message(assistant_message)
     elif assistant_response is not None:
-        output = {"content": _capture_content(assistant_response), "reasoning": None, "tool_calls": []}
+        output = {"role": "assistant", "content": _capture_content(assistant_response), "reasoning": None, "tool_calls": []}
     else:
-        output = {"content": f"[{assistant_content_chars} chars]" if assistant_content_chars else None, "reasoning": None,
+        output = {"role": "assistant", "content": f"[{assistant_content_chars} chars]" if assistant_content_chars else None, "reasoning": None,
                   "tool_calls": [{"id": f"tc_{i}"} for i in range(assistant_tool_call_count or 0)]}
 
     if output.get("tool_calls"):
@@ -1189,11 +1209,21 @@ def on_session_finalize(*, session_id: str = "", reason: str = "", **_: Any) -> 
     if client is None or client is _INIT_FAILED or not hasattr(client, "flush"):
         return
 
-    # This session's traces (all, when no session_id). Keys carry the session as
+    # This profile's session traces (all in the profile, when no session_id). Keys carry the session as
     # "session:<id>" or "task:<id>" (gateway: task_id == session_id) or bare legacy id.
+    profile_prefix = _profile_state_prefix()
     fragments = (f"session:{session_id}", f"task:{session_id}")
     with _STATE_LOCK:
-        keys = [k for k in _TRACE_STATE if not session_id or k == session_id or any(f in k for f in fragments)]
+        keys = []
+        for key in _TRACE_STATE:
+            if key.startswith(profile_prefix):
+                scope = key[len(profile_prefix):]
+            elif not key.startswith("profile:"):
+                scope = key  # Preserve unscoped legacy state.
+            else:
+                continue
+            if not session_id or scope == session_id or any(f in scope for f in fragments):
+                keys.append(key)
     for key in keys:
         _finish_trace(key)
 
@@ -1208,8 +1238,15 @@ def on_session_finalize(*, session_id: str = "", reason: str = "", **_: Any) -> 
     # cached client must keep exporting). Doing it while modules are intact keeps
     # the SDK's atexit handler off torn-down opentelemetry globals (TypeError on quit).
     if callable(getattr(client, "shutdown", None)):
-        with _failsafe("langfuse shutdown"):
-            client.shutdown()
+        with _STATE_LOCK:
+            live = any(key.startswith(profile_prefix) or not key.startswith("profile:")
+                       for key in _TRACE_STATE)
+            should_shutdown = not live and client not in _SHUT_DOWN_CLIENTS
+            if should_shutdown:
+                _SHUT_DOWN_CLIENTS.add(client)
+        if should_shutdown:
+            with _failsafe("langfuse shutdown"):
+                client.shutdown()
 
 
 def on_subagent_start(*, parent_turn_id: str = "", parent_subagent_id: Any = None,

@@ -10,10 +10,10 @@ from providers.base import ProviderProfile
 
 # Dual import: the Hermes loader imports this directory as a package; the flat test path does not.
 try:
-    from .model_catalog import ALIASES, MODEL_METADATA, MODEL_CAPABILITIES, native_model
+    from .model_catalog import ALIASES, MODEL_METADATA, MODEL_CAPABILITIES, PICKER_ROUTES, native_model
     from .directsdk_setup import INSTALL_HINT, _resolve
 except ImportError:
-    from model_catalog import ALIASES, MODEL_METADATA, MODEL_CAPABILITIES, native_model
+    from model_catalog import ALIASES, MODEL_METADATA, MODEL_CAPABILITIES, PICKER_ROUTES, native_model
     from directsdk_setup import INSTALL_HINT, _resolve
 
 logger = logging.getLogger(__name__)
@@ -185,7 +185,8 @@ profile = ClaudeOAuthDirectSDKProfile(
     process_args=(),
     process_command_env_vars=('CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND',),
     default_aux_model='claude-sonnet-5[1m]',
-    fallback_models=tuple(MODEL_METADATA),
+    # Access-gated models (Mythos) stay out: an account sees one only when its own picker offers it.
+    fallback_models=PICKER_ROUTES,
     model_aliases={alias: native_model(alias) for alias in ALIASES},
     # A dataclass field (Hermes >= 0.21.4), so a method on the subclass would be shadowed by its None default.
     classify_api_error=classify_api_error,

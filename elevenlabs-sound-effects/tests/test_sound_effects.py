@@ -141,7 +141,50 @@ def test_generates_a_sound_effect_with_the_users_settings(loaded, stand_ins, mon
     assert result["billed_characters"] == "120"
 
 
-def test_each_profile_gets_its_own_key_settings_and_output_dir(loaded, stand_ins, _hermes_home):
+@pytest.mark.parametrize(("content_type", "payload"), (
+    ("application/json", b'{"detail":"upstream proxy returned JSON"}'),
+    ("text/html; charset=utf-8", b"<!doctype html><title>upstream error</title>"),
+))
+def test_non_audio_200_response_is_not_saved_or_recorded(
+        loaded, stand_ins, monkeypatch, _hermes_home, content_type, payload):
+    entry, call = loaded
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "xi-test-key")
+    stand_ins[0].reply = (200, {"Content-Type": content_type}, payload)
+
+    result = call({"prompt": "thunder"})
+
+    plugin = entry.handler.__globals__["_sfx"]
+    files = list((_hermes_home / "cache" / "generated" / "audio").glob("*"))
+    records = plugin._provenance.read_all()
+    violations = []
+    if result.get("success") is True or "media_tag" in result or "file_path" in result:
+        violations.append(f"returned success output: {result}")
+    if files:
+        violations.append(f"saved non-audio response: {files}")
+    if records:
+        violations.append(f"recorded non-audio provenance: {records}")
+    assert not violations, "; ".join(violations)
+    assert "audio" in result["error"].lower()
+
+
+def test_valid_audio_uses_bytes_not_the_content_type(loaded, stand_ins, monkeypatch, _hermes_home, audio):
+    _, call = loaded
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "xi-test-key")
+    cases = (
+        ("mp3_44100_128", {"Content-Type": "application/octet-stream"}, audio.mp3(3), ".mp3"),
+        ("wav_48000", {"Content-Type": "audio/mpeg"}, audio.wav(0.02), ".wav"),
+        ("opus_48000_128", {}, audio.opus(960), ".opus"),
+    )
+    for output_format, headers, payload, suffix in cases:
+        _write_settings(_hermes_home, output_format=output_format, api_base_url=stand_ins[0].url)
+        stand_ins[0].reply = (200, headers, payload)
+        result = call({"prompt": f"valid {suffix} audio"})
+        assert result["success"] is True, result
+        assert Path(result["file_path"]).suffix == suffix
+        assert Path(result["file_path"]).read_bytes() == payload
+
+
+def test_each_profile_gets_its_own_key_settings_and_output_dir(loaded, stand_ins, _hermes_home, audio):
     """One process serving two profiles (the multiplexed gateway): key, settings and the output dir
     are resolved per call from the calling profile, never cached at registration."""
     from agent.secret_scope import (
@@ -155,6 +198,7 @@ def test_each_profile_gets_its_own_key_settings_and_output_dir(loaded, stand_ins
     _, call = loaded
     other = _hermes_home / "profiles" / "b"
     _write_settings(other, output_format="opus_48000_128", api_base_url=stand_ins[1].url)
+    stand_ins[1].reply = (200, {"Content-Type": "audio/ogg"}, audio.opus(960))
     results = []
     for home, key in ((_hermes_home, "key-a"), (other, "key-b"), (_hermes_home, "key-a")):
         tokens = (set_multiplex_context(True), set_hermes_home_override(home),
@@ -333,6 +377,6 @@ def test_the_key_never_travels_over_plain_http_except_to_this_machine(loaded, st
         assert "https" in call({"prompt": "thunder"})["error"], url
     port = stand_ins[0].url.rsplit(":", 1)[1]
     for url in (f"http://localhost:{port}", f"http://127.0.0.1:{port}"):
-        _write_settings(_hermes_home, api_base_url=url)
+        _write_settings(_hermes_home, output_format="wav_48000", api_base_url=url)
         assert call({"prompt": "thunder"})["success"] is True, url
     assert len(stand_ins[0].requests) == 2

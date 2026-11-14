@@ -47,6 +47,8 @@ hermes config set plugins.entries.bubblewrap.settings.cpu_seconds 600      # 0 d
 hermes config set plugins.entries.bubblewrap.settings.max_procs 256        # 0 disables
 hermes config set plugins.entries.bubblewrap.settings.binds '[{"src": "/data/models"}, {"src": "/srv/scratch", "readonly": false}]'
 hermes config set plugins.entries.bubblewrap.settings.home_allow '[".config/nvim"]'
+hermes config set plugins.entries.bubblewrap.settings.hide '["~/Documents/keys"]'
+hermes config set plugins.entries.bubblewrap.settings.home_default_deny all  # dot | all
 ```
 
 Settings are read each time a sandbox environment is created, per profile. `terminal.cwd`,
@@ -68,10 +70,10 @@ Each command gets:
   keyring and D-Bus sockets there are unreachable, and `SSH_AUTH_SOCK`, `GPG_AGENT_INFO` and
   `DBUS_SESSION_BUS_ADDRESS` are removed from the environment (again after your shell rc files run).
   The docker socket, if present, is replaced by an empty file.
-- **Your home directory with its dot entries hidden** unless they are on an allowlist, and credential
-  stores hidden always (below).
-- **Resource limits** per command (memory, CPU time, processes), applied by `prlimit` before `bwrap`
-  starts, so nothing runs in between.
+- **Your home directory with its dot entries hidden** (or every entry, with `home_default_deny: all`)
+  unless they are on an allowlist, and credential stores hidden always (below).
+- **Resource limits** per command (memory, CPU time, processes), applied by `prlimit`: memory and CPU
+  before `bwrap` starts, the process limit inside the sandbox. Nothing runs in between.
 - **`--die-with-parent` and `--new-session`**: a sandbox dies with Hermes and cannot inject input into
   the controlling terminal.
 
@@ -114,13 +116,27 @@ Credential stores stay hidden whatever the allowlist says: `.ssh`, `.aws`, `.gnu
 `.config/gcloud`, the browser profiles, the desktop keyrings and the other paths that Hermes' own
 file tools refuse to write. A `home_allow` entry that names one is ignored with a warning. Below an
 allowed entry the same holds: `~/.cargo` is visible, `~/.cargo/credentials.toml` shows as an empty
-file, and so do `~/.gem/credentials`, `~/.m2/settings.xml` and `~/.config/npm/npmrc`.
+file, and so do `~/.gem/credentials`, `~/.m2/settings.xml` and `~/.config/npm/npmrc`. The `hide`
+setting hides more paths, absolute or relative to the home directory (a non-dot directory that holds
+keys, say). A `hide` entry that names the home directory or a parent of it is ignored with a warning.
 
 An allowed dot entry that is a symlink stays a symlink inside the sandbox, so it resolves only when
 its target is visible. A dotfiles repository in a dot directory (`~/.gitconfig` linked to
 `~/.dotfiles/git/gitconfig`) and a CA bundle kept in one (`SSL_CERT_FILE=~/.certs/corp.pem`) need that
 directory in `home_allow` (`[".dotfiles"]`, `[".certs"]`): it then shows read-only, with the credential
 stores below it still hidden. A repository in a non-dot directory (`~/dotfiles`) needs nothing.
+
+A dot entry that is a symlink (at the top of the home directory or in `.config`, `.local` or
+`.local/share`) is also checked when the backend starts. When the link, any directory
+on the way or its final target lies in the working directory, in a read-write bind or in the profile
+home, a command could rewrite a file your next login shell reads, so the backend refuses to start and
+names the entry. Use a project directory as the working directory, or make the bind read-only.
+
+With `home_default_deny: all` (default `dot`), non-dot entries follow the same rule: every top-level
+entry of the home directory, files included, is hidden unless allowed, and `home_allow` also takes
+top-level names (`["projects", "bin"]`). The working directory and its parents still show. A `PATH`
+directory under the home directory shows its whole top-level entry; that is Hermes' own `PATH`, so
+a gateway run as a service may need `bin` in `home_allow`.
 
 The allowlist and the hidden set are fixed when the backend starts, so a command cannot widen them by
 changing `PATH`. The listing of the home directory is read at every command, so a directory you create
@@ -149,8 +165,9 @@ default home's `.env` or `auth.json`.
 
 Each sandbox sees only its own state directory: when `terminal.sandbox_dir` lies outside the hidden
 set, it is an empty read-only directory inside the sandbox with that one entry, so no sandbox reads
-another one's shell snapshot or `execute_code` files. Such a sandbox directory must not hold the
-working directory, the home directory or a bind destination, or the backend refuses to start.
+another one's shell snapshot or `execute_code` files. The same holds where a bind of a parent
+directory shows the sandbox directory again at another path. Such a sandbox directory must not hold
+the working directory, the home directory or a bind destination, or the backend refuses to start.
 
 A hidden path that does not exist on the host is skipped. An entry that is a symlink (a dotfiles
 repository linking `.ssh` to `dotfiles/ssh`) is hidden at its target, resolved when the backend
@@ -176,8 +193,8 @@ mount uses the resolved path, so a symlink changed later cannot redirect it. A p
   sandboxes, a read-write bind, the profile home, the Hermes scratch directory, the sandbox directory),
   where a command could swap it before the next command; a `binds` source bound at its own path
   directly under such a directory is the exception, since it cannot be renamed while mounted;
-- for a CA bundle, the scratch directory or the profile home: resolves into a credential store, into a
-  dot entry of the home directory that is not allowed, or into the Hermes home outside the Python
+- for a CA bundle, the scratch directory or the profile home: resolves into a credential store, into an
+  entry of the home directory the sandbox hides, or into the Hermes home outside the Python
   environment Hermes runs from (credentials, transcripts and the other profiles live there).
 
 A refused read-only `binds` entry or profile home stops the backend with an error naming it: skipping
@@ -216,8 +233,9 @@ Each file operation costs a sandbox spawn. Hermes' own file-safety rules still a
 - **Other Unix sockets stay connectable** (a read-only mount does not block `connect()`): anything
   outside `/run/user/<uid>`, `/tmp` and the docker socket, if a command knows its path.
 - **No background processes.** Each command is its own sandbox, and bwrap tears it down (pid namespace
-  included) when the command's shell exits, so a `background: true` job dies right after it starts.
-  The model is told background processes are unavailable on this backend.
+  included) when the command's shell exits, so a `background: true` job would die right after it
+  starts. The call is refused with an error saying so, instead of reporting a started job, and the
+  model is told background processes are unavailable on this backend.
 - **No persistent `execute_code` kernel.** Hermes tries its remote session kernel first, which cannot
   outlive the sandbox that starts it; it then falls back to running each `execute_code` call as its
   own script (inside the sandbox, under the same limits). Python state does not carry over between
@@ -230,12 +248,20 @@ backend) is the writable set: everything under it can be changed, everything els
 it at a project or scratch directory. Only that setting decides what is writable: a `cd` (the model's,
 or a Desktop/TUI workspace outside it) moves where commands start, and they run read-only there, also
 after Hermes recreates the environment. A `terminal.cwd` that does not exist runs commands read-only in
-its nearest existing parent. With your home directory as the working directory, the existing non-dot
+its nearest existing parent. With your home directory as the working directory, the visible non-dot
 entries of it are writable and nothing else is: the dot entries are read-only or hidden, and no new
 file or directory can be made at the top of the home directory. Hermes logs a warning in that case. A working directory of
 `/` is refused, and so is one under the Hermes home or a hidden path, since no command could run there.
 When Hermes was started from such a place (a gateway launched from its checkout under `.hermes`), the
 backend starts in your home directory instead, as the gateway does for the `local` backend.
+
+Set `terminal.cwd` for every profile that uses this backend, a gateway profile above all: without it
+the sandbox starts in your home directory, and your checkouts and `~/bin` are writable. Give each
+profile its own directory, so one profile's commands cannot change another's files:
+
+```sh
+hermes -p <profile> config set terminal.cwd "$HOME/work/<profile>"
+```
 
 If the working directory is deleted on the host (for example by the command's own `rm -rf`), later
 commands run in the nearest existing parent directory, read-only, until it exists again.
@@ -272,6 +298,12 @@ writable mount.
 A source may be a directory, a file, a Unix socket (a service or agent socket you choose to share), a
 FIFO or a device node.
 
+A read-write bind (or a writable working directory) that contains a credential path which does not
+exist on the host is refused when the backend starts: the backend hides a credential path by mounting
+over it, a path that is not there cannot be mounted over, and a command could then create it. A
+read-write bind of all of `~/.config` is refused while `~/.config/gh` does not exist. Bind the one
+directory a tool writes to instead (`~/.cache/pip`, `~/.cargo/registry`), at its own path.
+
 A bind whose source lies inside the working directory of a sandbox of this profile, inside another
 read-write bind or inside the profile home is refused, and the backend does not start, unless it has
 `dest` equal to `src` and sits directly under that directory with no symlink on the way: bwrap
@@ -289,14 +321,16 @@ refuses to start.
 |---------|---------|-------|
 | `memory_mb` | `256` | Virtual memory per process (`RLIMIT_AS`) |
 | `cpu_seconds` | `30` | CPU time per process (`RLIMIT_CPU`) |
-| `max_procs` | `256` | Processes and threads the command may add (`RLIMIT_NPROC`) |
+| `max_procs` | `256` | Processes and threads one command may run (`RLIMIT_NPROC`, counted for that sandbox alone) |
 
 A value of `0` disables that limit. The defaults are deliberately tight and some everyday tools exceed
 them: `pip`, `node`, `cargo` and most compilers need more than 256 MB of address space (the command
 fails with `MemoryError` or a similar message: raise `memory_mb` to 1024 or 2048), and a long compile
 or test run uses more than 30 seconds of CPU (killed, exit 137: raise `cpu_seconds`). `max_procs` is
-applied on top of the threads your user already runs, because the kernel counts `RLIMIT_NPROC` per
-user across the machine, so a fork bomb stops at about 256 processes without touching your desktop.
+set inside the sandbox, where the kernel counts only the processes of that sandbox: a fork bomb stops
+at 256 processes whatever else your user runs, and a command cannot raise the limit. This needs Linux
+5.14 or later. On an older kernel the backend sets no process limit, logs one warning and keeps the
+memory and CPU limits.
 
 ## Approval
 

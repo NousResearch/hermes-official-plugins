@@ -24,6 +24,10 @@ as too large, but this conversation is only 128K" error that blames the server.
   1M one.
 - Discovery lists every model the CLI advertises; the pinned table adds metadata only. Never
   filter the picker down to the table.
+- Discovery reads the account's own picker, which Claude Code serves only first-party (behind any
+  `ANTHROPIC_BASE_URL` it logs `[servedCatalog] off (not_first_party)`). The `initialize`
+  handshake therefore runs without the relay unless the environment carries an auth/backend
+  override; it must never send a user turn.
 
 ## Adding a Claude model (one PR, same day it ships)
 
@@ -34,14 +38,18 @@ window and which plans include it; the model table for the minimum CLI version).
 
 1. `model_catalog.py::CONTEXT_WINDOWS` — canonical id (hyphenated, as the CLI spells it) and
    window from the docs. Do not copy a window from a sibling model.
+   A model Anthropic grants per organization (Mythos: verified organizations only) also goes in
+   `ACCESS_GATED`: it keeps its window, thinking policy and capabilities, but it is never
+   appended to the picker or listed in `fallback_models`, so only an account whose own picker
+   offers it sees it. Pinning must never reveal a gated model to everyone.
 2. `ALIASES` — move the family alias (`opus`, `sonnet`, `fable`, `haiku`) when the docs move it.
 3. `MANDATORY_THINKING` / `NO_ADAPTIVE_THINKING` if the docs say thinking cannot be turned off
-   or adaptive thinking 400s (mandatory: Fable, Opus 5.5, Sonnet 5.5 and Haiku 5.5; no adaptive:
+   or adaptive thinking 400s (mandatory: Fable, Opus 5.5, Sonnet 5.5, Haiku 5.5 and Mythos; no adaptive:
    Haiku 4.5 today). Mirror what `agent/anthropic_adapter.py` in hermes-agent encodes; if the two
    disagree, fix both. Opus 5.5 was settled by #22: the docs say thinking cannot be turned off
    there and the API 400s the disable exactly as on Fable. Core's
    `_MANDATORY_THINKING_CLAUDE_SUBSTRINGS` still needs the Haiku 5.5 entry.
-4. `tests/test_directsdk_models.py::EXPECTED` — one row per route, window included. The test
+4. `tests/test_directsdk_models.py::EXPECTED` (or `GATED` for access-gated routes) — one row per route, window included. The test
    drives the fake CLI and checks the argv Hermes actually sends.
 5. `README.md` → Requirements: the minimum Claude Code version the model needs.
 6. Bump `plugin.yaml` `version` when a route changes; a pin bump alone does not surface in

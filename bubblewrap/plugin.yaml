@@ -1,6 +1,6 @@
 name: bubblewrap
 label: Bubblewrap
-version: 1.3.0
+version: 1.5.1
 manifest_version: 2
 kind: backend
 author: NousResearch
@@ -45,14 +45,25 @@ config_schema:
     type: int
     default: 256
     label: Process limit
-    description: "Processes and threads a command may add on top of what your user already runs (RLIMIT_NPROC). 0 disables it."
+    description: "Processes and threads one command may run (RLIMIT_NPROC, counted per sandbox; needs Linux 5.14 or later, else it is not applied). 0 disables it."
   home_allow:
     type: list
     default: []
     label: Extra home entries
-    description: "More dot entries of the home directory to show read-only, for example [\".zz-tool\", \".config/nvim\"]. Dot entries off the shipped allowlist are hidden; credential stores stay hidden."
+    description: "More dot entries of the home directory to show read-only, for example [\".zz-tool\", \".config/nvim\"]. Dot entries off the shipped allowlist are hidden; credential stores stay hidden. Under home_default_deny all it also takes top-level names such as \"projects\"."
   cron_dir:
     type: str
     default: ""
     label: Sandbox cron directory
     description: "Optional absolute path to an existing external directory, mounted read-write at $HERMES_HOME/cron inside Bubblewrap. It must be outside HERMES_HOME, credential stores, hidden HOME paths, and sandbox-writable roots. This only exposes that directory inside the sandbox; it does not relocate the host scheduler's cron storage. Leave empty to keep cron hidden."
+  hide:
+    type: list
+    default: []
+    label: Extra hidden paths
+    description: "More paths to hide, absolute or relative to the home directory, for example [\"~/Documents/keys\"]."
+  home_default_deny:
+    type: str
+    choices: [dot, all]
+    default: dot
+    label: Hidden home entries
+    description: "dot: hide dot entries of the home directory off the allowlist. all: hide every entry off it."

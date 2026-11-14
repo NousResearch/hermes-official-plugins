@@ -22,7 +22,7 @@ for path in (str(HERMES_AGENT_REPO), str(REPO_ROOT)):
         sys.path.insert(0, path)
 
 collect_ignore = ["__init__.py", "directsdk.py", "directsdk_setup.py", "admission.py", "model_catalog.py", "extra_usage.py",
-                  "inert_mcp.py", "process_tree.py", "evals"]
+                  "inert_mcp.py", "process_tree.py", "concurrency.py", "evals"]
 
 
 @pytest.fixture

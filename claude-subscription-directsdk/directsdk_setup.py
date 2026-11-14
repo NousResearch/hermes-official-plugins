@@ -148,6 +148,25 @@ def telemetry_enabled():
     return isinstance(value, (bool, int)) and bool(value)
 
 
+MAX_CONCURRENT_SETTING = "max_concurrent"
+MAX_CONCURRENT_DEFAULT = 4
+_bad_limits = set()
+
+
+def max_concurrent():
+    """The active profile's ``max_concurrent``: a positive whole number, else the default (warned once per value)."""
+    value = _setting(MAX_CONCURRENT_SETTING, MAX_CONCURRENT_DEFAULT)
+    if isinstance(value, str) and value.strip().isdigit():
+        value = int(value)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+        return value
+    if repr(value) not in _bad_limits:
+        _bad_limits.add(repr(value))
+        _logger.warning("claude-subscription-directsdk: max_concurrent must be a whole number of at least 1 (got %r); "
+                        "using %d", value, MAX_CONCURRENT_DEFAULT)
+    return MAX_CONCURRENT_DEFAULT
+
+
 def apply_config_dir(env):
     """Select the active profile's Claude config directory on a child env, in place."""
     override = env.pop("CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR", None)

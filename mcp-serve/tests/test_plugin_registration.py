@@ -28,5 +28,6 @@ def test_registers_only_the_mcp_serve_command():
     parser = argparse.ArgumentParser()
     cmd["setup_fn"](parser)
     defaults = parser.parse_args([])
-    assert (defaults.tools, defaults.verbose, defaults.accept_hooks) == (False, False, False)
+    assert (defaults.tools, defaults.tools_only, defaults.verbose, defaults.accept_hooks) == (False, False, False, False)
     assert parser.parse_args(["--tools", "-v"]).tools is True
+    assert parser.parse_args(["--tools-only"]).tools_only is True

@@ -65,11 +65,20 @@ Adds these Hermes tools next to the bridge, using this profile's configured prov
 - **Your hooks still apply.** Shell hooks and plugin `pre_tool_call` hooks run around every call; `--accept-hooks` skips the first-use consent check for shell hooks, as it does for the gateway.
 - Tool output is secret-redacted (`HERMES_REDACT_SECRETS`), and calls cost whatever the configured provider charges.
 
+## `--tools-only`: the safe face without the bridge
+
+```json
+{ "command": "hermes", "args": ["mcp-serve", "--tools-only"] }
+```
+
+Serves the same curated Hermes tool surface as `--tools` **instead of** the conversation bridge: no `messages_send`, no `permissions_*`, no conversation reads, and no `state.db` poller starts. Useful when a client should get Hermes' free web/vision/skills/TTS without the messaging-as-you surface. Everything under `--tools` above still applies (allowlist, no local files, profile choices, hooks, redaction).
+
 ## Options
 
 ```bash
 hermes mcp-serve                 # conversation bridge only
 hermes mcp-serve --tools         # plus Hermes' tools (see above)
+hermes mcp-serve --tools-only    # only Hermes' tools, no bridge
 hermes mcp-serve --verbose       # debug logging on stderr
 ```
 

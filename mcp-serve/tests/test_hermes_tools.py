@@ -60,6 +60,22 @@ def test_tools_mode_dispatches_through_handle_function_call(real_tools):
     assert json.loads(text) == {"ok": "web_search"}
 
 
+def test_tools_only_mode_serves_the_face_without_the_bridge(real_tools):
+    """--tools-only: the curated Hermes tools, none of the ten messaging/approval bridge tools."""
+    server = bridge.create_mcp_server(tools_only=True)
+    listed = _listed(server)
+    assert set(listed) == {"web_search", "skills_list", "browser_navigate", "vision_analyze", "text_to_speech"}
+    assert not set(listed) & _BRIDGE_TOOLS
+    assert "terminal" not in listed and "kanban_create" not in listed
+
+
+def test_tools_only_wins_over_include_tools(real_tools):
+    """--tools --tools-only is the safe composition: the bridge is never registered."""
+    server = bridge.create_mcp_server(include_tools=True, tools_only=True)
+    assert not set(_listed(server)) & _BRIDGE_TOOLS
+    assert "web_search" in _listed(server)
+
+
 def _call(server, name, args):
     result = asyncio.run(server.call_tool(name, args))
     return json.loads("".join(getattr(b, "text", "") for b in (getattr(result, "content", None) or [])))

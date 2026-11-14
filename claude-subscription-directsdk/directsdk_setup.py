@@ -4,8 +4,7 @@ Neither sends a Messages request: ``auth status`` reads the local credential sto
 ``initialize`` handshake enumerates the picker without one: it writes only ``initialize`` and no
 user turn. The handshake runs first-party, because Claude Code serves the account's own picker only
 then, so no relay counts its upstream calls and each row's ``upstream_requests`` is ``None``
-(unobserved). With an inherited auth/backend override it stays behind the relay, which counts them. With the ``claude_code_telemetry`` setting on (the default) the CLI
-fetches its feature flags for the handshake, which is what makes its picker list every model. Anything unexpected returns ``None``/``False`` so callers
+(unobserved). With an inherited auth/backend override it stays behind the relay, which counts them. The ``claude_code_telemetry`` setting is off by default, so the CLI runs with nonessential traffic off and its picker answers with only the pinned table; with the setting on it fetches its feature flags for the handshake, which is what makes its picker list every model. Anything unexpected returns ``None``/``False`` so callers
 fall back to the pinned catalog rather than failing setup.
 """
 import json
@@ -112,8 +111,8 @@ def _setting(key, default=None):
 
 
 def telemetry_enabled():
-    """The active profile's ``claude_code_telemetry`` plugin setting, default on."""
-    value = _setting(TELEMETRY_SETTING, True)
+    """The active profile's ``claude_code_telemetry`` plugin setting, default off."""
+    value = _setting(TELEMETRY_SETTING, False)
     if isinstance(value, str):
         return value.strip().lower() not in _OFF
     return value is not False and value != 0

@@ -1,6 +1,6 @@
 """Every request of one conversation must start native with the same session id.
 
-With feature flags on (the claude_code_telemetry default) native names a per-session scratchpad
+With feature flags on (the ``claude_code_telemetry`` setting enabled) native names a per-session scratchpad
 directory in the environment message right after the first user turn. Each request is a new native
 process, so a fresh session id per spawn changed that message on every call: the cached prefix
 collapsed to tools, system and the first turn, and the rest of the conversation was written to the

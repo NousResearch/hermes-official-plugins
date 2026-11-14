@@ -81,7 +81,7 @@ def test_unreadable_config_means_not_set(profile, tmp_path, monkeypatch):
     monkeypatch.setattr(hermes_cli.config, "load_config_readonly", unreadable)
     fallback = str(tmp_path / "fallback")
     assert directsdk_setup.apply_config_dir({OVERRIDE: fallback}) == {NATIVE_DIR: fallback}
-    assert directsdk_setup.telemetry_enabled() is True
+    assert directsdk_setup.telemetry_enabled() is False
 
 
 def test_a_multi_profile_gateway_reads_each_profiles_own_setting(profile, tmp_path):

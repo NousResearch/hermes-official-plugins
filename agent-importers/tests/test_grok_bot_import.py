@@ -205,6 +205,64 @@ def test_several_bots_are_offered_one_profile_each(tmp_path, monkeypatch, capsys
     assert "hermes -p ava cron resume" in out and "hermes -p scout cron resume" in out
 
 
+def test_bot_profiles_are_created_through_the_public_cli(tmp_path, monkeypatch):
+    """The profiles are made by `hermes profile create --clone`, not by reaching into
+    `hermes_cli.profiles`: those functions are private core with no compatibility promise, so a
+    routine release could move them and break the importer (catalog rule 9)."""
+    import sys
+
+    import hermes_cli.profiles as profiles_mod
+
+    def _private(*args, **kwargs):
+        raise AssertionError("the importer called hermes_cli.profiles directly")
+
+    for name in ("create_profile", "profile_exists", "get_profile_dir", "validate_profile_name"):
+        monkeypatch.setattr(profiles_mod, name, _private, raising=False)
+    home = tmp_path / ".hermes"
+    (home / "SOUL.md").write_text("You are Hermes.\n", encoding="utf-8")
+    export = {"format": "grok-bot-export", "version": 1, "bots": [
+        {"name": "Ava", "instructions": "You are Ava."},
+        {"name": "Scout", "instructions": "You are Scout."},
+    ]}
+    path = tmp_path / "grok-bot-export.json"
+    path.write_text(json.dumps(export), encoding="utf-8")
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("hermes_cli.cli_output.prompt_yes_no", lambda *a, **k: True)
+
+    _run(["grok-bot", "--source", str(path)])
+
+    assert (home / "profiles" / "ava" / "SOUL.md").is_file()
+    assert (home / "profiles" / "scout" / "SOUL.md").is_file()
+
+
+def test_a_bot_profile_gets_its_role_even_when_this_profile_has_its_own_soul(tmp_path, monkeypatch):
+    """`--clone` copies this profile's SOUL.md, and a Bot's role only replaces a SOUL.md that still
+    holds Hermes' default: a cloned personality would keep the role out and send it to memory —
+    the merge #265 is about — so the Bot's profile must not start from this profile's identity."""
+    import sys
+
+    home = tmp_path / ".hermes"
+    (home / "SOUL.md").write_text("# Mine\n\nBe terse with everyone.\n", encoding="utf-8")
+    export = {"format": "grok-bot-export", "version": 1, "bots": [
+        {"name": "Ava", "instructions": "You are Ava. Stay silent otherwise."},
+        {"name": "Scout", "instructions": "You are Scout. Dig into the inbox."},
+    ]}
+    path = tmp_path / "grok-bot-export.json"
+    path.write_text(json.dumps(export), encoding="utf-8")
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("hermes_cli.cli_output.prompt_yes_no", lambda *a, **k: True)
+
+    _run(["grok-bot", "--source", str(path)])
+
+    for profile, role in (("ava", "You are Ava"), ("scout", "You are Scout")):
+        soul = (home / "profiles" / profile / "SOUL.md").read_text(encoding="utf-8")
+        assert role in soul and "Be terse with everyone" not in soul
+        memory = home / "profiles" / profile / "memories" / "MEMORY.md"
+        assert "Grok Bot" not in (memory.read_text(encoding="utf-8") if memory.is_file() else "")
+
+
 def test_several_bots_without_a_prompt_are_imported_into_this_profile(tmp_path, capsys):
     """Nobody to answer (-y): no profile is created behind the user's back, and the import says what
     the Bots lose so the choice can be made deliberately."""

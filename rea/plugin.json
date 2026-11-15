@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "rea",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Reverse engineer programs with REA: inspect native binaries, .NET assemblies, Electron/JavaScript apps, Android packages, firmware and browser activity through REA's MCP server (pinned rea-agents@6.7.0 over npx stdio), with REA's reverse-engineer-anything workflow skill and a crash-triage skill (core dump + binary to root cause) bundled.",
   "author": {
     "name": "Nous Research",
@@ -22,5 +22,14 @@
     "crash",
     "core-dump",
     "mcp"
-  ]
+  ],
+  "extensions": {
+    "com.nousresearch.hermes": {
+      "servers": {
+        "rea": {
+          "timeout": 1000
+        }
+      }
+    }
+  }
 }

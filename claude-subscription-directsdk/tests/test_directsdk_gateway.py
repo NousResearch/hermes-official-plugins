@@ -146,8 +146,8 @@ def test_the_clis_own_calls_take_the_configured_proxy_and_ca(clean, tmp_path, mo
     env, = seen
     assert _spellings(env, "HTTPS_PROXY") == ["http://svc:p%40ss@[::1]:3128"] * _SPELLINGS
     assert env["NODE_EXTRA_CA_CERTS"] == str(ca)
-    assert [value.split(",") for value in _spellings(env, "NO_PROXY")] == [
-        ["internal.example.com", "127.0.0.1", "localhost"]] * _SPELLINGS
+    # Only the loopback relay bypasses the proxy: an inherited exception would let the CLI's own calls skip it.
+    assert [value.split(",") for value in _spellings(env, "NO_PROXY")] == [["127.0.0.1", "localhost"]] * _SPELLINGS
     assert env["ANTHROPIC_BASE_URL"].startswith("http://127.0.0.1:")
 
 

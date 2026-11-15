@@ -22,6 +22,8 @@ for line in sys.stdin:
  r=json.loads(line); rows.append(r)
  if r.get('shouldQuery') is False:
   print(json.dumps({'type':'result','num_turns':0,'is_error':False}),flush=True)
+ elif r['type']=='user':
+  break
 if os.environ.get('NATIVE_ERROR'):
  # An error native answers itself (no login: authentication_failed), with no request to ANTHROPIC_BASE_URL.
  code,text=os.environ['NATIVE_ERROR'].split(':',1)
@@ -39,7 +41,8 @@ if os.environ.get('HANG'):
 settings=json.loads(pathlib.Path(sys.argv[sys.argv.index('--settings')+1]).read_text())
 wire=json.loads(settings['env']['CLAUDE_CODE_EXTRA_BODY'])
 assert wire['tools'][0]['description'].endswith('TAIL')
-assert '--max-turns' in sys.argv and sys.argv[sys.argv.index('--max-turns')+1]=='1'
+# Native never runs a tool: a session may call only Hermes' MCP server, a one-shot stops after one step.
+assert ('--max-turns' in sys.argv) != ('--allowedTools' in sys.argv)
 assert sys.argv[sys.argv.index('--permission-mode')+1]=='dontAsk'
 assert sys.argv[sys.argv.index('--tools')+1]==''
 assert rows[-1]['type']=='user'

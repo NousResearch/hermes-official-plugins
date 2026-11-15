@@ -26,7 +26,10 @@ SPEC.loader.exec_module(native)
 
 FAKE = '''import json, os, pathlib, sys
 pathlib.Path(os.path.join(os.environ["HOME"], "cwds.log")).open("a").write(str(pathlib.Path.cwd()) + "\\n")
-for line in sys.stdin: pass
+for line in sys.stdin:
+    row = json.loads(line)
+    if row["type"] == "user" and row.get("shouldQuery", True):
+        break
 print(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}], "id": "m", "stop_reason": "end_turn"}}), flush=True)
 print(json.dumps({"type": "stream_event", "event": {"type": "message_stop"}}), flush=True)
 print(json.dumps({"type": "result", "subtype": "success", "usage": {"input_tokens": 1, "output_tokens": 1}}), flush=True)
@@ -98,7 +101,9 @@ def unsafe(kind, tmp_path, monkeypatch):
     root.mkdir(mode=0o700)
     monkeypatch.setattr(native.tempfile, "tempdir", str(root))
     if kind == "no_uid":
+        # No uid and, on Windows, no user name to key the shared path by: only the private fallback is left.
         monkeypatch.delattr(native.os, "getuid", raising=False)
+        monkeypatch.delenv("USERNAME", raising=False)
         return
     shared = shared_path(root)
     if kind == "file":
@@ -204,3 +209,39 @@ def test_tightening_never_follows_a_symlink_swapped_in_after_the_mkdir(tmp_path,
     finally:
         client.close()
     assert stat.S_IMODE(victim.stat().st_mode) == before, "chmod followed the swapped-in symlink"
+
+
+def test_the_windows_workspace_is_shared_per_user_and_refused_outside_their_profile(tmp_path, monkeypatch):
+    # Without a uid every Windows process used a fresh mkdtemp, so message 1 moved on every gateway restart.
+    profile, shared = tmp_path / "profile", tmp_path / "shared-temp"
+    for path in (profile, shared):
+        path.mkdir()
+    monkeypatch.setenv("USERNAME", "fixture user")
+    monkeypatch.setenv("LOCALAPPDATA", str(profile))
+    monkeypatch.setattr(native.tempfile, "tempdir", str(profile / "Temp"))
+    (profile / "Temp").mkdir()
+    assert native._windows_shared_workdir() == str(profile / "Temp" / "claude-directsdk-cwd-fixture_user")
+    monkeypatch.setattr(native.tempfile, "tempdir", str(shared))
+    assert native._windows_shared_workdir() is None, "a temp dir other users may write is never shared"
+
+
+def test_launch_files_a_killed_process_left_are_swept_and_a_live_ones_kept(tmp_path, monkeypatch):
+    # The launch files hold the whole system prompt and tool schemas; a hard kill must not leave them behind.
+    monkeypatch.setattr(native.tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(native, "_swept", [])
+    dead = native.subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    stale = tmp_path / f"claude-directsdk-launch-{dead.pid}-x"
+    live = tmp_path / f"claude-directsdk-launch-{os.getppid()}-x"
+    for path in (stale, live):
+        path.mkdir()
+        (path / "system.md").write_text("system prompt")
+    ours = native._launch_dir()
+    assert not stale.exists() and live.exists() and ours.is_dir()
+    client = fake_client(tmp_path)
+    try:
+        list(client.create(**REQUEST))
+    finally:
+        client.close()
+    assert not [p for p in tmp_path.glob(f"claude-directsdk-launch-{os.getpid()}-*") if p != ours], \
+        "a finished request leaves no launch files"

@@ -22,10 +22,11 @@ from pathlib import Path
 cfg = json.loads(os.environ['FIXTURE'])
 root = Path(cfg['root'])
 for line in sys.stdin:
-    if not json.loads(line).get('shouldQuery', True):
+    row = json.loads(line)
+    if not row.get('shouldQuery', True):
         print(json.dumps({'type': 'result', 'num_turns': 0}), flush=True)
-        continue
-    break
+    elif row['type'] == 'user':
+        break
 url = os.environ['ANTHROPIC_BASE_URL'] + '/v1/messages'
 def query():
     req = urllib.request.Request(url, data=json.dumps({'model': 'sonnet', 'stream': True,

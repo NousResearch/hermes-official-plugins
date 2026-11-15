@@ -148,6 +148,16 @@ def telemetry_enabled():
     return isinstance(value, (bool, int)) and bool(value)
 
 
+def session_settings():
+    """``(session_mode, max_sessions)`` from the active profile: one kept Claude Code per Hermes agent, default on,
+    at most this many per Hermes process (default 4)."""
+    mode, cap = _setting("session_mode", True), _setting("max_sessions", 4)
+    if isinstance(mode, str):
+        mode = mode.strip().lower() not in _OFF
+    cap = cap if isinstance(cap, int) and not isinstance(cap, bool) and cap >= 0 else 4
+    return mode is not False and mode != 0, cap
+
+
 def apply_config_dir(env):
     """Select the active profile's Claude config directory on a child env, in place."""
     override = env.pop("CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR", None)

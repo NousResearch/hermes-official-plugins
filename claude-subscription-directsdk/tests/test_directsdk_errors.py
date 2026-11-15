@@ -95,3 +95,22 @@ def test_watchdog_kill_classifies_like_a_timeout(profile):
     for other in (RuntimeError('Native request failed: error_during_execution'), InterruptedError('Agent interrupted during API call'),
                   TimeoutError('Claude request timed out'), ValueError('model is required')):
         assert profile.classify_api_error(other) is None
+
+
+def test_request_refused_before_spawn_is_not_retried_but_may_fall_back(profile):
+    from agent.error_classifier import classify_api_error
+
+    with pytest.raises(directsdk.RequestRejected) as raised:
+        directsdk.Client(command='claude', env={}).create(model='sonnet', messages=REQUEST['messages'],
+                                                          response_format={'type': 'json_object'})
+    verdict = classify_api_error(raised.value, provider=profile.name, model='sonnet')
+    assert (verdict.reason.value, verdict.retryable, verdict.should_fallback) == ('format_error', False, True)
+    # A ValueError that is not this transport's own refusal keeps core's verdict.
+    assert profile.classify_api_error(ValueError('Only json_schema structured output is supported')) is None
+
+
+def test_auxiliary_json_object_is_dropped_before_the_request(profile):
+    from agent.auxiliary_structured_output import without_unsupported_response_format
+
+    extra = {'response_format': {'type': 'json_object'}, 'max_tokens': 5}
+    assert without_unsupported_response_format(extra, profile.name, profile.base_url, 'claude-sonnet-5-5') == {'max_tokens': 5}

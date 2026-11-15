@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
@@ -58,40 +60,88 @@ class _BotTarget(NamedTuple):
 
 
 def _bot_profile_name(bot_name: str) -> str:
-    """A valid profile id for a Bot's own profile: ``Account Health`` → ``account-health``."""
-    from hermes_cli.profiles import validate_profile_name
+    """A profile id for a Bot's own profile: ``Account Health`` → ``account-health``.
 
-    from .grok_bot import _slug
-    candidate = _slug(bot_name)
-    if candidate == "default":  # the built-in profile; a Bot never gets to be it
-        candidate = "default-bot"
-    try:
-        validate_profile_name(candidate)
-    except ValueError:
-        candidate = _slug(f"{candidate}-bot")
-    return candidate
-
-
-def _ensure_bot_profile(target: _BotTarget) -> bool:
-    """Create the Bot's profile by cloning this one, so it can answer a chat without more setup.
-
-    Cloning is ``hermes profile create <name> --clone``: this profile's ``config.yaml`` and ``.env``
-    come along (the Bot is chattable at once), messaging channels do not (two gateways must not fight
-    over one bot token). SOUL.md is seeded rather than cloned: a Bot's role only replaces the file
-    while it still holds Hermes' default, and each Bot here is meant to own its profile's identity.
+    Only the slug rule lives here: whether Hermes accepts the name is the CLI's call, and a name it
+    refuses falls back to a ``-bot`` suffix in :func:`_create_bot_profile`.
     """
-    from hermes_cli.default_soul import DEFAULT_SOUL_MD
-    from hermes_cli.profiles import create_profile, profile_exists
+    from .grok_bot import _slug
 
-    if profile_exists(target.profile):
-        return True  # imported before: re-running merges into it, never clobbers it
-    try:
-        create_profile(target.profile, clone_config=True, soul=DEFAULT_SOUL_MD)
-    except (ValueError, FileExistsError, OSError) as exc:
-        from hermes_cli.cli_output import print_error
-        print_error(f"Could not create profile '{target.profile}' for {target.bot}: {exc}")
-        return False
-    return True
+    candidate = _slug(bot_name)
+    return "default-bot" if candidate == "default" else candidate  # never the built-in profile
+
+
+_CREATED_AT_RE = re.compile(r"^Profile '(?P<name>[^']+)' created at (?P<path>.+)$", re.MULTILINE)
+_PROFILE_PATH_RE = re.compile(r"^Path:\s+(?P<path>.+)$", re.MULTILINE)
+
+
+def _profile_cli(*args: str) -> subprocess.CompletedProcess:
+    """Run ``hermes profile <args>`` in a child process, anchored to the profile this import is in.
+
+    The command line is the plugin's public seam for profiles: ``hermes_cli.profiles`` is private
+    core with no compatibility promise, so a profile is created the way a user would create it
+    rather than by calling the functions behind it. ``HERMES_HOME`` names the home the child acts
+    for (a named profile's directory included), and the platform home travels with it because the
+    profiles root is derived from it — a child left on its own would write into a different install.
+    """
+    from hermes_constants import get_hermes_home
+
+    home = get_hermes_home()
+    env = dict(os.environ, HERMES_HOME=str(home), HOME=str(Path.home()), USERPROFILE=str(Path.home()))
+    argv = [sys.executable, "-P", "-m", "hermes_cli.main", "profile", *args]
+    return subprocess.run(argv, capture_output=True, text=True, check=False, env=env)
+
+
+def _profile_home(profile: str) -> Optional[Path]:
+    """The directory ``hermes profile show <name>`` reports, or None when it cannot be read."""
+    proc = _profile_cli("show", profile)
+    found = _PROFILE_PATH_RE.search(proc.stdout or "") if proc.returncode == 0 else None
+    return Path(found.group("path").strip()).expanduser() if found else None
+
+
+def _last_line(text: str) -> str:
+    """The line of CLI output worth repeating — its error, not its progress chatter."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return lines[-1] if lines else "no output"
+
+
+def _create_bot_profile(profile: str) -> Optional[tuple[str, Path]]:
+    """Create the Bot's profile with ``hermes profile create <name> --clone``; ``(name, home)`` back.
+
+    Cloning is what lets the Bot answer a chat without more setup: this profile's ``config.yaml`` and
+    ``.env`` come along, messaging channels do not (two gateways must not fight over one bot token).
+    ``--no-alias`` keeps the footprint to the profile itself — an import should not install a wrapper
+    script per Bot unasked.
+    """
+    from hermes_cli.cli_output import print_error
+
+    for name in (profile, f"{profile}-bot"):
+        proc = _profile_cli("create", name, "--clone", "--no-alias")
+        output = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+        if proc.returncode == 0:
+            created = _CREATED_AT_RE.search(proc.stdout or "")
+            home = Path(created.group("path").strip()).expanduser() if created else _profile_home(name)
+            if home is None:
+                print_error(f"Created profile '{name}' but could not read its directory back from the CLI.")
+                return None
+            # `--clone` copies this profile's SOUL.md, and a Bot's role only replaces a SOUL.md that
+            # still holds Hermes' default. Keeping the clone would send the role to memory instead —
+            # the merge #265 reports — so the profile is left without one, for the Bot to own.
+            soul = home / "SOUL.md"
+            if soul.is_file():
+                soul.unlink()
+            return name, home
+        if "already exists" in output:  # imported before: merge into it, never clobber it
+            home = _profile_home(name)
+            if home is not None:
+                return name, home
+            print_error(f"Profile '{name}' already exists, but its directory could not be read back.")
+            return None
+        if name == profile and ("is not a valid profile name" in output or "is reserved" in output):
+            continue  # the Bot's own name is refused; a `-bot` suffix is a valid id
+        print_error(f"Could not create profile '{name}': {_last_line(output)}")
+        return None
+    return None
 
 
 def _plan_per_bot_profiles(make_importer, args) -> list[_BotTarget]:
@@ -102,7 +152,6 @@ def _plan_per_bot_profiles(make_importer, args) -> list[_BotTarget]:
     export holds a single Bot, when ``--bot`` picked the Bots, or when nobody can answer.
     """
     from hermes_cli.cli_output import print_header, print_info, prompt_yes_no
-    from hermes_cli.profiles import get_profile_dir
 
     bots = make_importer(False).load_bots()
     if len(bots) < 2:
@@ -120,23 +169,27 @@ def _plan_per_bot_profiles(make_importer, args) -> list[_BotTarget]:
     print_header("One Profile per Bot")
     print_info(f"{len(bots)} Bots in this export, each keeping its own identity, memories and routines:")
     taken: set[str] = set()
-    planned: list[_BotTarget] = []
-    for name in names:
-        profile = _bot_profile_name(name)
+    planned: list[tuple[str, str]] = []  # (Bot, profile id): the directory is known once created
+    for bot in names:
+        profile = _bot_profile_name(bot)
         base, n = profile, 2
         while profile in taken:  # two Bots sharing a name still get a profile each
             profile, n = f"{base}-{n}", n + 1
         taken.add(profile)
-        planned.append(_BotTarget(bot=name, profile=profile, home=get_profile_dir(profile)))
-        print_info(f"  {name} → profile '{profile}'")
+        planned.append((bot, profile))
+        print_info(f"  {bot} → profile '{profile}'")
     if not prompt_yes_no(f"Give each of the {len(bots)} Bots its own profile (recommended)?", default=True):
         print_info("Importing into this profile instead; later Bots' roles become memory entries.")
         return []
     # Created here, on the answer just given: the preview below must see the real profile homes.
-    targets = [target for target in planned if _ensure_bot_profile(target)]
-    if len(targets) != len(planned):
-        print_info("Nothing was imported; re-run once the profiles above can be created.")
-        return []
+    targets: list[_BotTarget] = []
+    for bot, profile in planned:
+        made = _create_bot_profile(profile)
+        if made is None:
+            print_info("Nothing was imported; re-run once the profiles above can be created.")
+            return []
+        created, home = made
+        targets.append(_BotTarget(bot=bot, profile=created, home=home))
     print_info("Created: " + ", ".join(f"'{t.profile}'" for t in targets))
     return targets
 

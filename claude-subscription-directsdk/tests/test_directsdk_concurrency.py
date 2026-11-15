@@ -1,6 +1,7 @@
 """#329: one Hermes process runs at most ``max_concurrent`` Claude Code turn processes at once.
 
-Each fake native records when it starts and exits and how many fakes were alive when it started.
+Each fake native records when it starts and exits and how many fakes were alive when it started, in its own
+log file: appends from several processes to one file are not atomic on Windows and lose lines.
 """
 import json
 import os
@@ -15,7 +16,7 @@ import directsdk as ds
 NATIVE = r'''
 import json, os, sys, time
 from pathlib import Path
-live, log = Path(os.environ['LIVE']), Path(os.environ['LOG'])
+live, log = Path(os.environ['LIVE']), Path(os.environ['LOG']) / f'{os.getpid()}.jsonl'
 me = live / str(os.getpid())
 me.touch()
 def note(event, **extra):
@@ -49,7 +50,8 @@ def natives(tmp_path, monkeypatch):
     (tmp_path / 'live').mkdir()
     script = tmp_path / 'native.py'
     script.write_text(NATIVE)
-    log, clients = tmp_path / 'log.jsonl', []
+    log, clients = tmp_path / 'log', []
+    log.mkdir()
 
     def limit(n):
         # Where `hermes config set plugins.entries.<id>.settings.max_concurrent <n>` writes it.
@@ -65,7 +67,8 @@ def natives(tmp_path, monkeypatch):
         return made
 
     def events():
-        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+        rows = [json.loads(line) for f in log.glob('*.jsonl') for line in f.read_text().splitlines()]
+        return sorted(rows, key=lambda e: e['t'])
 
     def release():
         (tmp_path / 'release').touch()

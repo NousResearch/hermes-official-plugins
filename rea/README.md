@@ -86,11 +86,12 @@ server.
 
 ## Native analysis wait budget
 
-Every REA call runs under Hermes' normal MCP tool deadline (300 seconds by
-default). The plugin sets Ghidra's internal startup deadline to 900 seconds
-so a large import is not cut short on REA's side. A per-server Hermes call
-budget for REA ships with Hermes v0.23.0; this package will declare it once
-that release is out, so it installs on every current Hermes release today.
+Every REA call runs under the 1000-second deadline this package declares for its
+own server (`extensions.com.nousresearch.hermes.servers.rea.timeout` in
+`plugin.json`), so a large Ghidra import is not cut short while it analyzes. The
+plugin also sets Ghidra's internal startup deadline to 900 seconds. A Hermes
+release that predates per-server deadlines ignores the declaration and keeps its
+own MCP tool default.
 
 `open_binary` validates a target, but the first Ghidra-backed query imports and
 analyzes it. Large executables can take several minutes. Subsequent queries

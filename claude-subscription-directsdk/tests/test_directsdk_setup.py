@@ -337,7 +337,8 @@ def test_a_login_that_bills_api_usage_is_not_a_subscription_login(profile, tmp_p
     status = profile.setup_status(command=command, env=env)
     assert status["available"] and not status["logged_in"]
     assert "bills API usage instead of your Claude subscription" in status["detail"]
-    assert status["login_command"] == command + ["auth", "login"]
+    # No login command: setup prints this whole instruction instead of running a login that cannot fix it.
+    assert status["login_command"] is None
     assert profile.discover_models(command=command, env=env) is None
 
 

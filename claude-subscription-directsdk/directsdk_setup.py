@@ -405,7 +405,9 @@ def setup_status(command=None, env=None, timeout=20):
     provider = str(auth.get("apiProvider") or "firstParty")
     metered = _METERED_AUTH.get(auth.get("authMethod")) or (f"the {provider} backend" if provider != "firstParty" else None)
     if logged_in and metered:
-        logged_in, detail = False, METERED_HINT.format(metered)
+        # No login_command: Hermes setup would run `claude auth login` and print only "Login failed" when an
+        # environment switch keeps the metered backend, so setup shows the whole instruction instead.
+        logged_in, detail, login_command = False, METERED_HINT.format(metered), None
     return {"available": True, "logged_in": logged_in, "plan": _plan_label(plan), "detail": detail,
             "login_command": login_command}
 
@@ -714,14 +716,16 @@ def egress_env(env, upstream):
     """Route a child's own calls (in place) the way the relay goes. Claude Code sends only Messages requests to
     ANTHROPIC_BASE_URL; get_usage, bootstrap, the MCP directory and telemetry go to api.anthropic.com itself (measured
     on 2.1.319 and 2.1.292). Under an opted-in upstream_proxy / upstream_ca_file those calls take the same CONNECT
-    proxy and trust the same CA, and the loopback relay stays direct."""
+    proxy and trust the same CA, and only the loopback relay stays direct: an inherited NO_PROXY exception
+    (``*``, ``api.anthropic.com``) would let those calls skip the organisation's required proxy."""
     if not upstream.child_env:
         return env
     env.update(upstream.child_env)
     if "HTTPS_PROXY" in upstream.child_env:
-        bypass = [entry for entry in (env.get("NO_PROXY") or env.get("no_proxy") or "").split(",") if entry.strip()]
+        for name in ("NO_PROXY", "no_proxy"):
+            env.pop(name, None)
         for name in _proxy_names("NO_PROXY"):
-            env[name] = ",".join(bypass + ["127.0.0.1", "localhost"])
+            env[name] = "127.0.0.1,localhost"
     return env
 
 

@@ -27,19 +27,21 @@ import weakref
 from types import SimpleNamespace
 
 try:
+    from . import concurrency
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from .process_tree import kill_process_tree, own_process_group, unreaped
     from .directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
-        apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, observe_rate_limit, reap_orphaned_refresh_lock, relay,
-        resolve_upstream, Upstream)
+        apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, max_concurrent, observe_rate_limit,
+        reap_orphaned_refresh_lock, relay, resolve_upstream, Upstream)
 except ImportError:
+    import concurrency
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from process_tree import kill_process_tree, own_process_group, unreaped
     from directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
-        apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, observe_rate_limit, reap_orphaned_refresh_lock, relay,
-        resolve_upstream, Upstream)
+        apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, max_concurrent, observe_rate_limit,
+        reap_orphaned_refresh_lock, relay, resolve_upstream, Upstream)
 
 
 logger = logging.getLogger(__name__)
@@ -556,7 +558,7 @@ class _ToolStream:
         return out
 
 
-def _hand_off(process, admission, reader, err_drain):
+def _hand_off(process, admission, reader, err_drain, slot):
     _draining.add(process)
 
     def drain():
@@ -579,6 +581,8 @@ def _hand_off(process, admission, reader, err_drain):
                     if pipe and not pipe.closed:
                         pipe.close()
                 _draining.discard(process)
+                # The answer returned long ago; the slot frees only now that this native has exited.
+                slot.release()
 
     threading.Thread(target=drain, daemon=True, name='directsdk-drain').start()
 
@@ -901,6 +905,7 @@ class Client:
         p = None
         reader = None
         err_drain = None
+        slot = None
         native_stderr = deque(maxlen=40)
         try:
             timeout = kwargs.get('timeout', self.timeout)
@@ -938,6 +943,9 @@ class Client:
                 # Anthropic or the profile's opted-in gateway; an explicit Client(env=...) fixture may name its own.
                 upstream = (Upstream(env['ANTHROPIC_BASE_URL'], None, None, False) if env.get('ANTHROPIC_BASE_URL')
                             else resolve_upstream())
+                # Wait for a free slot (#329), then check extra usage: calls that ran meanwhile may have crossed the limit.
+                slot = yield from concurrency.acquire(max_concurrent(), request.cancelled, timeout,
+                                                      lambda: self._chunk(kwargs['model'], {}))
                 # The extra_usage setting refuses here, before anything is billed (#43).
                 check_extra_usage(resolved, dict(env), upstream)
                 # An inherited effort level would override the --effort Hermes passes below.
@@ -1125,8 +1133,8 @@ class Client:
                         admission = request.admission
                         request.process = None
                         request.admission = None
-                    _hand_off(p, admission, reader, err_drain)
-                    p = None
+                    _hand_off(p, admission, reader, err_drain, slot)
+                    p = slot = None
                 else:
                     p.wait(timeout=max(.1, deadline-time.monotonic()))
                     reader.join(timeout=1)
@@ -1236,23 +1244,27 @@ class Client:
                 # ignore_cleanup_errors already tolerates files still held open on Windows.
                 yield chunk
         finally:
-            request.cancel()
-            if request.admission is not None:
-                request.admission.close()
-            if p is not None:
-                p.wait(timeout=5)
-                if reader is not None:
-                    reader.join(timeout=5)
-                for pipe in (p.stdin, p.stdout):
-                    if pipe and not pipe.closed:
-                        # Closing stdin re-flushes bytes a dead child never read; that BrokenPipe must
-                        # not replace the cancellation or timeout already raised.
-                        try:
-                            pipe.close()
-                        except OSError:
-                            pass
-            with self._lock:
-                self._requests.discard(request)
+            try:
+                request.cancel()
+                if request.admission is not None:
+                    request.admission.close()
+                if p is not None:
+                    p.wait(timeout=5)
+                    if reader is not None:
+                        reader.join(timeout=5)
+                    for pipe in (p.stdin, p.stdout):
+                        if pipe and not pipe.closed:
+                            # Closing stdin re-flushes bytes a dead child never read; that BrokenPipe must
+                            # not replace the cancellation or timeout already raised.
+                            try:
+                                pipe.close()
+                            except OSError:
+                                pass
+            finally:
+                if slot is not None:
+                    slot.release()
+                with self._lock:
+                    self._requests.discard(request)
 
     @staticmethod
     def _chunk(model, delta, finish=None, usage=None):

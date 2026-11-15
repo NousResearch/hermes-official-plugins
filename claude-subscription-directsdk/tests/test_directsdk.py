@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -47,7 +48,7 @@ assert 'metadata' not in wire
 blocks=[{'type':'thinking','thinking':'private','signature':'signed-test'}, {'type':'text','text':'hello\n'}, {'type':'tool_use','id':'toolu_test','name':os.environ.get('TOOL_NAME','mcp__hermes__probe'),'input':{'value':'x'}}]
 if len(rows)>1:
  if rows[1]['message']['content'][0]['type']=='thinking':
-  assert rows[1]['message']['content']==[dict(b, name=os.environ.get('REPLAY_NAME', b['name'])) if b['type']=='tool_use' else b for b in blocks]
+  assert rows[1]['message']['content']==[dict(b, name=os.environ.get('REPLAY_NAME', b['name']), input=json.loads(os.environ.get('REPLAY_INPUT', 'null')) or b['input']) if b['type']=='tool_use' else b for b in blocks]
  else:
   assert rows[1]['message']['content'][0]['text']=='middleware changed'
  blocks=[{'type':'text','text':'done'}]
@@ -62,6 +63,18 @@ u={'input_tokens':3,'output_tokens':5,'cache_read_input_tokens':7,'cache_creatio
 print(json.dumps({'type':'result','num_turns':2 if len(blocks)>1 else 1,'subtype':'error_max_turns' if len(blocks)>1 else 'success','is_error':len(blocks)>1,'usage':u,'total_cost_usd':.012345,'modelUsage':{'sonnet':{'costBasis':'list'}}}),flush=True)
 sys.exit(1 if len(blocks)>1 else 0)
 """
+
+
+@contextmanager
+def deferred_tool(name):
+    """A tool Hermes Tool Search defers (an MCP server's), registered in core's real registry."""
+    from tools.registry import registry
+
+    registry.register(name, "mcp-woz", {"name": name, "parameters": {"type": "object"}}, lambda args, **kw: "{}")
+    try:
+        yield
+    finally:
+        registry.deregister(name)
 
 
 def _wait_gone(*pids, timeout=15):
@@ -192,6 +205,23 @@ class Contract(unittest.TestCase):
                                           "content": f"Tool '{host_name}' does not exist. Available tools: probe"}]
                 self.assertEqual(client.chat.completions.create(**req).choices[0].message.content, "done")
                 client.close()
+
+    def test_deferred_tool_called_directly_runs_through_the_offered_bridge(self):
+        # With Tool Search's bridge offered, the direct call (#39) runs wrapped in tool_call, and the next
+        # request replays that bridge call (the fake asserts REPLAY_NAME and REPLAY_INPUT).
+        wrapped = {"calls": [{"name": "mcp__woz__Edit", "arguments": {"value": "x"}}]}
+        with tempfile.TemporaryDirectory() as tmp, deferred_tool("mcp__woz__Edit"):
+            client = self.client(tmp, TOOL_NAME="mcp__woz__Edit", REPLAY_NAME="mcp__hermes__tool_call",
+                                 REPLAY_INPUT=json.dumps(wrapped))
+            req = self.request()
+            req["tools"].append({"type": "function", "function": {"name": "tool_call"}})
+            msg = client.chat.completions.create(**req).choices[0].message.model_dump()
+            [call] = msg["tool_calls"]
+            self.assertEqual((call["function"]["name"], json.loads(call["function"]["arguments"])), ("tool_call", wrapped))
+            msg["content"] = (msg.get("content") or "").strip()
+            req["messages"] += [msg, {"role": "tool", "tool_call_id": "toolu_test", "content": "ok"}]
+            self.assertEqual(client.chat.completions.create(**req).choices[0].message.content, "done")
+            client.close()
 
     def test_bare_host_name_maps_to_the_tool_and_replays_with_the_offered_name(self):
         # Native sometimes drops the MCP prefix on a tool it was offered (#62: `search_files`,

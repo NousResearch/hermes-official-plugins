@@ -86,6 +86,7 @@ NATIVE_ERROR_STATUS = {
 
 CARRIER = 'claude-subscription-directsdk-experimental.native_assistant'
 PREFIX = 'mcp__hermes__'
+BRIDGE = 'tool_call'  # Hermes Tool Search: runs a deferred tool as {'calls': [{'name', 'arguments'}]}
 
 
 class Object(SimpleNamespace):
@@ -489,6 +490,26 @@ def offered_tool_name(name, hermes_names):
     return name, hermes_names.get(bare, bare)
 
 
+def bridge_tool(name, hermes_names):
+    """Native name of Hermes' Tool Search bridge when ``name`` (as Hermes would run it) is a deferred tool the
+    bridge can run and the request offers the bridge, else None. Claude calls a deferred tool directly by the
+    name it read in ``tool_describe`` output (#39), often again after Hermes' unknown-tool error; wrapped in
+    ``tool_call`` it runs, under Hermes' own schema check. Any other name (a typo core's auto-repair fixes, a
+    name nothing runs) still reaches Hermes as written, so its repair and invalid-name limit apply."""
+    if not name.strip() or name in hermes_names.values():
+        return None
+    bridge = next((native for native, hermes in hermes_names.items() if hermes == BRIDGE), None)
+    if bridge is None:
+        return None
+    try:
+        from tools import tool_search
+        from tools.connectors import is_connector_name
+    except ImportError:
+        return None
+    deferred = tool_search.load_config_readonly().effective_defer_tools
+    return bridge if is_connector_name(name) or tool_search.is_deferrable_tool_name(name, deferred) else None
+
+
 def _json_suffix(prefix):
     """A suffix that makes a cut-off JSON text parse, or None. Used only for a refused call's streamed arguments:
     Hermes cannot take back a streamed fragment, and one it cannot repair turns the refusal into a truncation
@@ -522,23 +543,33 @@ class _ToolStream:
 
     def __init__(self, hermes_names):
         self.hermes_names, self.slots, self.raw = hermes_names, {}, {}
+        self.wraps = {}  # index -> streamed bridge prefix while a wrapped call (#39) is open, None once closed
 
     def deltas(self, native):
         """The ``tool_calls`` deltas for one native stream event, or None when it is not a tool event."""
         index, block = native.get('index'), native.get('content_block') or {}
         if native['type'] == 'content_block_start' and block.get('type') == 'tool_use':
-            self.slots[index], self.raw[index] = (len(self.slots), block.get('id')), ''
             name = offered_tool_name(block.get('name', ''), self.hermes_names)[1]
-            return [{'index': self.slots[index][0], 'id': block.get('id'), 'type': 'function', 'function': {'name': name, 'arguments': ''}}]
+            self.slots[index], self.raw[index] = (len(self.slots), block.get('id')), ''
+            arguments = ''
+            if bridge_tool(name, self.hermes_names):
+                # Streamed in place as the bridge call: Hermes orders calls by index, and the carrier by block.
+                self.wraps[index] = arguments = '{"calls":[{"name":' + json.dumps(name) + ',"arguments":'
+                name = BRIDGE
+            return [{'index': self.slots[index][0], 'id': block.get('id'), 'type': 'function', 'function': {'name': name, 'arguments': arguments}}]
         if index not in self.slots:
             return None
         if native.get('delta', {}).get('type') == 'input_json_delta':
             fragment = native['delta'].get('partial_json', '')
             self.raw[index] += fragment
             return [{'index': self.slots[index][0], 'function': {'arguments': fragment}}] if fragment else []
-        if native['type'] == 'content_block_stop' and not self.raw[index].strip():
-            self.raw[index] = '{}'  # A no-argument call streams nothing; Hermes runs '{}'.
-            return [{'index': self.slots[index][0], 'function': {'arguments': '{}'}}]
+        if native['type'] == 'content_block_stop':
+            tail = ''
+            if not self.raw[index].strip():
+                self.raw[index] = tail = '{}'  # A no-argument call streams nothing; Hermes runs '{}'.
+            if self.wraps.get(index):
+                self.wraps[index], tail = None, tail + '}]}'
+            return [{'index': self.slots[index][0], 'function': {'arguments': tail}}] if tail else None
         return None
 
     def streamed(self, call_id):
@@ -548,7 +579,7 @@ class _ToolStream:
         """Deltas that make every refused call's streamed arguments parse, so Hermes still sees one refusal."""
         out = []
         for index, (slot, _) in self.slots.items():
-            raw = self.raw[index]
+            raw = (self.wraps.get(index) or '') + self.raw[index]  # an open bridge wrap closes with its arguments
             try:
                 json.loads(raw)
             except ValueError:
@@ -1173,6 +1204,11 @@ class Client:
                 for block in blocks:
                     if block.get('type') == 'tool_use':
                         block['name'], name = offered_tool_name(block['name'], hermes_names)
+                        bridge = bridge_tool(name, hermes_names)
+                        if bridge:
+                            # Carried as the bridge call too, so the replayed turn shows the model the call that ran.
+                            block['name'], block['input'] = PREFIX + bridge, {'calls': [{'name': name, 'arguments': block['input']}]}
+                            name = BRIDGE
                         calls.append({'id': block['id'], 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(block['input'], separators=(',', ':'), allow_nan=False)}})
                 refused = any(a.get('stop_reason') == 'refusal' for a in assistants)
                 parsed_calls = list(calls)

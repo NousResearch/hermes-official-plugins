@@ -92,6 +92,14 @@ def test_alias_collision_with_another_alias_is_rejected(monkeypatch):
         directsdk.request_body({"tools": [tool("x" * 64), tool("x" * 63 + "y")]})
 
 
+def test_bridge_wraps_only_a_tool_it_can_run():
+    # A typo core's auto-repair maps (`Read_File` -> read_file) must reach core unwrapped, and its invalid-name limit too.
+    names = {"read_file": "read_file", "tool_call": "tool_call"}
+    with test_directsdk.deferred_tool("mcp__woz__Edit"):
+        assert directsdk.bridge_tool("mcp__woz__Edit", names) == "tool_call"
+        assert directsdk.bridge_tool("Read_File", names) is None
+
+
 def test_history_replays_offered_long_name_and_preserves_unoffered_name():
     _, _, names = directsdk.request_body({"tools": [tool(LONG_NAME)]})
     history = [{"role": "user", "content": "go"},

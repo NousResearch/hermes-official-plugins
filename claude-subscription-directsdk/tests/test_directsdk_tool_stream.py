@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import directsdk
+from test_directsdk import deferred_tool
 
 # Forwards one request through the relay and re-emits the upstream SSE as native's stream events, as Claude Code does.
 NATIVE = r'''
@@ -127,6 +128,25 @@ def test_tool_header_streams_before_its_arguments(tmp_path):
     assert (first['id'], first['function']) == ('toolu_1', {'name': 'read_file', 'arguments': ''})
     assert [d.function.arguments for d in deltas[1:]] == ['{"path": ', '"/tmp/a.txt"}']
     assert chunks[-1].choices[0].finish_reason == 'tool_calls'
+
+
+def test_deferred_tool_called_directly_streams_in_place_as_the_bridge_call(tmp_path):
+    # #39: between two offered calls the wrapped one keeps its index (Hermes orders calls by index, the replayed
+    # turn by block), and its arguments stream inside the bridge call.
+    blocks = [('t1', 'mcp__hermes__read_file', ['{}']), ('t2', 'mcp__woz__Search', ['{"q": ', '"x"}']), ('t3', 'read_file', [])]
+    events = [{'type': 'message_start', 'message': {'id': 'msg_1', 'role': 'assistant', 'content': [], 'usage': USAGE}}]
+    for i, (call_id, name, fragments) in enumerate(blocks):
+        events += [{'type': 'content_block_start', 'index': i, 'content_block': {'type': 'tool_use', 'id': call_id, 'name': name, 'input': {}}},
+                   *({'type': 'content_block_delta', 'index': i, 'delta': {'type': 'input_json_delta', 'partial_json': f}} for f in fragments),
+                   {'type': 'content_block_stop', 'index': i}]
+    events += [{'type': 'message_delta', 'delta': {'stop_reason': 'tool_use'}, 'usage': USAGE}, {'type': 'message_stop'}]
+    request = dict(REQUEST, tools=[*TOOLS, {'type': 'function', 'function': {'name': 'tool_call'}}])
+    with deferred_tool('mcp__woz__Search'), upstream(tmp_path, events) as (client, _):
+        calls = {}
+        for d in (d.model_dump() for d in tool_deltas(list(client.create(**request, stream=True)))):
+            calls.setdefault(d['index'], [d.get('id'), d['function'].get('name'), ''])[2] += d['function'].get('arguments') or ''
+    assert [(i, c[0], c[1]) for i, c in sorted(calls.items())] == [(0, 't1', 'read_file'), (1, 't2', 'tool_call'), (2, 't3', 'read_file')]
+    assert json.loads(calls[1][2]) == {'calls': [{'name': 'mcp__woz__Search', 'arguments': {'q': 'x'}}]}
 
 
 def test_refusal_mid_call_leaves_streamed_arguments_that_parse(tmp_path):

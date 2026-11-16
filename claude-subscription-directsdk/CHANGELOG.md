@@ -50,7 +50,8 @@
   block after the results where Hermes has it, in that request and in every later one. The bytes are per-call's
   (checked on 2.1.292, 2.1.322 and 2.1.323 with one, two and three parked calls). A steer row the relay cannot match
   to Hermes' steer is refused before upstream and the step replays into a new process; a steer of more than one text
-  block restarts at once. Before, every steer restarted the process and replayed the whole history.
+  block restarts at once. Before, every steer restarted the process and replayed the whole history: at round 200 the
+  steer step took 1.0 to 1.2 s locally, now 0.04 to 0.05 s (per-call: 0.9 to 1.1 s; offline bench, `--steer 50,200`).
 - Session mode: every restart of a kept process logs its reason at debug level (`launch`: the model, tools, effort,
   system prompt or environment changed; `edited`: history before the new frame changed, as in a compaction; `results`:
   the tool results do not match the parked calls; `steer`: a steer the process cannot carry; `exited`; `diverged`: the

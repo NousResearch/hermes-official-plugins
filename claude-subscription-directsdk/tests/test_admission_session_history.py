@@ -140,6 +140,22 @@ def test_a_misaligned_tail_is_refused_before_upstream(peer, misalign):
         gate.close()
 
 
+@pytest.mark.parametrize('broken', ['null_row', 'no_role'])
+def test_a_body_the_relay_cannot_read_is_refused_before_upstream(peer, broken):
+    """The first resumed step again, with a tail the rewrite cannot even read (a row that is not an object, a row with
+    no role). A parse error is a divergence too: refused, never forwarded as native built it."""
+    gate = kept(peer, FRAMES[:3])
+    forwarded = len(peer.received)
+    try:
+        rows = native_rows(FRAMES[:3])
+        rows[2] = None if broken == 'null_row' else {'content': rows[2]['content']}
+        status, body = post(gate, rows)
+        assert status == 400 and DIVERGED in body
+        assert gate.diverged and len(peer.received) == forwarded
+    finally:
+        gate.close()
+
+
 def test_a_misaligned_prefix_is_refused_as_not_extending_the_previous_request(peer):
     """Later steps: a replayed result already sits in the forwarded prefix in Hermes' bytes, so a request whose rows
     shifted there fails ``extends_previous`` whatever ``canonical_history`` does. Both gates refuse the same way."""

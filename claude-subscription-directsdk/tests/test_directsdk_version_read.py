@@ -51,3 +51,16 @@ def test_a_same_size_update_is_a_new_binary(tmp_path, how):
     else:
         claude.write_text('2.1.330')
     assert directsdk_setup.claude_version([str(claude)]) == (False, None)
+
+
+def test_a_version_is_kept_for_the_files_as_they_were_when_the_process_started(tmp_path):
+    """The binary is updated after a process starts and before its init event arrives: the version that process
+    reports belongs to the old files, so the new ones stay unseen (the next step runs per-call and learns theirs)."""
+    import time
+    claude = tmp_path / 'cli.js'
+    claude.write_text('2.1.322')
+    started = directsdk_setup.version_key([str(claude)])
+    time.sleep(.01)
+    claude.write_text('2.1.330, updated')
+    directsdk_setup.note_version([str(claude)], '2.1.322', started)
+    assert directsdk_setup.claude_version([str(claude)]) == (False, None)

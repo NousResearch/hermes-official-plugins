@@ -196,18 +196,25 @@ def _file_key(arg):
     return os.path.realpath(arg), status.st_dev, status.st_ino, status.st_mtime_ns, status.st_size
 
 
-def note_version(command, reported):
-    """Record the version a Claude Code process of ``command`` reported in its init event (``claude_code_version``);
-    only a release's own number counts ("2.1.323-beta.1" is not 2.1.323)."""
+def version_key(command):
+    """``command`` as the files it names are now; a version recorded under this key belongs to exactly those files."""
+    return tuple(_file_key(arg) for arg in command)
+
+
+def note_version(command, reported, key=None):
+    """Record the version a Claude Code process of ``command`` reported in its init event (``claude_code_version``),
+    under ``key``: the files as they were when that process started (an update meanwhile is another binary). Only a
+    release's own number counts ("2.1.323-beta.1" is not 2.1.323)."""
     version = reported if isinstance(reported, str) and re.fullmatch(r"\d+\.\d+\.\d+", reported) else None
+    key = key if key is not None else version_key(command)
     with _versions_lock:
-        _versions[tuple(_file_key(arg) for arg in command)] = version
+        _versions[key] = version
 
 
 def claude_version(command):
     """``(seen, version)``: whether a process of ``command`` (as the files it names are now) has reported its version
     yet, and the release it reported (None: none it could read)."""
-    key = tuple(_file_key(arg) for arg in command)
+    key = version_key(command)
     with _versions_lock:
         return key in _versions, _versions.get(key)
 

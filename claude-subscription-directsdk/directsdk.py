@@ -34,7 +34,7 @@ try:
     from .directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, claude_version, drop_api_credentials, egress_env, max_concurrent, note_version,
-        observe_rate_limit, reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_idle_seconds,
+        observe_rate_limit, version_key, reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_idle_seconds,
         session_min_rounds, session_tested, Upstream)
 except ImportError:
     import concurrency
@@ -44,7 +44,7 @@ except ImportError:
     from directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, claude_version, drop_api_credentials, egress_env, max_concurrent, note_version,
-        observe_rate_limit, reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_idle_seconds,
+        observe_rate_limit, version_key, reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_idle_seconds,
         session_min_rounds, session_tested, Upstream)
 
 
@@ -683,7 +683,8 @@ class Native:
     gets end of input after its frames and answers one step."""
 
     def __init__(self, request, command, env, workdir, admission, launch_dir, tools=None, binary=None, version=None):
-        # ``binary``: the resolved command this process runs, whose version its init event reports for the gate.
+        # ``binary``: the version key of the command this process runs (its files when it was started), under which its
+        # init event's version is recorded for the gate.
         self.admission, self.launch_dir, self.tools, self.binary = admission, launch_dir, tools, binary
         self.events, self.stderr = queue.Queue(), deque(maxlen=40)
         self.lock, self.writing = threading.Lock(), threading.Lock()
@@ -725,7 +726,7 @@ class Native:
                 elif event.get('type') != 'control_response':
                     if event.get('type') == 'system' and event.get('subtype') == 'init' and self.binary is not None:
                         reported = event.get('claude_code_version')
-                        note_version(self.binary, reported)
+                        note_version(None, reported, self.binary)
                         if self.tools is not None and reported != self.version:
                             # The binary changed under the gate: this process is not the version it allowed.
                             self._doubt('version')
@@ -1580,7 +1581,8 @@ class Client:
             if effort:
                 command += ['--effort', effort]
             command += ['--session-id', session_id]
-            native = Native(request, command, env, self._workdir(), admission, root, tools if session else None, resolved,
+            binary = version_key(resolved)  # before the spawn: an update after it is another binary
+            native = Native(request, command, env, self._workdir(), admission, root, tools if session else None, binary,
                             version if session else None)
             if session:
                 with _live_lock:

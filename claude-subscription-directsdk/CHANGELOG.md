@@ -67,7 +67,8 @@
   2.1.292, 2.1.322, 2.1.323; maintainer review of #361, item 5). Any other version runs per-call, with one log line
   that says why; a kept process ends at its next step when its binary changes or its version leaves the list, and one
   that reports another version than the gate allowed is not kept (`version`). The version is the
-  one Claude Code reports in its own init event (`claude_code_version`), kept per binary until a file of it changes,
+  one Claude Code reports in its own init event (`claude_code_version`), kept for the binary's files as they were when
+  that process started, until a file of it changes,
   so the first step on a new or updated binary runs per-call; only a release's own number counts (a pre-release of
   2.1.323 is not 2.1.323), and a version that cannot be read means per-call.
 - `session_idle_seconds` setting (default 3600, the prompt cache's lifetime): how long a kept process may idle. The

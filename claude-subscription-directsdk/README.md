@@ -150,8 +150,9 @@ hermes config set $S.upstream_ca_file /etc/ssl/corp-root.pem
 | Setting | Default | What it does |
 |---|---|---|
 | `session_mode` | `true` | Keep one Claude Code process per agent between model calls. `false`: a new process for every call, as before 0.4.0. |
-| `max_sessions` | `4` | At most this many kept processes in one Hermes process; a call past it runs per-call. |
-| `session_idle_seconds` | `3600` | A kept process that serves no step for this long ends. The default is the prompt cache's lifetime. |
+| `session_min_rounds` | `8` | A conversation keeps a process only once it has had this many tool rounds; before that every call runs per-call. Short chats and most subagents then hold none. `0`: keep from the first tool call. |
+| `max_sessions` | `4` | At most this many kept processes in one Hermes process. At the cap, the one that has waited longest for its user gives its place to the step asking now; if every one is serving a step or holds a parked tool call, that step runs per-call. |
+| `session_idle_seconds` | `3600` | A kept process that waits this long for its user ends. A parked tool call does not count as waiting. The default is the prompt cache's lifetime. |
 
 What it costs: memory between calls. During a call both modes hold one Claude Code process, about 200 to 250 MB. A kept
 process holds it between calls too, and it grows with the history it carries: 245 to 290 MB at round 200 on Linux, 284
@@ -212,17 +213,22 @@ keeps one Claude Code process alive between model calls:
 - A kept process counts against `max_concurrent` only while it serves a step. Between steps, idle or with a tool
   parked, it holds no place, so idle agents do not block title and summary calls; `max_sessions` bounds how many
   stay alive.
-- These calls still start a fresh process for one step (a one-shot): auxiliary calls (titles, summaries), calls without
-  tools, a second call on the same client while one is running, and any call past `max_sessions` kept processes in
-  this Hermes process (about 200 MB each).
-- The process ends on `cancel()`, `close()`, Hermes releasing the client, `session_idle_seconds` idle (an hour by
-  default, the prompt cache's lifetime), and when Hermes exits, even by `SIGKILL`: its standard input closes, which ends Claude Code's session.
+- These calls still start a fresh process for one step (a one-shot): a conversation's first `session_min_rounds` tool
+  rounds, auxiliary calls (titles, summaries), calls without tools, a second call on the same client while one is
+  running, and a call at `max_sessions` when no kept process can give its place up (each is serving a step or holds a
+  parked tool call).
+- The process ends on `cancel()`, `close()`, Hermes releasing the client, eviction at `max_sessions` (the one that has
+  waited longest for its user), `session_idle_seconds` waiting for its user (an hour by default, the prompt cache's
+  lifetime), and when Hermes exits, even by `SIGKILL`: its standard input closes, which ends Claude Code's session.
+- A subagent's process ends when the subagent finishes: Hermes closes the child agent on delegate completion
+  (`child.close()`, `tools/delegate_tool_child_run.py`), which closes its model clients (`client.close()` in
+  `agent/client_lifecycle.py`, for the shared client and the cached per-request one), and `close()` ends the kept
+  process at once. A client Hermes drops without closing ends its process when it is collected.
 - A tool parked on a human (an approval, a hand-off) keeps its call open: the plugin holds Claude Code's `tools/call`
   until Hermes brings the result, and Claude Code waits for it (`MCP_TOOL_TIMEOUT` is set to 24 hours on a kept
-  process). Hermes' request timeout and stale timer run only inside a model call, not while a tool is parked. The one
-  idle hour above counts from the end of the last model step, so a tool parked longer than that ends the process; the
-  next step then starts a new one with the per-call bytes, as a one-shot would have, and nothing else changes. Measured
-  on Linux and macOS: a call parked for 150 s continued on the same process with the same upstream bytes.
+  process). Hermes' request timeout and stale timer run only inside a model call, not while a tool is parked, and the
+  idle limit does not run while a call is parked either. Measured on Linux and macOS: a call parked for 150 s continued
+  on the same process with the same upstream bytes.
 - Claude Code reports list price per process and only when a turn ends, so a tool step has no price of its own and the
   turn's last step carries the turn's.
 
@@ -363,7 +369,7 @@ python evals/directsdk_admission.py /path/to/claude
 python evals/directsdk_cache_wire.py /path/to/claude
 ```
 
-CI runs both evals and the session tests that need the CLI (`tests/test_directsdk_session.py`, `_lifecycle.py`, `_parked.py`, `_steer.py`, `_doubt.py` and `_version.py`, which skip where no Claude Code is installed) on Linux and macOS through `evals/ci.sh`, against a pinned Claude Code installed from npm (`CLAUDE_CODE_VERSION`, default 2.1.292). They need no credentials and make no inference calls. Bump the pin to qualify a new Claude Code release: a change in native's wire shape fails here before it reaches users. Session mode then runs on that release once it is added to `session_versions` in `plugin.yaml` (`tests/test_directsdk_session_version.py` fails on a pin that is not listed).
+CI runs both evals and the session tests that need the CLI (`tests/test_directsdk_session.py`, `_lifecycle.py`, `_parked.py`, `_steer.py`, `_doubt.py`, `_version.py` and `_memory.py`, which skip where no Claude Code is installed) on Linux and macOS through `evals/ci.sh`, against a pinned Claude Code installed from npm (`CLAUDE_CODE_VERSION`, default 2.1.292). They need no credentials and make no inference calls. Bump the pin to qualify a new Claude Code release: a change in native's wire shape fails here before it reaches users. Session mode then runs on that release once it is added to `session_versions` in `plugin.yaml` (`tests/test_directsdk_session_version.py` fails on a pin that is not listed).
 
 The long-session bench compares the per-call and kept-process paths on the real CLI against a scripted loopback
 upstream, with no credentials and no inference:

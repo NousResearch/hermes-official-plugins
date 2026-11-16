@@ -57,6 +57,12 @@
   the tool results do not match the parked calls; `steer`: a steer the process cannot carry; `exited`; `diverged`: the
   relay refused the request before upstream), so a rising restart rate shows in `hermes logs`. The divergence line
   moved from info to debug with the others.
+- Session mode keeps memory where it pays (maintainer review of #361). A conversation keeps a process only after
+  `session_min_rounds` tool rounds (default 8); before that it runs per-call, so short chats and most subagents hold
+  none. At `max_sessions`, the kept process that has waited longest for its user gives its place to the step asking
+  now; one serving a step or holding a parked tool call never does (before, the first four agents kept their places
+  until an idle hour passed, and later ones ran per-call). A parked tool call no longer counts as idle. A finished
+  subagent's process ends when Hermes closes the child agent, which closes its client.
 - Session mode runs only on the Claude Code versions its tests passed on (`session_versions` in `plugin.yaml`:
   2.1.292, 2.1.322, 2.1.323; maintainer review of #361, item 5). Any other version runs per-call, with one log line
   that says why; a kept process whose version leaves the list ends at its next step (`version`). The version is the

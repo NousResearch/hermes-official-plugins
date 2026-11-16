@@ -16,5 +16,5 @@ for eval in evals/directsdk_admission.py evals/directsdk_cache_wire.py; do
 done
 # The session tests skip without a Claude Code on PATH, so the plugin suite alone never runs them. Run them on the pin.
 echo "::group::session tests"
-CLAUDE_CODE_BIN="$claude" python -m pytest -q tests/test_directsdk_session.py tests/test_directsdk_session_lifecycle.py tests/test_directsdk_session_parked.py tests/test_directsdk_session_steer.py tests/test_directsdk_session_doubt.py tests/test_directsdk_session_version.py
+CLAUDE_CODE_BIN="$claude" python -m pytest -q tests/test_directsdk_session.py tests/test_directsdk_session_lifecycle.py tests/test_directsdk_session_parked.py tests/test_directsdk_session_steer.py tests/test_directsdk_session_doubt.py tests/test_directsdk_session_version.py tests/test_directsdk_session_memory.py
 echo "::endgroup::"

@@ -7,7 +7,11 @@ processes started and alive at once, RSS of a kept process, and that a kept proc
 compaction or edit and survives a tool parked for ``--park`` seconds. Both modes see the same HOME and the same
 deterministic replies, so their upstream bodies must be byte-identical.
 
-Run: python evals/directsdk_session_bench.py /path/to/claude [--rounds 200] [--park 0] [--out bench.json]
+``--steer 50,200`` has Hermes deliver a /steer after those tool rounds, and adds a third mode, ``session_restart``: session
+mode with the steer not carried (as before the kept process took it), so the steer step's cost is measured kept,
+restarted and per-call.
+
+Run: python evals/directsdk_session_bench.py /path/to/claude [--rounds 200] [--park 0] [--steer 50,200] [--out bench.json]
 """
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,6 +38,9 @@ TOOLS = [{'type': 'function', 'function': {'name': 'read_file', 'description': '
           'parameters': {'type': 'object', 'properties': {'path': {'type': 'string'}}, 'required': ['path']}}}]
 USAGE = {'input_tokens': 10, 'output_tokens': 5, 'cache_read_input_tokens': 0, 'cache_creation_input_tokens': 0}
 SYSTEM = 'You are a bench agent. ' * 40
+STEER = {'role': 'user', 'content': '[OUT-OF-BAND USER MESSAGE \u2014 a direct message from the user, delivered once at this '
+         'position; not tool output and not a new delivery when replayed from conversation history]\nread g1 next\n'
+         '[/OUT-OF-BAND USER MESSAGE]'}  # Hermes' steer_user_row
 
 
 def opens_turn(message):
@@ -169,7 +176,7 @@ def client(binary, home, upstream, session):
         'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1', 'DISABLE_TELEMETRY': '1', 'DISABLE_ERROR_REPORTING': '1'})
 
 
-def turn(c, messages, rows, *, phase, rounds, park=0, park_at=None):
+def turn(c, messages, rows, *, phase, rounds, park=0, park_at=None, steer_at=()):
     """Hermes' loop for one user turn: one create() per model step, the tool results appended for each call."""
     budget = len(messages) + 2 * (rounds + 2)
     while True:
@@ -184,6 +191,8 @@ def turn(c, messages, rows, *, phase, rounds, park=0, park_at=None):
         kept = c._session.process.pid if c._session is not None else None
         row = {'phase': phase, 'history': len(messages), 'wall_s': round(wall, 4), 'tool': bool(message.get('tool_calls')),
                'kept_pid': kept, 'restarted': previous is not None and kept != previous, 'kept_rss': rss_of(kept) if kept else None}
+        if messages[-1] is STEER:
+            row['steer_after_rounds'] = len([r for r in rows if r['phase'] == phase and r['tool']])
         rows.append(row)
         if VERBOSE:
             print(json.dumps(row), file=sys.stderr, flush=True)
@@ -196,9 +205,11 @@ def turn(c, messages, rows, *, phase, rounds, park=0, park_at=None):
             row['parked_s'] = park
         messages += [{'role': 'tool', 'tool_call_id': call['id'], 'content': 'contents of ' + call['id'] + ' ' + 'x' * 64}
                      for call in message['tool_calls']]
+        if len([r for r in rows if r['phase'] == phase and r['tool']]) in steer_at:
+            messages.append(STEER)
 
 
-def scenario(binary, home, upstream, session, rounds, park):
+def scenario(binary, home, upstream, session, rounds, park, steer_at=()):
     """One full run of a mode. Returns the per-step rows, the upstream bodies and the process counts."""
     rows, sampler = [], Sampler()
     drained()
@@ -207,7 +218,7 @@ def scenario(binary, home, upstream, session, rounds, park):
     try:
         with Spawns() as spawns:
             messages = [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': 'go'}]
-            turn(c, messages, rows, phase='turn1', rounds=rounds, park=park, park_at=3 if park else None)
+            turn(c, messages, rows, phase='turn1', rounds=rounds, park=park, park_at=3 if park else None, steer_at=steer_at)
             # Hermes compaction: the finished tool loop becomes a summary; the kept process cannot continue this.
             compacted = messages[:2] + [{'role': 'user', 'content': f'Summary of earlier work: read f0..f{rounds - 1}.'}]
             compacted.append({'role': 'user', 'content': 'and now?'})
@@ -250,7 +261,9 @@ def summarize(rows, rounds):
             'restart_after_compaction': next((r['restarted'] for r in rows if r['phase'] == 'after_compaction'), None),
             'restart_after_edit': next((r['restarted'] for r in rows if r['phase'] == 'after_edit'), None),
             'kept_rss_mb': dist([v / 2**20 for v in rss]) if rss else None,
-            'parked': None if parked is None else {'seconds': rows[parked]['parked_s'], 'same_process_after': same_after}}
+            'parked': None if parked is None else {'seconds': rows[parked]['parked_s'], 'same_process_after': same_after},
+            'steer_steps': [{'after_rounds': r['steer_after_rounds'], 'wall_s': r['wall_s'], 'restarted': r['restarted']}
+                            for r in rows if 'steer_after_rounds' in r]}
 
 
 def save(report, out):
@@ -259,37 +272,45 @@ def save(report, out):
         Path(out).write_text(json.dumps(report, indent=1))
 
 
-def run(binary, rounds, park, repeats, out=None):
+def run(binary, rounds, park, repeats, out=None, steer_at=()):
     binary = shutil.which(binary) or str(Path(binary).absolute())  # a bare `claude` resolves on PATH
     version = subprocess.check_output([binary, '--version'], text=True, stdin=subprocess.DEVNULL,
                                       env={'PATH': os.defpath, 'HOME': tempfile.gettempdir()}).strip()
-    report = {'native_version': version, 'rounds': rounds, 'park_s': park, 'repeats': repeats, 'runs': [], 'modes': {}}
-    walls = {'per_call': [], 'session': []}
+    report = {'native_version': version, 'rounds': rounds, 'park_s': park, 'steer_at': list(steer_at), 'repeats': repeats,
+              'runs': [], 'modes': {}}
+    modes = (('per_call', False), ('session', True)) + ((('session_restart', True),) if steer_at else ())
+    walls = {mode: [] for mode, _ in modes}
+    carry = directsdk.steer_tail
     for repeat in range(repeats):
         with tempfile.TemporaryDirectory(prefix='directsdk-bench-') as home:
             bodies = {}
-            for mode, session in (('per_call', False), ('session', True)):
+            for mode, session in modes:
                 server = ThreadingHTTPServer(('127.0.0.1', 0), Upstream)
                 server.bodies, server.rounds = [], rounds
                 threading.Thread(target=server.serve_forever, daemon=True).start()
+                # session_restart: the kept process does not take the steer (resumes() finds none), so it restarts.
+                directsdk.steer_tail = (lambda content: None) if mode == 'session_restart' else carry
                 try:
                     started = time.perf_counter()
-                    rows, bodies[mode], processes = scenario(binary, home, server, session, rounds, park if session else 0)
+                    rows, bodies[mode], processes = scenario(binary, home, server, session, rounds, park if session else 0, steer_at)
                     total = time.perf_counter() - started
                 finally:
+                    directsdk.steer_tail = carry
                     server.shutdown()
                     server.server_close()
                 summary = summarize(rows, rounds)
                 summary.update(processes=processes, total_wall_s=round(total, 2))
                 walls[mode] += [r['wall_s'] for r in rows if r['phase'] == 'turn1' and r['tool']]
-                report['runs'].append({'repeat': repeat, 'mode': mode, 'summary': summary, 'steps': rows})
+                run_row = {'repeat': repeat, 'mode': mode, 'summary': summary, 'steps': rows}
+                report['runs'].append(run_row)
                 print(json.dumps({'repeat': repeat, 'mode': mode, **summary}), file=sys.stderr, flush=True)
-            identical = bodies['per_call'] == bodies['session']
-            report['runs'][-1]['bytes_identical_to_per_call'] = identical
-            if not identical:
-                diverging = next((i for i, (a, b) in enumerate(zip(bodies['per_call'], bodies['session'])) if a != b), min(map(len, bodies.values())))
-                report['runs'][-1]['first_differing_request'] = diverging
-            print(json.dumps({'repeat': repeat, 'bytes_identical_to_per_call': identical, 'requests': len(bodies['per_call'])}), file=sys.stderr, flush=True)
+                if session:
+                    identical = bodies['per_call'] == bodies[mode]
+                    run_row['bytes_identical_to_per_call'] = identical
+                    if not identical:
+                        run_row['first_differing_request'] = next((i for i, (a, b) in enumerate(zip(bodies['per_call'], bodies[mode])) if a != b),
+                                                                  min(len(bodies['per_call']), len(bodies[mode])))
+                    print(json.dumps({'repeat': repeat, 'mode': mode, 'bytes_identical_to_per_call': identical, 'requests': len(bodies[mode])}), file=sys.stderr, flush=True)
             for mode in walls:
                 report['modes'][mode] = {'tool_round_wall_s': dist(walls[mode])}
             save(report, out)
@@ -302,11 +323,12 @@ if __name__ == '__main__':
     parser.add_argument('--rounds', type=int, default=200, help='tool rounds in the first turn (default 200)')
     parser.add_argument('--park', type=float, default=0, help='seconds to park the third tool call on (session mode)')
     parser.add_argument('--repeats', type=int, default=1)
+    parser.add_argument('--steer', default='', help='comma-separated tool rounds after which Hermes delivers a /steer')
     parser.add_argument('--out', help='write the full report (every step) here; stdout gets the summary')
     parser.add_argument('--verbose', action='store_true', help='print every step to stderr as it completes')
     args = parser.parse_args()
     VERBOSE = args.verbose
-    result = run(args.binary, args.rounds, args.park, args.repeats, args.out)
+    result = run(args.binary, args.rounds, args.park, args.repeats, args.out, tuple(int(n) for n in args.steer.split(',') if n))
     if args.out:
         for r in result['runs']:
             r.pop('steps', None)

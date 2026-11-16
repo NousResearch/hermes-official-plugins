@@ -162,7 +162,9 @@ Session mode runs only on the Claude Code versions its tests passed on, listed i
 (`session_versions` on the `claude` dependency: 2.1.292, the CI pin, plus 2.1.322 and 2.1.323). Any other version
 runs every call per-call, and the log says so once (`session mode runs only on Claude Code ...; this is ..., so every
 call runs per-call`). An update of Claude Code then costs latency, never correctness. A kept process whose version
-leaves the list ends at its next step (restart reason `version`).
+leaves the list ends at its next step (restart reason `version`). The version is the one Claude Code reports in its own
+init event (`claude_code_version`), kept per binary until the binary changes, so the first step on a new or updated
+binary runs per-call; no extra process is started to ask.
 
 ```sh
 hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.session_mode false

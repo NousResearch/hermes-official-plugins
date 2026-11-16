@@ -59,9 +59,10 @@
   moved from info to debug with the others.
 - Session mode runs only on the Claude Code versions its tests passed on (`session_versions` in `plugin.yaml`:
   2.1.292, 2.1.322, 2.1.323; maintainer review of #361, item 5). Any other version runs per-call, with one log line
-  that says why; a kept process whose version leaves the list ends at its next step (`version`). The version is read
-  once per command until a file it names changes (`claude --version`); only a release's own number counts (a
-  pre-release of 2.1.323 is not 2.1.323), and a version that cannot be read means per-call.
+  that says why; a kept process whose version leaves the list ends at its next step (`version`). The version is the
+  one Claude Code reports in its own init event (`claude_code_version`), kept per binary until a file of it changes,
+  so the first step on a new or updated binary runs per-call; only a release's own number counts (a pre-release of
+  2.1.323 is not 2.1.323), and a version that cannot be read means per-call.
 - `session_idle_seconds` setting (default 3600, the prompt cache's lifetime): how long a kept process may idle. The
   session settings and their memory cost are documented in the README.
 - Session mode fails closed (maintainer review of #361, items 1 to 4). A kept process's first resumed request goes

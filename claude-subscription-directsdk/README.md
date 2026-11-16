@@ -145,12 +145,28 @@ hermes config set $S.upstream_ca_file /etc/ssl/corp-root.pem
 - An inherited `ANTHROPIC_BASE_URL` stays refused with or without these settings; no environment variable selects the upstream.
 - What goes to the gateway: Claude Code sends only Messages requests (`POST /v1/messages`) to its base URL, and the relay forwards that path and nothing else. Its own account calls go to `api.anthropic.com` whatever the base URL: `/usage` (`/api/oauth/usage`), the picker handshake and every spawn's bootstrap, MCP directory and, with `claude_code_telemetry` on, feature-flag and event logging (measured on 2.1.319 and 2.1.292). Those carry the Claude login to Anthropic itself, never to another host. With `upstream_proxy` or `upstream_ca_file` set, Claude Code is started with that proxy (`HTTPS_PROXY`, credentials included) and that CA (`NODE_EXTRA_CA_CERTS`), so these calls leave through the same egress; the loopback relay stays in `NO_PROXY`. A network that allows no direct route to `api.anthropic.com` therefore needs `upstream_proxy`; with only `upstream_url` set, `/usage` and those calls go out directly.
 
-**Keep one Claude Code process per agent** (`session_mode`, bool, default `true`) and **kept processes per Hermes
-process** (`max_sessions`, int, default `4`). See [Transport](#transport). Turn session mode off to start a new Claude Code
-for every model call, as before 0.4.0:
+**Session mode** (see [Transport](#transport)). These are read from the serving profile's config on every call:
+
+| Setting | Default | What it does |
+|---|---|---|
+| `session_mode` | `true` | Keep one Claude Code process per agent between model calls. `false`: a new process for every call, as before 0.4.0. |
+| `max_sessions` | `4` | At most this many kept processes in one Hermes process; a call past it runs per-call. |
+| `session_idle_seconds` | `3600` | A kept process that serves no step for this long ends. The default is the prompt cache's lifetime. |
+
+What it costs: memory between calls. During a call both modes hold one Claude Code process, about 200 to 250 MB. A kept
+process holds it between calls too, and it grows with the history it carries: 245 to 290 MB at round 200 on Linux, 284
+to 307 MB on macOS, 325 MB the most seen. So `max_sessions` 4 can hold about 1 to 1.3 GB while agents are idle, until
+`session_idle_seconds` ends them. Requests are byte-identical in both modes, so cost and caching do not change.
+
+Session mode runs only on the Claude Code versions its tests passed on, listed in `plugin.yaml`
+(`session_versions` on the `claude` dependency: 2.1.292, the CI pin, plus 2.1.322 and 2.1.323). Any other version
+runs every call per-call, and the log says so once (`session mode runs only on Claude Code ...; this is ..., so every
+call runs per-call`). An update of Claude Code then costs latency, never correctness. A kept process whose version
+leaves the list ends at its next step (restart reason `version`).
 
 ```sh
 hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.session_mode false
+hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.session_idle_seconds 600
 ```
 
 ## Transport
@@ -185,7 +201,7 @@ keeps one Claude Code process alive between model calls:
 - Any other change Claude Code cannot continue from restarts it with a replay, exactly as a fresh call would: an edited
   or compacted history, a steer of more than one text block, a different model, system prompt, tool list, effort or
   output cap. Each restart logs its reason at debug level (`launch`, `edited`, `results`, `steer`, `exited`,
-  `diverged`, `unproven`, `no_tool_id`, `tool_id`, `control`, `event`).
+  `diverged`, `unproven`, `no_tool_id`, `tool_id`, `control`, `event`, `version`).
 - A kept process that does something the plugin does not know is not trusted again: a tool call without
   `claudecode/toolUseId`, with an id its step never received or one it asked for before, a control request other than
   the hermes server's MCP traffic, or an output line that is not a JSON object. Its call is never parked or waited on.
@@ -197,8 +213,8 @@ keeps one Claude Code process alive between model calls:
 - These calls still start a fresh process for one step (a one-shot): auxiliary calls (titles, summaries), calls without
   tools, a second call on the same client while one is running, and any call past `max_sessions` kept processes in
   this Hermes process (about 200 MB each).
-- The process ends on `cancel()`, `close()`, Hermes releasing the client, an hour idle (the prompt cache's lifetime),
-  and when Hermes exits, even by `SIGKILL`: its standard input closes, which ends Claude Code's session.
+- The process ends on `cancel()`, `close()`, Hermes releasing the client, `session_idle_seconds` idle (an hour by
+  default, the prompt cache's lifetime), and when Hermes exits, even by `SIGKILL`: its standard input closes, which ends Claude Code's session.
 - A tool parked on a human (an approval, a hand-off) keeps its call open: the plugin holds Claude Code's `tools/call`
   until Hermes brings the result, and Claude Code waits for it (`MCP_TOOL_TIMEOUT` is set to 24 hours on a kept
   process). Hermes' request timeout and stale timer run only inside a model call, not while a tool is parked. The one
@@ -345,7 +361,7 @@ python evals/directsdk_admission.py /path/to/claude
 python evals/directsdk_cache_wire.py /path/to/claude
 ```
 
-CI runs both evals and the session tests that need the CLI (`tests/test_directsdk_session.py`, `_lifecycle.py`, `_parked.py`, `_steer.py` and `_doubt.py`, which skip where no Claude Code is installed) on Linux and macOS through `evals/ci.sh`, against a pinned Claude Code installed from npm (`CLAUDE_CODE_VERSION`, default 2.1.292). They need no credentials and make no inference calls. Bump the pin to qualify a new Claude Code release: a change in native's wire shape fails here before it reaches users.
+CI runs both evals and the session tests that need the CLI (`tests/test_directsdk_session.py`, `_lifecycle.py`, `_parked.py`, `_steer.py`, `_doubt.py` and `_version.py`, which skip where no Claude Code is installed) on Linux and macOS through `evals/ci.sh`, against a pinned Claude Code installed from npm (`CLAUDE_CODE_VERSION`, default 2.1.292). They need no credentials and make no inference calls. Bump the pin to qualify a new Claude Code release: a change in native's wire shape fails here before it reaches users.
 
 The long-session bench compares the per-call and kept-process paths on the real CLI against a scripted loopback
 upstream, with no credentials and no inference:

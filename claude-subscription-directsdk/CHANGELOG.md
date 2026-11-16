@@ -57,6 +57,12 @@
   the tool results do not match the parked calls; `steer`: a steer the process cannot carry; `exited`; `diverged`: the
   relay refused the request before upstream), so a rising restart rate shows in `hermes logs`. The divergence line
   moved from info to debug with the others.
+- Session mode runs only on the Claude Code versions its tests passed on (`session_versions` in `plugin.yaml`:
+  2.1.292, 2.1.322, 2.1.323; maintainer review of #361, item 5). Any other version runs per-call, with one log line
+  that says why; a kept process whose version leaves the list ends at its next step (`version`). The version is read
+  once per binary file (`claude --version`).
+- `session_idle_seconds` setting (default 3600, the prompt cache's lifetime): how long a kept process may idle. The
+  session settings and their memory cost are documented in the README.
 - Session mode fails closed (maintainer review of #361, items 1 to 4). A kept process's first resumed request goes
   upstream only if it equals the request a per-call step builds for the same history (a one-shot builds it into a
   relay that sends nothing upstream); before, only its opening turn was compared, so a tail native built differently

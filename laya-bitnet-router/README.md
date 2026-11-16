@@ -132,19 +132,39 @@ laya_llm_request_middleware
 Hermes sends to selected provider
 ```
 
-## Contributing
-
-1. Fork the repo
-2. Add routing rules in `middleware.py:ROUTING_RULES`
-3. Add tests in `tests/`
-4. Submit PR
-
 ## License
 
 MIT License - see [LICENSE](LICENSE)
 
-## Credits
+## Credits & Acknowledgments
 
-- [Laya](https://github.com/convai/laya) - Typed decision engine
-- [bitnet.cpp](https://github.com/microsoft/BitNet) - 1-bit LLM inference
-- [Hermes](https://github.com/NousResearch/hermes) - AI agent framework
+This plugin is built on top of excellent open-source projects:
+
+### Core Dependencies
+
+| Project | Description | Repository |
+|---------|-------------|------------|
+| **Laya** | Typed decision engine for System-1 fast routing decisions | [convai/laya](https://github.com/convai/laya) |
+| **bitnet.cpp** | Official 1-bit LLM inference engine with optimized kernels | [microsoft/BitNet](https://github.com/microsoft/BitNet) |
+| **Hermes** | AI agent framework with plugin architecture | [NousResearch/hermes](https://github.com/NousResearch/hermes) |
+
+### Models Used
+
+| Model | Source | Description |
+|-------|--------|-------------|
+| **BitNet b1.58 2B** | Microsoft Research | Native 1.58-bit ternary LLM trained on 4T tokens |
+| **Nemotron 3 Ultra** | NVIDIA | High-quality instruct model family |
+| **Laya Decision Model** | convai | Lightweight typed decision engine |
+
+### Special Thanks
+
+- **Microsoft Research** for pioneering 1-bit LLM architecture and releasing BitNet b1.58
+- **convai** for Laya's innovative typed decision approach
+- **NVIDIA** for Nemotron model family
+- **Nous Research** for the Hermes agent framework and plugin ecosystem
+
+## Related Projects
+
+- [Hermes Official Plugins](https://github.com/NousResearch/hermes-official-plugins) - Official plugin catalog
+- [BitNet b1.58 Technical Report](https://arxiv.org/abs/2410.16144) - Architecture details
+- [Laya Documentation](https://github.com/convai/laya) - Typed decision engine docs

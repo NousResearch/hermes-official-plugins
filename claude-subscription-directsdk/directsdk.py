@@ -1521,8 +1521,8 @@ class Client:
     def _per_call_request(self, request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id):
         """The request a per-call step sends for ``frames``, from a one-shot whose relay keeps it and sends nothing
         upstream; None when it could not be had."""
-        probe = self._launch(request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id, False)
-        probe.admission.probe = True
+        probe = self._launch(request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id, False,
+                             probe=True)
         try:
             probe.replay(request, frames, timeout)
             probe.send(request, None, timeout)
@@ -1537,7 +1537,7 @@ class Client:
         return probe.admission.probed
 
     def _launch(self, request, env, resolved, upstream, kwargs, body, tools, system, frames, timeout, session_id, session, reservation=None,
-                version=None):
+                version=None, probe=False):
         """Start native for one step: a session (kept for the next step, taking the place ``reservation`` holds in
         ``_live``) or a one-shot (ends after this one)."""
         queried = frames[-1]['message']['content']
@@ -1546,6 +1546,8 @@ class Client:
         # A Hermes auxiliary one-shot (summary, title: marked by the profile hook, one turn, no tools) is
         # never replayed, so the relay drops its message cache marks instead of moving them.
         admission.one_shot = kwargs.get('hermes_auxiliary') is True and not json.loads(body)['tools'] and len(frames) == 1
+        # A probe's relay keeps the request and forwards nothing, from before its Claude Code starts.
+        admission.probe = probe
         admission.eager = session_id not in _BUFFER_TOOL_INPUT
         if session:
             # The relay keeps a kept native's requests byte-identical to what a fresh replay sends.

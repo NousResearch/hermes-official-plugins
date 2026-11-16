@@ -33,6 +33,14 @@ config_schema:
       Let Claude Code send its usage telemetry and error reports. Off by default. The model picker and
       /usage stay complete either way: their zero-inference probes still fetch Claude Code's feature
       flags and plan limits.
+  max_concurrent:
+    type: int
+    default: 4
+    label: Claude Code calls at once
+    description: >-
+      At most this many Claude Code processes (about 250 MB each) run at once in one Hermes process, across its
+      profiles, subagents and auxiliary calls. A call past the limit waits for a free one within its own timeout;
+      it is not failed or sent to another provider. /usage and the model picker do not count.
   extra_usage:
     type: string
     default: notify

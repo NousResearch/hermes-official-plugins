@@ -107,6 +107,12 @@ hermes config set plugins.entries.claude-subscription-directsdk-experimental.set
 
 It is read for the active profile on every spawn, so it applies to the next request without a restart. Whatever the setting, the plugin never lets the CLI auto-update itself, use its feedback upload path or send its own session-title request (`DISABLE_AUTOUPDATER`, `DISABLE_FEEDBACK_COMMAND`, `CLAUDE_CODE_DISABLE_TERMINAL_TITLE`), and an opt-out you export yourself (`DISABLE_TELEMETRY`, `DO_NOT_TRACK`, ...) is passed through untouched.
 
+**Claude Code calls at once** (`max_concurrent`, default 4; #329). At most this many Claude Code turn processes run at the same time in one Hermes process, whatever started them: the main agent, parallel subagents (`delegate_task` runs up to 10 at once), auxiliary calls such as titles and compression, and every profile a multiplexed gateway serves. Each process uses about 250 MB, and all of them draw on one subscription, whose rate limits a burst can trip together (the plugin turns Claude Code's own retries off so Hermes owns retry policy). A call past the limit waits for a free place in arrival order, within its own request timeout; it is not failed and not sent to a fallback provider. Interrupting a waiting call ends it at once without starting Claude Code. A call that waits longer than 2 s writes a warning to the log (`hermes logs`) naming the limit; a model provider has no way to put a line on Hermes' status bar, so the CLI shows the usual spinner meanwhile. A place is freed when its process exits, so a crashed or killed process never holds one; a kept process (see [Transport](#transport)) gives its place back at the end of each step. `/usage`, the model picker and the login check do not count: they send no model request and finish within seconds. The setting is read per call from the profile that makes it; with profiles that set different limits, each call waits until fewer than its own limit are running.
+
+```sh
+hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.max_concurrent 6
+```
+
 **Extra usage** (`extra_usage`, `allow` | `notify` | `ask` | `stop`, default `notify`). What a request does once Claude Code reports that this account has passed its plan limit and is drawing paid extra usage (#43). Claude Code sends that signal with every request (`rate_limit_event`: `isUsingOverage`, `resetsAt`); the plugin keeps it in memory per process, per Claude login, and writes no files.
 
 - `allow`: nothing changes.
@@ -176,6 +182,9 @@ keeps one Claude Code process alive between model calls:
   or compacted history, a steer of more than one text block, a different model, system prompt, tool list, effort or
   output cap. Each restart logs its reason at debug level (`launch`, `edited`, `results`, `steer`, `exited`,
   `diverged`).
+- A kept process counts against `max_concurrent` only while it serves a step. Between steps, idle or with a tool
+  parked, it holds no place, so idle agents do not block title and summary calls; `max_sessions` bounds how many
+  stay alive.
 - These calls still start a fresh process for one step (a one-shot): auxiliary calls (titles, summaries), calls without
   tools, a second call on the same client while one is running, and any call past `max_sessions` kept processes in
   this Hermes process (about 200 MB each).
@@ -200,8 +209,8 @@ parse, and the call is never run.
 
 ## Ownership and replay
 
-A new process runs in the plugin's stable working directory, with its system prompt and settings in private launch
-files that are removed after its first step (and swept on the next start if Hermes was killed). Native tools, skills and setting sources are disabled. MCP advertises only the current Hermes tool inventory, and native `dontAsk` denies anything else. Full descriptions and schemas are supplied through tools plus validated generation fields in `CLAUDE_CODE_EXTRA_BODY`, applied from a private native settings file; the system prompt uses a private file too. This avoids the OS per-argument/environment-string limit. Authentication and identity fields are never replaced.
+A new process starts once a `max_concurrent` place is free and runs in the plugin's stable working directory, with
+its system prompt and settings in private launch files that are removed after its first step (and swept on the next start if Hermes was killed). Native tools, skills and setting sources are disabled. MCP advertises only the current Hermes tool inventory, and native `dontAsk` denies anything else. Full descriptions and schemas are supplied through tools plus validated generation fields in `CLAUDE_CODE_EXTRA_BODY`, applied from a private native settings file; the system prompt uses a private file too. This avoids the OS per-argument/environment-string limit. Authentication and identity fields are never replaced.
 
 For per-call replay, native moves today's date line from its environment message into a trailing `role: system` message, and puts its context reminder ahead of the newest user turn; neither recurs on the next request. The relay returns that exact date line to the end of the environment message (other trailing text stays put) and drops plain-text reminders before the newest queried user frame after an assistant turn, as native's own tool-result steps already do. Later requests then replay the context each step's signed thinking was generated against, and keep the previous turn's cache prefix (#40, #36). A frame that cannot be found exactly once is left as native built it. Removed cache markers transfer without increasing their count.
 

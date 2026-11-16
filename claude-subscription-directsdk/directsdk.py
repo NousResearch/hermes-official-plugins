@@ -27,21 +27,23 @@ import weakref
 from types import SimpleNamespace
 
 try:
+    from . import concurrency
     from .admission import steer_tail
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from .process_tree import kill_process_tree, own_process_group, unreaped
     from .directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
-        apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, observe_rate_limit, reap_orphaned_refresh_lock, relay,
-        resolve_upstream, session_settings, Upstream)
+        apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, max_concurrent, observe_rate_limit,
+        reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, Upstream)
 except ImportError:
+    import concurrency
     from admission import steer_tail
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from process_tree import kill_process_tree, own_process_group, unreaped
     from directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
-        apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, observe_rate_limit, reap_orphaned_refresh_lock, relay,
-        resolve_upstream, session_settings, Upstream)
+        apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, max_concurrent, observe_rate_limit,
+        reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, Upstream)
 
 
 logger = logging.getLogger(__name__)
@@ -584,6 +586,9 @@ def _hand_off(native):
                 native.release()
             finally:
                 _draining.discard(process)
+                if native.slot is not None:
+                    # The answer returned long ago; the slot frees only now that this native has exited.
+                    native.slot.release()
 
     threading.Thread(target=drain, daemon=True, name='directsdk-drain').start()
 
@@ -651,7 +656,7 @@ class Native:
         self.parked, self.results = {}, {}
         # A kept session: what it was launched with, the frames it holds, and what the next step must bring.
         self.ident = self.frames = self.expect = self.idle = self.on_exit = None
-        self.cost = 0
+        self.cost, self.slot = 0, None
         self.process = request.spawn(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      text=True, encoding='utf-8', cwd=workdir, env=env)
         # Native's stderr is diagnosis, not noise: a gateway-only failure (issue #44) vanished into DEVNULL.
@@ -1266,7 +1271,7 @@ class Client:
 
     def _run(self, request, kwargs, body, manifest, names, system, frames):
         hermes_names = {native: hermes for hermes, native in names.items()}
-        native, state, stepping = None, {}, False
+        native, state, stepping, slot = None, {}, False, None
         try:
             timeout = kwargs.get('timeout', self.timeout)
             timeout = getattr(timeout, 'read', timeout)
@@ -1293,6 +1298,10 @@ class Client:
             # Anthropic or the profile's opted-in gateway; an explicit Client(env=...) fixture may name its own.
             upstream = (Upstream(env['ANTHROPIC_BASE_URL'], None, None, False) if env.get('ANTHROPIC_BASE_URL')
                         else resolve_upstream())
+            # Wait for a free slot (#329), then check extra usage: calls that ran meanwhile may have crossed the limit.
+            # A kept process holds a slot only while it serves a step; idle or parked between steps it holds none.
+            slot = yield from concurrency.acquire(max_concurrent(), request.cancelled, timeout,
+                                                  lambda: self._chunk(kwargs['model'], {}))
             # The extra_usage setting refuses here, before anything is billed (#43).
             check_extra_usage(resolved, dict(env), upstream)
             # An inherited effort level would override the --effort Hermes passes below.
@@ -1342,7 +1351,7 @@ class Client:
                         # However the launch ended, the reservation is spent: native holds the place now, or nothing does.
                         with _live_lock:
                             _live.discard(reservation)
-                    native.ident = ident
+                    native.ident, native.slot = ident, slot
                     native.replay(request, frames, timeout)
                     if not session:
                         native.send(request, None, timeout)
@@ -1351,6 +1360,7 @@ class Client:
                         if request.cancelled.is_set():
                             raise RuntimeError('Claude request cancelled')
                         request.process, request.admission = native.process, native.admission
+                    native.slot = slot
                     native.admission.rearm(timeout, frames[-1]['message']['content'], frames)
                     native.admission.eager = session_id not in _BUFFER_TOOL_INPUT
                     if how[0] == 'user':
@@ -1367,15 +1377,22 @@ class Client:
                 self._restart(native, 'diverged')
                 native = None
         finally:
-            request.cancel()
             outcome = state.get('outcome')
-            if native is not None and outcome not in ('kept', 'handed_off'):
-                native.kill()
-                native.release()
-            with self._lock:
-                self._requests.discard(request)
-                if stepping and outcome != 'kept':
-                    self._stepping = False
+            try:
+                request.cancel()
+                if native is not None and outcome not in ('kept', 'handed_off'):
+                    native.kill()
+                    native.release()
+            finally:
+                if slot is not None and outcome != 'handed_off':
+                    # A kept process stays alive but holds no slot between steps; a handed-off one-shot frees it on exit.
+                    slot.release()
+                    if native is not None:
+                        native.slot = None
+                with self._lock:
+                    self._requests.discard(request)
+                    if stepping and outcome != 'kept':
+                        self._stepping = False
 
     def _launch(self, request, env, resolved, upstream, kwargs, body, tools, system, frames, timeout, session_id, session, reservation=None):
         """Start native for one step: a session (kept for the next step, taking the place ``reservation`` holds in

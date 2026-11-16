@@ -709,6 +709,9 @@ class Admission:
         self.prefix = '/admit/' + secrets.token_urlsafe(32)
         self.server = _Server(('127.0.0.1', 0), Handler)
         self.server.admission = self
+        # _serve() calls handle_request() once the listener is readable; it selects again before accepting, and must
+        # not wait there: a connection gone in between would hold the loop, and close() with it.
+        self.server.timeout = 0
         self.url = f'http://127.0.0.1:{self.server.server_port}' + self.prefix
         # close() wakes the loop through this pair at once; serve_forever() noticed a shutdown only at its next poll,
         # up to 50 ms after close() asked, on every step.

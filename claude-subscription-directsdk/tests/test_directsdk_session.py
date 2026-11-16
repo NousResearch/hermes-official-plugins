@@ -21,6 +21,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import directsdk
+import directsdk_setup
 
 CLAUDE = os.environ.get('CLAUDE_CODE_BIN') or shutil.which('claude')
 pytestmark = pytest.mark.skipif(not CLAUDE, reason='needs the Claude Code CLI')
@@ -90,8 +91,19 @@ def home():
 EMAIL = 'fixture@example.invalid'
 
 
-def client(home, upstream, monkeypatch, session, cap=4, login='api_key'):
+def learned(binary=None):
+    """The version gate as it stands once a process of the CLI has reported its version (its init event): the first
+    step on a binary it has not seen runs per-call. The tests start from there."""
+    binary = binary or CLAUDE
+    if binary and not directsdk_setup.claude_version([binary])[0]:
+        printed = subprocess.check_output([binary, '--version'], text=True, stdin=subprocess.DEVNULL).split()[0]
+        directsdk_setup.note_version([binary], printed)
+
+
+def client(home, upstream, monkeypatch, session, cap=4, login='api_key', learn=True):
     monkeypatch.setattr(directsdk, 'session_settings', lambda: (session, cap))
+    if learn:
+        learned()
     if login == 'claude_ai':
         # A claude.ai login with an account email: native prepends the userEmail reminder to the opening user turn.
         account = Path(home) / '.claude.json'
@@ -214,6 +226,7 @@ import sys
 sys.path[:0] = {[str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parent)]!r}
 import test_directsdk_session as t, directsdk, time
 directsdk.session_settings = lambda: (True, 4)
+t.learned()
 c = directsdk.Client(command={CLAUDE!r}, timeout=60, env={{"PATH": "{os.defpath}", "HOME": {home!r}, "CLAUDE_CONFIG_DIR": {home!r},
     "ANTHROPIC_API_KEY": "***", "ANTHROPIC_BASE_URL": "http://127.0.0.1:{upstream.server_port}", "NO_PROXY": "127.0.0.1",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}})

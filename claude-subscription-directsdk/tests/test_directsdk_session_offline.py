@@ -22,9 +22,9 @@ def first_step(tmp_path, monkeypatch):
     """A session-mode first step up to its launch; the command resolves but no test here lets it spawn."""
     monkeypatch.setattr(directsdk, 'apply_traffic_policy', lambda env: env)
     monkeypatch.setattr(directsdk, 'session_settings', lambda: (True, 1))
-    # The fake CLI prints no version: say it is one session mode runs on, or the step would run per-call and take no
-    # place, and these tests would pass without testing anything.
-    monkeypatch.setattr(directsdk, 'claude_version', lambda *_: min(directsdk_setup.session_versions()))
+    # The fake CLI reports no version: say one of its processes reported one session mode runs on, or the step would
+    # run per-call and take no place, and these tests would pass without testing anything.
+    monkeypatch.setattr(directsdk, 'claude_version', lambda *_: (True, min(directsdk_setup.session_versions())))
     client = directsdk.Client(command=[sys.executable, '-I', str(Path(__file__).parent / 'fixtures/lifecycle_cli.py')], timeout=2,
                               env={'HOME': str(tmp_path), 'PATH': '', 'ANTHROPIC_BASE_URL': 'http://127.0.0.1:9'})
     yield lambda: client.create(model='sonnet', messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS)

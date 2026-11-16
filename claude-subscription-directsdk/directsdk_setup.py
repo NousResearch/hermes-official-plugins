@@ -190,22 +190,20 @@ def _file_key(arg):
     return os.path.realpath(arg), status.st_dev, status.st_ino, status.st_mtime_ns, status.st_size
 
 
-def claude_version(command, env):
-    """``claude --version`` of this command (asked once per command and the files it names), else None. A version
-    that cannot be read stays unread until those files change: per-call is the safe answer, and asking again on every
-    call could wait the full timeout each time."""
+def note_version(command, reported):
+    """Record the version a Claude Code process of ``command`` reported in its init event (``claude_code_version``);
+    only a release's own number counts ("2.1.323-beta.1" is not 2.1.323)."""
+    version = reported if isinstance(reported, str) and re.fullmatch(r"\d+\.\d+\.\d+", reported) else None
+    with _versions_lock:
+        _versions[tuple(_file_key(arg) for arg in command)] = version
+
+
+def claude_version(command):
+    """``(seen, version)``: whether a process of ``command`` (as the files it names are now) has reported its version
+    yet, and the release it reported (None: none it could read)."""
     key = tuple(_file_key(arg) for arg in command)
     with _versions_lock:
-        if key not in _versions:
-            try:
-                out = subprocess.run(list(command) + ["--version"], capture_output=True, text=True, timeout=10, env=env,
-                                     stdin=subprocess.DEVNULL).stdout
-            except (OSError, subprocess.SubprocessError, ValueError):
-                out = ""
-            # Only a release's own number: "2.1.323-beta.1" is not 2.1.323.
-            match = re.match(r"\s*(\d+\.\d+\.\d+)(?=\s|$)", out or "")
-            _versions[key] = match.group(1) if match else None
-        return _versions[key]
+        return key in _versions, _versions.get(key)
 
 
 def session_tested(version):

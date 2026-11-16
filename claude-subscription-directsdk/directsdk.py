@@ -33,8 +33,9 @@ try:
     from .process_tree import kill_process_tree, own_process_group, unreaped
     from .directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
-        apply_traffic_policy, check_extra_usage, claude_version, drop_api_credentials, egress_env, max_concurrent, observe_rate_limit,
-        reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_idle_seconds, session_tested, Upstream)
+        apply_traffic_policy, check_extra_usage, claude_version, drop_api_credentials, egress_env, max_concurrent, note_version,
+        observe_rate_limit, reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_idle_seconds,
+        session_tested, Upstream)
 except ImportError:
     import concurrency
     from admission import steer_tail
@@ -42,8 +43,9 @@ except ImportError:
     from process_tree import kill_process_tree, own_process_group, unreaped
     from directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
-        apply_traffic_policy, check_extra_usage, claude_version, drop_api_credentials, egress_env, max_concurrent, observe_rate_limit,
-        reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_idle_seconds, session_tested, Upstream)
+        apply_traffic_policy, check_extra_usage, claude_version, drop_api_credentials, egress_env, max_concurrent, note_version,
+        observe_rate_limit, reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_idle_seconds,
+        session_tested, Upstream)
 
 
 logger = logging.getLogger(__name__)
@@ -658,8 +660,9 @@ class Native:
     protocol: native's ``tools/call`` waits until Hermes brings the result, so native never runs a tool. A one-shot
     gets end of input after its frames and answers one step."""
 
-    def __init__(self, request, command, env, workdir, admission, launch_dir, tools=None):
-        self.admission, self.launch_dir, self.tools = admission, launch_dir, tools
+    def __init__(self, request, command, env, workdir, admission, launch_dir, tools=None, binary=None):
+        # ``binary``: the resolved command this process runs, whose version its init event reports for the gate.
+        self.admission, self.launch_dir, self.tools, self.binary = admission, launch_dir, tools, binary
         self.events, self.stderr = queue.Queue(), deque(maxlen=40)
         self.lock, self.writing = threading.Lock(), threading.Lock()
         self.parked, self.results = {}, {}
@@ -695,6 +698,8 @@ class Native:
                 elif event.get('type') == 'control_request':
                     self._control(event)
                 elif event.get('type') != 'control_response':
+                    if event.get('type') == 'system' and event.get('subtype') == 'init' and self.binary is not None:
+                        note_version(self.binary, event.get('claude_code_version'))
                     self.events.put(event)
         except Exception as error:
             if self.tools is not None and not isinstance(error, TimeoutError):
@@ -1380,9 +1385,10 @@ class Client:
             enabled, cap = session_settings()
             # An auxiliary call (summary, title) or a tool-less one is a single step: a one-shot, never kept.
             session = bool(enabled and manifest and kwargs.get('hermes_auxiliary') is not True)
-            # Kept mode runs only on a Claude Code version the session tests passed on; any other runs per-call.
-            version = claude_version(resolved, env) if session else None
-            tested = session and session_tested(version)
+            # Kept mode runs only on a Claude Code version the session tests passed on; any other runs per-call. The
+            # version is what a process of this binary reported in its init event: until one has, the step runs per-call.
+            seen, version = claude_version(resolved) if session else (False, None)
+            tested = session and seen and session_tested(version)
             with self._lock:
                 # One step at a time uses the kept native; a concurrent call on this client runs one-shot.
                 session = stepping = session and not self._stepping
@@ -1531,7 +1537,7 @@ class Client:
             if effort:
                 command += ['--effort', effort]
             command += ['--session-id', session_id]
-            native = Native(request, command, env, self._workdir(), admission, root, tools if session else None)
+            native = Native(request, command, env, self._workdir(), admission, root, tools if session else None, resolved)
             if session:
                 with _live_lock:
                     _live.discard(reservation)

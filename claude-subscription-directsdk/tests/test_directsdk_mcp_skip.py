@@ -6,13 +6,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import directsdk
+import directsdk_setup
 
 NATIVE = r'''
 import json, os, pathlib, sys
 argv = sys.argv
-if '--version' in argv:
-    print('2.1.292 (Claude Code)')  # a version session mode runs on, as the real CLI prints it
-    sys.exit(0)
 mcp = json.loads(argv[argv.index('--mcp-config') + 1])
 root = pathlib.Path(argv[argv.index('--system-prompt-file') + 1]).parent
 report = {'mcp': mcp, 'tools_json': (root / 'tools.json').exists()}
@@ -52,7 +50,9 @@ def test_a_request_without_tools_skips_the_helper(tmp_path):
     assert seen == {'mcp': {'mcpServers': {}}, 'tools_json': False}
 
 
-def test_a_request_with_tools_serves_them_in_process(tmp_path):
+def test_a_request_with_tools_serves_them_in_process(tmp_path, monkeypatch):
+    # As if a process of this binary had reported a version session mode runs on.
+    monkeypatch.setattr(directsdk, 'claude_version', lambda *_: (True, min(directsdk_setup.session_versions())))
     client, report = _client(tmp_path)
     tools = [{'type': 'function', 'function': {'name': 'probe', 'description': 'd',
               'parameters': {'type': 'object', 'properties': {}}}}]

@@ -1,5 +1,6 @@
 """Session mode runs only on a Claude Code version its tests passed on (``session_versions`` in plugin.yaml); any
-other runs per-call, with one log line that says why. Real Claude Code CLI against the scripted loopback upstream of
+other runs per-call, with one log line that says why. The version is the one a process of the binary reports in its
+init event (``claude_code_version``), so the first step on a binary the plugin has not seen runs per-call. Real Claude Code CLI against the scripted loopback upstream of
 ``test_directsdk_session_steer``; no credentials, no inference. Skipped without the CLI; ``CLAUDE_CODE_BIN`` picks a
 binary (evals/ci.sh runs this on the pin, so a pin bumped without listing it fails here).
 """
@@ -31,9 +32,20 @@ def lines(caplog, text):
     return [r.getMessage() for r in caplog.records if text in r.getMessage()]
 
 
-def test_this_claude_code_is_a_version_session_mode_runs_on():
+def test_the_first_step_learns_the_version_and_the_next_keeps_a_process(home, upstream, monkeypatch):
+    """No process of this CLI has reported yet: the first step runs per-call, and its own init event gives the version.
+    It is listed (evals/ci.sh runs this on the pin), so the next step starts the kept process. Bytes are per-call's."""
+    expected = per_call(home, upstream, monkeypatch, steer_at=None)
+    monkeypatch.setattr(directsdk_setup, '_versions', {})
+    kept = client(home, upstream, monkeypatch, session=True, learn=False)
+    try:
+        pids = converse(kept, steer_at=None)
+    finally:
+        kept.close()
+    assert directsdk_setup.claude_version([CLAUDE]) == (True, printed())
     assert printed() in directsdk_setup.session_versions()
-    assert directsdk_setup.claude_version([CLAUDE], dict(os.environ)) == printed()
+    assert pids[0] is None and pids[1] is not None and len(set(pids[1:])) == 1, pids
+    assert upstream.bodies == expected
 
 
 def test_an_untested_claude_code_runs_every_call_per_call(home, upstream, monkeypatch, caplog):

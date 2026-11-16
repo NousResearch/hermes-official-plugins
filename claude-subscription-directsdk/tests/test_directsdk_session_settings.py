@@ -34,3 +34,10 @@ def test_session_settings_are_read_from_the_profiles_config(home):
 def test_a_bad_idle_limit_keeps_the_cache_lifetime(home, value):
     configure(home, session_idle_seconds=value)
     assert directsdk_setup.session_idle_seconds(3600.0) == 3600.0
+
+
+@pytest.mark.parametrize('value', ['10000000000.0', '.inf', '.nan'])
+def test_an_idle_limit_the_timer_cannot_hold_keeps_the_cache_lifetime(home, value):
+    """Past threading.TIMEOUT_MAX the idle timer's thread dies at start, and the process would never idle out."""
+    configure(home, session_idle_seconds=value)
+    assert directsdk_setup.session_idle_seconds(3600.0) == 3600.0

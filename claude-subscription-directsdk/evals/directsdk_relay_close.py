@@ -83,7 +83,8 @@ def steps(binary, n):
     threading.Thread(target=server.serve_forever, daemon=True).start()
     out = []
     try:
-        with tempfile.TemporaryDirectory(prefix='directsdk-relay-close-') as home:
+        # A finished one-shot's Claude Code can still write under HOME while its drain ends it (seen on macOS).
+        with tempfile.TemporaryDirectory(prefix='directsdk-relay-close-', ignore_cleanup_errors=True) as home:
             c = directsdk.Client(command=binary, timeout=60, env={
                 'PATH': os.defpath, 'HOME': home, 'CLAUDE_CONFIG_DIR': home, 'ANTHROPIC_API_KEY': 'fixture-key',
                 'ANTHROPIC_BASE_URL': f'http://127.0.0.1:{server.server_port}', 'NO_PROXY': '127.0.0.1',

@@ -32,8 +32,10 @@ def test_a_closed_relay_stops_listening_and_a_second_close_is_harmless():
         socket.create_connection(('127.0.0.1', port), timeout=1).close()
 
 
-def test_a_relay_that_cannot_start_its_loop_closes_its_listener(monkeypatch):
-    """Out of descriptors: the wake pair cannot be made. The relay raises, and its listening socket is closed."""
+@pytest.mark.parametrize('missing', ['socketpair', 'selector'])
+def test_a_relay_that_cannot_start_its_loop_closes_its_listener(monkeypatch, missing):
+    """Out of descriptors: the wake pair, or the loop's selector, cannot be made. The relay raises at once (not later,
+    from a dead thread), and its listening socket is closed."""
     import admission
     made = []
     real = admission._Server
@@ -45,7 +47,10 @@ def test_a_relay_that_cannot_start_its_loop_closes_its_listener(monkeypatch):
     def no_pair():
         raise OSError(24, 'Too many open files')
     monkeypatch.setattr(admission, '_Server', server)
-    monkeypatch.setattr(admission.socket, 'socketpair', no_pair)
+    if missing == 'socketpair':
+        monkeypatch.setattr(admission.socket, 'socketpair', no_pair)
+    else:
+        monkeypatch.setattr(admission.selectors, 'DefaultSelector', no_pair)
     with pytest.raises(OSError, match='Too many open files'):
         Admission('http://127.0.0.1:9', 5)
     assert made and made[0].socket.fileno() == -1

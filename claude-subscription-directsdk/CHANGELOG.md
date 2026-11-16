@@ -25,9 +25,10 @@
   every bind, only to fill a field the relay never reads. On a host whose resolver stalls on that lookup the first
   call of each Hermes process waited it out (35 s on one macOS host; later calls hit the resolver's cache).
 - A model step's loopback relay closes at once. `close()` used to wait for the relay's `serve_forever` to see the
-  shutdown at its next 50 ms poll: 50 ms on every step, at the end of the step for a refused or failed one, and before
-  the `max_concurrent` slot of a finished one-shot is free. Now the relay's loop wakes on close (`close()` 50.2 ms ->
-  0.04 ms median, offline, `evals/directsdk_relay_close.py`).
+  shutdown at its next 50 ms poll: up to 50 ms (25 ms median) on every step, at the end of the step for a refused or
+  failed one, and before the `max_concurrent` slot of a finished one-shot is free. Now the relay's loop wakes on
+  close: 25.4 ms -> 0.19 ms median after a random idle, 50.2 ms -> 0.03 ms right after start (offline,
+  `evals/directsdk_relay_close.py`). A relay that cannot start its loop closes its listener.
 - An empty `.oauth_refresh.lock` that a Claude Code left after exiting mid-refresh (anthropics/claude-code#95236) is removed from the child's own login directory before every spawn, once it is past Claude Code's 60 s stale window; before, every request failed with "another Claude Code process is refreshing it" until the user deleted it. A lock with contents or a fresh mtime is never touched (P#25, thanks @LevSky22 and @100yenadmin).
 - The picker and `/usage` probes own their Claude Code child: it is killed and waited for before its scratch directory is removed, on every path, and at interpreter exit. `hermes status` on Windows printed a `PermissionError [WinError 32]` traceback, left a `claude-directsdk-picker-*` directory and a running `claude.exe` behind, because the catalog refresh thread was still inside the handshake when Hermes exited (C#146288). A launcher that exits before the CLI it started (a shell or npm shim) no longer leaves that CLI running: probes and turns share one process-group helper that signals the group while the leader is still unreaped.
 - Setup no longer reports a Console API key, an API-key helper or a cloud backend login (Bedrock, Vertex, Foundry) as a working subscription login: `claude auth status` says `loggedIn: true` for those too, so setup passed and the first turn failed. It now says which login Claude Code would use and how to switch (P#28, thanks @100yenadmin).

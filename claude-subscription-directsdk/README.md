@@ -167,7 +167,10 @@ keeps one Claude Code process alive between model calls:
 - What goes upstream is byte for byte what a fresh process would send for the same history, so prompt caching and cost
   are the same either way. The relay rewrites each replayed tool result to Hermes' own bytes, and refuses, before it
   reaches Anthropic, any request that does not extend the previous one or whose rows no longer line up with Hermes'
-  history. That step is then replayed into a new process. The identity is measured offline: the bench's loopback
+  history. That step is then replayed into a new process. A kept process's first resumed request is the first with
+  rows it built itself past its launch's replay, so no earlier request vouches for them: it goes upstream only if it
+  equals the request a per-call step builds for the same history. A one-shot builds that request into a relay that
+  sends nothing upstream, so each kept process pays one per-call launch once, at that step. The identity is measured offline: the bench's loopback
   answers a minimal stream (no `ping`, no cache usage detail, no stop sequence) to an API-key login, and the session
   tests add a claude.ai login with its account reminder on the opening turn. A real login has not been run through
   the bench.
@@ -181,7 +184,12 @@ keeps one Claude Code process alive between model calls:
 - Any other change Claude Code cannot continue from restarts it with a replay, exactly as a fresh call would: an edited
   or compacted history, a steer of more than one text block, a different model, system prompt, tool list, effort or
   output cap. Each restart logs its reason at debug level (`launch`, `edited`, `results`, `steer`, `exited`,
-  `diverged`).
+  `diverged`, `unproven`, `no_tool_id`, `tool_id`, `control`, `event`).
+- A kept process that does something the plugin does not know is not trusted again: a tool call without
+  `claudecode/toolUseId`, with an id its step never received or one it asked for before, a control request other than
+  the hermes server's MCP traffic, or an output line that is not a JSON object. Its call is never parked or waited on.
+  If its request had not gone upstream, the step replays on a fresh one-shot; if it had, the answer stands and the
+  process is not kept. `unproven` means the per-call request for the first resumed step could not be built.
 - A kept process counts against `max_concurrent` only while it serves a step. Between steps, idle or with a tool
   parked, it holds no place, so idle agents do not block title and summary calls; `max_sessions` bounds how many
   stay alive.

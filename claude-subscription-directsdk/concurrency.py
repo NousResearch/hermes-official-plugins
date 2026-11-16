@@ -1,7 +1,7 @@
 """The one admission point for Claude Code turn processes: at most ``max_concurrent`` live at once per Hermes process.
 
 A turn holds its slot from just before its ``claude`` starts (its extra-usage check included) until that process has
-exited and been reaped. The picker handshake, ``/usage`` and ``auth status`` take none: they send no Messages
+exited and been reaped. A kept session process holds one only while it serves a step. The picker handshake, ``/usage`` and ``auth status`` take none: they send no Messages
 request, end within seconds, and ``/usage`` must answer while a fan-out holds every slot.
 """
 from __future__ import annotations

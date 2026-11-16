@@ -15,6 +15,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import shutil
 import ssl
 import subprocess
@@ -156,6 +157,50 @@ def session_settings():
         mode = mode.strip().lower() not in _OFF
     cap = cap if isinstance(cap, int) and not isinstance(cap, bool) and cap >= 0 else 4
     return mode is not False and mode != 0, cap
+
+
+_SESSION_VERSIONS = re.compile(r"^\s*session_versions:\s*\[([^\]]*)\]", re.M)
+_versions, _untested = {}, set()
+
+
+def session_versions():
+    """The Claude Code versions the session tests passed on (plugin.yaml ``session_versions``); none if unreadable."""
+    try:
+        match = _SESSION_VERSIONS.search(Path(__file__).with_name("plugin.yaml").read_text(encoding="utf-8"))
+    except OSError:
+        return frozenset()
+    return frozenset(v.strip().strip("'\"") for v in match.group(1).split(",") if v.strip()) if match else frozenset()
+
+
+def claude_version(command, env):
+    """``claude --version`` of this binary file (asked once per file and change), else None."""
+    try:
+        status = os.stat(os.path.realpath(command[0]))
+    except (OSError, IndexError):
+        return None
+    key = (os.path.realpath(command[0]), status.st_mtime_ns, status.st_size)
+    if key not in _versions:
+        try:
+            out = subprocess.run(list(command) + ["--version"], capture_output=True, text=True, timeout=30, env=env,
+                                 stdin=subprocess.DEVNULL).stdout
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return None
+        match = re.match(r"\s*(\d+\.\d+\.\d+)\b", out or "")
+        _versions[key] = match.group(1) if match else None
+    return _versions[key]
+
+
+def session_tested(version):
+    """Whether session mode may run on this Claude Code version; one log line per other version saying why not."""
+    tested = session_versions()
+    if version in tested:
+        return True
+    if version not in _untested:
+        _untested.add(version)
+        _logger.info("claude-subscription-directsdk: session mode runs only on Claude Code %s; this is %s, so every "
+                     "call runs per-call (a new process each)", ", ".join(sorted(tested)) or "(none listed)",
+                     version or "a version it could not read")
+    return False
 
 
 MAX_CONCURRENT_SETTING = "max_concurrent"

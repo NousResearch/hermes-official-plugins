@@ -33,8 +33,8 @@ try:
     from .process_tree import kill_process_tree, own_process_group, unreaped
     from .directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
-        apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, max_concurrent, observe_rate_limit,
-        reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, Upstream)
+        apply_traffic_policy, check_extra_usage, claude_version, drop_api_credentials, egress_env, max_concurrent, observe_rate_limit,
+        reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_tested, Upstream)
 except ImportError:
     import concurrency
     from admission import steer_tail
@@ -42,8 +42,8 @@ except ImportError:
     from process_tree import kill_process_tree, own_process_group, unreaped
     from directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
-        apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, max_concurrent, observe_rate_limit,
-        reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, Upstream)
+        apply_traffic_policy, check_extra_usage, claude_version, drop_api_credentials, egress_env, max_concurrent, observe_rate_limit,
+        reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_tested, Upstream)
 
 
 logger = logging.getLogger(__name__)
@@ -664,7 +664,7 @@ class Native:
         self.lock, self.writing = threading.Lock(), threading.Lock()
         self.parked, self.results = {}, {}
         # A kept session: what it was launched with, the frames it holds, and what the next step must bring.
-        self.ident = self.frames = self.expect = self.idle = self.on_exit = None
+        self.ident = self.version = self.frames = self.expect = self.idle = self.on_exit = None
         # Why this native is in doubt (a restart reason), every tool id it asked for, and whether a resumed request of
         # its own has been shown equal to per-call's.
         self.doubt, self.asked, self.proven = None, set(), False
@@ -1236,13 +1236,14 @@ class Client:
             ended()  # It exited before it was the session, so its reader found nothing to end.
         return True
 
-    def _resume(self, ident, frames):
-        """The kept session and how this step continues it, else (None, None) after ending it."""
+    def _resume(self, ident, frames, version):
+        """The kept session and how this step continues it, else (None, None) after ending it (``version``: the
+        Claude Code version this step may keep a process on, None for none)."""
         with self._lock:
             native, self._session, self._kept['native'] = self._session, None, None
         if native is not None:
             native.idle.cancel()
-            how = ('launch' if native.ident != ident else native.doubt or
+            how = ('version' if native.version != version else 'launch' if native.ident != ident else native.doubt or
                    (native.resumes(frames) if native.settled() else 'exited'))
             if not isinstance(how, str):
                 return native, how
@@ -1379,11 +1380,15 @@ class Client:
             enabled, cap = session_settings()
             # An auxiliary call (summary, title) or a tool-less one is a single step: a one-shot, never kept.
             session = bool(enabled and manifest and kwargs.get('hermes_auxiliary') is not True)
+            # Kept mode runs only on a Claude Code version the session tests passed on; any other runs per-call.
+            version = claude_version(resolved, env) if session else None
+            tested = session and session_tested(version)
             with self._lock:
                 # One step at a time uses the kept native; a concurrent call on this client runs one-shot.
                 session = stepping = session and not self._stepping
                 self._stepping = self._stepping or session
-            native, how = self._resume(ident, frames) if session else (None, None)
+            native, how = self._resume(ident, frames, version if tested else None) if session else (None, None)
+            session = session and tested
             while True:
                 if native is None:
                     reservation = None
@@ -1400,7 +1405,7 @@ class Client:
                         # However the launch ended, the reservation is spent: native holds the place now, or nothing does.
                         with _live_lock:
                             _live.discard(reservation)
-                    native.ident, native.slot = ident, slot
+                    native.ident, native.version, native.slot = ident, version, slot
                     try:
                         native.replay(request, frames, timeout)
                     except _Doubt as doubt:

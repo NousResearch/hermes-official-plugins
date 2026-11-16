@@ -10,6 +10,9 @@ import directsdk
 NATIVE = r'''
 import json, os, pathlib, sys
 argv = sys.argv
+if '--version' in argv:
+    print('2.1.292 (Claude Code)')  # a version session mode runs on, as the real CLI prints it
+    sys.exit(0)
 mcp = json.loads(argv[argv.index('--mcp-config') + 1])
 root = pathlib.Path(argv[argv.index('--system-prompt-file') + 1]).parent
 report = {'mcp': mcp, 'tools_json': (root / 'tools.json').exists()}

@@ -723,22 +723,25 @@ class Admission:
         self.url = f'http://127.0.0.1:{self.server.server_port}' + self.prefix
         # close() wakes the loop through this pair at once; serve_forever() noticed a shutdown only at its next poll,
         # up to 50 ms after close() asked, on every step.
+        selector = None
         try:
             self._wake, self._waker = socket.socketpair()
-            self.thread = threading.Thread(target=self._serve, daemon=True)
+            # Made here, not in the thread: an epoll that cannot be had (out of descriptors) fails the relay's start.
+            selector = selectors.DefaultSelector()
+            selector.register(self.server, selectors.EVENT_READ)
+            selector.register(self._wake, selectors.EVENT_READ)
+            self.thread = threading.Thread(target=self._serve, args=(selector,), daemon=True)
             self.thread.start()
         except BaseException:
             # Out of descriptors or threads: the listener must not outlive the relay that could not start.
             self.server.server_close()
-            for sock in (getattr(self, '_wake', None), getattr(self, '_waker', None)):
-                if sock is not None:
-                    sock.close()
+            for each in (selector, getattr(self, '_wake', None), getattr(self, '_waker', None)):
+                if each is not None:
+                    each.close()
             raise
 
-    def _serve(self):
-        with selectors.DefaultSelector() as selector:
-            selector.register(self.server, selectors.EVENT_READ)
-            selector.register(self._wake, selectors.EVENT_READ)
+    def _serve(self, selector):
+        with selector:
             while True:
                 ready = [key.fileobj for key, _ in selector.select()]
                 if self._wake in ready:

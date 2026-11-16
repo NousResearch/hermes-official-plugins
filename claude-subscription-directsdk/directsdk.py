@@ -697,8 +697,8 @@ class Native:
                 elif event.get('type') != 'control_response':
                     self.events.put(event)
         except Exception as error:
-            if self.tools is not None:
-                self._doubt('event')
+            if self.tools is not None and not isinstance(error, TimeoutError):
+                self._doubt('event')  # A line that is not JSON; a control write that timed out stays a timeout.
             self.events.put(error)
         finally:
             # The consumer may close while paused at a yielded chunk. Reaping belongs to this owner thread, never

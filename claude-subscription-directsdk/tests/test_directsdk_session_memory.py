@@ -44,3 +44,23 @@ def test_a_conversation_is_kept_only_after_session_min_rounds_tool_rounds(home, 
     assert not [r for r in caplog.records if 'session restart' in r.getMessage()]
     assert upstream.bodies == expected
 
+
+def test_at_max_sessions_the_longest_idle_kept_process_gives_its_place_up(home, upstream, monkeypatch, caplog):
+    """``max_sessions`` 1. Agent A ends its turn and waits for the user; agent B's first step takes A's place (A's
+    process ends). Then B waits on a parked tool call, and agent C's step runs per-call: a parked call is never
+    evicted. Before, B ran per-call beside an idle A until A's idle hour passed."""
+    a, b, c = (client(home, upstream, monkeypatch, session=True, cap=1) for _ in range(3))
+    try:
+        converse(a, turns=('go',))
+        first = next(iter(session_pids(a)))
+        with caplog.at_level('DEBUG', logger=directsdk.logger.name):
+            b.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+        assert session_pids(b) and session_pids(b) != {first} and a._session is None and ended(first)
+        assert [r.getMessage() for r in caplog.records if 'evicted' in r.getMessage()] == \
+            ['Claude session evicted (the longest idle at max_sessions 1): its place goes to a step asking now']
+        parked = next(iter(session_pids(b)))
+        c.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+        assert not session_pids(c) and session_pids(b) == {parked} and not ended(parked)
+    finally:
+        for each in (a, b, c):
+            each.close()

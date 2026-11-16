@@ -608,6 +608,28 @@ class _Reservation:
         pass
 
 
+def _place(cap):
+    """A place against ``max_sessions`` for a new kept process, else None. At the cap the kept process that has waited
+    longest for a new user turn gives its place up; one serving a step or holding a parked call never does. The place
+    is taken under the lock: concurrent launches checked against an empty set used to all pass."""
+    while True:
+        with _live_lock:
+            if len(_live) < cap:
+                reservation = _Reservation()
+                _live.add(reservation)
+                return reservation
+            idle = [n for n in _live if getattr(n, 'idle_since', None) is not None]
+        if not idle:
+            return None
+        oldest = min(idle, key=lambda n: n.idle_since)
+        end = oldest.end and oldest.end()
+        # Its owner ends it only if it is still that client's idle session (no step took it meanwhile).
+        if end is not None and end(oldest):
+            logger.debug('Claude session evicted (the longest idle at max_sessions %d): its place goes to a step asking now', cap)
+        else:
+            oldest.idle_since = None  # not evictable now; look at the next
+
+
 def _end_orphan_native(native):
     native.kill()
     native.release()
@@ -671,6 +693,8 @@ class Native:
         # Why this native is in doubt (a restart reason), every tool id it asked for, and whether a resumed request of
         # its own has been shown equal to per-call's.
         self.doubt, self.asked, self.proven = None, set(), False
+        # Kept and waiting for a new user turn since (monotonic), and its owner's way to end it: the cap's eviction order.
+        self.idle_since = self.end = None
         self.cost, self.slot = 0, None
         self.process = request.spawn(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      text=True, encoding='utf-8', cwd=workdir, env=env)
@@ -1203,13 +1227,14 @@ class Client:
         self._end_session()
 
     def _end_session(self, native=None):
-        """Kill the idle kept session (only ``native`` when given: the idle timer's own)."""
+        """Kill the idle kept session (only ``native`` when given: the idle timer's own); whether it did."""
         with self._lock:
             if self._session is None or (native is not None and self._session is not native):
-                return
+                return False
             native, self._session, self._kept['native'] = self._session, None, None
         native.kill()
         native.release()
+        return True
 
     def _keep(self, native, frames, expect, request):
         """Make ``native`` this client's kept session; False when cancel() or close() got there first.
@@ -1227,6 +1252,7 @@ class Client:
             (method if method is not None else _end_orphan_native)(native)
         native.idle, native.on_exit = threading.Timer(session_idle_seconds(SESSION_IDLE_S), ended), ended
         native.idle.daemon = True
+        native.idle_since, native.end = (time.monotonic(), end) if expect == 'user' else (None, None)
         with self._lock, request.lock:
             if self._closed or request.cancelled.is_set():
                 return False
@@ -1402,14 +1428,10 @@ class Client:
             session = session and tested
             while True:
                 if native is None:
-                    reservation = None
-                    with _live_lock:
-                        # At the process cap this step runs one-shot: the same bytes at the per-call cost. The place is
-                        # taken here, under the lock: concurrent launches checked against an empty set used to all pass.
-                        session = session and len(_live) < cap
-                        if session:
-                            reservation = _Reservation()
-                            _live.add(reservation)
+                    # At the process cap with no kept process to evict, this step runs one-shot: the same bytes at the
+                    # per-call cost.
+                    reservation = _place(cap) if session else None
+                    session = reservation is not None
                     try:
                         native = self._launch(request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id, session, reservation)
                     finally:

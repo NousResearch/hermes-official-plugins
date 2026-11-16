@@ -12,7 +12,7 @@ class Kept:
     def __init__(self, since, ends):
         self.idle_since, self.calls = since, []
 
-        def end(native, idle):
+        def end(native, idle=False):
             self.calls.append(idle)
             if ends:
                 directsdk._live.discard(native)

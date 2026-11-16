@@ -1416,13 +1416,10 @@ class Client:
             ident = hashlib.sha256(json.dumps([resolved, sorted(env.items()), upstream and [upstream.url, upstream.proxy],
                                                kwargs['model'], body, system, session_id], default=str).encode()).hexdigest()
             enabled, cap = session_settings()
+            if not enabled:
+                self._end_session()  # session mode was turned off: a process kept before (even one parked) ends now
             # An auxiliary call (summary, title) or a tool-less one is a single step: a one-shot, never kept.
-            # A conversation is kept only once it has had session_min_rounds tool rounds: before that the saving is small
-            # and the memory is not worth holding (short chats, most subagents).
-            rounds = sum(f['type'] == 'assistant' and any(b.get('type') == 'tool_use' for b in f['message']['content'])
-                         for f in frames)
-            session = bool(enabled and manifest and kwargs.get('hermes_auxiliary') is not True
-                           and rounds >= session_min_rounds())
+            session = bool(enabled and manifest and kwargs.get('hermes_auxiliary') is not True)
             # Kept mode runs only on a Claude Code version the session tests passed on; any other runs per-call. The
             # version is what a process of this binary reported in its init event: until one has, the step runs per-call.
             seen, version = claude_version(resolved) if session else (False, None)
@@ -1432,7 +1429,12 @@ class Client:
                 session = stepping = session and not self._stepping
                 self._stepping = self._stepping or session
             native, how = self._resume(ident, frames, version if tested else None) if session else (None, None)
-            session = session and tested
+            # A new process is kept only once the conversation has had session_min_rounds tool rounds (Hermes' frames of
+            # tool results): before that the saving is small and the memory not worth holding (short chats, most
+            # subagents). A kept one still continues, or restarts, as its history says.
+            rounds = sum(f['type'] == 'user' and any(b.get('type') == 'tool_result' for b in f['message']['content'])
+                         for f in frames)
+            session = session and tested and (native is not None or rounds >= session_min_rounds())
             while True:
                 if native is None:
                     # At the process cap with no kept process to evict, this step runs one-shot: the same bytes at the

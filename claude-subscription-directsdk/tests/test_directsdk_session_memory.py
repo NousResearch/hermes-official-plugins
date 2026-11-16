@@ -64,3 +64,51 @@ def test_at_max_sessions_the_longest_idle_kept_process_gives_its_place_up(home, 
     finally:
         for each in (a, b, c):
             each.close()
+
+
+def test_a_parked_process_ends_when_the_history_falls_below_session_min_rounds(home, upstream, monkeypatch, caplog):
+    """``session_min_rounds`` 3: the fourth step keeps a process, which parks its tool call. Hermes then compacts the
+    history to fewer rounds. The next step still meets the parked process: it cannot continue, ends, and
+    the step runs per-call. Before, that step skipped the kept process altogether and the parked process held its
+    memory and its place with no idle limit."""
+    c = client(home, upstream, monkeypatch, session=True, min_rounds=3)
+    try:
+        messages = [{'role': 'system', 'content': 'You are a fixture agent.'}, {'role': 'user', 'content': 'go'}]
+        for _ in range(4):
+            reply = c.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000).choices[0].message.model_dump()
+            messages.append({k: v for k, v in reply.items() if k in ('role', 'content', 'tool_calls', 'reasoning_details') and v is not None})
+            messages += [{'role': 'tool', 'tool_call_id': call['id'], 'content': 'contents'} for call in reply['tool_calls']]
+        pid = next(iter(session_pids(c)))
+        compacted = messages[:2] + [{'role': 'user', 'content': 'Summary of earlier work: read f0..f3.'},
+                                    {'role': 'user', 'content': 'and now?'}]
+        with caplog.at_level('DEBUG', logger=directsdk.logger.name):
+            c.create(model=MODEL, messages=compacted, tools=TOOLS, max_tokens=1000)
+        assert ended(pid) and not session_pids(c)
+        # The compaction changes the history the process holds (``edited``), here even what it was launched with
+        # (``launch``: the conversation's session id comes from its opening).
+        restarts = [r.getMessage() for r in caplog.records if 'session restart' in r.getMessage()]
+        assert restarts in (['Claude session restart (launch): replaying into a new process'],
+                            ['Claude session restart (edited): replaying into a new process']), restarts
+    finally:
+        c.close()
+
+
+def test_a_step_with_several_tool_calls_is_one_round(home, monkeypatch):
+    """Rounds are Hermes' tool-result frames. Three calls in one step are one round: with ``session_min_rounds`` 2 the
+    process is kept from the third step, not the second (Claude Code holds each call as its own assistant message)."""
+    from test_directsdk_session_steer import Upstream as Steps, converse as loop
+    from http.server import ThreadingHTTPServer
+    import threading
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Steps)
+    server.bodies, server.calls = [], 3
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        c = client(home, server, monkeypatch, session=True, min_rounds=2)
+        try:
+            pids = loop(c, steer_at=None)
+        finally:
+            c.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert pids[:2] == [None, None] and pids[2] is not None and len(set(pids[2:])) == 1, pids

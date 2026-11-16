@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from admission import Admission, HistoryMisaligned, canonical_history
+from admission import STEER_ROW, Admission, HistoryMisaligned, canonical_history
 
 ENV = {'role': 'system', 'content': 'Fixture environment'}
 DIVERGED = b'HERMES_SESSION_DIVERGED'
@@ -197,3 +197,22 @@ def test_canonical_history_leaves_an_aligned_body_alone_but_for_the_results():
     out = json.loads(canonical_history(wire(native_rows(FRAMES)), FRAMES))['messages']
     assert out[0] == ENV and out[1] == OPEN['message'] and out[2] == call(1)['message'] and out[4] == call(2)['message']
     assert out[3] == result(1)['message'] and out[5] == result(2)['message']
+
+
+STEER = {'type': 'text', 'text': '[OUT-OF-BAND USER MESSAGE]\nread g1 instead\n[/OUT-OF-BAND USER MESSAGE]'}
+
+
+@pytest.mark.parametrize('native', ['wraps_hermes_steer', 'wraps_other_text', 'hermes_holds_none'])
+def test_a_steer_row_goes_back_into_its_frame_and_nowhere_else(native):
+    """A kept native holds a /steer as its own system row after the tool results; per-call has it as a text block
+    after them, where Hermes put it. The row goes back only when it wraps exactly Hermes' steer."""
+    steered = FRAMES[:-1] + [frame('user', *result(2)['message']['content'], STEER)]
+    text = 'read g2 instead' if native == 'wraps_other_text' else STEER['text']
+    rows = native_rows(FRAMES) + [{'role': 'system', 'content': [{'type': 'text', 'text': text.join(STEER_ROW), 'cache_control': {'type': 'ephemeral'}}]}]
+    if native != 'wraps_hermes_steer':
+        with pytest.raises(HistoryMisaligned):
+            canonical_history(wire(rows), FRAMES if native == 'hermes_holds_none' else steered)
+        return
+    out = json.loads(canonical_history(wire(rows), steered))['messages']
+    assert [m['role'] for m in out] == ['system', 'user', 'assistant', 'user', 'assistant', 'user']
+    assert out[-1]['content'][-1] == dict(STEER, cache_control={'type': 'ephemeral'})

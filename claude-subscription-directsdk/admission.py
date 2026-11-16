@@ -569,14 +569,45 @@ def _fold_replayed_date(messages):
     return True
 
 
+# How Claude Code (2.1.292 to 2.1.323) puts a user message that reached a kept native mid-turn (a /steer) into its
+# requests: a system row of its own after the tool results. Per-call has the same text as a block after the results.
+STEER_ROW = ('The user sent a new message while you were working:\n', '\n\nThis is how Claude Code surfaces messages '
+             'the user sends mid-turn — within the running turn, often alongside the next tool result, rather than '
+             'as a separate conversation turn. Address the message above as you continue this turn.')
+
+
+def steer_tail(content):
+    """The one text block after a frame's tool results (Hermes' /steer), else None."""
+    tail = content[-1:] if len(content) > 1 and all(b.get('type') == 'tool_result' for b in content[:-1]) else []
+    return tail[0] if tail and set(tail[0]) == {'type', 'text'} and tail[0]['type'] == 'text' else None
+
+
+def _steer_row(message):
+    """The text of a system row of native's steer shape (one text block, or a string in its own history), else None."""
+    content = message.get('content') if message.get('role') == 'system' else None
+    block = content[0] if isinstance(content, list) and len(content) == 1 and isinstance(content[0], dict) else {}
+    text = content if isinstance(content, str) else block.get('text') if set(block) <= {'type', 'text', 'cache_control'} else None
+    return text if isinstance(text, str) and text.startswith(STEER_ROW[0]) else None
+
+
+def _fold_steer(messages, i, steer):
+    """Remove native's steer row after row ``i`` when it wraps exactly ``steer``; returns its cache mark (or True)."""
+    row = messages[i + 1] if i + 1 < len(messages) else {}
+    if _steer_row(row) != steer['text'].join(STEER_ROW):
+        return None
+    del messages[i + 1]
+    return (row['content'][0].get('cache_control') if isinstance(row['content'], list) else None) or True
+
+
 def canonical_history(payload, frames):
     """Send every replayed user frame of a kept-alive native exactly as a fresh native replays Hermes' frame.
 
     Native holds tool results as it built them from MCP replies (text-block lists), and a fresh native replays
     Hermes' frames verbatim, so the two would differ from the second request on. Mapping is positional over
-    non-system messages; native's cache mark stays. Raises ``HistoryMisaligned`` when the rows do not line up (one
-    more or fewer than Hermes holds, a role out of place, a body this cannot read): the caller decides whether such
-    a request still forwards."""
+    non-system messages; native's cache mark stays. A steer native holds as its own row goes back into the frame.
+    Raises ``HistoryMisaligned`` when the rows do not line up (one more or fewer than Hermes holds, a role out of
+    place, a steer not where Hermes put it, a body this cannot read): the caller decides whether such a request
+    still forwards."""
     try:
         body = json.loads(payload)
         messages = body['messages']
@@ -584,9 +615,18 @@ def canonical_history(payload, frames):
         convo = [(i, m) for i, m in enumerate(messages) if m.get('role') != 'system']
         if len(convo) != len(frames):
             raise HistoryMisaligned(f'{len(convo)} native rows against {len(frames)} Hermes frames')
-        for k, ((i, sent), frame) in enumerate(zip(convo, frames)):
+        for k, ((i, sent), frame) in reversed(list(enumerate(zip(convo, frames)))):  # a fold shifts later rows only
             if sent.get('role') != frame['type']:
                 raise HistoryMisaligned(f'row {k}: native {sent.get("role")!r} against Hermes {frame["type"]!r}')
+            steer = frame['type'] == 'user' and steer_tail(frame['message']['content'])
+            folded = steer and _fold_steer(messages, i, steer)
+            changed = changed or bool(folded)
+            if steer and k == len(frames) - 1:
+                if folded:
+                    sent['content'].append(dict(steer, **({} if folded is True else {'cache_control': folded})))
+                elif _plain(sent['content'][-1]) != steer:
+                    raise HistoryMisaligned(f'row {k}: the steer is not where Hermes put it')
+                continue
             opens_turn = any(b.get('type') != 'tool_result' for b in frame['message']['content'])
             # Assistant turns are native's own; a new user turn keeps the per-call transforms that follow.
             if frame['type'] != 'user' or (k == len(frames) - 1 and opens_turn):
@@ -598,11 +638,15 @@ def canonical_history(payload, frames):
             want = copy.deepcopy(frame['message']['content'])
             got = sent.get('content')
             mark = next((b['cache_control'] for b in got if isinstance(b, dict) and 'cache_control' in b), None) if isinstance(got, list) else None
+            if mark is None and isinstance(folded, dict):
+                mark = folded  # native's mark sat on the steer row folded in above
             if mark is not None:
                 want[-1].setdefault('cache_control', mark)
             if got != want:
                 messages[i] = {'role': 'user', 'content': want}
                 changed = True
+        if any(_steer_row(m) for m in messages):
+            raise HistoryMisaligned('a steer row where Hermes holds none')
         return json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8') if changed else payload
     except HistoryMisaligned:
         raise

@@ -44,6 +44,13 @@
   next agent ran per-call beside a dead process.
 - Session mode: a launch that fails after its relay is up and before Claude Code starts (the launch directory cannot
   be made) closes that relay. Before, its listener and thread stayed for the life of the Hermes process.
+- Session mode: a `/steer` after a tool round continues the kept process instead of restarting it. The steer goes to
+  Claude Code's input before the tool results, so it reads both and sends one request; it holds the steer as a system
+  row of its own ("The user sent a new message while you were working: ..."), which the relay puts back as the text
+  block after the results where Hermes has it, in that request and in every later one. The bytes are per-call's
+  (checked on 2.1.292, 2.1.322 and 2.1.323 with one, two and three parked calls). A steer row the relay cannot match
+  to Hermes' steer is refused before upstream and the step replays into a new process; a steer of more than one text
+  block restarts at once. Before, every steer restarted the process and replayed the whole history.
 - Session mode: every restart of a kept process logs its reason at debug level (`launch`: the model, tools, effort,
   system prompt or environment changed; `edited`: history before the new frame changed, as in a compaction; `results`:
   the tool results do not match the parked calls; `steer`: a steer the process cannot carry; `exited`; `diverged`: the

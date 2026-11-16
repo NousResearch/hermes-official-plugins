@@ -27,6 +27,7 @@ import weakref
 from types import SimpleNamespace
 
 try:
+    from .admission import steer_tail
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from .process_tree import kill_process_tree, own_process_group, unreaped
     from .directsdk_setup import (
@@ -34,6 +35,7 @@ try:
         apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, observe_rate_limit, reap_orphaned_refresh_lock, relay,
         resolve_upstream, session_settings, Upstream)
 except ImportError:
+    from admission import steer_tail
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from process_tree import kill_process_tree, own_process_group, unreaped
     from directsdk_setup import (
@@ -808,18 +810,21 @@ class Native:
                     break
 
     def resumes(self, frames):
-        """How this kept session continues ``frames``: ('user', frame), ('tools', results), or why it cannot (a string:
-        the restart's reason)."""
+        """How this kept session continues ``frames``: ('user', frame), ('tools', results), ('steer', results, frame)
+        for the results with Hermes' /steer after them, or why it cannot (a string: the restart's reason)."""
         n = len(self.frames)
         if len(frames) != n + 1 or frames[:n] != self.frames:
             return 'edited'
         blocks = frames[n]['message']['content']
         if self.expect == 'user':
             return ('user', frames[n]) if any(b.get('type') != 'tool_result' for b in blocks) else 'results'
+        steer = steer_tail(blocks)
+        if steer:
+            blocks = blocks[:-1]
         results = {b.get('tool_use_id'): (b.get('content'), bool(b.get('is_error'))) for b in blocks if b.get('type') == 'tool_result'}
         if len(results) != len(blocks) or set(results) != self.expect or not all(isinstance(c, str) for c, _ in results.values()):
             return 'steer' if any(b.get('type') != 'tool_result' for b in blocks) else 'results'
-        return 'tools', results
+        return ('steer', results, {'type': 'user', 'message': {'role': 'user', 'content': [dict(steer)]}}) if steer else ('tools', results)
 
     def settled(self):
         """Drop what the last step left queued (native's own echo of its turn); False once native has exited.
@@ -1351,6 +1356,10 @@ class Client:
                     if how[0] == 'user':
                         native.send(request, how[1], timeout)
                     else:
+                        if how[0] == 'steer':
+                            # Native reads its stdin in order, so the steer is queued when the results arrive and goes
+                            # up with them in one request (as its own row; the relay puts it back where Hermes has it).
+                            native.send(request, how[2], timeout)
                         native.deliver(how[1])
                 if (yield from self._step(request, native, state, kwargs, hermes_names, session, session_id, resolved, env, frames, timeout)) != 'diverged':
                     break

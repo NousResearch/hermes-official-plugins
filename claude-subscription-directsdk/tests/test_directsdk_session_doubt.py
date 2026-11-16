@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -56,3 +57,61 @@ def test_a_first_resumed_request_that_is_not_per_calls_is_refused_and_replayed(h
     assert restarts(caplog) == ['Claude session restart (diverged): replaying into a new process']
     assert len(expected) == ROUNDS + 1 and upstream.bodies == expected  # the changed request never went upstream
 
+
+FIRST, SECOND, THIRD = 'toolu_00_0', 'toolu_00_1', 'toolu_00_2'
+
+
+def break_line(event, how):
+    """The event native printed, as the plugin will read it after the forced change."""
+    request = event.get('request') or {}
+    meta = ((request.get('message') or {}).get('params') or {}).get('_meta') or {}
+    if how == 'no_tool_id':
+        del meta['claudecode/toolUseId']
+    elif how in ('tool_id', 'duplicate'):
+        meta['claudecode/toolUseId'] = FIRST if how == 'duplicate' else 'toolu_never_sent'
+    elif how == 'control':
+        request['subtype'] = 'a_new_subtype'
+    else:
+        return [event]
+    return event
+
+
+@pytest.mark.parametrize('how, which, why', [
+    ('no_tool_id', FIRST, 'no_tool_id'),    # asked as the first reply streams: the reply stands, the process is not kept
+    ('no_tool_id', SECOND, 'no_tool_id'),   # asked inside the next step, before its request: that step restarts
+    ('tool_id', SECOND, 'tool_id'),         # an id the step never received
+    ('duplicate', SECOND, 'tool_id'),       # an id native asked for before
+])
+def test_a_line_the_plugin_does_not_know_restarts_the_kept_process(home, upstream, monkeypatch, caplog, how, which, why):
+    """Three calls in the first step; native asks for them one at a time, the first as soon as it has streamed, the
+    others once Hermes brings the results. One of those asks is changed as the plugin reads it. The process is never answered
+    or waited on again: the step restarts with the reason in the log, and every request is per-call's. Before, a call
+    with no id or an id outside the step was parked and never answered (native waited forever), and an unknown
+    control request was answered with an error while the process carried on."""
+    upstream.calls = 3
+    expected = per_call(home, upstream, monkeypatch, steer_at=None)
+    loads, broken = json.loads, []
+
+    def read(line, *args, **kwargs):
+        event = loads(line, *args, **kwargs)
+        if not broken and isinstance(event, dict) and event.get('type') == 'control_request' and \
+                (((event.get('request') or {}).get('message') or {}).get('params') or {}).get('_meta', {}).get('claudecode/toolUseId') == which:
+            broken.append(True)
+            return break_line(event, how)
+        return event
+    monkeypatch.setattr(directsdk, 'json', SimpleNamespace(**{**{k: getattr(json, k) for k in dir(json) if not k.startswith('_')}, 'loads': read}))
+    kept = client(home, upstream, monkeypatch, session=True)
+    try:
+        with caplog.at_level('DEBUG', logger=directsdk.logger.name):
+            pids = converse(kept, steer_at=None)
+    finally:
+        kept.close()
+    assert broken, 'native never asked for the call'
+    assert restarts(caplog) == [f'Claude session restart ({why}): replaying into a new process']
+    if which == FIRST:
+        # That step's answer stands without keeping its process; the next step keeps a new one.
+        assert pids[0] is None and None not in pids[1:] and len(set(pids[1:])) == 1, pids
+    else:
+        # That step runs per-call; the next one keeps a new process.
+        assert pids[1] is None and pids[2] not in (None, pids[0]) and len(set(pids[2:])) == 1, pids
+    assert len(expected) == ROUNDS + 1 and upstream.bodies == expected

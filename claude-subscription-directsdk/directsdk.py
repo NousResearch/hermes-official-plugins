@@ -642,6 +642,15 @@ def _launch_dir():
     return Path(tempfile.mkdtemp(prefix=f'claude-directsdk-launch-{os.getpid()}-'))
 
 
+class _Doubt(RuntimeError):
+    """A kept native did something the plugin does not know (a tool call it cannot match, a control request or an
+    output line of an unknown shape): it is never answered or waited on, and its step restarts it."""
+
+    def __init__(self, why):
+        super().__init__(f'Claude session in doubt ({why})')
+        self.why = why
+
+
 class Native:
     """One Claude Code process and the relay its requests go through.
 
@@ -656,8 +665,9 @@ class Native:
         self.parked, self.results = {}, {}
         # A kept session: what it was launched with, the frames it holds, and what the next step must bring.
         self.ident = self.frames = self.expect = self.idle = self.on_exit = None
-        # Whether a resumed request of its own has been shown equal to per-call's.
-        self.proven = False
+        # Why this native is in doubt (a restart reason), every tool id it asked for, and whether a resumed request of
+        # its own has been shown equal to per-call's.
+        self.doubt, self.asked, self.proven = None, set(), False
         self.cost, self.slot = 0, None
         self.process = request.spawn(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      text=True, encoding='utf-8', cwd=workdir, env=env)
@@ -712,6 +722,19 @@ class Native:
         if stalled.is_set():
             raise TimeoutError('Claude request timed out')
 
+    def _doubt(self, why):
+        """Never trust this native again: the step it serves (or the next one) restarts it with ``why`` as the reason."""
+        if self.doubt is None:
+            self.doubt = why
+            self.events.put(_Doubt(why))
+
+    def _expected(self):
+        """The tool ids native may ask for now: the calls of the response this step received, else the parked ones."""
+        message = self.admission.capture.message
+        if message is not None:
+            return {b.get('id') for b in message.get('content') or () if isinstance(b, dict) and b.get('type') == 'tool_use'}
+        return self.expect if isinstance(self.expect, frozenset) else frozenset()
+
     def _control(self, event):
         """Answer native's MCP traffic for the hermes server; park each tools/call until Hermes has its result."""
         request = event.get('request') or {}
@@ -723,9 +746,19 @@ class Native:
             return
         if message.get('method') == 'tools/call':
             tool_id = ((message.get('params') or {}).get('_meta') or {}).get('claudecode/toolUseId')
+            if not isinstance(tool_id, str):
+                # Parked under no id it would never be answered: native would wait on it forever.
+                self._doubt('no_tool_id')
+                return
             with self.lock:
-                self.parked[tool_id] = (event['request_id'], message.get('id'))
-                self._answer(tool_id)
+                known = tool_id not in self.asked and tool_id in self._expected()
+                if known:
+                    self.asked.add(tool_id)
+                    self.parked[tool_id] = (event['request_id'], message.get('id'))
+                    self._answer(tool_id)
+            if not known:
+                # A call this step never received, or one native asked for before: its history is not Hermes'.
+                self._doubt('tool_id')
             return
         result = {}
         if message.get('method') == 'initialize':
@@ -789,8 +822,8 @@ class Native:
                 event = self.events.get(timeout=min(remaining, .2))
             except queue.Empty:
                 continue
-            if isinstance(event, TimeoutError):
-                raise event  # The reader's own control write gave up: a timeout, not bad output.
+            if isinstance(event, (TimeoutError, _Doubt)):
+                raise event  # The reader's own control write gave up (a timeout, not bad output), or it doubts native.
             if isinstance(event, Exception):
                 # The offending stdout line is the whole diagnosis (a shim banner, a stray print); keep it.
                 raise RuntimeError('Invalid native stream-json output: ' + repr((getattr(event, 'doc', None) or str(event))[:300]) + _stderr_tail(self.stderr)) from event
@@ -1196,7 +1229,8 @@ class Client:
             native, self._session, self._kept['native'] = self._session, None, None
         if native is not None:
             native.idle.cancel()
-            how = 'launch' if native.ident != ident else native.resumes(frames) if native.settled() else 'exited'
+            how = ('launch' if native.ident != ident else native.doubt or
+                   (native.resumes(frames) if native.settled() else 'exited'))
             if not isinstance(how, str):
                 return native, how
             self._restart(native, how)
@@ -1384,10 +1418,16 @@ class Client:
                             # up with them in one request (as its own row; the relay puts it back where Hermes has it).
                             native.send(request, how[2], timeout)
                         native.deliver(how[1])
-                if (yield from self._step(request, native, state, kwargs, hermes_names, session, session_id, resolved, env, frames, timeout)) != 'diverged':
-                    break
-                # The kept native's request would not extend its previous one; it was never forwarded. Replay instead.
-                self._restart(native, 'diverged')
+                try:
+                    if (yield from self._step(request, native, state, kwargs, hermes_names, session, session_id, resolved, env, frames, timeout)) != 'diverged':
+                        break
+                    # The relay refused the kept native's request before upstream (rows that do not line up, not the
+                    # previous request extended, not per-call's bytes). Replay instead.
+                    why = 'diverged'
+                except _Doubt as doubt:
+                    # Before its request went upstream: this step replays per-call bytes on a fresh one-shot.
+                    why, session = doubt.why, False
+                self._restart(native, why)
                 native = None
         finally:
             outcome = state.get('outcome')
@@ -1491,7 +1531,14 @@ class Client:
         native_error = native_error_code = None
         parked = False
         while True:
-            event = native.receive(request, timeout)
+            try:
+                event = native.receive(request, timeout)
+            except _Doubt:
+                if not admission.used:
+                    raise
+                # Native asks for a tool as soon as its call has streamed. The answer is upstream's and stands; the
+                # process is not kept after it (native.doubt).
+                continue
             if event is None:
                 break
             kind = event.get('type')
@@ -1663,7 +1710,9 @@ class Client:
         # Kept only when native holds exactly the history Hermes will send next: a clean step through the relay, every
         # call parked on Hermes, nothing native answered itself.
         clean = (session and admission.used and not admission.denied and not native_error and not refused and not unparsed
-                 and (routed if parked else final.get('subtype') == 'success' and not calls))
+                 and (routed if parked else final.get('subtype') == 'success' and not calls) and native.doubt is None)
+        if session and native.doubt is not None:
+            logger.debug('Claude session restart (%s): replaying into a new process', native.doubt)
         state['outcome'] = 'kept' if clean else 'handed_off' if fast else 'done'
         if fast:
             # The answer is complete at native's result: its exit is never waited for; the drain kills a native

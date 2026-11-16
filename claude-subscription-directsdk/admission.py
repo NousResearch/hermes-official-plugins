@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import secrets
+import selectors
 import socket
 import socketserver
 import ssl
@@ -717,8 +718,21 @@ class Admission:
         self.server = _Server(('127.0.0.1', 0), Handler)
         self.server.admission = self
         self.url = f'http://127.0.0.1:{self.server.server_port}' + self.prefix
-        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval':.05}, daemon=True)
+        # close() wakes the loop through this pair at once; serve_forever() noticed a shutdown only at its next poll,
+        # 50 ms after close() asked, on every step.
+        self._wake, self._waker = socket.socketpair()
+        self.thread = threading.Thread(target=self._serve, daemon=True)
         self.thread.start()
+
+    def _serve(self):
+        with selectors.DefaultSelector() as selector:
+            selector.register(self.server, selectors.EVENT_READ)
+            selector.register(self._wake, selectors.EVENT_READ)
+            while True:
+                ready = [key.fileobj for key, _ in selector.select()]
+                if self._wake in ready:
+                    return
+                self.server.handle_request()
 
     def error_text(self):
         """The upstream's own message for a non-200 answer, '' when none was captured."""
@@ -748,9 +762,14 @@ class Admission:
 
     def close(self):
         self.abort()
-        self.server.shutdown()
+        try:
+            self._waker.send(b'\0')
+        except OSError:
+            pass  # Already closed: a second close().
         self.thread.join()
         self.server.server_close()
+        self._wake.close()
+        self._waker.close()
 
 
 class Handler(BaseHTTPRequestHandler):

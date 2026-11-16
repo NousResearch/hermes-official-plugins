@@ -689,11 +689,16 @@ class Native:
         try:
             for line in process.stdout:
                 event = json.loads(line)
-                if event.get('type') == 'control_request':
+                if self.tools is not None and not (isinstance(event, dict) and isinstance(event.get('type'), str) and (
+                        event['type'] != 'stream_event' or isinstance(event.get('event'), dict))):
+                    self._doubt('event')
+                elif event.get('type') == 'control_request':
                     self._control(event)
                 elif event.get('type') != 'control_response':
                     self.events.put(event)
         except Exception as error:
+            if self.tools is not None:
+                self._doubt('event')
             self.events.put(error)
         finally:
             # The consumer may close while paused at a yielded chunk. Reaping belongs to this owner thread, never
@@ -740,6 +745,10 @@ class Native:
         request = event.get('request') or {}
         message = request.get('message') or {}
         if request.get('subtype') != 'mcp_message':
+            if self.tools is not None:
+                # A kept native asks only for the hermes server's MCP traffic: one that asks for more is not kept. The
+                # error below still answers it, so a reply already streaming finishes.
+                self._doubt('control')
             # dontAsk with mcp__hermes allowed leaves native nothing else to ask; never let it act on its own.
             self._write({'type': 'control_response', 'response': {'subtype': 'error', 'request_id': event.get('request_id'),
                                                                   'error': 'Hermes runs every tool'}})

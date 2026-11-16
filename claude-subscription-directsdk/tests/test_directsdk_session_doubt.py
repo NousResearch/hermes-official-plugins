@@ -81,6 +81,8 @@ def break_line(event, how):
     ('no_tool_id', SECOND, 'no_tool_id'),   # asked inside the next step, before its request: that step restarts
     ('tool_id', SECOND, 'tool_id'),         # an id the step never received
     ('duplicate', SECOND, 'tool_id'),       # an id native asked for before
+    ('control', SECOND, 'control'),         # a control request the plugin does not know
+    ('event', SECOND, 'event'),             # an output line that is not an object
 ])
 def test_a_line_the_plugin_does_not_know_restarts_the_kept_process(home, upstream, monkeypatch, caplog, how, which, why):
     """Three calls in the first step; native asks for them one at a time, the first as soon as it has streamed, the

@@ -711,10 +711,18 @@ class Admission:
         self.server.admission = self
         self.url = f'http://127.0.0.1:{self.server.server_port}' + self.prefix
         # close() wakes the loop through this pair at once; serve_forever() noticed a shutdown only at its next poll,
-        # 50 ms after close() asked, on every step.
-        self._wake, self._waker = socket.socketpair()
-        self.thread = threading.Thread(target=self._serve, daemon=True)
-        self.thread.start()
+        # up to 50 ms after close() asked, on every step.
+        try:
+            self._wake, self._waker = socket.socketpair()
+            self.thread = threading.Thread(target=self._serve, daemon=True)
+            self.thread.start()
+        except BaseException:
+            # Out of descriptors or threads: the listener must not outlive the relay that could not start.
+            self.server.server_close()
+            for sock in (getattr(self, '_wake', None), getattr(self, '_waker', None)):
+                if sock is not None:
+                    sock.close()
+            raise
 
     def _serve(self):
         with selectors.DefaultSelector() as selector:

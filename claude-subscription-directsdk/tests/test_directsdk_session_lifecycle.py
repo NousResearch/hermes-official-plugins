@@ -154,3 +154,38 @@ def test_a_process_that_dies_as_it_becomes_the_kept_session_gives_its_place_back
             assert not directsdk._live, 'the dead process holds a place'
     finally:
         c.close()
+
+
+def test_a_kept_process_holds_a_max_concurrent_slot_only_while_it_serves_a_step(home, upstream, monkeypatch):
+    """With ``max_concurrent`` 1, an agent's kept process waits on its parked tool call while a title call runs: the
+    title call starts at once, because a kept process holds its slot only while it serves a step. The agent's next
+    step then takes the slot again on the same process. Holding it between steps would leave the title call waiting
+    until its own timeout."""
+    monkeypatch.setattr(directsdk, 'max_concurrent', lambda: 1)
+    pool = directsdk.concurrency._pool
+    assert pool.held == 0
+    agent = client(home, upstream, monkeypatch, session=True)
+    titles = client(home, upstream, monkeypatch, session=True)  # hermes_auxiliary makes its call a one-shot
+    try:
+        go = [{'role': 'user', 'content': 'go'}]
+        reply = agent.create(model=MODEL, messages=go, tools=TOOLS, max_tokens=1000).choices[0].message.model_dump()
+        native = agent._session
+        pid = native.process.pid
+        assert native.process.poll() is None and pool.held == 0
+        titles.create(model=MODEL, messages=go, tools=TOOLS, max_tokens=1000, timeout=10, hermes_auxiliary=True)
+        # The title call's one-shot process frees its slot once it has exited, after its answer.
+        deadline = time.monotonic() + 10
+        while pool.held and time.monotonic() < deadline:
+            time.sleep(.02)
+        assert pool.held == 0
+        held_while_serving = []
+        deliver = native.deliver
+        monkeypatch.setattr(native, 'deliver', lambda results: (held_while_serving.append(pool.held), deliver(results))[1])
+        assistant = {k: v for k, v in reply.items() if k in ('role', 'content', 'tool_calls', 'reasoning_details') and v is not None}
+        result = {'role': 'tool', 'tool_call_id': reply['tool_calls'][0]['id'], 'content': 'contents'}
+        agent.create(model=MODEL, messages=go + [assistant, result], tools=TOOLS, max_tokens=1000)
+        assert held_while_serving == [1]
+        assert session_pids(agent) == {pid} and pool.held == 0
+    finally:
+        agent.close()
+        titles.close()

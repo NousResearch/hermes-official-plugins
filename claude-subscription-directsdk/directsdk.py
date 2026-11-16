@@ -612,22 +612,22 @@ def _place(cap):
     """A place against ``max_sessions`` for a new kept process, else None. At the cap the kept process that has waited
     longest for a new user turn gives its place up; one serving a step or holding a parked call never does. The place
     is taken under the lock: concurrent launches checked against an empty set used to all pass."""
+    tried = set()
     while True:
         with _live_lock:
             if len(_live) < cap:
                 reservation = _Reservation()
                 _live.add(reservation)
                 return reservation
-            idle = [n for n in _live if getattr(n, 'idle_since', None) is not None]
+            idle = [(since, id(n), n) for n in _live if n not in tried and (since := getattr(n, 'idle_since', None)) is not None]
         if not idle:
             return None
-        oldest = min(idle, key=lambda n: n.idle_since)
+        oldest = min(idle)[2]
+        tried.add(oldest)
         end = oldest.end and oldest.end()
-        # Its owner ends it only if it is still that client's idle session (no step took it meanwhile).
-        if end is not None and end(oldest):
+        # Its owner ends it only if it is still that client's session and still waits for its user.
+        if end is not None and end(oldest, True):
             logger.debug('Claude session evicted (the longest idle at max_sessions %d): its place goes to a step asking now', cap)
-        else:
-            oldest.idle_since = None  # not evictable now; look at the next
 
 
 def _end_orphan_native(native):
@@ -1231,10 +1231,12 @@ class Client:
                 request.cancel()
         self._end_session()
 
-    def _end_session(self, native=None):
-        """Kill the idle kept session (only ``native`` when given: the idle timer's own); whether it did."""
+    def _end_session(self, native=None, idle=False):
+        """Kill the idle kept session (only ``native`` when given: the idle timer's own; with ``idle``, only while it
+        waits for its user, as eviction requires); whether it did."""
         with self._lock:
-            if self._session is None or (native is not None and self._session is not native):
+            if self._session is None or (native is not None and self._session is not native) or (
+                    idle and self._session.idle_since is None):
                 return False
             native, self._session, self._kept['native'] = self._session, None, None
         native.kill()
@@ -1281,6 +1283,7 @@ class Client:
             native, self._session, self._kept['native'] = self._session, None, None
         if native is not None:
             native.idle.cancel()
+            native.idle_since = None  # serving a step now: never evicted
             how = ('version' if native.version != version else 'launch' if native.ident != ident else native.doubt or
                    (native.resumes(frames) if native.settled() else 'exited'))
             if not isinstance(how, str):

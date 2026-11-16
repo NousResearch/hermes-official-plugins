@@ -682,14 +682,15 @@ class Native:
     protocol: native's ``tools/call`` waits until Hermes brings the result, so native never runs a tool. A one-shot
     gets end of input after its frames and answers one step."""
 
-    def __init__(self, request, command, env, workdir, admission, launch_dir, tools=None, binary=None):
+    def __init__(self, request, command, env, workdir, admission, launch_dir, tools=None, binary=None, version=None):
         # ``binary``: the resolved command this process runs, whose version its init event reports for the gate.
         self.admission, self.launch_dir, self.tools, self.binary = admission, launch_dir, tools, binary
         self.events, self.stderr = queue.Queue(), deque(maxlen=40)
         self.lock, self.writing = threading.Lock(), threading.Lock()
         self.parked, self.results = {}, {}
         # A kept session: what it was launched with, the frames it holds, and what the next step must bring.
-        self.ident = self.version = self.frames = self.expect = self.idle = self.on_exit = None
+        self.ident = self.frames = self.expect = self.idle = self.on_exit = None
+        self.version = version  # the Claude Code version the gate let this kept process run on
         # Why this native is in doubt (a restart reason), every tool id it asked for, and whether a resumed request of
         # its own has been shown equal to per-call's.
         self.doubt, self.asked, self.proven = None, set(), False
@@ -723,7 +724,11 @@ class Native:
                     self._control(event)
                 elif event.get('type') != 'control_response':
                     if event.get('type') == 'system' and event.get('subtype') == 'init' and self.binary is not None:
-                        note_version(self.binary, event.get('claude_code_version'))
+                        reported = event.get('claude_code_version')
+                        note_version(self.binary, reported)
+                        if self.tools is not None and reported != self.version:
+                            # The binary changed under the gate: this process is not the version it allowed.
+                            self._doubt('version')
                     self.events.put(event)
         except Exception as error:
             if self.tools is not None and not isinstance(error, TimeoutError):
@@ -1435,7 +1440,8 @@ class Client:
                     reservation = _place(cap) if session else None
                     session = reservation is not None
                     try:
-                        native = self._launch(request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id, session, reservation)
+                        native = self._launch(request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id, session, reservation,
+                                              version)
                     finally:
                         # However the launch ended, the reservation is spent: native holds the place now, or nothing does.
                         with _live_lock:
@@ -1524,7 +1530,8 @@ class Client:
             probe.release()
         return probe.admission.probed
 
-    def _launch(self, request, env, resolved, upstream, kwargs, body, tools, system, frames, timeout, session_id, session, reservation=None):
+    def _launch(self, request, env, resolved, upstream, kwargs, body, tools, system, frames, timeout, session_id, session, reservation=None,
+                version=None):
         """Start native for one step: a session (kept for the next step, taking the place ``reservation`` holds in
         ``_live``) or a one-shot (ends after this one)."""
         queried = frames[-1]['message']['content']
@@ -1568,7 +1575,8 @@ class Client:
             if effort:
                 command += ['--effort', effort]
             command += ['--session-id', session_id]
-            native = Native(request, command, env, self._workdir(), admission, root, tools if session else None, resolved)
+            native = Native(request, command, env, self._workdir(), admission, root, tools if session else None, resolved,
+                            version if session else None)
             if session:
                 with _live_lock:
                     _live.discard(reservation)

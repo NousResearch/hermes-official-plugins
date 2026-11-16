@@ -33,3 +33,21 @@ def test_a_version_belongs_to_the_command_and_the_files_it_names_as_they_are(tmp
     assert directsdk_setup.claude_version([sys.executable, str(b)]) == (False, None)
     a.write_text('one, updated')
     assert directsdk_setup.claude_version([sys.executable, str(a)]) == (False, None)
+
+
+@pytest.mark.parametrize('how', ['replaced', 'rewritten'])
+def test_a_same_size_update_is_a_new_binary(tmp_path, how):
+    """npm gives package files a fixed mtime: a release of the same size is told apart by its new file (inode), and an
+    in-place rewrite by its mtime."""
+    import os
+    import time
+    claude = tmp_path / 'cli.js'
+    claude.write_text('2.1.322')
+    directsdk_setup.note_version([str(claude)], '2.1.322')
+    time.sleep(.01)
+    if how == 'replaced':
+        (tmp_path / 'new.js').write_text('2.1.330')
+        os.replace(tmp_path / 'new.js', claude)
+    else:
+        claude.write_text('2.1.330')
+    assert directsdk_setup.claude_version([str(claude)]) == (False, None)

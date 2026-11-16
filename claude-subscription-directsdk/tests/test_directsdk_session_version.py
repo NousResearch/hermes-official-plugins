@@ -89,3 +89,23 @@ def test_a_kept_process_ends_when_its_version_is_no_longer_one_session_mode_runs
     assert lines(caplog, 'session restart') == ['Claude session restart (version): replaying into a new process']
     assert len(lines(caplog, WHY)) == 1
     assert upstream.bodies == expected
+
+
+def test_a_process_that_reports_another_version_than_the_gate_allowed_is_not_kept(home, upstream, monkeypatch, caplog):
+    """The binary changed between the version the gate knew and the process it started (an update in place): that
+    process's own init event names another version, so it is not kept (``version``) and the step runs per-call. The
+    next step keeps a process of the version it really is."""
+    expected = per_call(home, upstream, monkeypatch, steer_at=None)
+    other = next(v for v in sorted(directsdk_setup.session_versions()) if v != printed())
+    monkeypatch.setattr(directsdk_setup, '_versions', {})
+    directsdk_setup.note_version([CLAUDE], other)
+    kept = client(home, upstream, monkeypatch, session=True, learn=False)
+    try:
+        with caplog.at_level('DEBUG'):
+            pids = converse(kept, steer_at=None)
+    finally:
+        kept.close()
+    assert lines(caplog, 'session restart') == ['Claude session restart (version): replaying into a new process']
+    assert pids[0] is None and pids[1] is not None and len(set(pids[1:])) == 1, pids
+    assert directsdk_setup.claude_version([CLAUDE]) == (True, printed())
+    assert upstream.bodies == expected

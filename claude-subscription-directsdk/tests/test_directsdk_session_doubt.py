@@ -18,7 +18,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import admission
 import directsdk
-from test_directsdk_session import client, home, session_pids  # noqa: F401  (fixtures)
+from test_directsdk_session import MODEL, TOOLS, client, home, session_pids  # noqa: F401  (fixtures)
 from test_directsdk_session_steer import ROUNDS, converse, per_call, upstream  # noqa: F401  (fixtures)
 
 pytestmark = pytest.mark.skipif(not (os.environ.get('CLAUDE_CODE_BIN') or shutil.which('claude')), reason='needs the Claude Code CLI')
@@ -117,3 +117,40 @@ def test_a_line_the_plugin_does_not_know_restarts_the_kept_process(home, upstrea
         # That step runs per-call; the next one keeps a new process.
         assert pids[1] is None and pids[2] not in (None, pids[0]) and len(set(pids[2:])) == 1, pids
     assert len(expected) == ROUNDS + 1 and upstream.bodies == expected
+
+
+def test_a_doubt_while_a_new_process_replays_runs_that_step_per_call(home, upstream, monkeypatch, caplog):
+    """A new process replays the history before its first request, and starts the hermes MCP server meanwhile. Its
+    server's start is changed into a control request the plugin does not know: nothing has gone upstream, so the step
+    runs on a fresh one-shot with per-call's bytes (before, the call failed)."""
+    upstream.calls = 1
+    one_shot = client(home, upstream, monkeypatch, session=False)
+    try:
+        messages = [{'role': 'system', 'content': 'You are a fixture agent.'}, {'role': 'user', 'content': 'go'}]
+        reply = one_shot.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000).choices[0].message.model_dump()
+        messages.append({k: v for k, v in reply.items() if k in ('role', 'content', 'tool_calls', 'reasoning_details') and v is not None})
+        messages.append({'role': 'tool', 'tool_call_id': reply['tool_calls'][0]['id'], 'content': 'contents'})
+        one_shot.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000)
+    finally:
+        one_shot.close()
+    expected, upstream.bodies[:] = upstream.bodies[-1], []
+    loads, broken = json.loads, []
+
+    def read(line, *args, **kwargs):
+        event = loads(line, *args, **kwargs)
+        if not broken and isinstance(event, dict) and event.get('type') == 'control_request' and \
+                ((event.get('request') or {}).get('message') or {}).get('method') == 'initialize':
+            broken.append(True)
+            event['request']['subtype'] = 'a_new_subtype'
+        return event
+    monkeypatch.setattr(directsdk, 'json', SimpleNamespace(**{**{k: getattr(json, k) for k in dir(json) if not k.startswith('_')}, 'loads': read}))
+    kept = client(home, upstream, monkeypatch, session=True)
+    try:
+        with caplog.at_level('DEBUG', logger=directsdk.logger.name):
+            assert kept.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000).choices[0].message.tool_calls
+        assert broken and not session_pids(kept)
+    finally:
+        kept.close()
+    assert restarts(caplog) == ['Claude session restart (control): replaying into a new process']
+    assert upstream.bodies == [expected]
+

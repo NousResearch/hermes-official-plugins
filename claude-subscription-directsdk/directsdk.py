@@ -1401,7 +1401,13 @@ class Client:
                         with _live_lock:
                             _live.discard(reservation)
                     native.ident, native.slot = ident, slot
-                    native.replay(request, frames, timeout)
+                    try:
+                        native.replay(request, frames, timeout)
+                    except _Doubt as doubt:
+                        # Nothing has gone upstream yet: this step replays on a fresh one-shot.
+                        self._restart(native, doubt.why)
+                        native, session = None, False
+                        continue
                     if not session:
                         native.send(request, None, timeout)
                 else:

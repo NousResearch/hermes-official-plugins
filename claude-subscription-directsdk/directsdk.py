@@ -1260,7 +1260,9 @@ class Client:
             request.process = request.admission = None
             # Idle from here on, so its max_concurrent slot goes back now, not when the caller ends the stream.
             slot, native.slot = native.slot, None
-            native.idle.start()
+            if expect == 'user':
+                # A parked call is not idle: native waits on Hermes' tool, however long it runs.
+                native.idle.start()
         if slot is not None:
             slot.release()
         if native.process.returncode is not None:

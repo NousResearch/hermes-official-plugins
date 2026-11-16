@@ -16,7 +16,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import directsdk
-from test_directsdk_session import MODEL, TOOLS, client, home, session_pids, upstream  # noqa: F401  (fixtures)
+from test_directsdk_session import MODEL, TOOLS, client, converse, home, session_pids, upstream  # noqa: F401  (fixtures)
 
 pytestmark = pytest.mark.skipif(not (os.environ.get('CLAUDE_CODE_BIN') or shutil.which('claude')), reason='needs the Claude Code CLI')
 
@@ -203,14 +203,14 @@ def test_a_kept_process_holds_a_max_concurrent_slot_only_while_it_serves_a_step(
 
 
 def test_a_kept_process_ends_after_the_profiles_idle_limit(home, upstream, monkeypatch, tmp_path):
-    """``session_idle_seconds`` from the profile's config: a kept process that serves no step for that long ends and
-    gives its place back."""
+    """``session_idle_seconds`` from the profile's config: a kept process that has waited that long for its user ends
+    and gives its place back."""
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
     (tmp_path / 'config.yaml').write_text('plugins:\n  entries:\n    claude-subscription-directsdk-experimental:\n'
                                           '      settings:\n        session_idle_seconds: 1\n', encoding='utf-8')
     c = client(home, upstream, monkeypatch, session=True)
     try:
-        c.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+        converse(c, turns=('go',))  # the turn ends: the process now waits for its user
         pid = next(iter(session_pids(c)))
         assert gone(pid, within=15), 'the kept process outlived the idle limit'
         deadline = time.monotonic() + 5

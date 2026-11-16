@@ -1,8 +1,8 @@
 """A tool parked on a human: session mode against the real Claude Code CLI and a scripted loopback upstream.
 
 Hermes approvals and hand-offs can hold a tool for minutes. The kept process must keep the call open meanwhile and
-continue on the same process once the result arrives; when the plugin's own idle eviction fires first, the next step
-must run anew with the bytes per-call sends. No credentials, no inference. Skipped without the CLI; ``CLAUDE_CODE_BIN``
+continue on the same process once the result arrives, however long the park: the idle limit counts only while the
+process waits for a new user turn. No credentials, no inference. Skipped without the CLI; ``CLAUDE_CODE_BIN``
 picks a binary. ``DIRECTSDK_PARK_SECONDS`` sets the park (default 2 s; run it at 150 to prove minutes).
 
 The result of a parked call goes to native as one control write. A healthy native takes 250,000 bytes in full on the
@@ -77,35 +77,28 @@ def test_a_parked_tool_continues_on_the_same_process(home, upstream, monkeypatch
         kept.close()
 
 
-def test_idle_eviction_during_a_park_falls_back_to_per_call_bytes(home, upstream, monkeypatch):
-    """Idle eviction fires while the tool is parked: the process is gone, and the next step replays into a new one
-    whose request is exactly what a one-shot sends for the same history."""
+def test_a_parked_call_is_not_idle_but_a_finished_turn_is(home, upstream, monkeypatch):
+    """The idle limit (half a second here) passes while a tool call is parked: the process stays, and the result
+    continues on it. Once the turn has ended and the process waits for the user, the same limit ends it. Before, the
+    idle timer ran during the park too, and a tool parked past the limit lost its process."""
     monkeypatch.setattr(directsdk, 'SESSION_IDLE_S', .5)
-    kept, one_shot = client(home, upstream, monkeypatch, session=True), None
+    kept = client(home, upstream, monkeypatch, session=True)
     try:
         messages = [{'role': 'system', 'content': 'You are a fixture agent.'}, {'role': 'user', 'content': 'go'}]
-        first = step(kept, messages)
+        message = step(kept, messages)
         pid = next(iter(session_pids(kept)))
+        time.sleep(2)
+        assert alive(pid) and session_pids(kept) == {pid}, 'the parked call counted as idle'
+        while message.get('tool_calls'):
+            messages += results(message)
+            message = step(kept, messages)
+            assert session_pids(kept) == {pid}
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and alive(pid):
             time.sleep(.05)
-        assert not alive(pid), 'idle eviction did not end the parked process'
-        assert not session_pids(kept)
-        messages += results(first)
-        history = list(messages)
-        upstream.bodies = []
-        step(kept, messages)
-        replayed = upstream.bodies[-1]
-        assert session_pids(kept) and session_pids(kept) != {pid}
-        one_shot = directsdk.Client(command=kept.command, timeout=60, env=kept.env)
-        monkeypatch.setattr(directsdk, 'session_settings', lambda: (False, 4))
-        upstream.bodies = []
-        one_shot.create(model=MODEL, messages=history, tools=TOOLS, max_tokens=1000)
-        assert upstream.bodies == [replayed]
+        assert not alive(pid) and not session_pids(kept), 'the finished turn outlived the idle limit'
     finally:
         kept.close()
-        if one_shot is not None:
-            one_shot.close()
 
 
 def large_results(message):

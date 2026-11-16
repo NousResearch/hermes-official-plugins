@@ -85,8 +85,8 @@ def converse(c, steer_at, steer=(STEER,)):
     raise AssertionError('the loop did not end')
 
 
-def per_call(home, upstream, monkeypatch, steer_at, **kwargs):
-    one_shot = client(home, upstream, monkeypatch, session=False)
+def per_call(home, upstream, monkeypatch, steer_at, login='api_key', **kwargs):
+    one_shot = client(home, upstream, monkeypatch, session=False, login=login)
     try:
         converse(one_shot, steer_at, **kwargs)
     finally:
@@ -95,13 +95,15 @@ def per_call(home, upstream, monkeypatch, steer_at, **kwargs):
     return expected
 
 
+@pytest.mark.parametrize('login', ['api_key', 'claude_ai'])
 @pytest.mark.parametrize('calls', [1, 3])
-def test_a_steer_continues_the_kept_process(home, upstream, monkeypatch, caplog, calls):
+def test_a_steer_continues_the_kept_process(home, upstream, monkeypatch, caplog, calls, login):
     """The steer lands after the results of one call, or of three parked in one step (native asks for them one at a
-    time): the same process serves the whole loop, every request is per-call's, the steer where Hermes put it."""
+    time): the same process serves the whole loop, every request is per-call's, the steer where Hermes put it. The
+    claude.ai login adds native's account reminder to the opening turn, as a live login does."""
     upstream.calls = calls
-    expected = per_call(home, upstream, monkeypatch, steer_at=0)
-    kept = client(home, upstream, monkeypatch, session=True)
+    expected = per_call(home, upstream, monkeypatch, steer_at=0, login=login)
+    kept = client(home, upstream, monkeypatch, session=True, login=login)
     try:
         with caplog.at_level('DEBUG', logger=directsdk.logger.name):
             pids = converse(kept, steer_at=0)

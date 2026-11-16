@@ -49,3 +49,15 @@ def test_a_relay_that_cannot_start_its_loop_closes_its_listener(monkeypatch):
     with pytest.raises(OSError, match='Too many open files'):
         Admission('http://127.0.0.1:9', 5)
     assert made and made[0].socket.fileno() == -1
+
+
+def test_a_connection_gone_before_it_is_accepted_does_not_hold_close():
+    """The loop saw the listener readable, then the connection went (the client was killed). handle_request() selects
+    again before it accepts; it must not wait there for another connection, or close() would wait with it."""
+    gate = Admission('http://127.0.0.1:9', 5)
+    try:
+        started = time.perf_counter()
+        gate.server.handle_request()  # nothing pending: returns at once instead of waiting for a connection
+        assert time.perf_counter() - started < 1
+    finally:
+        gate.close()

@@ -1,0 +1,13 @@
+name: laya-bitnet-router
+label: Laya BitNet Router
+kind: standalone
+version: 1.0.0
+author: Chato
+description: >
+  System-1 fast model routing using Laya's typed decision engine.
+  Automatically routes each request to the best model (bitnet_local,
+  nemotron_local, cloud_nvidia) based on request content.
+requires_hermes: ">=0.22.0"
+provides_hooks: []
+provides_middleware:
+  - llm_request

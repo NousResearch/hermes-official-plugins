@@ -1,0 +1,24 @@
+[project]
+name = "laya-bitnet-router"
+version = "1.0.0"
+description = "System-1 fast model routing using Laya's typed decision engine with BitNet offline fallback"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "laya>=0.4.34",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

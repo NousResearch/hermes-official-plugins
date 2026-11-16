@@ -30,3 +30,22 @@ def test_a_closed_relay_stops_listening_and_a_second_close_is_harmless():
     gate.close()
     with pytest.raises(OSError):
         socket.create_connection(('127.0.0.1', port), timeout=1).close()
+
+
+def test_a_relay_that_cannot_start_its_loop_closes_its_listener(monkeypatch):
+    """Out of descriptors: the wake pair cannot be made. The relay raises, and its listening socket is closed."""
+    import admission
+    made = []
+    real = admission._Server
+
+    def server(*args, **kwargs):
+        made.append(real(*args, **kwargs))
+        return made[-1]
+
+    def no_pair():
+        raise OSError(24, 'Too many open files')
+    monkeypatch.setattr(admission, '_Server', server)
+    monkeypatch.setattr(admission.socket, 'socketpair', no_pair)
+    with pytest.raises(OSError, match='Too many open files'):
+        Admission('http://127.0.0.1:9', 5)
+    assert made and made[0].socket.fileno() == -1

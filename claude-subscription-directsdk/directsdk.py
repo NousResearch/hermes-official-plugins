@@ -656,6 +656,8 @@ class Native:
         self.parked, self.results = {}, {}
         # A kept session: what it was launched with, the frames it holds, and what the next step must bring.
         self.ident = self.frames = self.expect = self.idle = self.on_exit = None
+        # Whether a resumed request of its own has been shown equal to per-call's.
+        self.proven = False
         self.cost, self.slot = 0, None
         self.process = request.spawn(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      text=True, encoding='utf-8', cwd=workdir, env=env)
@@ -1356,12 +1358,23 @@ class Client:
                     if not session:
                         native.send(request, None, timeout)
                 else:
+                    expected = None
+                    if not native.proven:
+                        # Its first resumed request is the first with rows native built itself past the launch's replay,
+                        # so no earlier request proves them: it goes upstream only as per-call's own bytes.
+                        expected = self._per_call_request(request, env, resolved, upstream, kwargs, body, manifest, system,
+                                                          frames, timeout, session_id)
+                        if expected is None:
+                            self._restart(native, 'unproven')
+                            native = None
+                            continue
                     with request.lock:
                         if request.cancelled.is_set():
                             raise RuntimeError('Claude request cancelled')
                         request.process, request.admission = native.process, native.admission
                     native.slot = slot
                     native.admission.rearm(timeout, frames[-1]['message']['content'], frames)
+                    native.admission.expected, native.proven = expected, True
                     native.admission.eager = session_id not in _BUFFER_TOOL_INPUT
                     if how[0] == 'user':
                         native.send(request, how[1], timeout)
@@ -1393,6 +1406,24 @@ class Client:
                     self._requests.discard(request)
                     if stepping and outcome != 'kept':
                         self._stepping = False
+
+    def _per_call_request(self, request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id):
+        """The request a per-call step sends for ``frames``, from a one-shot whose relay keeps it and sends nothing
+        upstream; None when it could not be had."""
+        probe = self._launch(request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id, False)
+        probe.admission.probe = True
+        try:
+            probe.replay(request, frames, timeout)
+            probe.send(request, None, timeout)
+            while probe.admission.probed is None and probe.receive(request, timeout) is not None:
+                pass
+        except (RuntimeError, OSError):
+            if request.cancelled.is_set():
+                raise
+        finally:
+            probe.kill()
+            probe.release()
+        return probe.admission.probed
 
     def _launch(self, request, env, resolved, upstream, kwargs, body, tools, system, frames, timeout, session_id, session, reservation=None):
         """Start native for one step: a session (kept for the next step, taking the place ``reservation`` holds in

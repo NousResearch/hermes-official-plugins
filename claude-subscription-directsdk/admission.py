@@ -844,6 +844,9 @@ class Admission:
         # A kept-alive native's step: Hermes' frames for canonical_history, and the request extends_previous checks.
         self.frames = self.last_forwarded = None
         self.diverged = False
+        # A probe relay keeps per-call's request for a step (``probed``) and sends nothing; a kept native's relay
+        # forwards its request only when it equals ``expected``, when that is set.
+        self.probe, self.probed, self.expected = False, None, None
         self.prefix = '/admit/' + secrets.token_urlsafe(32)
         self.server = _Server(('127.0.0.1', 0), Handler)
         self.server.admission = self
@@ -857,7 +860,7 @@ class Admission:
             self.timeout, self.queried, self.frames = timeout, queried, frames
             self.cancelled, self.used, self.denied, self.auth_retry_used = False, False, 0, False
             self.request_id = self.status = self.failure = self.unrestored = None
-            self.capture, self.error_body, self.diverged = Capture(), b'', False
+            self.capture, self.error_body, self.diverged, self.expected = Capture(), b'', False, None
 
     def error_text(self):
         """The upstream's own message for a non-200 answer, '' when none was captured."""
@@ -1017,7 +1020,11 @@ class Handler(BaseHTTPRequestHandler):
             payload = pin_message_breakpoint(payload, gate.queried)
             if gate.eager:
                 payload = stream_tool_input(payload)
-            if gate.frames is not None and not extends_previous(gate, payload):
+            if gate.probe:
+                gate.probed = payload
+                self._refuse(b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_PER_CALL_PROBE"}}')
+                return
+            if gate.frames is not None and (gate.expected not in (None, payload) or not extends_previous(gate, payload)):
                 # Never worse than per-call: refuse before upstream, as a denial does; the client serves the step anew.
                 gate.diverged = True
                 self._refuse(b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_SESSION_DIVERGED"}}')

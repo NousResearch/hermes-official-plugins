@@ -150,9 +150,9 @@ hermes config set $S.upstream_ca_file /etc/ssl/corp-root.pem
 | Setting | Default | What it does |
 |---|---|---|
 | `session_mode` | `true` | Keep one Claude Code process per agent between model calls. `false`: a new process for every call, as before 0.4.0. |
-| `session_min_rounds` | `8` | A conversation keeps a process only once it has had this many tool rounds; before that every call runs per-call. Short chats and most subagents then hold none. `0`: keep from the first tool call. |
+| `session_min_rounds` | `8` | A conversation starts a kept process only once it has had this many tool rounds (sets of tool results); before that every call runs per-call. Short chats and most subagents then hold none. A process kept already meets every later step, and ends if the history no longer fits it (a compaction). `0`: keep from the first step. |
 | `max_sessions` | `4` | At most this many kept processes in one Hermes process. At the cap, the one that has waited longest for its user gives its place to the step asking now; if every one is serving a step or holds a parked tool call, that step runs per-call. |
-| `session_idle_seconds` | `3600` | A kept process that waits this long for its user ends. A parked tool call does not count as waiting. The default is the prompt cache's lifetime. |
+| `session_idle_seconds` | `3600` | A kept process that waits this long for its user ends. A parked tool call does not count as waiting: the process stays while Hermes runs the tool, and ends at the next step if that step cannot continue it, or when its client closes. The default is the prompt cache's lifetime. |
 
 What it costs: memory between calls. During a call both modes hold one Claude Code process, about 200 to 250 MB. A kept
 process holds it between calls too, and it grows with the history it carries: 245 to 290 MB at round 200 on Linux, 284

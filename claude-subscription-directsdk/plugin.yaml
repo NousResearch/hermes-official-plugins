@@ -108,7 +108,8 @@ config_schema:
     description: >-
       A conversation is kept (one Claude Code process between its model calls) only once it has had this many tool
       rounds; before that every call runs per-call. Short chats and most subagents then hold no process; long tool
-      loops, where the saving grows with history, do. 0 keeps every conversation from its first tool call.
+      loops, where the saving grows with history, do. A round is one set of tool results Hermes sends back. 0 keeps
+      every conversation from its first step.
   session_idle_seconds:
     type: int
     default: 3600

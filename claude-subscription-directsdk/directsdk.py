@@ -1457,8 +1457,10 @@ class Client:
                         # so no earlier request proves them: it goes upstream only as per-call's own bytes.
                         expected = self._per_call_request(request, env, resolved, upstream, kwargs, body, manifest, system,
                                                           frames, timeout, session_id)
-                        if expected is None:
-                            self._restart(native, 'unproven')
+                        # The probe took a while: drop what native echoed of its last step meanwhile, as _resume did.
+                        why = 'unproven' if expected is None else None if native.settled() else 'exited'
+                        if why:
+                            self._restart(native, why)
                             native = None
                             continue
                     with request.lock:

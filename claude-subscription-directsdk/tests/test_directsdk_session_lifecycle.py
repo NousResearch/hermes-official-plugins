@@ -163,7 +163,14 @@ def test_a_kept_process_holds_a_max_concurrent_slot_only_while_it_serves_a_step(
     until its own timeout."""
     monkeypatch.setattr(directsdk, 'max_concurrent', lambda: 1)
     pool = directsdk.concurrency._pool
-    assert pool.held == 0
+
+    def freed(within=30):
+        # One-shots of earlier tests free their slots only once their processes have exited.
+        deadline = time.monotonic() + within
+        while pool.held and time.monotonic() < deadline:
+            time.sleep(.02)
+        return pool.held == 0
+    assert freed()
     agent = client(home, upstream, monkeypatch, session=True)
     titles = client(home, upstream, monkeypatch, session=True)  # hermes_auxiliary makes its call a one-shot
     try:
@@ -173,17 +180,21 @@ def test_a_kept_process_holds_a_max_concurrent_slot_only_while_it_serves_a_step(
         pid = native.process.pid
         assert native.process.poll() is None and pool.held == 0
         titles.create(model=MODEL, messages=go, tools=TOOLS, max_tokens=1000, timeout=10, hermes_auxiliary=True)
-        # The title call's one-shot process frees its slot once it has exited, after its answer.
-        deadline = time.monotonic() + 10
-        while pool.held and time.monotonic() < deadline:
-            time.sleep(.02)
-        assert pool.held == 0
+        assert freed(10)  # the title call's one-shot, once its process has exited
         held_while_serving = []
         deliver = native.deliver
         monkeypatch.setattr(native, 'deliver', lambda results: (held_while_serving.append(pool.held), deliver(results))[1])
         assistant = {k: v for k, v in reply.items() if k in ('role', 'content', 'tool_calls', 'reasoning_details') and v is not None}
         result = {'role': 'tool', 'tool_call_id': reply['tool_calls'][0]['id'], 'content': 'contents'}
-        agent.create(model=MODEL, messages=go + [assistant, result], tools=TOOLS, max_tokens=1000)
+        stream = agent.create(model=MODEL, messages=go + [assistant, result], tools=TOOLS, max_tokens=1000, stream=True)
+        try:
+            for chunk in stream:
+                if chunk.choices[0].finish_reason:
+                    # The slot is back with the answer, not only once the caller ends the stream.
+                    assert pool.held == 0
+                    break
+        finally:
+            stream.close()
         assert held_while_serving == [1]
         assert session_pids(agent) == {pid} and pool.held == 0
     finally:

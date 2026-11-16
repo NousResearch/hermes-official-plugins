@@ -1227,7 +1227,11 @@ class Client:
                 return False
             self._session, self._stepping, self._kept['native'] = native, False, native
             request.process = request.admission = None
+            # Idle from here on, so its max_concurrent slot goes back now, not when the caller ends the stream.
+            slot, native.slot = native.slot, None
             native.idle.start()
+        if slot is not None:
+            slot.release()
         if native.process.returncode is not None:
             ended()  # It exited before it was the session, so its reader found nothing to end.
         return True
@@ -1447,10 +1451,8 @@ class Client:
                     native.release()
             finally:
                 if slot is not None and outcome != 'handed_off':
-                    # A kept process stays alive but holds no slot between steps; a handed-off one-shot frees it on exit.
+                    # A kept process gave its slot back in _keep (idempotent here); a handed-off one-shot frees it on exit.
                     slot.release()
-                    if native is not None:
-                        native.slot = None
                 with self._lock:
                     self._requests.discard(request)
                     if stepping and outcome != 'kept':

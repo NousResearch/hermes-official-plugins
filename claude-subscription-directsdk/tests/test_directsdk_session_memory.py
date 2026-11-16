@@ -95,7 +95,9 @@ def test_a_parked_process_ends_when_the_history_falls_below_session_min_rounds(h
 
 def test_a_step_with_several_tool_calls_is_one_round(home, monkeypatch):
     """Rounds are Hermes' tool-result frames. Three calls in one step are one round: with ``session_min_rounds`` 2 the
-    process is kept from the third step, not the second (Claude Code holds each call as its own assistant message)."""
+    process is kept from the third step, not the second. (The step's reply is one assistant frame holding the three
+    calls, the relay's capture of the response, on 2.1.292, 2.1.322 and 2.1.323; counting assistant frames gave the
+    same, so this guards the count rather than fixing it.)"""
     from test_directsdk_session_steer import Upstream as Steps, converse as loop
     from http.server import ThreadingHTTPServer
     import threading

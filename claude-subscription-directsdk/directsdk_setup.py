@@ -168,6 +168,12 @@ def session_idle_seconds(default):
     return value if ok else default
 
 
+def session_min_rounds():
+    """The active profile's ``session_min_rounds``: tool rounds a conversation has had before it is kept (default 8)."""
+    value = _setting("session_min_rounds", 8)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 8
+
+
 _SESSION_VERSIONS = re.compile(r"^\s*session_versions:\s*\[([^\]]*)\]", re.M)
 _versions, _untested, _versions_lock = {}, set(), threading.Lock()
 

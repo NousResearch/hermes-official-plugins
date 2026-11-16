@@ -100,10 +100,13 @@ def learned(binary=None):
         directsdk_setup.note_version([binary], printed)
 
 
-def client(home, upstream, monkeypatch, session, cap=4, login='api_key', learn=True):
+def client(home, upstream, monkeypatch, session, cap=4, login='api_key', learn=True, min_rounds=0):
+    """A client on the real CLI; kept from its first step unless ``min_rounds`` (None: the profile's setting)."""
     monkeypatch.setattr(directsdk, 'session_settings', lambda: (session, cap))
     if learn:
         learned()
+    if min_rounds is not None:
+        monkeypatch.setattr(directsdk, 'session_min_rounds', lambda: min_rounds)
     if login == 'claude_ai':
         # A claude.ai login with an account email: native prepends the userEmail reminder to the opening user turn.
         account = Path(home) / '.claude.json'
@@ -227,6 +230,7 @@ sys.path[:0] = {[str(Path(__file__).resolve().parents[1]), str(Path(__file__).re
 import test_directsdk_session as t, directsdk, time
 directsdk.session_settings = lambda: (True, 4)
 t.learned()
+directsdk.session_min_rounds = lambda: 0
 c = directsdk.Client(command={CLAUDE!r}, timeout=60, env={{"PATH": "{os.defpath}", "HOME": {home!r}, "CLAUDE_CONFIG_DIR": {home!r},
     "ANTHROPIC_API_KEY": "***", "ANTHROPIC_BASE_URL": "http://127.0.0.1:{upstream.server_port}", "NO_PROXY": "127.0.0.1",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}})

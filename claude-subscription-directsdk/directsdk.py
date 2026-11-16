@@ -35,7 +35,7 @@ try:
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, claude_version, drop_api_credentials, egress_env, max_concurrent, note_version,
         observe_rate_limit, reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_idle_seconds,
-        session_tested, Upstream)
+        session_min_rounds, session_tested, Upstream)
 except ImportError:
     import concurrency
     from admission import steer_tail
@@ -45,7 +45,7 @@ except ImportError:
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, claude_version, drop_api_credentials, egress_env, max_concurrent, note_version,
         observe_rate_limit, reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_idle_seconds,
-        session_tested, Upstream)
+        session_min_rounds, session_tested, Upstream)
 
 
 logger = logging.getLogger(__name__)
@@ -1384,7 +1384,12 @@ class Client:
                                                kwargs['model'], body, system, session_id], default=str).encode()).hexdigest()
             enabled, cap = session_settings()
             # An auxiliary call (summary, title) or a tool-less one is a single step: a one-shot, never kept.
-            session = bool(enabled and manifest and kwargs.get('hermes_auxiliary') is not True)
+            # A conversation is kept only once it has had session_min_rounds tool rounds: before that the saving is small
+            # and the memory is not worth holding (short chats, most subagents).
+            rounds = sum(f['type'] == 'assistant' and any(b.get('type') == 'tool_use' for b in f['message']['content'])
+                         for f in frames)
+            session = bool(enabled and manifest and kwargs.get('hermes_auxiliary') is not True
+                           and rounds >= session_min_rounds())
             # Kept mode runs only on a Claude Code version the session tests passed on; any other runs per-call. The
             # version is what a process of this binary reported in its init event: until one has, the step runs per-call.
             seen, version = claude_version(resolved) if session else (False, None)

@@ -53,6 +53,7 @@ def test_a_request_without_tools_skips_the_helper(tmp_path):
 def test_a_request_with_tools_serves_them_in_process(tmp_path, monkeypatch):
     # As if a process of this binary had reported a version session mode runs on.
     monkeypatch.setattr(directsdk, 'claude_version', lambda *_: (True, min(directsdk_setup.session_versions())))
+    monkeypatch.setattr(directsdk, 'session_min_rounds', lambda: 0)  # kept from its first step
     client, report = _client(tmp_path)
     tools = [{'type': 'function', 'function': {'name': 'probe', 'description': 'd',
               'parameters': {'type': 'object', 'properties': {}}}}]

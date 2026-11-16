@@ -28,7 +28,7 @@
   shutdown at its next 50 ms poll: up to 50 ms on every step, at the end of the step for a refused or failed one, and
   before the `max_concurrent` slot of a finished one-shot is free. Now the relay's loop wakes on close. Offline
   (`evals/directsdk_relay_close.py`, Claude Code 2.1.292, 2.1.322, 2.1.323): `close()` after a random idle 22.5 to
-  22.8 ms -> 0.29 to 0.45 ms median; right after start 50.2 ms -> 0.03 ms; a per-call tool step at `max_concurrent`
+  22.8 ms -> 0.29 to 0.45 ms median; right after start 50.2 to 50.3 ms -> 0.03 ms; a per-call tool step at `max_concurrent`
   1, which waits for the previous step's slot, 17 to 36 ms faster (median of three runs' medians). A relay that cannot start its loop
   fails at once and closes its listener.
 - An empty `.oauth_refresh.lock` that a Claude Code left after exiting mid-refresh (anthropics/claude-code#95236) is removed from the child's own login directory before every spawn, once it is past Claude Code's 60 s stale window; before, every request failed with "another Claude Code process is refreshing it" until the user deleted it. A lock with contents or a fresh mtime is never touched (P#25, thanks @LevSky22 and @100yenadmin).

@@ -11,6 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import directsdk
+import directsdk_setup
 
 TOOLS = [{'type': 'function', 'function': {'name': 'read_file', 'description': 'Read a file',
           'parameters': {'type': 'object', 'properties': {'path': {'type': 'string'}}, 'required': ['path']}}}]
@@ -21,6 +22,9 @@ def first_step(tmp_path, monkeypatch):
     """A session-mode first step up to its launch; the command resolves but no test here lets it spawn."""
     monkeypatch.setattr(directsdk, 'apply_traffic_policy', lambda env: env)
     monkeypatch.setattr(directsdk, 'session_settings', lambda: (True, 1))
+    # The fake CLI prints no version: say it is one session mode runs on, or the step would run per-call and take no
+    # place, and these tests would pass without testing anything.
+    monkeypatch.setattr(directsdk, 'claude_version', lambda *_: min(directsdk_setup.session_versions()))
     client = directsdk.Client(command=[sys.executable, '-I', str(Path(__file__).parent / 'fixtures/lifecycle_cli.py')], timeout=2,
                               env={'HOME': str(tmp_path), 'PATH': '', 'ANTHROPIC_BASE_URL': 'http://127.0.0.1:9'})
     yield lambda: client.create(model='sonnet', messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS)
@@ -45,13 +49,14 @@ def test_a_control_write_the_reader_thread_gave_up_on_reaches_the_step_as_a_time
 def test_a_launch_that_fails_before_the_spawn_leaves_no_relay(first_step, monkeypatch):
     """The launch directory cannot be made (a full or read-only temp dir) after the relay is up: the relay's thread
     and listener must go with the failed launch, and so must its place against ``max_sessions``."""
-    relays, make = [], directsdk.relay
+    relays, make, taken = [], directsdk.relay, []
 
     def recorded(*args, **kwargs):
         relays.append(make(*args, **kwargs))
         return relays[-1]
 
     def no_dir():
+        taken.append(held())
         raise OSError(28, 'No space left on device')
     monkeypatch.setattr(directsdk, 'relay', recorded)
     monkeypatch.setattr(directsdk, '_launch_dir', no_dir)
@@ -63,7 +68,7 @@ def test_a_launch_that_fails_before_the_spawn_leaves_no_relay(first_step, monkey
         assert not relay.thread.is_alive(), 'the relay thread outlived the failed launch'
         with pytest.raises(OSError):
             socket.create_connection(('127.0.0.1', int(relay.url.split(':')[2].split('/')[0])), timeout=1).close()
-        assert held() == 0, 'the failed launch kept its place'
+        assert taken == [1] and held() == 0, 'the launch took no place, or kept it'
     finally:
         if relay.thread.is_alive():
             relay.close()
@@ -74,13 +79,16 @@ def test_a_launch_that_fails_before_the_spawn_leaves_no_relay(first_step, monkey
 def test_a_launch_that_fails_before_its_relay_gives_its_place_back(first_step, monkeypatch):
     """The place against ``max_sessions`` is taken before the launch; a relay that cannot start (no socket to bind)
     must not keep it, or the cap shrinks by one for the life of the Hermes process."""
+    taken = []
+
     def no_relay(*_, **__):
+        taken.append(held())
         raise OSError(24, 'Too many open files')
     monkeypatch.setattr(directsdk, 'relay', no_relay)
     try:
         with pytest.raises(OSError, match='Too many open files'):
             first_step()
-        assert held() == 0, 'the failed launch kept its place'
+        assert taken == [1] and held() == 0, 'the launch took no place, or kept it'
     finally:
         with directsdk._live_lock:
             directsdk._live.clear()

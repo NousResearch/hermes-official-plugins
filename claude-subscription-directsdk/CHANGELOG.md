@@ -60,10 +60,11 @@
 - Session mode fails closed (maintainer review of #361, items 1 to 4). A kept process's first resumed request goes
   upstream only if it equals the request a per-call step builds for the same history (a one-shot builds it into a
   relay that sends nothing upstream); before, only its opening turn was compared, so a tail native built differently
-  could go upstream. A request body the relay cannot read is a divergence, refused before upstream. A tool call
+  could go upstream. A request body the relay cannot read was already refused before upstream; it now has a relay
+  test. A tool call
   without its id, with an id the step never received or one asked before, a control request other than the hermes
   server's MCP traffic, or an output line that is not a JSON object restarts the process (`no_tool_id`, `tool_id`,
-  `control`, `event`); before, a call without an id or with an unknown one was parked and never answered, and an
+  `control`, `event`), also while a new process replays the history; before, a call without an id or with an unknown one was parked and never answered, and an
   unknown control request was answered with an error while the process carried on.
 - The session cancel test checked the process state regardless of the request's error (an `and`/`or` without
   parentheses) and could fail on a pid that vanished between two checks.

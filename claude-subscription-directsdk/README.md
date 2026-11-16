@@ -170,7 +170,8 @@ keeps one Claude Code process alive between model calls:
   history. That step is then replayed into a new process. A kept process's first resumed request is the first with
   rows it built itself past its launch's replay, so no earlier request vouches for them: it goes upstream only if it
   equals the request a per-call step builds for the same history. A one-shot builds that request into a relay that
-  sends nothing upstream, so each kept process pays one per-call launch once, at that step. The identity is measured offline: the bench's loopback
+  sends nothing upstream, so each kept process pays one per-call launch once, at that step (two Claude Code processes
+  for a moment, on that step's one `max_concurrent` slot). The identity is measured offline: the bench's loopback
   answers a minimal stream (no `ping`, no cache usage detail, no stop sequence) to an API-key login, and the session
   tests add a claude.ai login with its account reminder on the opening turn. A real login has not been run through
   the bench.
@@ -188,8 +189,8 @@ keeps one Claude Code process alive between model calls:
 - A kept process that does something the plugin does not know is not trusted again: a tool call without
   `claudecode/toolUseId`, with an id its step never received or one it asked for before, a control request other than
   the hermes server's MCP traffic, or an output line that is not a JSON object. Its call is never parked or waited on.
-  If its request had not gone upstream, the step replays on a fresh one-shot; if it had, the answer stands and the
-  process is not kept. `unproven` means the per-call request for the first resumed step could not be built.
+  If its request had not gone upstream, the step replays on a fresh one-shot; if it had, the process is not kept
+  after the step (the answer stands, or the step fails if native's output no longer parses). `unproven` means the per-call request for the first resumed step could not be built.
 - A kept process counts against `max_concurrent` only while it serves a step. Between steps, idle or with a tool
   parked, it holds no place, so idle agents do not block title and summary calls; `max_sessions` bounds how many
   stay alive.

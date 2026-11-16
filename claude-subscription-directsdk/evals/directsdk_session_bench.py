@@ -178,7 +178,7 @@ def client(binary, home, upstream, session):
 
 def turn(c, messages, rows, *, phase, rounds, park=0, park_at=None, steer_at=()):
     """Hermes' loop for one user turn: one create() per model step, the tool results appended for each call."""
-    budget = len(messages) + 2 * (rounds + 2)
+    budget = len(messages) + 2 * (rounds + 2) + len(steer_at)  # each steer is one more row
     while True:
         if len(messages) > budget:
             raise RuntimeError(f'{phase}: the turn did not end after {rounds} tool rounds')

@@ -154,3 +154,26 @@ def test_a_doubt_while_a_new_process_replays_runs_that_step_per_call(home, upstr
     assert restarts(caplog) == ['Claude session restart (control): replaying into a new process']
     assert upstream.bodies == [expected]
 
+
+def test_a_per_call_request_that_cannot_be_built_restarts_the_kept_process(home, upstream, monkeypatch, caplog):
+    """The one-shot that builds per-call's request for the first resumed step exits before its replay is acknowledged
+    (forced once). Nothing proves the kept process's request, so it restarts (``unproven``); the new process is kept,
+    and its own first resumed request is checked as usual."""
+    expected = per_call(home, upstream, monkeypatch, steer_at=None)
+    replay, failed = directsdk.Native.replay, []
+
+    def flaky(self, request, frames, timeout):
+        if self.tools is None and not failed:
+            failed.append(True)
+            raise RuntimeError('Native exited before replay acknowledgment (exit=1)')
+        return replay(self, request, frames, timeout)
+    monkeypatch.setattr(directsdk.Native, 'replay', flaky)
+    kept = client(home, upstream, monkeypatch, session=True)
+    try:
+        with caplog.at_level('DEBUG', logger=directsdk.logger.name):
+            pids = converse(kept, steer_at=None)
+    finally:
+        kept.close()
+    assert failed and pids[1] != pids[0] and len(set(pids[1:])) == 1 and None not in pids, pids
+    assert restarts(caplog) == ['Claude session restart (unproven): replaying into a new process']
+    assert len(expected) == ROUNDS + 1 and upstream.bodies == expected

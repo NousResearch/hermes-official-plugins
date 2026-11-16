@@ -3,7 +3,10 @@
 Every model step starts a loopback relay (``admission.Admission``) and closes it when its Claude Code has exited.
 ``close()`` used to wait for the relay's ``serve_forever`` to notice the shutdown at its next 50 ms poll. This measures:
 
-- ``close_ms``: ``Admission.close()`` alone, ``--closes`` times (no Claude Code needed);
+- ``close_ms``: ``Admission.close()`` right after the relay starts, ``--closes`` times (no Claude Code needed): the
+  worst case, a full poll;
+- ``close_after_idle_ms``: the same after the relay has idled a random 0 to 100 ms, as when Claude Code exits a while
+  after its answer, so the close lands anywhere in a poll;
 - with a Claude Code binary, ``step_s``: per-call steps of one tool loop at ``max_concurrent`` 1, where each step waits
   for the previous step's process to exit and its relay to close before it may start (the case a subagent fan-out
   at the cap is in), against a scripted loopback upstream.
@@ -14,6 +17,7 @@ import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import random
 from pathlib import Path
 import statistics
 import subprocess
@@ -38,10 +42,11 @@ def dist(values):
             'p95': round(values[int(round(.95 * (len(values) - 1)))], 4), 'max': round(values[-1], 4)}
 
 
-def closes(n):
-    out = []
+def closes(n, idle=0.0):
+    out, rng = [], random.Random(3889)
     for _ in range(n):
         gate = admission.Admission('http://127.0.0.1:9', 5)
+        time.sleep(rng.uniform(0, idle))
         started = time.perf_counter()
         gate.close()
         out.append((time.perf_counter() - started) * 1000)
@@ -106,7 +111,7 @@ if __name__ == '__main__':
     parser.add_argument('--steps', type=int, default=40)
     parser.add_argument('--out')
     args = parser.parse_args()
-    report = {'close_ms': dist(closes(args.closes))}
+    report = {'close_ms': dist(closes(args.closes)), 'close_after_idle_ms': dist(closes(args.closes, .1))}
     if args.binary:
         report['native_version'] = subprocess.check_output([args.binary, '--version'], text=True, stdin=subprocess.DEVNULL).strip()
         # The first step pays Claude Code's own first start (disk cache); the rest are steady state.

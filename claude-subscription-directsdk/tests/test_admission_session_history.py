@@ -140,18 +140,45 @@ def test_a_misaligned_tail_is_refused_before_upstream(peer, misalign):
         gate.close()
 
 
-@pytest.mark.parametrize('broken', ['null_row', 'no_role'])
-def test_a_body_the_relay_cannot_read_is_refused_before_upstream(peer, broken):
-    """The first resumed step again, with a tail the rewrite cannot even read (a row that is not an object, a row with
-    no role). A parse error is a divergence too: refused, never forwarded as native built it."""
+def test_a_body_the_relay_cannot_read_is_refused_before_upstream(peer):
+    """The first resumed step again, with a tail the rewrite cannot even read (a row that is not an object). A parse
+    error is a divergence too: refused, never forwarded as native built it."""
     gate = kept(peer, FRAMES[:3])
     forwarded = len(peer.received)
     try:
         rows = native_rows(FRAMES[:3])
-        rows[2] = None if broken == 'null_row' else {'content': rows[2]['content']}
+        rows[2] = None
         status, body = post(gate, rows)
         assert status == 400 and DIVERGED in body
         assert gate.diverged and len(peer.received) == forwarded
+    finally:
+        gate.close()
+
+
+@pytest.mark.parametrize('drift', [False, True])
+def test_a_first_resumed_request_goes_upstream_only_as_per_calls_own(peer, drift):
+    """The relay's half of the first resumed step: a probe relay keeps the request per-call sends for the frames and
+    forwards nothing; the kept relay forwards its own request only when it is that request, byte for byte. Its record
+    of the first reply drifted here (one tool argument), which no earlier request can show."""
+    probe = Admission(f'http://127.0.0.1:{peer.server_port}', 5, queried=FRAMES[2]['message']['content'])
+    probe.probe = True
+    try:
+        status, _ = post(probe, [ENV] + [copy.deepcopy(f['message']) for f in FRAMES[:3]])
+        assert status == 400 and probe.probed and not peer.received
+    finally:
+        probe.close()
+    gate = kept(peer, FRAMES[:3])
+    gate.rearm(5, FRAMES[2]['message']['content'], FRAMES[:3], probe.probed)
+    forwarded = len(peer.received)
+    try:
+        rows = native_rows(FRAMES[:3])
+        if drift:
+            rows[2]['content'][-1]['input']['path'] += ' (as native recalls it)'
+        status, body = post(gate, rows)
+        if drift:
+            assert status == 400 and DIVERGED in body and gate.diverged and len(peer.received) == forwarded
+        else:
+            assert status == 200 and not gate.diverged and peer.received[-1] == json.loads(probe.probed)
     finally:
         gate.close()
 

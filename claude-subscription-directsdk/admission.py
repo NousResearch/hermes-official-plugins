@@ -854,13 +854,14 @@ class Admission:
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval':.05}, daemon=True)
         self.thread.start()
 
-    def rearm(self, timeout, queried, frames):
-        """Admit one more request: the next step of the kept-alive native this relay serves."""
+    def rearm(self, timeout, queried, frames, expected=None):
+        """Admit one more request: the next step of the kept-alive native this relay serves (only as ``expected``,
+        when given)."""
         with self.lock:
-            self.timeout, self.queried, self.frames = timeout, queried, frames
+            self.timeout, self.queried, self.frames, self.expected = timeout, queried, frames, expected
             self.cancelled, self.used, self.denied, self.auth_retry_used = False, False, 0, False
             self.request_id = self.status = self.failure = self.unrestored = None
-            self.capture, self.error_body, self.diverged, self.expected = Capture(), b'', False, None
+            self.capture, self.error_body, self.diverged = Capture(), b'', False
 
     def error_text(self):
         """The upstream's own message for a non-200 answer, '' when none was captured."""

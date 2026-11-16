@@ -1426,8 +1426,8 @@ class Client:
                             raise RuntimeError('Claude request cancelled')
                         request.process, request.admission = native.process, native.admission
                     native.slot = slot
-                    native.admission.rearm(timeout, frames[-1]['message']['content'], frames)
-                    native.admission.expected, native.proven = expected, True
+                    native.admission.rearm(timeout, frames[-1]['message']['content'], frames, expected)
+                    native.proven = True
                     native.admission.eager = session_id not in _BUFFER_TOOL_INPUT
                     if how[0] == 'user':
                         native.send(request, how[1], timeout)

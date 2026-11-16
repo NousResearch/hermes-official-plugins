@@ -167,7 +167,7 @@ def session_idle_seconds(default):
 
 
 _SESSION_VERSIONS = re.compile(r"^\s*session_versions:\s*\[([^\]]*)\]", re.M)
-_versions, _untested = {}, set()
+_versions, _untested, _versions_lock = {}, set(), threading.Lock()
 
 
 def session_versions():
@@ -179,22 +179,31 @@ def session_versions():
     return frozenset(v.strip().strip("'\"") for v in match.group(1).split(",") if v.strip()) if match else frozenset()
 
 
-def claude_version(command, env):
-    """``claude --version`` of this binary file (asked once per file and change), else None."""
+def _file_key(arg):
+    """An argument that names a file, as that file is now (an update in place or a replaced file changes it)."""
     try:
-        status = os.stat(os.path.realpath(command[0]))
-    except (OSError, IndexError):
-        return None
-    key = (os.path.realpath(command[0]), status.st_mtime_ns, status.st_size)
-    if key not in _versions:
-        try:
-            out = subprocess.run(list(command) + ["--version"], capture_output=True, text=True, timeout=30, env=env,
-                                 stdin=subprocess.DEVNULL).stdout
-        except (OSError, subprocess.SubprocessError, ValueError):
-            return None
-        match = re.match(r"\s*(\d+\.\d+\.\d+)\b", out or "")
-        _versions[key] = match.group(1) if match else None
-    return _versions[key]
+        status = os.stat(arg)
+    except (OSError, TypeError, ValueError):
+        return arg
+    return os.path.realpath(arg), status.st_dev, status.st_ino, status.st_mtime_ns, status.st_size
+
+
+def claude_version(command, env):
+    """``claude --version`` of this command (asked once per command and the files it names), else None. A version
+    that cannot be read stays unread until those files change: per-call is the safe answer, and asking again on every
+    call could wait the full timeout each time."""
+    key = tuple(_file_key(arg) for arg in command)
+    with _versions_lock:
+        if key not in _versions:
+            try:
+                out = subprocess.run(list(command) + ["--version"], capture_output=True, text=True, timeout=10, env=env,
+                                     stdin=subprocess.DEVNULL).stdout
+            except (OSError, subprocess.SubprocessError, ValueError):
+                out = ""
+            # Only a release's own number: "2.1.323-beta.1" is not 2.1.323.
+            match = re.match(r"\s*(\d+\.\d+\.\d+)(?=\s|$)", out or "")
+            _versions[key] = match.group(1) if match else None
+        return _versions[key]
 
 
 def session_tested(version):
@@ -202,8 +211,9 @@ def session_tested(version):
     tested = session_versions()
     if version in tested:
         return True
-    if version not in _untested:
-        _untested.add(version)
+    with _versions_lock:
+        first, _ = version not in _untested, _untested.add(version)
+    if first:
         _logger.info("claude-subscription-directsdk: session mode runs only on Claude Code %s; this is %s, so every "
                      "call runs per-call (a new process each)", ", ".join(sorted(tested)) or "(none listed)",
                      version or "a version it could not read")

@@ -43,3 +43,10 @@ def test_each_command_is_asked_once_until_its_files_change(fake):
     broken = fake('broken.py', 'not a version')
     assert [directsdk_setup.claude_version(broken, env) for _ in range(3)] == [None] * 3 and fake.calls() == 4
 
+
+@pytest.mark.parametrize('value', ['10000000000.0', '.inf', '.nan'])
+def test_an_idle_limit_the_timer_cannot_hold_keeps_the_cache_lifetime(tmp_path, monkeypatch, value):
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    (tmp_path / 'config.yaml').write_text('plugins:\n  entries:\n    claude-subscription-directsdk-experimental:\n'
+                                          f'      settings:\n        session_idle_seconds: {value}\n', encoding='utf-8')
+    assert directsdk_setup.session_idle_seconds(3600.0) == 3600.0

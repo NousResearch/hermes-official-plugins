@@ -163,7 +163,9 @@ def session_idle_seconds(default):
     """The active profile's ``session_idle_seconds``: how long a kept process may idle (positive seconds, else
     ``default``, the prompt cache's lifetime)."""
     value = _setting("session_idle_seconds", default)
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0 else default
+    # Above TIMEOUT_MAX (or infinite) the idle timer's thread dies at start, and the process would never idle out.
+    ok = isinstance(value, (int, float)) and not isinstance(value, bool) and 0 < value <= threading.TIMEOUT_MAX
+    return value if ok else default
 
 
 _SESSION_VERSIONS = re.compile(r"^\s*session_versions:\s*\[([^\]]*)\]", re.M)

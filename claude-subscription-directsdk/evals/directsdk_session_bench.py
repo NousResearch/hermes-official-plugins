@@ -11,12 +11,19 @@ deterministic replies, so their upstream bodies must be byte-identical.
 mode with the steer not carried (as before the kept process took it), so the steer step's cost is measured kept,
 restarted and per-call.
 
-Run: python evals/directsdk_session_bench.py /path/to/claude [--rounds 200] [--park 0] [--steer 50,200] [--out bench.json]
+``--min-rounds`` is ``session_min_rounds`` for session mode (default 0: kept from the first tool round, so a kept
+process's RSS shows at round 1; the plugin's own default is 8). Each mode reports its restart reasons (the plugin's
+debug lines) and how many first resumed steps built per-call's request to compare against.
+
+Run: python evals/directsdk_session_bench.py /path/to/claude [--rounds 200] [--park 0] [--steer 50,200] [--min-rounds 0]
+     [--out bench.json]
 """
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import logging
 import os
+import re
 from pathlib import Path
 import shutil
 import statistics
@@ -168,8 +175,27 @@ def rss_of(pid):
         return None
 
 
+MIN_ROUNDS = 0
+REASON = re.compile(r'Claude session (?:restart \((\w+)\)|(evicted))')
+
+
+class Reasons(logging.Handler):
+    """Counts the plugin's restart and eviction lines (debug level) while a mode runs."""
+
+    def __init__(self):
+        super().__init__(logging.DEBUG)
+        self.counts = {}
+
+    def emit(self, record):
+        match = REASON.match(record.getMessage())
+        if match:
+            why = match.group(1) or match.group(2)
+            self.counts[why] = self.counts.get(why, 0) + 1
+
+
 def client(binary, home, upstream, session):
     directsdk.session_settings = lambda: (session, 4)
+    directsdk.session_min_rounds = lambda: MIN_ROUNDS
     return directsdk.Client(command=binary, timeout=60, env={
         'PATH': os.defpath, 'HOME': home, 'CLAUDE_CONFIG_DIR': home, 'ANTHROPIC_API_KEY': 'fixture-key',
         'ANTHROPIC_BASE_URL': f'http://127.0.0.1:{upstream.server_port}', 'NO_PROXY': '127.0.0.1',
@@ -211,9 +237,20 @@ def turn(c, messages, rows, *, phase, rounds, park=0, park_at=None, steer_at=())
 
 def scenario(binary, home, upstream, session, rounds, park, steer_at=()):
     """One full run of a mode. Returns the per-step rows, the upstream bodies and the process counts."""
-    rows, sampler = [], Sampler()
+    rows, sampler, reasons = [], Sampler(), Reasons()
     drained()
     c = client(binary, home, upstream, session)
+    probe, probes = directsdk.Client._per_call_request, []
+
+    def counted(self, *args, **kwargs):
+        started = time.perf_counter()
+        try:
+            return probe(self, *args, **kwargs)
+        finally:
+            probes.append(round(time.perf_counter() - started, 4))
+    directsdk.Client._per_call_request = counted
+    directsdk.logger.addHandler(reasons)
+    level, directsdk.logger.level = directsdk.logger.level, logging.DEBUG
     sampler.start()
     try:
         with Spawns() as spawns:
@@ -233,7 +270,11 @@ def scenario(binary, home, upstream, session, rounds, park, steer_at=()):
         c.close()
         sampler.stop.set()
         sampler.join(2)
-    return rows, list(upstream.bodies), {'started': len(spawns.pids), 'max_alive': sampler.max_alive, 'samples': sampler.samples}
+        directsdk.Client._per_call_request = probe
+        directsdk.logger.removeHandler(reasons)
+        directsdk.logger.level = level
+    return rows, list(upstream.bodies), {'started': len(spawns.pids), 'max_alive': sampler.max_alive, 'samples': sampler.samples,
+                                         'restart_reasons': reasons.counts, 'per_call_probes_s': probes}
 
 
 def dist(values):
@@ -252,6 +293,9 @@ def summarize(rows, rounds):
         if bucket:
             buckets[f'rounds_{lo}_{lo + len(bucket) - 1}'] = dist(bucket)
     rss = [r['kept_rss'] for r in rows if r.get('kept_rss')]
+    # RSS of the kept process after its first kept tool round and after the last one of the first turn.
+    kept_steps = [(i + 1, r['kept_rss']) for i, r in enumerate(steps) if r.get('kept_rss')]
+    rss_at = {f'round_{n}': round(v / 2**20, 1) for n, v in (kept_steps[:1] + kept_steps[-1:])} if kept_steps else None
     parked = next((i for i, r in enumerate(rows) if r.get('parked_s')), None)
     # The process that answered the parked call is the one the next step ran on: it must be the one that made the call.
     same_after = parked is not None and parked + 1 < len(rows) and rows[parked + 1]['kept_pid'] is not None \
@@ -260,7 +304,7 @@ def summarize(rows, rounds):
             'first_step_wall_s': rows[0]['wall_s'], 'restarts': sum(r['restarted'] for r in rows),
             'restart_after_compaction': next((r['restarted'] for r in rows if r['phase'] == 'after_compaction'), None),
             'restart_after_edit': next((r['restarted'] for r in rows if r['phase'] == 'after_edit'), None),
-            'kept_rss_mb': dist([v / 2**20 for v in rss]) if rss else None,
+            'kept_rss_mb': dist([v / 2**20 for v in rss]) if rss else None, 'kept_rss_mb_at': rss_at,
             'parked': None if parked is None else {'seconds': rows[parked]['parked_s'], 'same_process_after': same_after},
             'steer_steps': [{'after_rounds': r['steer_after_rounds'], 'wall_s': r['wall_s'], 'restarted': r['restarted']}
                             for r in rows if 'steer_after_rounds' in r]}
@@ -277,7 +321,7 @@ def run(binary, rounds, park, repeats, out=None, steer_at=()):
     version = subprocess.check_output([binary, '--version'], text=True, stdin=subprocess.DEVNULL,
                                       env={'PATH': os.defpath, 'HOME': tempfile.gettempdir()}).strip()
     report = {'native_version': version, 'rounds': rounds, 'park_s': park, 'steer_at': list(steer_at), 'repeats': repeats,
-              'runs': [], 'modes': {}}
+              'session_min_rounds': MIN_ROUNDS, 'runs': [], 'modes': {}}
     modes = (('per_call', False), ('session', True)) + ((('session_restart', True),) if steer_at else ())
     walls = {mode: [] for mode, _ in modes}
     carry = directsdk.steer_tail
@@ -325,9 +369,10 @@ if __name__ == '__main__':
     parser.add_argument('--repeats', type=int, default=1)
     parser.add_argument('--steer', default='', help='comma-separated tool rounds after which Hermes delivers a /steer')
     parser.add_argument('--out', help='write the full report (every step) here; stdout gets the summary')
+    parser.add_argument('--min-rounds', type=int, default=0, help='session_min_rounds in session mode (default 0)')
     parser.add_argument('--verbose', action='store_true', help='print every step to stderr as it completes')
     args = parser.parse_args()
-    VERBOSE = args.verbose
+    VERBOSE, MIN_ROUNDS = args.verbose, args.min_rounds
     result = run(args.binary, args.rounds, args.park, args.repeats, args.out, tuple(int(n) for n in args.steer.split(',') if n))
     if args.out:
         for r in result['runs']:

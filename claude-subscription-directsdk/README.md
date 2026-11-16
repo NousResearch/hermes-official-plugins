@@ -214,8 +214,9 @@ keeps one Claude Code process alive between model calls:
 - A kept process counts against `max_concurrent` only while it serves a step. Between steps, idle or with a tool
   parked, it holds no place, so idle agents do not block title and summary calls; `max_sessions` bounds how many
   stay alive.
-- These calls still start a fresh process for one step (a one-shot): a conversation's first `session_min_rounds` tool
-  rounds, auxiliary calls (titles, summaries), calls without tools, a second call on the same client while one is
+- These calls still start a fresh process for one step (a one-shot): a conversation's steps before it has had
+  `session_min_rounds` tool rounds (sets of tool results; the step that brings the last of them starts the kept
+  process), auxiliary calls (titles, summaries), calls without tools, a second call on the same client while one is
   running, and a call at `max_sessions` when no kept process can give its place up (each is serving a step or holds a
   parked tool call).
 - The process ends on `cancel()`, `close()`, Hermes releasing the client, eviction at `max_sessions` (the one that has

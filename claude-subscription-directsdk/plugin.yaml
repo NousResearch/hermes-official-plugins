@@ -93,14 +93,17 @@ config_schema:
     default: true
     label: Keep one Claude Code process per agent
     description: >-
-      Keep one Claude Code process alive per Hermes agent (subagents get their own) and hand it each tool round,
-      instead of starting and replaying a new one on every model call. Requests are byte-identical either way.
+      Keep one Claude Code process alive per Hermes agent (subagents get their own) once its conversation has had
+      session_min_rounds tool rounds, and hand it each later step, instead of starting and replaying a new one on every
+      model call. Requests are byte-identical either way.
   max_sessions:
     type: int
     default: 4
     label: Kept Claude Code processes per Hermes process
     description: >-
-      At most this many kept processes (about 200 MB each); a call past the cap runs as a one-shot.
+      At most this many kept processes (about 200 MB each). At the cap the one that has waited longest for its user
+      gives its place to the step asking now; if each is serving a step or holds a parked tool call, that step runs
+      as a one-shot.
   session_min_rounds:
     type: int
     default: 8

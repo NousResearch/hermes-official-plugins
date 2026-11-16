@@ -808,16 +808,17 @@ class Native:
                     break
 
     def resumes(self, frames):
-        """How this kept session continues ``frames``: ('user', frame), ('tools', results), or None (restart)."""
+        """How this kept session continues ``frames``: ('user', frame), ('tools', results), or why it cannot (a string:
+        the restart's reason)."""
         n = len(self.frames)
         if len(frames) != n + 1 or frames[:n] != self.frames:
-            return None
+            return 'edited'
         blocks = frames[n]['message']['content']
         if self.expect == 'user':
-            return ('user', frames[n]) if any(b.get('type') != 'tool_result' for b in blocks) else None
+            return ('user', frames[n]) if any(b.get('type') != 'tool_result' for b in blocks) else 'results'
         results = {b.get('tool_use_id'): (b.get('content'), bool(b.get('is_error'))) for b in blocks if b.get('type') == 'tool_result'}
         if len(results) != len(blocks) or set(results) != self.expect or not all(isinstance(c, str) for c, _ in results.values()):
-            return None
+            return 'steer' if any(b.get('type') != 'tool_result' for b in blocks) else 'results'
         return 'tools', results
 
     def settled(self):
@@ -1183,12 +1184,18 @@ class Client:
             native, self._session, self._kept['native'] = self._session, None, None
         if native is not None:
             native.idle.cancel()
-            how = native.resumes(frames) if native.ident == ident and native.settled() else None
-            if how:
+            how = 'launch' if native.ident != ident else native.resumes(frames) if native.settled() else 'exited'
+            if not isinstance(how, str):
                 return native, how
-            native.kill()
-            native.release()
+            self._restart(native, how)
         return None, None
+
+    @staticmethod
+    def _restart(native, why):
+        """End a kept session this step cannot continue; Hermes' logs say why (a rising rate is visible there)."""
+        logger.debug('Claude session restart (%s): replaying into a new process', why)
+        native.kill()
+        native.release()
 
     def _workdir(self):
         """The shared cwd, else the one private cwd of this process."""
@@ -1348,9 +1355,7 @@ class Client:
                 if (yield from self._step(request, native, state, kwargs, hermes_names, session, session_id, resolved, env, frames, timeout)) != 'diverged':
                     break
                 # The kept native's request would not extend its previous one; it was never forwarded. Replay instead.
-                logger.info('Claude session diverged from its previous request; replaying into a new one')
-                native.kill()
-                native.release()
+                self._restart(native, 'diverged')
                 native = None
         finally:
             request.cancel()

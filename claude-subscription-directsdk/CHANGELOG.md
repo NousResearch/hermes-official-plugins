@@ -44,6 +44,11 @@
   next agent ran per-call beside a dead process.
 - Session mode: a launch that fails after its relay is up and before Claude Code starts (the launch directory cannot
   be made) closes that relay. Before, its listener and thread stayed for the life of the Hermes process.
+- Session mode: every restart of a kept process logs its reason at debug level (`launch`: the model, tools, effort,
+  system prompt or environment changed; `edited`: history before the new frame changed, as in a compaction; `results`:
+  the tool results do not match the parked calls; `steer`: a steer the process cannot carry; `exited`; `diverged`: the
+  relay refused the request before upstream), so a rising restart rate shows in `hermes logs`. The divergence line
+  moved from info to debug with the others.
 - The session cancel test checked the process state regardless of the request's error (an `and`/`or` without
   parentheses) and could fail on a pid that vanished between two checks.
 - A tool call cut at the output cap or streamed as invalid JSON reaches Hermes with its raw arguments and finish

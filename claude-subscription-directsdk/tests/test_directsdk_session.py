@@ -150,20 +150,25 @@ def test_kept_session_sends_the_same_bytes_as_one_shots(home, upstream, monkeypa
     expected, upstream.bodies = list(upstream.bodies), []
     kept, pids, other = client(home, upstream, monkeypatch, session=True, cap=1, login=login), [], None
     try:
-        with caplog.at_level('INFO', logger=directsdk.logger.name):
+        with caplog.at_level('DEBUG', logger=directsdk.logger.name):
             assert converse(kept, on_step=lambda: pids.append(session_pids(kept))) == history
         assert len(expected) == 12 and upstream.bodies == expected
-        # One process served the whole conversation, and it never diverged.
+        # One process served the whole conversation, and it never restarted.
         assert len(set().union(*pids)) == 1
-        assert not [r for r in caplog.records if 'diverged' in r.getMessage()]
+        assert not [r for r in caplog.records if 'session restart' in r.getMessage()]
         other, upstream.bodies = directsdk.Client(command=kept.command, timeout=60, env=kept.env), []
         assert converse(other) == history and not session_pids(other)
         assert upstream.bodies == expected
         first = session_pids(kept)
         history[1] = {'role': 'user', 'content': 'go (summarised)'}
         history.append({'role': 'user', 'content': 'next'})
-        kept.create(model=MODEL, messages=history, tools=TOOLS, max_tokens=1000)
+        with caplog.at_level('DEBUG', logger=directsdk.logger.name):
+            kept.create(model=MODEL, messages=history, tools=TOOLS, max_tokens=1000)
         assert session_pids(kept) and session_pids(kept) != first
+        # The restart says why at debug level, so a rising restart rate is visible in Hermes' logs. The opening turn
+        # names the session id, so its edit changes what the process was launched with.
+        assert [r.getMessage() for r in caplog.records if 'session restart' in r.getMessage()] == \
+            ['Claude session restart (launch): replaying into a new process']
         after, upstream.bodies = upstream.bodies[-1], []
         other.create(model=MODEL, messages=history, tools=TOOLS, max_tokens=1000)
         assert upstream.bodies == [after]

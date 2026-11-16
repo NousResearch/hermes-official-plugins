@@ -219,7 +219,8 @@ keeps one Claude Code process alive between model calls:
   process), auxiliary calls (titles, summaries), calls without tools, a second call on the same client while one is
   running, and a call at `max_sessions` when no kept process can give its place up (each is serving a step or holds a
   parked tool call).
-- The process ends on `cancel()`, `close()`, Hermes releasing the client, eviction at `max_sessions` (the one that has
+- The process ends on `cancel()`, `close()`, Hermes releasing the client, an agent call without tools (which it
+  cannot serve), turning `session_mode` off, eviction at `max_sessions` (the one that has
   waited longest for its user), `session_idle_seconds` waiting for its user (an hour by default, the prompt cache's
   lifetime), and when Hermes exits, even by `SIGKILL`: its standard input closes, which ends Claude Code's session.
 - A subagent's process ends when the subagent finishes: Hermes closes the child agent on delegate completion

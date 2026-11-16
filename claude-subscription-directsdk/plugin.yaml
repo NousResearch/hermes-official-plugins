@@ -101,3 +101,10 @@ config_schema:
     label: Kept Claude Code processes per Hermes process
     description: >-
       At most this many kept processes (about 200 MB each); a call past the cap runs as a one-shot.
+  session_idle_seconds:
+    type: int
+    default: 3600
+    label: Seconds a kept Claude Code process may idle
+    description: >-
+      A kept process that serves no step for this long ends (its memory, 200 to 300 MB, goes back); the next step
+      starts a new one with the same bytes. Default one hour, the prompt cache's lifetime.

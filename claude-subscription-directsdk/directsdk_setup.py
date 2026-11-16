@@ -159,6 +159,13 @@ def session_settings():
     return mode is not False and mode != 0, cap
 
 
+def session_idle_seconds(default):
+    """The active profile's ``session_idle_seconds``: how long a kept process may idle (positive seconds, else
+    ``default``, the prompt cache's lifetime)."""
+    value = _setting("session_idle_seconds", default)
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0 else default
+
+
 _SESSION_VERSIONS = re.compile(r"^\s*session_versions:\s*\[([^\]]*)\]", re.M)
 _versions, _untested = {}, set()
 

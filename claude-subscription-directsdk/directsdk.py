@@ -34,7 +34,7 @@ try:
     from .directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, claude_version, drop_api_credentials, egress_env, max_concurrent, observe_rate_limit,
-        reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_tested, Upstream)
+        reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_idle_seconds, session_tested, Upstream)
 except ImportError:
     import concurrency
     from admission import steer_tail
@@ -43,7 +43,7 @@ except ImportError:
     from directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, claude_version, drop_api_credentials, egress_env, max_concurrent, observe_rate_limit,
-        reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_tested, Upstream)
+        reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_idle_seconds, session_tested, Upstream)
 
 
 logger = logging.getLogger(__name__)
@@ -1220,7 +1220,7 @@ class Client:
             """The idle hour passed, or native exited on its own (its reader calls this)."""
             method = end()
             (method if method is not None else _end_orphan_native)(native)
-        native.idle, native.on_exit = threading.Timer(SESSION_IDLE_S, ended), ended
+        native.idle, native.on_exit = threading.Timer(session_idle_seconds(SESSION_IDLE_S), ended), ended
         native.idle.daemon = True
         with self._lock, request.lock:
             if self._closed or request.cancelled.is_set():

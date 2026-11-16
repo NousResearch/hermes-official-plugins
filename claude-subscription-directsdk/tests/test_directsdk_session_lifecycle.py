@@ -200,3 +200,22 @@ def test_a_kept_process_holds_a_max_concurrent_slot_only_while_it_serves_a_step(
     finally:
         agent.close()
         titles.close()
+
+
+def test_a_kept_process_ends_after_the_profiles_idle_limit(home, upstream, monkeypatch, tmp_path):
+    """``session_idle_seconds`` from the profile's config: a kept process that serves no step for that long ends and
+    gives its place back."""
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    (tmp_path / 'config.yaml').write_text('plugins:\n  entries:\n    claude-subscription-directsdk-experimental:\n'
+                                          '      settings:\n        session_idle_seconds: 1\n', encoding='utf-8')
+    c = client(home, upstream, monkeypatch, session=True)
+    try:
+        c.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+        pid = next(iter(session_pids(c)))
+        assert gone(pid, within=15), 'the kept process outlived the idle limit'
+        deadline = time.monotonic() + 5
+        while c._session is not None and time.monotonic() < deadline:
+            time.sleep(.02)
+        assert c._session is None and not directsdk._live
+    finally:
+        c.close()

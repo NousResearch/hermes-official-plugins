@@ -112,3 +112,22 @@ def test_a_step_with_several_tool_calls_is_one_round(home, monkeypatch):
         server.shutdown()
         server.server_close()
     assert pids[:2] == [None, None] and pids[2] is not None and len(set(pids[2:])) == 1, pids
+
+
+def test_a_call_without_tools_ends_the_parked_process_it_cannot_use(home, upstream, monkeypatch):
+    """The agent's next call brings the results but no tools (Hermes asking for a final answer without them): it runs
+    per-call, and the process parked on the earlier call ends instead of staying with no idle limit. A title call
+    without tools in between leaves the parked process alone."""
+    c = client(home, upstream, monkeypatch, session=True)
+    try:
+        messages = [{'role': 'system', 'content': 'You are a fixture agent.'}, {'role': 'user', 'content': 'go'}]
+        reply = c.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000).choices[0].message.model_dump()
+        pid = next(iter(session_pids(c)))
+        c.create(model=MODEL, messages=[{'role': 'user', 'content': 'title this'}], max_tokens=100, hermes_auxiliary=True)
+        assert session_pids(c) == {pid}
+        messages.append({k: v for k, v in reply.items() if k in ('role', 'content', 'tool_calls', 'reasoning_details') and v is not None})
+        messages += [{'role': 'tool', 'tool_call_id': call['id'], 'content': 'contents'} for call in reply['tool_calls']]
+        c.create(model=MODEL, messages=messages, max_tokens=1000)
+        assert ended(pid) and not session_pids(c)
+    finally:
+        c.close()

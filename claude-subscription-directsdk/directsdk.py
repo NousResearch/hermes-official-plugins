@@ -1420,8 +1420,10 @@ class Client:
             ident = hashlib.sha256(json.dumps([resolved, sorted(env.items()), upstream and [upstream.url, upstream.proxy],
                                                kwargs['model'], body, system, session_id], default=str).encode()).hexdigest()
             enabled, cap = session_settings()
-            if not enabled:
-                self._end_session()  # session mode was turned off: a process kept before (even one parked) ends now
+            if not enabled or (not manifest and kwargs.get('hermes_auxiliary') is not True):
+                # Session mode was turned off, or the agent's own call carries no tools: a process kept before (even one
+                # parked) cannot serve it and ends now. An auxiliary call (title, summary) leaves it alone.
+                self._end_session()
             # An auxiliary call (summary, title) or a tool-less one is a single step: a one-shot, never kept.
             session = bool(enabled and manifest and kwargs.get('hermes_auxiliary') is not True)
             # Kept mode runs only on a Claude Code version the session tests passed on; any other runs per-call. The

@@ -752,14 +752,32 @@ export async function continueInChat(id, session) {
   }
   host.notify?.({ kind: 'success', message: "Asked the scan's chat to continue." })
 }
+// The gateway refuses session titles over 100 chars (SessionDB.MAX_TITLE_LENGTH) as invalid_params,
+// and older SQLite builds reject lone UTF-16 surrogates, so derived titles are cleaned and clamped
+// without splitting a surrogate pair while keeping any identifying suffix whole.
+const MAX_CHAT_TITLE = 100
+const cleanTitle = (value) => String(value || '')
+  .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')
+  .replace(/\s+/g, ' ')
+export function clampChatTitle(text, suffix = '') {
+  const clean = cleanTitle(text).trim()
+  const tail = cleanTitle(suffix).trimEnd()
+  if (tail.length >= MAX_CHAT_TITLE) return clampChatTitle(tail.trimStart())
+  const room = MAX_CHAT_TITLE - tail.length
+  if (clean.length <= room) return `${clean}${tail}`.trimStart()
+  const cut = clean.slice(0, Math.max(0, room - 1)).replace(/[\uD800-\uDBFF]$/, '').trimEnd()
+  return `${cut}…${tail}`.trimStart()
+}
+// The title names the scan: a create whose title an existing chat already holds reopens that
+// chat, so a repo-only title would put every later scan of the repo in its first scan's chat.
+export const scanChatTitle = (id, path) => {
+  const short = cleanTitle(id).trim().replace(/^scan_/, '').slice(0, 6)
+  const repo = cleanTitle(repoName(path)).trim() || 'Repository'
+  return clampChatTitle(`Security scan · ${repo}`, short ? ` · ${short}` : '')
+}
 // Start the agent run in its own background chat session and link it to the scan.
 // Falls back to a chat draft when this backend can't create sessions.
 // `route` = { model, provider } picked on the form, or the current chat's model; empty = the profile's default model.
-// The title names the scan: a create whose title an existing chat already holds reopens that
-// chat, so a repo-only title would put every later scan of the repo in its first scan's chat.
-// chatTitle is defined ~850 lines below (with the 100-character limit it enforces); a repo name can
-// be long enough that the gateway would otherwise refuse this create as invalid_params.
-export const scanChatTitle = (id, path) => chatTitle(`Security scan · ${repoName(path)}`, ` · ${String(id).replace(/^scan_/, '').slice(0, 6)}`)
 export async function launchScan(id, path, route = {}) {
   const prompt = scanPrompt(id, path)
   try {
@@ -1608,34 +1626,17 @@ function FindingSections({ id, finding: f, patch, chains, note, setNote, saveNot
 }
 // A titled create reopens the chat already holding that title, so a fix chat's title names the finding
 // (short id) and the second it started: another finding or a later attempt never reuses a chat.
-// The gateway refuses a session title over 100 characters (SessionDB.MAX_TITLE_LENGTH) as
-// invalid_params, and both titles below are built from evidence text (a finding title, a repo
-// name), so each is clamped to fit while its identifying suffix is kept whole. The clamp holds
-// whenever the suffix is shorter than the limit; today's suffixes are 9 (scan id) and 27 (short id
-// and timestamp, 28 with a two-digit day) characters. The cut is a UTF-16 slice, so it also drops a
-// dangling half of a surrogate pair: a split emoji is a lone surrogate, which the gateway's SQLite
-// refuses to store, and that finding's chat then never opens.
-export const MAX_CHAT_TITLE = 100
-export function chatTitle(text, suffix = '') {
-  const tail = String(suffix || '')
-  const room = Math.max(1, MAX_CHAT_TITLE - tail.length)
-  const clean = String(text || '').replace(/\s+/g, ' ').trim()
-  if (clean.length <= room) return `${clean}${tail}`
-  const budget = Math.max(0, room - 1)
-  let cut = clean.slice(0, budget)
-  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1) // never split a surrogate pair
-  return `${cut.trimEnd()}…${tail}`
-}
 export function fixChatTitle(title, id, now = new Date()) {
   const when = now.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
     second: '2-digit', hour12: false })
-  const short = String(id || '').replace(/^hsf_/, '').slice(0, 6)
-  return chatTitle(`Fix: ${title || 'security finding'}`, `${short ? ` · ${short}` : ''} · ${when}`)
+  const short = cleanTitle(id).trim().replace(/^hsf_/, '').slice(0, 6)
+  const label = cleanTitle(title).trim() || 'security finding'
+  return clampChatTitle(`Fix: ${label}`, `${short ? ` · ${short}` : ''} · ${when}`)
 }
 // Findings whose fix chat is being created; a second click meanwhile does nothing (no second prompt).
 export const fixesStarting = new Set()
 export async function startChat(path, title, prompt) {
-  const session = await host.request('session.create', { cwd: path, title: chatTitle(title) })
+  const session = await host.request('session.create', { cwd: path, title: clampChatTitle(title) || 'Security chat' })
   if (!session?.session_id) throw new Error('A chat could not be started.')
   await host.request('prompt.submit', { session_id: session.session_id, text: prompt })
   return session

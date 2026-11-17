@@ -564,6 +564,13 @@ test('completed scan uses sealed manifest counts beside coverage', () => {
   assert.match(output, /fixture-model/)
   assert.match(output, /Run in chat/)
 })
+const EMOJI_TITLE = 'a'.repeat(60) + '😀'.repeat(30)
+const findFixButton = (id = 'hsf_test') => nodes(plugin.FindingDetail({ id, onBack() {} }))
+  .find((n) => n.type === 'button' && /Fix in chat/.test(render(n.props.children ?? '')))
+const assertValidChatTitle = (title) => {
+  assert.ok(title.length <= 100)
+  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(title))
+}
 test('all finding tabs and repository metadata render without missing SDK references', async () => {
   env.fixtures['/findings/hsf_test'] = {
     ...env.fixtures['/findings/hsf_test'],
@@ -590,17 +597,15 @@ test('all finding tabs and repository metadata render without missing SDK refere
     plugin.fixChatTitle('Test finding', 'hsf_32c904', new Date(2026, 10, 9, 1, 45, 8)))
   assert.equal(plugin.fixChatTitle('', '', at), 'Fix: security finding · Nov 9, 01:45:07')
   env.rpc = []
-  const fixButton = () => nodes(plugin.FindingDetail({ id: 'hsf_test', onBack() {} }))
-    .find((n) => n.type === 'button' && /Fix in chat/.test(render(n.props.children ?? '')))
   // A double click while the chat is being created sends one prompt, not two.
-  await Promise.all([fixButton().props.onClick(), fixButton().props.onClick()])
+  await Promise.all([findFixButton().props.onClick(), findFixButton().props.onClick()])
   assert.equal(env.rpc.filter(([method]) => method === 'session.create').length, 1)
   assert.equal(env.rpc.filter(([method]) => method === 'prompt.submit').length, 1)
   assert.match(env.rpc.find(([method]) => method === 'session.create')[1].title,
     /^Fix: Test finding · test · [A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}:\d{2}$/)
   assert.equal(plugin.fixesStarting.size, 0)
   // Once it finished, a later click starts another chat.
-  await fixButton().props.onClick()
+  await findFixButton().props.onClick()
   assert.equal(env.rpc.filter(([method]) => method === 'session.create').length, 2)
   env.states = []
   const page = render(plugin.BrowserView({ kind: 'Findings', selected: null, setSelected() {}, onFinding: {}, newScan: false, setNewScan() {} }))
@@ -609,48 +614,56 @@ test('all finding tabs and repository metadata render without missing SDK refere
   assert.match(page, /Any severity/)
   assert.ok(env.queryOptions.some((q) => q.queryKey[2] === '/findings' && new URLSearchParams(q.queryKey[3]).get('status') === 'open'))
 })
+test('clampChatTitle enforces the 100-unit cap and drops lone surrogates', () => {
+  assert.equal(plugin.clampChatTitle(''), '')
+  assert.equal(plugin.clampChatTitle('  \n\t  '), '')
+  assert.equal(plugin.clampChatTitle('a'.repeat(100)), 'a'.repeat(100))
+  assert.equal(plugin.clampChatTitle('a'.repeat(101)), 'a'.repeat(99) + '…')
+  assert.equal(plugin.clampChatTitle('hello', '  \n  ·  abc  '), 'hello · abc')
+  for (const title of [
+    plugin.clampChatTitle('a', 's'.repeat(100)),
+    plugin.clampChatTitle('', 's'.repeat(120)),
+    plugin.clampChatTitle('a'.repeat(50) + '\uD800'),
+    plugin.clampChatTitle('\uD800' + 'a'.repeat(120)),
+    plugin.clampChatTitle('ok', ' · \uD800'),
+  ]) assertValidChatTitle(title)
+  assert.equal(plugin.clampChatTitle('a'.repeat(98) + '😀'), 'a'.repeat(98) + '😀')
+  assert.equal(plugin.clampChatTitle('a'.repeat(98) + '😀b'), 'a'.repeat(98) + '…')
+})
 test('chat titles stay inside the gateway limit with the finding suffix intact', () => {
   // 102 characters of evidence text: the gateway refuses a session title over 100 (invalid_params).
   const evidence = "An incoming email can plant a model-authored token in the agent's mail brief through quarantine_reason"
   const at = new Date(2026, 10, 9, 1, 45, 7)
   const long = plugin.fixChatTitle(evidence, 'hsf_32c904e04b66b939ad4e5fb8', at)
-  assert.ok(long.length <= 100)
+  assertValidChatTitle(long)
   assert.ok(long.startsWith('Fix: '))
   assert.ok(long.endsWith(' · 32c904 · Nov 9, 01:45:07'))
   assert.ok(long.includes('…'))
-  // A title that fits is unchanged, and the short id still names the finding.
-  assert.equal(plugin.fixChatTitle('Test finding', 'hsf_32c904e04b66b939ad4e5fb8', at), 'Fix: Test finding · 32c904 · Nov 9, 01:45:07')
+  // Whitespace-only titles fall back to the default label instead of leaving an empty prefix.
+  assert.equal(plugin.fixChatTitle('   ', 'hsf_32c904e04b66b939ad4e5fb8', at), 'Fix: security finding · 32c904 · Nov 9, 01:45:07')
   // A long repo name is clamped too, but never at the cost of the scan id.
   const scan = plugin.scanChatTitle('scan_c9bf4ff6a0f8d33338f432c7', '/remote/' + 'a'.repeat(90))
-  assert.ok(scan.length <= 100)
+  assertValidChatTitle(scan)
   assert.ok(scan.endsWith(' · c9bf4f'))
-  assert.equal(plugin.fixChatTitle('', '', at), 'Fix: security finding · Nov 9, 01:45:07')
-  for (const title of [long, scan, plugin.fixChatTitle('', '', at)]) assert.ok(title.length <= 100)
-  // A finding title can hold an emoji, and the cut is a UTF-16 slice: 60 'a' + 30 '😀' lands the
-  // 100-unit budget in the middle of the fourth emoji. A split pair is a lone surrogate, a string
-  // SQLite refuses to store, so the cut drops it instead of sending it to the gateway.
-  const astral = plugin.fixChatTitle('a'.repeat(60) + '😀'.repeat(30), 'hsf_32c904e04b66b939ad4e5fb8', at)
-  assert.ok(astral.length <= 100)
-  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(astral))
+  const astral = plugin.fixChatTitle(EMOJI_TITLE, 'hsf_32c904e04b66b939ad4e5fb8', at)
+  assertValidChatTitle(astral)
   assert.ok(astral.endsWith(' · 32c904 · Nov 9, 01:45:07'))
 })
-test('a finding title with an emoji reaches session.create at 100 units or fewer', async () => {
-  // The same clamp on the wire: the click sends fixChatTitle's result, so the title the gateway
-  // stores is the one checked here, and its short id still names the finding.
+test('startChat, launchScan, and FindingDetail keep session.create titles within 100 units', async () => {
   const previous = env.fixtures['/findings/hsf_test']
   try {
-    env.fixtures['/findings/hsf_test'] = { ...previous, title: 'a'.repeat(60) + '😀'.repeat(30) }
+    env.fixtures['/findings/hsf_test'] = { ...previous, title: EMOJI_TITLE }
     env.states = ['', null]
     env.rpc = []
-    const fixButton = () => nodes(plugin.FindingDetail({ id: 'hsf_test', onBack() {} }))
-      .find((n) => n.type === 'button' && /Fix in chat/.test(render(n.props.children ?? '')))
-    await fixButton().props.onClick()
-    const created = env.rpc.filter(([method]) => method === 'session.create')
-    assert.equal(created.length, 1)
-    const title = created[0][1].title
-    assert.ok(title.length <= 100)
-    assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(title))
-    assert.match(title, / · test · [A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}:\d{2}$/)
+    await findFixButton().props.onClick()
+    await plugin.launchScan('scan_c9bf4ff6a0f8d33338f432c7', '/remote/' + 'r'.repeat(150))
+    await plugin.startChat('/remote/repo', '   ', 'go')
+    const created = env.rpc.filter(([method]) => method === 'session.create').map(([, params]) => params.title)
+    assert.equal(created.length, 3)
+    for (const title of created) assertValidChatTitle(title)
+    assert.match(created[0], / · test · [A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}:\d{2}$/)
+    assert.ok(created[1].endsWith(' · c9bf4f'))
+    assert.equal(created[2], 'Security chat')
   } finally {
     env.fixtures['/findings/hsf_test'] = previous
     env.states = []

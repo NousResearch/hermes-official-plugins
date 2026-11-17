@@ -730,3 +730,34 @@ exec "{CLAUDE}" "$@"
             server.server_close()
     assert probes == [1], f'{len(probes)} per-call probes in 3 steps'
     assert sum('runs per-call from now on' in r.getMessage() for r in caplog.records) == 1
+
+
+@needs_cli
+def test_a_probe_that_raises_on_an_unlisted_release_gives_its_place_back(mode, monkeypatch):
+    """The per-call build that proves an unlisted release's first kept request times out: the step fails, and the
+    max_sessions place it had reserved is free again, not held for the life of the Hermes process."""
+    from test_directsdk_session import MODEL, TOOLS, client
+    import test_directsdk_session as base
+    import tempfile
+    from http.server import ThreadingHTTPServer
+    monkeypatch.setattr(directsdk_setup, 'session_versions', lambda: frozenset())
+    monkeypatch.setattr(directsdk, 'session_versions', lambda: frozenset(), raising=False)
+    mode('force')
+
+    def stalled(self, *args):
+        raise TimeoutError('Claude request timed out')
+    monkeypatch.setattr(directsdk.Client, '_per_call_request', stalled)
+    with tempfile.TemporaryDirectory(prefix='directsdk-unlisted-') as home:
+        server = ThreadingHTTPServer(('127.0.0.1', 0), base.Upstream)
+        server.bodies, server.slow = [], 0
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        c = client(home, server, monkeypatch, session=True, cap=1)
+        try:
+            with pytest.raises(TimeoutError):
+                c.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+            with directsdk._live_lock:
+                assert not directsdk._live, 'the place stayed reserved'
+        finally:
+            c.close()
+            server.shutdown()
+            server.server_close()

@@ -1511,19 +1511,17 @@ class Client:
                         session = False
                     reservation = _place(cap) if session else None
                     session = reservation is not None
-                    if session and unlisted:
-                        # A release not on the list (session_unlisted_versions force or self-test): the kept process's
-                        # first request is held to per-call's own build too, as its first resumed one always is, so no
-                        # request shape the self-test did not run reaches upstream unproven. None built: per-call.
-                        unproven_first = self._per_call_request(request, env, resolved, upstream, kwargs, body, manifest,
-                                                                system, frames, timeout, session_id)
-                        if unproven_first is None:
-                            with _live_lock:
-                                _live.discard(reservation)
-                            reservation, session = None, False
                     try:
-                        native = self._launch(request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id, session, reservation,
-                                              version)
+                        if session and unlisted:
+                            # A release not on the list (session_unlisted_versions force or self-test): the kept
+                            # process's first request is held to per-call's own build too, as its first resumed one
+                            # always is, so no request shape the self-test did not run reaches upstream unproven. None
+                            # built: per-call. A probe that raises still gives the place back (finally below).
+                            unproven_first = self._per_call_request(request, env, resolved, upstream, kwargs, body,
+                                                                    manifest, system, frames, timeout, session_id)
+                            session = unproven_first is not None
+                        native = self._launch(request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id, session,
+                                              reservation if session else None, version)
                     finally:
                         # However the launch ended, the reservation is spent: native holds the place now, or nothing does.
                         with _live_lock:

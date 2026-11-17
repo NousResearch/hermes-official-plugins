@@ -609,6 +609,53 @@ test('all finding tabs and repository metadata render without missing SDK refere
   assert.match(page, /Any severity/)
   assert.ok(env.queryOptions.some((q) => q.queryKey[2] === '/findings' && new URLSearchParams(q.queryKey[3]).get('status') === 'open'))
 })
+test('chat titles stay inside the gateway limit with the finding suffix intact', () => {
+  // 102 characters of evidence text: the gateway refuses a session title over 100 (invalid_params).
+  const evidence = "An incoming email can plant a model-authored token in the agent's mail brief through quarantine_reason"
+  const at = new Date(2026, 10, 9, 1, 45, 7)
+  const long = plugin.fixChatTitle(evidence, 'hsf_32c904e04b66b939ad4e5fb8', at)
+  assert.ok(long.length <= 100)
+  assert.ok(long.startsWith('Fix: '))
+  assert.ok(long.endsWith(' · 32c904 · Nov 9, 01:45:07'))
+  assert.ok(long.includes('…'))
+  // A title that fits is unchanged, and the short id still names the finding.
+  assert.equal(plugin.fixChatTitle('Test finding', 'hsf_32c904e04b66b939ad4e5fb8', at), 'Fix: Test finding · 32c904 · Nov 9, 01:45:07')
+  // A long repo name is clamped too, but never at the cost of the scan id.
+  const scan = plugin.scanChatTitle('scan_c9bf4ff6a0f8d33338f432c7', '/remote/' + 'a'.repeat(90))
+  assert.ok(scan.length <= 100)
+  assert.ok(scan.endsWith(' · c9bf4f'))
+  assert.equal(plugin.fixChatTitle('', '', at), 'Fix: security finding · Nov 9, 01:45:07')
+  for (const title of [long, scan, plugin.fixChatTitle('', '', at)]) assert.ok(title.length <= 100)
+  // A finding title can hold an emoji, and the cut is a UTF-16 slice: 60 'a' + 30 '😀' lands the
+  // 100-unit budget in the middle of the fourth emoji. A split pair is a lone surrogate, a string
+  // SQLite refuses to store, so the cut drops it instead of sending it to the gateway.
+  const astral = plugin.fixChatTitle('a'.repeat(60) + '😀'.repeat(30), 'hsf_32c904e04b66b939ad4e5fb8', at)
+  assert.ok(astral.length <= 100)
+  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(astral))
+  assert.ok(astral.endsWith(' · 32c904 · Nov 9, 01:45:07'))
+})
+test('a finding title with an emoji reaches session.create at 100 units or fewer', async () => {
+  // The same clamp on the wire: the click sends fixChatTitle's result, so the title the gateway
+  // stores is the one checked here, and its short id still names the finding.
+  const previous = env.fixtures['/findings/hsf_test']
+  try {
+    env.fixtures['/findings/hsf_test'] = { ...previous, title: 'a'.repeat(60) + '😀'.repeat(30) }
+    env.states = ['', null]
+    env.rpc = []
+    const fixButton = () => nodes(plugin.FindingDetail({ id: 'hsf_test', onBack() {} }))
+      .find((n) => n.type === 'button' && /Fix in chat/.test(render(n.props.children ?? '')))
+    await fixButton().props.onClick()
+    const created = env.rpc.filter(([method]) => method === 'session.create')
+    assert.equal(created.length, 1)
+    const title = created[0][1].title
+    assert.ok(title.length <= 100)
+    assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(title))
+    assert.match(title, / · test · [A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}:\d{2}$/)
+  } finally {
+    env.fixtures['/findings/hsf_test'] = previous
+    env.states = []
+  }
+})
 test('page owner and queries distinguish same-named remote profiles', async () => {
   env.connectionId = 'remote-a'
   const before = plugin.SecurityPage()

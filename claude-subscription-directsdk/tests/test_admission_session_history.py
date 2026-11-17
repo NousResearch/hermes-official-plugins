@@ -274,3 +274,24 @@ def test_a_steer_row_goes_back_into_its_frame_and_nowhere_else(native):
     assert [m['role'] for m in out] == ['system', 'user', 'assistant', 'user', 'assistant', 'user']
     assert out[-1]['content'][-1] == dict(STEER, cache_control={'type': 'ephemeral'})
 
+
+def test_a_cancel_wakes_a_request_waiting_for_its_native_s_init(peer):
+    """A kept relay holds its first request until its native's init has named the allowed version. A cancel (or the
+    native's death) must end that wait at once: closing the relay waits for its handler. Before, close() waited the
+    whole init wait out."""
+    import time
+    gate = Admission(f'http://127.0.0.1:{peer.server_port}', 30, queried=FRAMES[0]['message']['content'])
+    gate.init_ok = threading.Event()
+    def send():
+        try:
+            post(gate, native_rows(FRAMES[:1]))
+        except OSError:
+            pass  # the cancel closed the connection
+    sender = threading.Thread(target=send, daemon=True)
+    sender.start()
+    time.sleep(.3)
+    started = time.monotonic()
+    gate.abort()
+    gate.close()
+    assert time.monotonic() - started < 2 and not peer.received
+    sender.join(5)

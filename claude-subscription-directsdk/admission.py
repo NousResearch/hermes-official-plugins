@@ -900,6 +900,8 @@ class Admission:
         return message if isinstance(message, str) else text
 
     def abort(self):
+        if self.init_ok is not None:
+            self.init_ok.set()  # a request waiting for its native's init sees the cancel, and is refused, at once
         with self.lock:
             self.cancelled = True
             for sock in self.sockets:
@@ -1055,7 +1057,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = pin_message_breakpoint(payload, gate.queried)
             if gate.eager:
                 payload = stream_tool_input(payload)
-            if gate.init_ok is not None and (not gate.init_ok.wait(min(gate.timeout, INIT_WAIT_SECONDS)) or gate.unversioned):
+            if gate.init_ok is not None and (not gate.init_ok.wait(min(gate.timeout, INIT_WAIT_SECONDS)) or gate.unversioned
+                                             or gate.cancelled):
                 # Kept mode runs only on a version this very process reported: nothing goes upstream before it has.
                 gate.diverged = gate.unversioned = True
                 self._refuse(b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_SESSION_DIVERGED"}}')

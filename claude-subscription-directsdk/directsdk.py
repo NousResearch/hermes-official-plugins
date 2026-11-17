@@ -1322,9 +1322,11 @@ class Client:
         if slot is not None:
             slot.release()
         if native.process.returncode is not None or native.doubt is not None:
-            # It exited, or doubted, before it was the session: its reader found nothing to end.
-            if native.doubt is None or native.end_doubted():
-                ended()
+            # It exited, or doubted, before it was the session: its reader found nothing to end. Ending is idempotent;
+            # only the log line is claimed once (the reader or the step may have logged the doubt already).
+            if native.doubt is not None:
+                native.end_doubted()
+            ended()
         return True
 
     def _resume(self, ident, frames, version):

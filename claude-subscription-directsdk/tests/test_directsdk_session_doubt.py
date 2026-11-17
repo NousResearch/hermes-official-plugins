@@ -212,6 +212,31 @@ def waited(predicate, within=5):
     return predicate()
 
 
+def test_a_process_that_doubted_and_exited_as_the_step_handed_it_over_is_ended(home, upstream, monkeypatch, caplog):
+    """The reader's doubt lands after the step decided to keep the process, the step logs it, and the process exits
+    before the hand-over. The hand-over must still end it and give its place back, logging the reason once. Before,
+    the hand-over saw the reason already logged and skipped the end too: the dead process stayed the session, with its
+    place and its relay, and a parked call has no idle limit."""
+    keep = directsdk.Client._keep
+
+    def late(self, native, *args, **kwargs):
+        native._doubt('event')  # still serving: queued for a step, which is past reading it
+        native.end_doubted()  # what the step does with a doubt it sees after deciding to keep
+        native.process.kill()
+        native.process.wait(5)
+        native.reader.join(5)
+        return keep(self, native, *args, **kwargs)
+    monkeypatch.setattr(directsdk.Client, '_keep', late)
+    c = client(home, upstream, monkeypatch, session=True, cap=1)
+    try:
+        with caplog.at_level('DEBUG', logger=directsdk.logger.name):
+            c.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+            assert c._session is None and not directsdk._live, 'the exited process is still the kept session'
+        assert restarts(caplog) == ['Claude session restart (event): replaying into a new process']
+    finally:
+        c.close()
+
+
 @pytest.mark.parametrize('fault', ['no_tool_id', 'non_object', 'non_json', 'eof', 'partial_eof'])
 def test_a_line_the_plugin_does_not_know_after_the_step_returned_ends_the_kept_process(home, upstream, monkeypatch, caplog, fault):
     """The bad line (or the end of native's output) arrives after the step has returned and the process holds its

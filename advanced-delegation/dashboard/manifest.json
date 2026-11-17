@@ -1,0 +1,11 @@
+{
+  "name": "advanced-delegation",
+  "label": "Advanced Delegation",
+  "description": "Delegation modes, Model routes, Profile routes, and System-1 Decider auto-router.",
+  "icon": "GitBranch",
+  "version": "1.2.0",
+  "tab": {
+    "hidden": true
+  },
+  "api": "plugin_api.py"
+}

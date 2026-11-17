@@ -349,3 +349,21 @@ def test_a_refused_write_ends_with_the_reason_and_exit_1(terminal, capsys, home,
     assert _run("config") == 1
     assert "nix" in capsys.readouterr().err.lower()
     assert not (home / "config.yaml").exists()
+
+
+def test_model_routes_decider_tui_toggles_and_edits_endpoint(terminal, capsys, home):
+    _write(home, {"delegation": {"backends": {"model_map": {"options": [
+        {"name": "fast", "description": "Quick lookups.", "provider": "openrouter", "model": "m1"},
+        {"name": "deep", "description": "Careful work.", "provider": "anthropic", "model": "claude-opus-5"}]}}}})
+    terminal.menu(DOWN, ENTER)                 # mode picker -> Model routes
+    terminal.menu(*[DOWN] * 4, ENTER)          # routes list: fast, deep, + Add, Done, Decider -> Decider
+    terminal.menu(ENTER)                       # Decider menu row 0 -> toggle ON
+    terminal.menu(DOWN, ENTER)                 # Decider menu row 1 -> edit Primary endpoint & model
+    terminal.type("http://192.168.0.150:11434/v1/systemone", "pplx-decider:27b-nvfp4")
+    terminal.menu(QUIT)                        # leave Decider menu
+    terminal.menu(QUIT)                        # leave Model routes menu
+    _run("config")
+    dec = _config(home)["delegation"]["backends"]["model_map"]["decider"]
+    assert dec["enabled"] is True
+    assert dec["url"] == "http://192.168.0.150:11434/v1/systemone"
+    assert dec["model"] == "pplx-decider:27b-nvfp4"

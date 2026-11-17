@@ -186,6 +186,69 @@ YAML there and edit those routes outside Desktop.
 account): a tier the route does not offer refuses the spawn with a tool error instead of silently
 running at another tier. An unknown `reasoning_effort` is refused the same way.
 
+### Optional: System-1 Decider auto-router (`model_map.decider`)
+
+When `delegation.backend` is `model_map`, you can optionally enable a **System-1 Decider**
+(`/v1/systemone` endpoint — local Ollama `pplx-decider:27b-nvfp4` or TypeSafe Cloud `jev-latest`)
+to automatically route tasks that omit `option`.
+
+When `delegate_task` is called with one or more unassigned tasks, the `pre_tool_call` hook batches
+all unassigned tasks into a single `/v1/systemone` forward pass, asking:
+1. `t{i}_needs_specialist` (`noul`): does this task require a specialist route (visual/screenshot
+   analysis, complex architecture, adversarial verification, offensive security, or deep synthesis)
+   rather than the default route?
+2. `t{i}_route` (`choice`): which eligible route best matches the task?
+
+If both thresholds (`specialist_threshold` and `confidence_threshold`) are met, the task is
+upgraded to that route; otherwise it stays on `default` (or inherits the parent model). Paid or
+advisor-only routes listed in `excluded_options` are never chosen automatically, remaining
+available only when the caller explicitly passes `option`.
+
+```yaml
+delegation:
+  backend: model_map
+  backends:
+    model_map:
+      options: [...]
+      default: FastSub
+      decider:
+        enabled: true
+        url: http://192.168.0.150:11434/v1/systemone
+        model: pplx-decider:27b-nvfp4
+        allow_fallback: true
+        fallback_url: https://api.typesafe.ai/v1/systemone
+        fallback_model: jev-latest
+        specialist_threshold: 0.70
+        confidence_threshold: 0.60
+        timeout: 18.0
+        excluded_options:
+          - UltraFastPaid
+          - AbsoluteSOTAGoogle
+          - AbsoluteSOTAOpenAI
+          - AbsoluteSOTAAnthropic
+          - AbsoluteSOTAXAI
+```
+
+Configure, inspect, or test the System-1 Decider from any surface:
+
+- **Interactive TUI**: `hermes delegation config` → **Model routes** → **⚡ System-1 Decider auto-router**, or `hermes delegation decider`
+- **Non-interactive CLI**:
+  ```bash
+  hermes delegation decider --show
+  hermes delegation decider --enable --url http://192.168.0.150:11434/v1/systemone --model pplx-decider:27b-nvfp4
+  hermes delegation decider --test "Analyze screenshot.png and extract the error dialog" --images
+  hermes delegation decider --history
+  ```
+- **In-chat slash command**:
+  ```
+  /delegation decider status
+  /delegation decider on
+  /delegation decider off
+  /delegation decider test Design a multi-file database migration
+  /delegation decider history
+  ```
+- **Hermes Desktop UI**: **Settings → Model → System-1 Decider** (or `/delegation` from the sidebar / Command Palette) provides a full workbench to toggle modes, edit primary & fallback endpoints, check/uncheck auto-eligible routes, run live routing probes, and inspect recent routing decisions.
+
 ### Profile routes (`profile_routes`)
 
 ```yaml

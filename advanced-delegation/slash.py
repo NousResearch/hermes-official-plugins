@@ -140,6 +140,9 @@ def _ask_mode(ask_choice: AskChoice, section: Mapping[str, Any], saved: str) -> 
 def handle(raw_args: str = "", session_key: str = "", ask_choice: Optional[AskChoice] = None, api=None) -> str:
     """``api``: ``ctx.delegation_backends`` (None on a core without it); ``ask_choice``: ``ctx.ask_choice``,
     which itself returns None where the surface cannot ask (a hook, cron, an event-loop handler)."""
+    stripped = (raw_args or "").strip()
+    if stripped.lower().startswith("decider") and (len(stripped) == 7 or stripped[7].isspace()):
+        return _handle_decider_slash(stripped[7:].strip())
     section = store.delegation_section()
     saved = store.current_mode(section)
     mode, now, unknown = _parse(raw_args or "")
@@ -157,6 +160,72 @@ def handle(raw_args: str = "", session_key: str = "", ask_choice: Optional[AskCh
                 return f"Delegation mode unchanged: {store.mode_label(saved)}."
             now = when == "now"
     return _switch(mode, now, section, saved, api, session_key)
+
+
+def _handle_decider_slash(rest: str) -> str:
+    """Handle ``/delegation decider [status | on | off | history | test <goal>]``."""
+    from .decider_router import probe_decider, read_decision_log
+    section = store.delegation_section()
+    dec = dict(store.decider_settings(section))
+    tokens = rest.split(None, 1)
+    sub = tokens[0].lower() if tokens else "status"
+    tail = tokens[1].strip() if len(tokens) > 1 else ""
+
+    if sub in ("on", "enable", "enabled"):
+        dec["enabled"] = True
+        try:
+            store.save_decider(dec)
+        except RuntimeError as exc:
+            return f"Could not enable System-1 Decider: {exc}"
+        return f"System-1 Decider auto-router: ON ({dec['model']} @ {dec['url']})."
+
+    if sub in ("off", "disable", "disabled"):
+        dec["enabled"] = False
+        try:
+            store.save_decider(dec)
+        except RuntimeError as exc:
+            return f"Could not disable System-1 Decider: {exc}"
+        return "System-1 Decider auto-router: OFF."
+
+    if sub == "history":
+        rows = read_decision_log(limit=10)
+        if not rows:
+            return "No System-1 Decider routing decisions recorded yet."
+        lines = [f"Recent System-1 Decider decisions ({len(rows)}):"]
+        for r in rows:
+            fb = " [fallback]" if r.get("fallback_used") else ""
+            lines.append(
+                f"  • {r.get('action', '-')} -> {r.get('route', '-')} "
+                f"(spec={r.get('needs_specialist', 0):.2f}, conf={r.get('confidence', 0):.2f}, "
+                f"{r.get('latency_ms', 0):.0f}ms{fb}): {r.get('goal', '')}"
+            )
+        return "\n".join(lines)
+
+    if sub in ("test", "probe"):
+        goal = tail or "Analyze screenshot.png and extract the error dialog text"
+        mm_block = _settings(section, "model_map")
+        res = probe_decider(goal, has_images=("screenshot" in goal.lower() or "image" in goal.lower()), settings=mm_block)
+        if not res.get("ok"):
+            return f"Decider probe failed: {res.get('error')}"
+        action = "upgraded to specialist" if res.get("upgraded") else "kept on default"
+        fb = " (fallback)" if res.get("fallback_used") else ""
+        return (
+            f"Decider probe ({res.get('latency_ms', 0):.0f}ms on {res.get('model')}{fb}):\n"
+            f"  Goal: {res.get('goal')}\n"
+            f"  Route: {res.get('effective_route')} ({action}; candidate={res.get('candidate_route')}, "
+            f"needs_specialist={res.get('needs_specialist', 0):.2f}, confidence={res.get('confidence', 0):.2f})"
+        )
+
+    state_lbl = "ON" if dec["enabled"] else "OFF"
+    fb_lbl = f"{dec['fallback_model']} @ {dec['fallback_url']}" if dec["allow_fallback"] and dec["fallback_url"] else "off"
+    return (
+        f"System-1 Decider auto-router: {state_lbl}\n"
+        f"  Primary: {dec['model']} @ {dec['url']}\n"
+        f"  Fallback: {fb_lbl}\n"
+        f"  Thresholds: specialist >= {dec['specialist_threshold']:.2f}, confidence >= {dec['confidence_threshold']:.2f}, timeout {dec['timeout']:.0f}s\n"
+        f"  Excluded routes: {', '.join(dec['excluded_options']) if dec['excluded_options'] else '(none)'}\n"
+        f"Usage: /delegation decider [status | on | off | history | test <goal>]"
+    )
 
 
 def _save(mode: str, now: bool, api, session_key: str) -> bool:

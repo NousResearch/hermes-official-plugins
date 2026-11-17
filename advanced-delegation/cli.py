@@ -38,12 +38,47 @@ def setup_parser(parser) -> None:
         description="Pick how delegate_task routes subagents (Default, Model routes, Profile routes) "
                     "and edit the routes. Changes apply to new sessions.")
     config.add_argument("--show", action="store_true", help="Print the current mode and routes, then exit")
+
+    decider = sub.add_parser(
+        "decider", help="Configure or test the System-1 Decider auto-router for model_map",
+        description="Configure or test the System-1 Decider (/v1/systemone) that auto-routes unassigned "
+                    "subagent tasks in model_map mode.")
+    decider.add_argument("--show", action="store_true", help="Print current System-1 Decider settings and exit")
+    decider.add_argument("--enable", action="store_true", help="Enable System-1 Decider auto-routing")
+    decider.add_argument("--disable", action="store_true", help="Disable System-1 Decider auto-routing")
+    decider.add_argument("--url", type=str, default=None, help="Primary /v1/systemone endpoint URL")
+    decider.add_argument("--model", type=str, default=None, help="Primary decision model name")
+    decider.add_argument("--fallback-url", type=str, default=None, help="Fallback /v1/systemone URL")
+    decider.add_argument("--fallback-model", type=str, default=None, help="Fallback decision model name")
+    decider.add_argument("--allow-fallback", dest="allow_fallback", action="store_true", default=None,
+                         help="Allow cloud fallback when the primary endpoint fails")
+    decider.add_argument("--no-fallback", dest="allow_fallback", action="store_false",
+                         help="Disable cloud fallback")
+    decider.add_argument("--threshold", type=float, default=None,
+                         help="Specialist probability threshold (0.0-1.0, default 0.70)")
+    decider.add_argument("--confidence", type=float, default=None,
+                         help="Route choice confidence threshold (0.0-1.0, default 0.60)")
+    decider.add_argument("--timeout", type=float, default=None,
+                         help="Request timeout in seconds (1.0-120.0, default 18.0)")
+    decider.add_argument("--exclude", type=str, default=None,
+                         help="Comma-separated route names excluded from automatic routing")
+    decider.add_argument("--test", type=str, default=None, metavar="GOAL",
+                         help="Run a live routing probe for GOAL against the configured Decider")
+    decider.add_argument("--images", action="store_true",
+                         help="With --test: simulate image attachments on the task")
+    decider.add_argument("--history", action="store_true",
+                         help="Print recent System-1 Decider routing decisions")
+    decider.add_argument("--clear-history", action="store_true",
+                         help="Clear cached System-1 Decider routing decisions")
     parser.set_defaults(func=handle)
 
 
 def handle(args) -> int:
-    if getattr(args, "delegation_command", None) != "config":
-        print("usage: hermes delegation config [--show]")
+    cmd = getattr(args, "delegation_command", None)
+    if cmd == "decider":
+        return _handle_decider(args)
+    if cmd != "config":
+        print("usage: hermes delegation {config|decider} [--show]")
         return 0
     if getattr(args, "show", False):
         print(store.describe(store.delegation_section()))
@@ -122,6 +157,16 @@ def _route_row(route: Mapping[str, Any], default: str, width: int, desc_width: i
             (f"  {store.route_summary(route)}", "dim"), *([("  ★ default", "yellow")] if name == default else [])]
 
 
+def _decider_row(section: Mapping[str, Any]) -> list:
+    dec = store.decider_settings(section)
+    badge = ("ON", "green") if dec["enabled"] else ("OFF", "dim")
+    return [
+        ("⚡ System-1 Decider auto-router: ", None),
+        badge,
+        (f"  ({dec['model']} @ {dec['url']})", "dim"),
+    ]
+
+
 def _model_routes() -> None:
     while True:
         section = store.delegation_section()
@@ -129,13 +174,16 @@ def _model_routes() -> None:
         width = max((len(_text(o.get("name"))) for o in options), default=4)
         desc_width = min(60, max((len(_text(o.get("description"))) for o in options), default=0))
         rows = [_route_row(o, default, width, desc_width) for o in options] + [
-            "+ Add a route", "Done: use Model routes"]
+            "+ Add a route", "Done: use Model routes", _decider_row(section)]
         idx = _radio("Model routes: the agent picks one per subagent", rows, description=(
             "  Each route: a name and a one-line description the agent reads, plus the provider/model\n"
             "  it runs on. Enter on a route to edit, delete or make it the default.\n"))
         if idx < 0:
             print("Route changes are saved; the delegation mode is unchanged.")
             return
+        if idx == len(options) + 2:
+            _configure_decider()
+            continue
         if idx == len(options) + 1:
             if _finish_model_routes(options, default):
                 return
@@ -373,3 +421,236 @@ def _clear_profiles(section: Mapping[str, Any], had_profiles: bool) -> None:
         store.set_mode("default")
     print("Profile list cleared." + (" Delegation mode: Default; delegation.model / delegation.provider apply "
                                      "again. New sessions pick this up." if active else ""))
+
+
+# --- System-1 Decider CLI & Curses TUI --------------------------------------------------------
+
+def _describe_decider(section: Mapping[str, Any]) -> str:
+    dec = store.decider_settings(section)
+    options = store.routes(section)
+    opt_names = [_text(o.get("name")) for o in options if _text(o.get("name"))]
+    excluded = set(dec["excluded_options"])
+    eligible = [n for n in opt_names if n not in excluded]
+    state_str = "ON" if dec["enabled"] else "OFF"
+    fb_str = f"{dec['fallback_model']} @ {dec['fallback_url']}" if dec["allow_fallback"] and dec["fallback_url"] else "disabled"
+    lines = [
+        f"System-1 Decider auto-router: {state_str}",
+        f"  Primary endpoint:     {dec['url']}",
+        f"  Primary model:        {dec['model']}",
+        f"  Cloud fallback:       {fb_str}",
+        f"  Thresholds:           specialist >= {dec['specialist_threshold']:.2f}, confidence >= {dec['confidence_threshold']:.2f}",
+        f"  Timeout:              {dec['timeout']:.1f}s",
+        f"  Eligible routes ({len(eligible)}/{len(opt_names)}): {', '.join(eligible) if eligible else '(none)'}",
+        f"  Excluded routes:      {', '.join(dec['excluded_options']) if dec['excluded_options'] else '(none)'}",
+    ]
+    return "\n".join(lines)
+
+
+def _print_probe_result(res: Mapping[str, Any]) -> int:
+    if not res.get("ok"):
+        print(f"✗ Decider probe failed: {res.get('error')}", file=sys.stderr)
+        return 1
+    action = "UPGRADED to specialist" if res.get("upgraded") else "KEPT on default"
+    fb = " (via cloud fallback)" if res.get("fallback_used") else ""
+    print(f"✓ Decider probe succeeded in {res.get('latency_ms', 0):.0f} ms on {res.get('model')}{fb}:")
+    print(f"  Goal:              {res.get('goal')}")
+    print(f"  Effective route:   {res.get('effective_route')} ({action})")
+    print(f"  Candidate route:   {res.get('candidate_route')} (confidence={res.get('confidence', 0):.2f})")
+    print(f"  Needs specialist:  {res.get('needs_specialist', 0):.2f}")
+    return 0
+
+
+def _handle_decider(args) -> int:
+    from .decider_router import clear_decision_log, probe_decider, read_decision_log
+    section = store.delegation_section()
+    current = dict(store.decider_settings(section))
+
+    if getattr(args, "clear_history", False):
+        removed = clear_decision_log()
+        print(f"Cleared {removed} cached Decider routing decision(s).")
+        return 0
+
+    if getattr(args, "history", False):
+        rows = read_decision_log(limit=25)
+        if not rows:
+            print("No System-1 Decider routing decisions recorded yet.")
+            return 0
+        print(f"Recent System-1 Decider routing decisions ({len(rows)}):")
+        for r in rows:
+            fb = " [fallback]" if r.get("fallback_used") else ""
+            print(
+                f"  • [{r.get('action', '-')}] -> {r.get('route', '-')} "
+                f"(spec={r.get('needs_specialist', 0):.2f}, conf={r.get('confidence', 0):.2f}, "
+                f"{r.get('latency_ms', 0):.0f}ms{fb}): {r.get('goal', '')}"
+            )
+        return 0
+
+    changed = False
+    if getattr(args, "enable", False):
+        current["enabled"] = True
+        changed = True
+    if getattr(args, "disable", False):
+        current["enabled"] = False
+        changed = True
+    if getattr(args, "url", None) is not None:
+        current["url"] = args.url.strip()
+        changed = True
+    if getattr(args, "model", None) is not None:
+        current["model"] = args.model.strip()
+        changed = True
+    if getattr(args, "fallback_url", None) is not None:
+        current["fallback_url"] = args.fallback_url.strip()
+        changed = True
+    if getattr(args, "fallback_model", None) is not None:
+        current["fallback_model"] = args.fallback_model.strip()
+        changed = True
+    if getattr(args, "allow_fallback", None) is not None:
+        current["allow_fallback"] = bool(args.allow_fallback)
+        changed = True
+    if getattr(args, "threshold", None) is not None:
+        current["specialist_threshold"] = args.threshold
+        changed = True
+    if getattr(args, "confidence", None) is not None:
+        current["confidence_threshold"] = args.confidence
+        changed = True
+    if getattr(args, "timeout", None) is not None:
+        current["timeout"] = args.timeout
+        changed = True
+    if getattr(args, "exclude", None) is not None:
+        current["excluded_options"] = [x.strip() for x in args.exclude.split(",") if x.strip()]
+        changed = True
+
+    if changed:
+        problems = store.validate_decider(current)
+        if problems:
+            for p in problems:
+                print(f"✗ {p}", file=sys.stderr)
+            return 1
+        try:
+            store.save_decider(current)
+        except RuntimeError as exc:
+            print(f"✗ {exc}", file=sys.stderr)
+            return 1
+        section = store.delegation_section()
+        print(_describe_decider(section))
+
+    if getattr(args, "test", None):
+        mm_block = section.get("backends", {}).get("model_map") if isinstance(section.get("backends"), Mapping) else {}
+        res = probe_decider(args.test, has_images=bool(getattr(args, "images", False)), settings=mm_block)
+        return _print_probe_result(res)
+
+    if getattr(args, "show", False) or changed:
+        if not changed:
+            print(_describe_decider(section))
+        return 0
+
+    if not _has_terminal():
+        print(_describe_decider(section))
+        return 0
+
+    try:
+        _configure_decider()
+    except RuntimeError as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _configure_decider() -> None:
+    """Interactive curses TUI for the System-1 Decider auto-router."""
+    from hermes_cli.curses_ui import curses_checklist
+    from .decider_router import probe_decider
+
+    while True:
+        section = store.delegation_section()
+        dec = dict(store.decider_settings(section))
+        options = store.routes(section)
+        opt_names = [_text(o.get("name")) for o in options if _text(o.get("name"))]
+        excluded = set(dec["excluded_options"])
+        eligible_count = sum(1 for n in opt_names if n not in excluded)
+        fb_status = f"ON ({dec['fallback_model']} @ {dec['fallback_url']})" if dec["allow_fallback"] else "OFF"
+
+        rows = [
+            [("Auto-routing status:   ", None), ("ON (enabled)" if dec["enabled"] else "OFF (disabled)", "green" if dec["enabled"] else "yellow")],
+            [("Primary endpoint:      ", None), (f"{dec['model']} @ {dec['url']}", "dim")],
+            [("Cloud fallback:        ", None), (fb_status, "dim")],
+            [("Thresholds & timeout:  ", None), (f"specialist >= {dec['specialist_threshold']:.2f} · confidence >= {dec['confidence_threshold']:.2f} · timeout {dec['timeout']:.0f}s", "dim")],
+            [("Eligible routes:       ", None), (f"{eligible_count}/{len(opt_names)} routes enabled for auto-selection", "dim")],
+            "Run a live routing test (probe)",
+            "Done / Back",
+        ]
+        idx = _radio(
+            "System-1 Decider: automatic subagent route selection (/v1/systemone)",
+            rows,
+            description=(
+                "  When enabled, delegate_task calls that omit `option` are batch-routed by the\n"
+                "  System-1 Decider (local Ollama pplx-decider or TypeSafe Cloud).\n"
+            ),
+        )
+        if idx < 0 or idx == 6:
+            return
+        if idx == 0:
+            dec["enabled"] = not dec["enabled"]
+            store.save_decider(dec)
+            print(f"System-1 Decider auto-router: {'ON' if dec['enabled'] else 'OFF'}.")
+        elif idx == 1:
+            url = _ask("Primary /v1/systemone URL", dec["url"])
+            model = _ask("Primary decision model", dec["model"])
+            if url and model:
+                dec["url"] = url
+                dec["model"] = model
+                problems = store.validate_decider(dec)
+                if problems:
+                    for p in problems:
+                        print(f"  ✗ {p}")
+                else:
+                    store.save_decider(dec)
+                    print(f"Saved primary Decider: {dec['model']} @ {dec['url']}.")
+        elif idx == 2:
+            toggle = _radio("Cloud fallback when primary Decider is busy or unreachable:", ["Enabled", "Disabled"],
+                            selected=0 if dec["allow_fallback"] else 1)
+            if toggle >= 0:
+                dec["allow_fallback"] = (toggle == 0)
+                if dec["allow_fallback"]:
+                    dec["fallback_url"] = _ask("Fallback /v1/systemone URL", dec["fallback_url"])
+                    dec["fallback_model"] = _ask("Fallback model", dec["fallback_model"])
+                problems = store.validate_decider(dec)
+                if not problems:
+                    store.save_decider(dec)
+                    print("Saved cloud fallback settings.")
+        elif idx == 3:
+            spec = _ask("Specialist probability threshold (0.0-1.0)", f"{dec['specialist_threshold']:.2f}")
+            conf = _ask("Route confidence threshold (0.0-1.0)", f"{dec['confidence_threshold']:.2f}")
+            tout = _ask("Request timeout in seconds (1-120)", f"{dec['timeout']:.1f}")
+            candidate = {**dec, "specialist_threshold": spec, "confidence_threshold": conf, "timeout": tout}
+            problems = store.validate_decider(candidate)
+            if problems:
+                for p in problems:
+                    print(f"  ✗ {p}")
+            else:
+                store.save_decider(candidate)
+                print("Saved Decider thresholds and timeout.")
+        elif idx == 4:
+            if not opt_names:
+                print("Add model routes first so you can choose which ones the Decider may auto-select.")
+                continue
+            checked = {i for i, n in enumerate(opt_names) if n not in excluded}
+            chosen = curses_checklist(
+                "Which routes may the System-1 Decider select automatically? (uncheck paid/advisor routes)",
+                opt_names,
+                checked,
+                cancel_returns={-1},
+            )
+            if chosen != {-1}:
+                # Preserve excluded names that aren't in opt_names (e.g. standard defaults) plus unchecked ones
+                unchecked = [n for i, n in enumerate(opt_names) if i not in chosen]
+                preserved = [n for n in dec["excluded_options"] if n not in opt_names]
+                dec["excluded_options"] = [*preserved, *unchecked]
+                store.save_decider(dec)
+                print(f"Saved Decider route eligibility ({len(chosen)}/{len(opt_names)} eligible).")
+        elif idx == 5:
+            goal = _ask("Sample subagent goal to test", "Analyze screenshot.png and extract the error dialog text")
+            if goal:
+                mm_block = section.get("backends", {}).get("model_map") if isinstance(section.get("backends"), Mapping) else {}
+                res = probe_decider(goal, has_images=("screenshot" in goal.lower() or "image" in goal.lower()), settings=mm_block)
+                _print_probe_result(res)

@@ -195,24 +195,45 @@ class ModelMapDelegationProvider(DelegationProvider):
         return (DAYBREAK_KEY,)
 
     def task_parameters(self, config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-        options = configured_options(self.settings(config))
+        settings = self.settings(config)
+        options = configured_options(settings)
         if not options:
             return {}
+        from .decider_router import decider_enabled
+        header = (
+            "Which configured model runs this subagent. Omit to let the System-1 Decider auto-select "
+            "between the default route and a specialist route."
+            if decider_enabled(settings)
+            else "Which configured model runs this subagent. Omit for the default subagent route."
+        )
         lines = [
-            "Which configured model runs this subagent. Omit for the default subagent route.",
+            header,
             *(f"{name}: {option['description']}" for name, option in options.items()),
         ]
         return {PARAMETER: {"type": "string", "enum": list(options), "description": "\n".join(lines)}}
 
     def description(self, config: Mapping[str, Any]) -> str:
-        if not configured_options(self.settings(config)):
+        settings = self.settings(config)
+        if not configured_options(settings):
             return ""
+        from .decider_router import decider_enabled
+        if decider_enabled(settings):
+            return (
+                "Each task may set `option` to run that subagent on one of the listed models "
+                "(if omitted, System-1 Decider routes automatically)."
+            )
         return "Each task may set `option` to run that subagent on one of the listed models."
 
     def route_task(self, task: Mapping[str, Any], config: Mapping[str, Any]) -> dict[str, Any]:
         settings = self.settings(config)
         options = configured_options(settings)
         chosen = task.get(PARAMETER)
+        if not chosen:
+            from .decider_router import decider_enabled, route_single_task
+            if decider_enabled(settings):
+                decided = route_single_task(dict(task), settings)
+                if decided and decided in options:
+                    chosen = decided
         if not chosen:
             default = settings.get("default")
             chosen = default.strip() if isinstance(default, str) else ""

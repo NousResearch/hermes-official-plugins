@@ -69,6 +69,18 @@ def profile_default(section: Mapping[str, Any]) -> str:
     return _text(_block(section, "profile_routes").get("default"))
 
 
+def has_decider(section: Mapping[str, Any]) -> bool:
+    """Whether ``delegation.backends.model_map`` has explicit System-1 Decider configuration."""
+    block = _block(section, "model_map")
+    return isinstance(block.get("decider"), Mapping) or "decider_routing_enabled" in block
+
+
+def decider_settings(section: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalized System-1 Decider settings from ``delegation.backends.model_map``."""
+    from .decider_router import decider_config
+    return decider_config(_block(section, "model_map"))
+
+
 # --- writes -----------------------------------------------------------------------------------
 
 def _write(mutate: Callable[[dict[str, Any]], None]) -> None:
@@ -121,6 +133,51 @@ def save_routes(options: list[dict[str, Any]], default: str = "") -> None:
 
 def save_profiles(entries: list[dict[str, Any]], default: str = "") -> None:
     _save_list("profile_routes", "profiles", entries, default)
+
+
+def save_decider(settings: Mapping[str, Any]) -> None:
+    """Persist ``delegation.backends.model_map.decider`` while keeping existing routes and default."""
+    from .decider_router import decider_config
+    normalized = decider_config({"decider": dict(settings)})
+
+    def mutate(section: dict[str, Any]) -> None:
+        block = _backend_block(section, "model_map")
+        existing = block.get("decider")
+        target = existing if isinstance(existing, dict) else {}
+        for key, value in normalized.items():
+            target[key] = value
+        block["decider"] = target
+
+    _write(mutate)
+
+
+def validate_decider(settings: Mapping[str, Any]) -> list[str]:
+    """Validate System-1 Decider settings before saving (empty list = valid)."""
+    problems: list[str] = []
+    url = _text(settings.get("url"))
+    if not url or not (url.startswith("http://") or url.startswith("https://")):
+        problems.append("Decider endpoint URL must start with http:// or https://.")
+    if not _text(settings.get("model")):
+        problems.append("Decider model name cannot be empty.")
+    fb_url = _text(settings.get("fallback_url"))
+    if fb_url and not (fb_url.startswith("http://") or fb_url.startswith("https://")):
+        problems.append("Fallback URL must start with http:// or https:// (or be left blank).")
+    for field, low, high in (
+        ("specialist_threshold", 0.0, 1.0),
+        ("confidence_threshold", 0.0, 1.0),
+        ("timeout", 1.0, 120.0),
+    ):
+        val = settings.get(field)
+        if val is None or val == "":
+            continue
+        try:
+            num = float(val)
+        except (TypeError, ValueError):
+            problems.append(f"{field} must be a number between {low} and {high}.")
+            continue
+        if not (low <= num <= high):
+            problems.append(f"{field} must be between {low} and {high} (got {num}).")
+    return problems
 
 
 # --- validation -------------------------------------------------------------------------------
@@ -254,6 +311,15 @@ def describe(section: Mapping[str, Any]) -> str:
             lines.append(f"    {''.ljust(width)}  {route_summary(option)}{mark}")
         if not options:
             lines.append("    (none yet: run `hermes delegation config`)")
+        if has_decider(section) or decider_settings(section).get("enabled"):
+            dec = decider_settings(section)
+            state_lbl = "on" if dec["enabled"] else "off"
+            lines.append(
+                f"  System-1 Decider auto-router: {state_lbl} "
+                f"({dec['model']} @ {dec['url']}, "
+                f"specialist >= {dec['specialist_threshold']:.2f}, "
+                f"confidence >= {dec['confidence_threshold']:.2f})"
+            )
     elif mode == "profile_routes":
         entries, default = listed_profiles(section), profile_default(section)
         lines.append(f"  Profile routes ({len(entries)}){f', default: {default}' if default else ''}:")

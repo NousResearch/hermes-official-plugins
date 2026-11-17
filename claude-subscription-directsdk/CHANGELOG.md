@@ -78,7 +78,8 @@
   holds it (rewriting it made every later step refuse and relaunch); a steered result Claude Code reworded (a
   whitespace-only or very large one) is rewritten to Hermes' bytes, and a newest frame the relay still cannot restore
   is refused before upstream and replayed; Claude Code's record of each later reply must be Hermes' frame byte for
-  byte; results are compared and rewritten as bytes, key order included. A kept process's relay waits for that
+  byte (less the `caller` the Messages API adds to each tool call, which Claude Code drops from its record and from a
+  replay alike); results are compared and rewritten as bytes, key order included. A kept process's relay waits for that
   process's own init event and its version; a cancel ends that wait at once and refuses the request. A doubt or the end of output after a step returned ends the process at once; a tool call for
   another MCP server, for a tool Hermes did not offer or without a JSON-RPC id is never parked. `max_sessions` bounds
   the Hermes process across profiles (one registry for every copy of the plugin). Cancel reads a request's relay once,

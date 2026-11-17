@@ -683,3 +683,48 @@ def test_no_hermes_setting_reaches_the_test(tmp_path, monkeypatch):
     assert not result['passed']
     assert seen.exists(), 'the stand-in never ran: the test proves nothing'
     assert seen.read_text().strip() not in ('', str(login)), seen.read_text()
+
+
+@needs_cli
+@posix
+def test_an_unlisted_release_whose_kept_launch_differs_runs_per_call_after_the_first_refusal(mode, monkeypatch, tmp_path, caplog):
+    """Its first kept request is refused once; every later step on that release runs per-call, without another probe
+    and a refused launch each time, and says so once."""
+    from test_directsdk_session import MODEL, TOOLS, client
+    import test_directsdk_session as base
+    import tempfile
+    from http.server import ThreadingHTTPServer
+    script = stand_in(tmp_path, f'''for a in "$@"; do
+  case "$prev" in --system-prompt-file) prompt="$a";; esac
+  case "$a" in --allowedTools) kept=1;; esac
+  prev="$a"
+done
+[ -n "$kept" ] && [ -n "$prompt" ] && printf . >> "$prompt"
+exec "{CLAUDE}" "$@"
+''')
+    monkeypatch.setattr(base, 'CLAUDE', script)
+    monkeypatch.setattr(directsdk_setup, 'session_versions', lambda: frozenset())
+    monkeypatch.setattr(directsdk, 'session_versions', lambda: frozenset(), raising=False)
+    monkeypatch.setattr(directsdk, '_unmatched', set(), raising=False)
+    mode('force')
+    probes, build = [], directsdk.Client._per_call_request
+    monkeypatch.setattr(directsdk.Client, '_per_call_request', lambda self, *a: (probes.append(1), build(self, *a))[1])
+    with tempfile.TemporaryDirectory(prefix='directsdk-unlisted-') as home:
+        server = ThreadingHTTPServer(('127.0.0.1', 0), base.Upstream)
+        server.bodies, server.slow = [], 0
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        c = client(home, server, monkeypatch, session=True)
+        try:
+            with caplog.at_level('WARNING', logger=directsdk.logger.name):
+                messages = [{'role': 'user', 'content': 'go'}]
+                for _ in range(3):
+                    reply = c.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000).choices[0].message.model_dump()
+                    assert c._session is None
+                    messages += [{k: v for k, v in reply.items() if k in ('role', 'content', 'tool_calls', 'reasoning_details') and v is not None}]
+                    messages += [{'role': 'tool', 'tool_call_id': t['id'], 'content': 'ok'} for t in reply['tool_calls']]
+        finally:
+            c.close()
+            server.shutdown()
+            server.server_close()
+    assert probes == [1], f'{len(probes)} per-call probes in 3 steps'
+    assert sum('runs per-call from now on' in r.getMessage() for r in caplog.records) == 1

@@ -606,6 +606,9 @@ _LIVE = ModuleType('_claude_subscription_directsdk_live_v1')
 _LIVE.natives, _LIVE.lock = set(), threading.Lock()
 _LIVE = sys.modules.setdefault(_LIVE.__name__, _LIVE)
 _live, _live_lock = _LIVE.natives, _LIVE.lock
+# Unlisted releases whose kept process sent a first request that was not per-call's (shared by every copy too): they
+# run per-call for the rest of this Hermes process, instead of paying a probe and a refused launch on every step.
+_unmatched = sys.modules[_LIVE.__name__].__dict__.setdefault('unmatched', set())
 SESSION_IDLE_S = 3600.0
 
 
@@ -1503,15 +1506,21 @@ class Client:
                     # At the process cap with no kept process to evict, this step runs one-shot: the same bytes at the
                     # per-call cost.
                     unproven_first = None
-                    if session and version not in session_versions():
+                    unlisted = session and version not in session_versions()
+                    if unlisted and version in _unmatched:
+                        session = False
+                    reservation = _place(cap) if session else None
+                    session = reservation is not None
+                    if session and unlisted:
                         # A release not on the list (session_unlisted_versions force or self-test): the kept process's
                         # first request is held to per-call's own build too, as its first resumed one always is, so no
                         # request shape the self-test did not run reaches upstream unproven. None built: per-call.
                         unproven_first = self._per_call_request(request, env, resolved, upstream, kwargs, body, manifest,
                                                                 system, frames, timeout, session_id)
-                        session = unproven_first is not None
-                    reservation = _place(cap) if session else None
-                    session = reservation is not None
+                        if unproven_first is None:
+                            with _live_lock:
+                                _live.discard(reservation)
+                            reservation, session = None, False
                     try:
                         native = self._launch(request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id, session, reservation,
                                               version)
@@ -1581,8 +1590,13 @@ class Client:
                     elif native.admission.expected is not None and native.admission.last_forwarded is None and \
                             native.version not in session_versions():
                         # An unlisted release's new process did not send per-call's first request: another would not
-                        # either, so this step runs per-call.
+                        # either, so this step runs per-call, and so does every later one on this release here.
                         session = False
+                        if native.version not in _unmatched:
+                            _unmatched.add(native.version)
+                            logger.warning('claude-subscription-directsdk: Claude Code %s is not on the tested list and '
+                                           'its kept process did not send per-call\'s first request; it runs per-call '
+                                           'from now on in this Hermes process', native.version)
                 except _Doubt as doubt:
                     # Before its request went upstream: this step replays per-call bytes on a fresh one-shot.
                     why, session = doubt.why, False

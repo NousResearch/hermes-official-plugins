@@ -405,7 +405,62 @@ def test_a_verdict_belongs_to_the_binary_not_to_every_one_reporting_that_version
     assert selftest.verdict(UNLISTED, None) is None
 
 
+@pytest.mark.parametrize('pids, reasons, passed', [
+    ([1] * 9 + [2] * 4, ['launch'], True),
+    ([1] * 5 + [2] * 4 + [3] * 4, ['diverged', 'launch'], True),
+    (list(range(13)), ['diverged'] * 12, False),            # a process per step
+    ([1] * 5 + [2] * 4 + [3] * 4, ['diverged', 'diverged'], False),
+    ([1] * 13, ['steer'], False),                           # a restart the conversation should not cause
+    ([None] * 13, [], False)])                              # nothing kept at all
+def test_the_verdict_needs_a_process_kept_across_the_steps(pids, reasons, passed):
+    same = [b'x'] * 13
+    assert selftest.judge(same, list(same), pids, reasons)['passed'] is passed
+    assert selftest.judge(same, same[:-1] + [b'y'], pids, reasons)['passed'] is False
+
+
 @needs_cli
 def test_a_binary_that_reports_another_version_fails(tmp_path):
     passed, reason, _ = selftest.run_child([CLAUDE], '2.1.999', time_limit=120)
     assert not passed and 'reports' in reason and '2.1.999' in reason, reason
+
+
+@posix
+def test_a_killed_test_leaves_no_temporary_directory(tmp_path, monkeypatch):
+    work = tmp_path / 'tmp'
+    work.mkdir()
+    monkeypatch.setattr(selftest.tempfile, 'tempdir', str(work))
+    script = stand_in(tmp_path, 'exec sleep 600\n')
+    passed, reason, _ = selftest.run_child([script], UNLISTED, time_limit=8)
+    assert not passed and list(work.iterdir()) == []
+
+
+@pytest.mark.parametrize('runs, verdict', [([False, True], 'pass'), ([False, False], 'fail'), ([True], 'pass')])
+def test_a_fail_is_kept_only_when_a_second_run_fails_too(monkeypatch, runs, verdict):
+    results = iter([(ok, 'fine' if ok else 'request 4 of 13 differs', 1.0) for ok in runs])
+    calls = []
+    monkeypatch.setattr(selftest, 'run_child', lambda command, version: (calls.append(1), next(results))[1])
+    selftest.request(CMD, UNLISTED)
+    deadline = time.monotonic() + 5
+    while selftest._state.running and time.monotonic() < deadline:
+        time.sleep(.01)
+    assert len(calls) == len(runs) and selftest.verdict(UNLISTED, CMD)['verdict'] == verdict
+
+
+def test_another_hermes_process_testing_holds_this_one_off(monkeypatch):
+    held = selftest._machine_lock()
+    assert held not in (None, True)
+    runs = []
+    monkeypatch.setattr(selftest, 'run_child', lambda command, version: (runs.append(1), (True, 'fine', 1.0))[1])
+    try:
+        selftest.request(CMD, UNLISTED)
+        deadline = time.monotonic() + 5
+        while selftest._state.running and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert runs == [] and selftest.verdict(UNLISTED, CMD) is None
+    finally:
+        held.close()
+    selftest.request(CMD, UNLISTED)
+    deadline = time.monotonic() + 5
+    while selftest._state.running and time.monotonic() < deadline:
+        time.sleep(.01)
+    assert runs == [1] and selftest.verdict(UNLISTED, CMD)['verdict'] == 'pass'

@@ -142,7 +142,7 @@ def request(command, version):
     if not version or verdict(version, command) is not None:
         return
     with _state.lock:
-        if _state.running:
+        if _state.running or verdict(version, command) is not None:
             return
         thread = threading.Thread(target=_test, args=(list(command), version), name="directsdk-selftest", daemon=True)
         _state.running[version] = thread
@@ -203,6 +203,8 @@ def _kill_all(child, kill_process_tree, seen=()):
     kill_process_tree(child)
     for proc in found:
         try:
+            if not proc.is_running():  # gone, or its pid now belongs to another process: leave it
+                continue
             if os.name != "nt":
                 try:
                     if os.getpgid(proc.pid) == proc.pid:
@@ -228,12 +230,24 @@ def run_child(command, version, time_limit=None, memory_limit=None):
     kill_process_tree, own_process_group = _process_tree()
     time_limit = TIME_LIMIT_S if time_limit is None else time_limit
     memory_limit = MEMORY_LIMIT_BYTES if memory_limit is None else memory_limit
-    spec = {"command": command, "version": version, "sys_path": _hermes_paths(), "time_limit": time_limit}
+    # Everything the test writes (its homes, the plugin's launch directories) goes under one directory this process
+    # removes, whether the child ended or was killed.
+    work = tempfile.mkdtemp(prefix="directsdk-selftest-")
+    try:
+        return _run_child(command, version, time_limit, memory_limit, work, kill_process_tree, own_process_group)
+    finally:
+        import shutil
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _run_child(command, version, time_limit, memory_limit, work, kill_process_tree, own_process_group):
+    spec = {"command": command, "version": version, "sys_path": _hermes_paths(), "time_limit": time_limit, "work": work}
     started = time.monotonic()
+    env = dict(_child_env(), TMPDIR=work, TEMP=work, TMP=work)
     try:
         child = subprocess.Popen([sys.executable, "-I", str(Path(__file__).resolve()), json.dumps(spec)],
                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                 env=_child_env(), cwd=tempfile.gettempdir(), **own_process_group())
+                                 env=env, cwd=work, **own_process_group())
     except OSError as error:
         return False, f"the test could not start: {error}", 0.0
     out = {}
@@ -272,10 +286,51 @@ def run_child(command, version, time_limit=None, memory_limit=None):
     return passed, str(result.get("reason") or ("" if passed else "no reason given")), seconds
 
 
-def _test(command, version):
+def _machine_lock():
+    """One test at a time on this machine (every Hermes process shares the cache): a held lock file, or None when
+    another process holds it. No cache file, no lock: the test runs."""
+    path = cache_path()
+    if path is None:
+        return True
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(path.with_name(path.name + ".lock"), "a+b")
+    except OSError:
+        return True
+    try:
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+def _run_once_more_on_fail(command, version):
+    """A fail is kept only when a second run fails too: one run can trip on the machine (load, a date that turns
+    between the per-call and the kept run) rather than on the binary."""
+    first = run_child(command, version)
+    if first[0]:
+        return first
+    second = run_child(command, version)
+    return second if second[0] else (False, first[1] if first[1] == second[1] else f"{first[1]}; again: {second[1]}",
+                                     round(first[2] + second[2], 1))
+
+
+def _test(command, version):
+    lock = None
+    try:
+        lock = _machine_lock()
+        if lock is None:
+            return  # another Hermes process is testing; its verdict lands in the shared cache
+        if verdict(version, command) is not None:
+            return
         try:
-            passed, reason, seconds = run_child(command, version)
+            passed, reason, seconds = _run_once_more_on_fail(command, version)
         except Exception as error:  # a test that cannot run is a fail
             passed, reason, seconds = False, f"the test could not run: {error}", 0.0
         record = {"verdict": "pass" if passed else "fail", "reason": reason, "seconds": seconds,
@@ -290,6 +345,8 @@ def _test(command, version):
             _logger.warning("claude-subscription-directsdk: Claude Code %s is not on the tested list and its "
                             "self-test failed (%s), so every call runs per-call", version, reason)
     finally:
+        if lock not in (None, True):
+            lock.close()
         with _state.lock:
             _state.running.pop(version, None)
 
@@ -350,6 +407,7 @@ def _reply(body):
 
 def _upstream():
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import socketserver
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -370,7 +428,13 @@ def _upstream():
             self.wfile.write(payload)
             self.wfile.flush()
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    class Server(ThreadingHTTPServer):
+        def server_bind(self):
+            # HTTPServer's own bind asks DNS for 127.0.0.1's name, which takes seconds on some macOS hosts.
+            socketserver.TCPServer.server_bind(self)
+            self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
+
+    server = Server(("127.0.0.1", 0), Handler)
     server.bodies = []
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
@@ -417,6 +481,8 @@ def _guard(limit):
             time.sleep(0.5)
         for proc in _descendants(os.getpid()):
             try:
+                if not proc.is_running():
+                    continue
                 if os.name != "nt" and os.getpgid(proc.pid) == proc.pid:
                     os.killpg(proc.pid, 9)  # windows-footgun: ok — POSIX only, guarded above
                 proc.kill()
@@ -426,10 +492,31 @@ def _guard(limit):
     threading.Thread(target=watch, name="directsdk-selftest-guard", daemon=True).start()
 
 
+def judge(expected, actual, pids, reasons):
+    """The verdict on one run of the conversation: per-call's requests, kept's, kept's process after each step, and the
+    restart reasons logged. Every kept request must be per-call's, byte for byte, on a process kept across the steps:
+    the whitespace-led reply is refused once (Claude Code drops the block from its own record) and the compacted turn
+    starts a new process; anything more means the release does not keep a process here."""
+    if len(actual) != len(expected):
+        return {"passed": False, "reason": f"kept sent {len(actual)} requests, per-call {len(expected)}"}
+    for n, (a, b) in enumerate(zip(actual, expected)):
+        if a != b:
+            at = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
+            return {"passed": False, "reason": f"request {n + 1} of {len(expected)} differs from per-call's at byte {at}"}
+    kept = [p for p in pids if p is not None]
+    longest = max((kept.count(p) for p in set(kept)), default=0)
+    if (len(reasons) > EXPECTED_RESTARTS or not set(reasons) <= {"launch", "edited", "diverged"}
+            or reasons.count("diverged") > 1 or longest < MIN_KEPT_STEPS):
+        return {"passed": False, "reason": f"the process was not kept across the steps (restarts: "
+                f"{', '.join(reasons) or 'none'}; longest on one process: {longest} steps)"}
+    return {"passed": True, "reason": f"{len(expected)} requests byte-identical, one process for {longest} steps, "
+            f"restarts: {', '.join(reasons) or 'none'}"}
+
+
 def child(spec):
     _guard(float(spec.get("time_limit") or TIME_LIMIT_S) + 30)
     sys.path[:0] = [str(_PLUGIN_DIR)] + [p for p in spec.get("sys_path", []) if p not in sys.path]
-    work = Path(tempfile.mkdtemp(prefix="directsdk-selftest-"))
+    work = Path(tempfile.mkdtemp(prefix="run-", dir=spec.get("work")))
     try:
         hermes_home = work / "hermes"
         hermes_home.mkdir()
@@ -482,22 +569,7 @@ def child(spec):
         reported = directsdk.claude_version(resolved)[1]
         if reported != spec["version"]:
             return {"passed": False, "reason": f"the binary reports {reported or 'no version'}, not {spec['version']}"}
-        if len(actual) != len(expected):
-            return {"passed": False, "reason": f"kept sent {len(actual)} requests, per-call {len(expected)}"}
-        for n, (a, b) in enumerate(zip(actual, expected)):
-            if a != b:
-                at = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
-                return {"passed": False, "reason": f"request {n + 1} of {len(expected)} differs from per-call's at byte {at}"}
-        kept = [p for p in pids if p is not None]
-        longest = max((kept.count(p) for p in set(kept)), default=0)
-        # Expected: the whitespace-led reply is refused once (Claude Code drops the block from its own record), and
-        # the compacted turn starts a new process. Anything more means the release does not keep a process here.
-        if (len(reasons) > EXPECTED_RESTARTS or not set(reasons) <= {"launch", "edited", "diverged"}
-                or reasons.count("diverged") > 1 or longest < MIN_KEPT_STEPS):
-            return {"passed": False, "reason": f"the process was not kept across the steps (restarts: "
-                    f"{', '.join(reasons) or 'none'}; longest on one process: {longest} steps)"}
-        return {"passed": True, "reason": f"{len(expected)} requests byte-identical, one process for {longest} steps, "
-                f"restarts: {', '.join(reasons) or 'none'}"}
+        return judge(expected, actual, pids, reasons)
     except Exception as error:
         return {"passed": False, "reason": f"{type(error).__name__}: {str(error)[:300]}"}
     finally:

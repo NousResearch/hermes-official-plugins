@@ -160,7 +160,7 @@ to 307 MB on macOS, 325 MB the most seen. So `max_sessions` 4 can hold about 1 t
 `session_idle_seconds` ends them. Requests are byte-identical in both modes, so cost and caching do not change.
 
 Session mode runs only on the Claude Code versions its tests passed on, listed in `plugin.yaml`
-(`session_versions` on the `claude` dependency: 2.1.292, the CI pin, plus 2.1.322 and 2.1.323). Any other version
+(`session_versions` on the `claude` dependency: 2.1.292, the CI pin, plus 2.1.322 to 2.1.326). Any other version
 runs every call per-call, and the log says so once (`session mode runs only on Claude Code ...; this is ..., so every
 call runs per-call`). An update of Claude Code then costs latency, never correctness. A kept process ends at its
 next step when its binary changes or its version leaves the list, and a process that reports another version than the

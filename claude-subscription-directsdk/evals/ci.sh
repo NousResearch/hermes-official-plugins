@@ -7,6 +7,10 @@ version="${CLAUDE_CODE_VERSION:-2.1.292}"
 prefix="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/claude-code.XXXXXX")"
 npm install --prefix "$prefix" --no-audit --no-fund --loglevel=error "@anthropic-ai/claude-code@$version"
 claude="$prefix/node_modules/.bin/claude"
+case "$(uname -s)" in
+  # Git Bash on Windows: npm's shim for Windows is claude.cmd, and Python needs a Windows path.
+  MINGW*|MSYS*|CYGWIN*) claude="$(cygpath -m "$prefix")/node_modules/.bin/claude.cmd" ;;
+esac
 "$claude" --version
 for eval in evals/directsdk_admission.py evals/directsdk_cache_wire.py; do
   echo "::group::$eval"

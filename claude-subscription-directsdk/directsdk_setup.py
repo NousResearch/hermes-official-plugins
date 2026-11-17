@@ -263,7 +263,7 @@ def session_tested(version, command=None):
                             version, listed, UNLISTED_SETTING)
         return True
     if mode == "self-test":
-        record = selftest.verdict(version)
+        record = selftest.verdict(version, command)
         if record is not None:
             passed = record.get("verdict") == "pass"
             if version not in selftest._state.logged and _once(("verdict", version)):

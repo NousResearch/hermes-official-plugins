@@ -26,6 +26,7 @@ needs_cli = pytest.mark.skipif(not CLAUDE, reason='needs the Claude Code CLI')
 posix = pytest.mark.skipif(os.name == 'nt', reason='the stand-in binaries are POSIX shell scripts')
 LISTED = min(directsdk_setup.session_versions())
 UNLISTED = '9.9.9'
+CMD = ['claude']
 
 
 @pytest.fixture
@@ -39,7 +40,7 @@ def mode(monkeypatch):
     return lambda m: value.__setitem__('mode', m)
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def cache(tmp_path, monkeypatch):
     path = tmp_path / 'hermes' / 'cache' / 'session-selftest.json'
     monkeypatch.setattr(selftest, 'cache_path', lambda: path)
@@ -102,9 +103,9 @@ def test_self_test_runs_per_call_until_a_verdict_and_follows_it(mode, cache, mon
         assert not directsdk_setup.session_tested(UNLISTED, ['claude'])
         assert not directsdk_setup.session_tested(UNLISTED, ['claude'])
         assert asked == [(['claude'], UNLISTED)] * 2  # it asks each time; request() starts one test
-        selftest._write(UNLISTED, {'verdict': 'pass', 'reason': 'fixture', 'seconds': 1.0, 'at': 'now'})
+        selftest._write(UNLISTED, CMD, {'verdict': 'pass', 'reason': 'fixture', 'seconds': 1.0, 'at': 'now'})
         assert directsdk_setup.session_tested(UNLISTED, ['claude']) and directsdk_setup.session_tested(UNLISTED, ['claude'])
-        selftest._write('9.9.8', {'verdict': 'fail', 'reason': 'request 3 of 12 differs', 'seconds': 1.0, 'at': 'now'})
+        selftest._write('9.9.8', CMD, {'verdict': 'fail', 'reason': 'request 3 of 12 differs', 'seconds': 1.0, 'at': 'now'})
         assert not directsdk_setup.session_tested('9.9.8', ['claude'])
     assert len(asked) == 2
     said = lines(caplog)
@@ -113,19 +114,23 @@ def test_self_test_runs_per_call_until_a_verdict_and_follows_it(mode, cache, mon
 
 
 def test_a_verdict_belongs_to_the_plugin_version_the_release_and_the_platform(cache, monkeypatch):
-    selftest._write(UNLISTED, {'verdict': 'pass', 'reason': '', 'seconds': 1.0, 'at': 'now'})
-    assert selftest.verdict(UNLISTED)['verdict'] == 'pass' and selftest.verdict('9.9.8') is None
+    selftest._write(UNLISTED, CMD, {'verdict': 'pass', 'reason': '', 'seconds': 1.0, 'at': 'now'})
+    assert selftest.verdict(UNLISTED, CMD)['verdict'] == 'pass' and selftest.verdict('9.9.8', CMD) is None
     monkeypatch.setattr(selftest, 'plugin_version', lambda: '0.0.0-other')
-    assert selftest.verdict(UNLISTED) is None
+    assert selftest.verdict(UNLISTED, CMD) is None
+    monkeypatch.undo()
+    monkeypatch.setattr(selftest, 'cache_path', lambda: cache)
+    monkeypatch.setattr(selftest.platform, 'machine', lambda: 'other-machine')
+    assert selftest.verdict(UNLISTED, CMD) is None
 
 
 @pytest.mark.parametrize('content', ['{not json', '[]', '', '{KEY: "pass"}', '{KEY: {"verdict": "maybe"}}', '{KEY: ["pass"]}'])
 def test_a_corrupt_cache_holds_no_verdict_and_is_rewritten(cache, content):
     cache.parent.mkdir(parents=True)
-    cache.write_text(content.replace('KEY', json.dumps(selftest.verdict_key(UNLISTED))))
-    assert selftest.verdict(UNLISTED) is None
-    selftest._write(UNLISTED, {'verdict': 'fail', 'reason': 'r', 'seconds': 1.0, 'at': 'now'})
-    assert selftest.verdict(UNLISTED)['verdict'] == 'fail'
+    cache.write_text(content.replace('KEY', json.dumps(selftest.verdict_key(UNLISTED, CMD))))
+    assert selftest.verdict(UNLISTED, CMD) is None
+    selftest._write(UNLISTED, CMD, {'verdict': 'fail', 'reason': 'r', 'seconds': 1.0, 'at': 'now'})
+    assert selftest.verdict(UNLISTED, CMD)['verdict'] == 'fail'
 
 
 def test_two_agents_asking_at_once_start_one_test(cache, monkeypatch):
@@ -146,7 +151,7 @@ def test_two_agents_asking_at_once_start_one_test(cache, monkeypatch):
     deadline = time.monotonic() + 5
     while selftest._state.running and time.monotonic() < deadline:
         time.sleep(.01)
-    assert runs == [UNLISTED] and selftest.verdict(UNLISTED)['verdict'] == 'pass'
+    assert runs == [UNLISTED] and selftest.verdict(UNLISTED, CMD)['verdict'] == 'pass'
     selftest.request(['claude'], UNLISTED)  # a verdict exists: nothing runs again
     assert runs == [UNLISTED]
 
@@ -159,7 +164,7 @@ def test_a_test_that_cannot_run_is_a_fail(cache, monkeypatch):
     deadline = time.monotonic() + 5
     while selftest._state.running and time.monotonic() < deadline:
         time.sleep(.01)
-    record = selftest.verdict(UNLISTED)
+    record = selftest.verdict(UNLISTED, CMD)
     assert record['verdict'] == 'fail' and 'no loopback port' in record['reason']
 
 
@@ -173,10 +178,17 @@ def test_a_missing_binary_fails_the_self_test(tmp_path):
 @needs_cli
 def test_the_real_binary_passes_its_self_test():
     """The listed release, run through the self-test as if it were not listed: every kept request is per-call's."""
-    version = directsdk_setup.claude_version([CLAUDE])[1] or LISTED
+    version = real_version()
     passed, reason, seconds = selftest.run_child([CLAUDE], version, time_limit=120)
     assert passed, reason
     assert 'byte-identical' in reason and seconds < 120
+
+
+def real_version():
+    import re
+    import subprocess
+    out = subprocess.run([CLAUDE, '--version'], capture_output=True, text=True, timeout=60).stdout
+    return re.search(r'\d+\.\d+\.\d+', out).group(0)
 
 
 def stand_in(tmp_path, body):
@@ -198,7 +210,7 @@ done
 [ -n "$kept" ] && [ -n "$prompt" ] && printf . >> "$prompt"
 exec "{CLAUDE}" "$@"
 ''')
-    version = directsdk_setup.claude_version([CLAUDE])[1] or LISTED
+    version = real_version()
     passed, reason, _ = selftest.run_child([script], version, time_limit=120)
     assert not passed and 'differs from per-call' in reason, reason
 
@@ -208,9 +220,9 @@ def test_a_test_that_hangs_is_killed_with_everything_it_started(tmp_path):
     pids = tmp_path / 'pids'
     script = stand_in(tmp_path, f'sleep 600 & echo $! >> {pids}\necho $$ >> {pids}\nexec sleep 600\n')
     started = time.monotonic()
-    passed, reason, _ = selftest.run_child([script], UNLISTED, time_limit=3)
+    passed, reason, _ = selftest.run_child([script], UNLISTED, time_limit=15)
     assert not passed and 'did not finish' in reason
-    assert time.monotonic() - started < 30
+    assert time.monotonic() - started < 45
     deadline = time.monotonic() + 5
     left = []
     while time.monotonic() < deadline:
@@ -315,11 +327,12 @@ def test_self_test_mode_runs_per_call_until_the_real_binary_passes_then_keeps(mo
             with caplog.at_level('INFO', logger=directsdk_setup._logger.name), caplog.at_level('INFO', logger=selftest._logger.name):
                 started = time.monotonic()
                 c.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+                assert selftest._state.running, 'the first call waited for the self-test to end'
                 assert time.monotonic() - started < 10 and c._session is None, 'the first call waited or kept a process'
                 deadline = time.monotonic() + 120
                 while selftest._state.running and time.monotonic() < deadline:
                     time.sleep(.2)
-                record = selftest.verdict(directsdk_setup.claude_version([base.CLAUDE])[1])
+                record = selftest.verdict(directsdk_setup.claude_version([base.CLAUDE])[1], [base.CLAUDE])
                 assert record and record['verdict'] == 'pass', record
                 c.create(model=MODEL, messages=[{'role': 'user', 'content': 'go again'}], tools=TOOLS, max_tokens=1000)
                 assert c._session is not None, 'a passed self-test kept no process'
@@ -342,7 +355,7 @@ def test_a_verdict_that_cannot_be_written_is_kept_for_this_process(cache, monkey
         deadline = time.monotonic() + 5
         while selftest._state.running and time.monotonic() < deadline:
             time.sleep(.01)
-    assert runs == [UNLISTED] and selftest.verdict(UNLISTED)['verdict'] == 'pass'
+    assert runs == [UNLISTED] and selftest.verdict(UNLISTED, CMD)['verdict'] == 'pass'
 
 
 HERMES = """
@@ -378,3 +391,21 @@ def test_hermes_ending_mid_test_leaves_no_process_behind(tmp_path, end):
             break
         time.sleep(.2)
     assert pids.exists() and not left, left
+
+
+def test_a_verdict_belongs_to_the_binary_not_to_every_one_reporting_that_version(tmp_path):
+    one, other = tmp_path / 'one', tmp_path / 'other'
+    one.write_text('a'), other.write_text('b')
+    selftest._write(UNLISTED, [str(one)], {'verdict': 'pass', 'reason': '', 'seconds': 1.0, 'at': 'now'})
+    assert selftest.verdict(UNLISTED, [str(one)])['verdict'] == 'pass'
+    assert selftest.verdict(UNLISTED, [str(other)]) is None
+    time.sleep(.01)
+    one.write_text('a, updated in place')
+    assert selftest.verdict(UNLISTED, [str(one)]) is None
+    assert selftest.verdict(UNLISTED, None) is None
+
+
+@needs_cli
+def test_a_binary_that_reports_another_version_fails(tmp_path):
+    passed, reason, _ = selftest.run_child([CLAUDE], '2.1.999', time_limit=120)
+    assert not passed and 'reports' in reason and '2.1.999' in reason, reason

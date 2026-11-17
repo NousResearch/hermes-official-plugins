@@ -70,8 +70,22 @@ def plugin_version():
     return match.group(1).strip("'\"") if match else "unknown"
 
 
-def verdict_key(version):
-    return f"{plugin_version()}|{version}|{sys.platform}-{platform.machine().lower()}"
+def _binary_id(command):
+    """The files ``command`` names, as they are now (path, inode, mtime, size): a verdict belongs to this binary, not
+    to every one that reports the same version (a wrapper, another install, an update in place)."""
+    import hashlib
+    parts = []
+    for arg in command or ():
+        try:
+            st = os.stat(arg)
+            parts.append([os.path.realpath(arg), st.st_ino, st.st_mtime_ns, st.st_size])
+        except (OSError, TypeError, ValueError):
+            parts.append(str(arg))
+    return hashlib.sha256(json.dumps(parts).encode()).hexdigest()[:16]
+
+
+def verdict_key(version, command):
+    return f"{plugin_version()}|{version}|{_binary_id(command)}|{sys.platform}-{platform.machine().lower()}"
 
 
 def cache_path():
@@ -96,21 +110,24 @@ def _read_cache(path):
     return {k: v for k, v in data.items() if isinstance(v, dict) and v.get("verdict") in ("pass", "fail")}
 
 
-def verdict(version):
-    """``{"verdict": "pass" | "fail", "reason", "seconds", "at"}`` for this release, or None (not tested yet)."""
-    key = verdict_key(version)
+def verdict(version, command):
+    """``{"verdict": "pass" | "fail", "reason", "seconds", "at"}`` for this release and binary, or None (not tested
+    yet, or no binary named)."""
+    if not command:
+        return None
+    key = verdict_key(version, command)
     return _state.verdicts.get(key) or _read_cache(cache_path()).get(key)
 
 
-def _write(version, record):
-    _state.verdicts[verdict_key(version)] = record
+def _write(version, command, record):
+    _state.verdicts[verdict_key(version, command)] = record
     path = cache_path()
     if path is None:
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         data = _read_cache(path)
-        data[verdict_key(version)] = record
+        data[verdict_key(version, command)] = record
         tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
         os.replace(tmp, path)
@@ -122,7 +139,7 @@ def _write(version, record):
 def request(command, version):
     """Start this release's test in the background unless it has a verdict or a test is already running. Never
     blocks: until a verdict exists, calls run per-call."""
-    if not version or verdict(version) is not None:
+    if not version or verdict(version, command) is not None:
         return
     with _state.lock:
         if _state.running:
@@ -263,7 +280,7 @@ def _test(command, version):
             passed, reason, seconds = False, f"the test could not run: {error}", 0.0
         record = {"verdict": "pass" if passed else "fail", "reason": reason, "seconds": seconds,
                   "at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
-        _write(version, record)
+        _write(version, command, record)
         _state.logged.add(version)
         if passed:
             _logger.warning("claude-subscription-directsdk: Claude Code %s is not on the tested list; its self-test "
@@ -462,6 +479,9 @@ def child(spec):
                 client.close()
             runs[mode], upstream.bodies[:] = (list(upstream.bodies), pids), []
         (expected, _), (actual, pids) = runs[False], runs[True]
+        reported = directsdk.claude_version(resolved)[1]
+        if reported != spec["version"]:
+            return {"passed": False, "reason": f"the binary reports {reported or 'no version'}, not {spec['version']}"}
         if len(actual) != len(expected):
             return {"passed": False, "reason": f"kept sent {len(actual)} requests, per-call {len(expected)}"}
         for n, (a, b) in enumerate(zip(actual, expected)):

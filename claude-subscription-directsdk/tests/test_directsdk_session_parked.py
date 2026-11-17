@@ -122,11 +122,13 @@ def test_a_large_tool_result_arrives_in_full_on_the_same_process(home, upstream,
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='POSIX SIGSTOP stands in for a native that stops reading')
-def test_a_tool_result_native_never_reads_times_out(home, upstream, monkeypatch):
+@pytest.mark.parametrize('timeout', [.2, 2])
+def test_a_tool_result_native_never_reads_times_out(home, upstream, monkeypatch, timeout):
     """Native serves one resumed step (so the next step builds no per-call request first), parks a call, then stops
     reading its stdin. The result does not fit the pipe, so its write waits; at the request timeout the process must
     end and the step must raise the timeout error. Before, that write had no bound and the step waited until someone
-    cancelled it. The large write must have been entered: the test cannot pass on another timeout."""
+    cancelled it. The large write must have been entered: the test cannot pass on another timeout. With 2 s a replay
+    on a new process would finish in time: the step must not replay after its deadline passed."""
     import json
     kept = client(home, upstream, monkeypatch, session=True)
     messages = [{'role': 'system', 'content': 'You are a fixture agent.'}, {'role': 'user', 'content': 'go'}]
@@ -143,15 +145,15 @@ def test_a_tool_result_native_never_reads_times_out(home, upstream, monkeypatch)
 
     def deliver():
         try:
-            kept.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000, timeout=.2)
+            kept.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000, timeout=timeout)
         except Exception as error:  # noqa: BLE001
             errors.append(f'{type(error).__name__}: {error}')
     worker = threading.Thread(target=deliver, daemon=True)
     try:
         os.killpg(pid, signal.SIGSTOP)
         worker.start()
-        worker.join(5)
-        assert not worker.is_alive(), 'the result was still being written 5 s after a 0.2 s timeout'
+        worker.join(timeout + 5)
+        assert not worker.is_alive(), f'the result was still being written 5 s after a {timeout} s timeout'
         assert any(n >= LARGE for n in entered), 'the large result write was never entered'
         assert errors == ['TimeoutError: Claude request timed out']
         assert not session_pids(kept) and not alive(pid)

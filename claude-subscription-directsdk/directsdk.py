@@ -1547,6 +1547,8 @@ class Client:
                                 # has it).
                                 native.send(request, how[2], timeout)
                             native.deliver(how[1])
+                    except TimeoutError:
+                        raise  # the step's own deadline passed while native would not read: no replay after it
                     except OSError:
                         # It exited after the resume check, before this write: nothing went upstream. Replay instead.
                         self._restart(native, 'exited')

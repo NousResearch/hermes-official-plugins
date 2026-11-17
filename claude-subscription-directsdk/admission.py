@@ -678,7 +678,7 @@ class _Server(HTTPServer):
     def server_bind(self):
         # HTTPServer.server_bind also asks DNS for the bound address's name (socket.getfqdn) only to fill
         # server_name, which nothing here reads. Every call starts a relay, and on a host whose resolver stalls on
-        # 127.0.0.1 every call waited out that lookup (35 s on one macOS host).
+        # 127.0.0.1 the first call of each process waited out that lookup (35 s on one macOS host).
         socketserver.TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[0], self.server_address[1]
 

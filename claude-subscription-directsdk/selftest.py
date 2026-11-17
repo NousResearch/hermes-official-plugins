@@ -47,11 +47,13 @@ _state.verdicts, _state.children = {}, {}  # verdicts this process reached (kept
 
 def _end_children():
     """At Hermes' exit a test's thread is abandoned: end its child and what that started here, not later."""
-    for child, seen in list(_state.children.values()):
+    import shutil
+    for child, seen, work in list(_state.children.values()):
         try:
             _kill_all(child, _process_tree()[0], seen.values())
         except Exception:
             pass
+        shutil.rmtree(work, ignore_errors=True)
 
 
 _state.end_children = _end_children
@@ -293,7 +295,7 @@ def _run_child(command, version, time_limit, memory_limit, work, kill_process_tr
     reader = threading.Thread(target=lambda: out.update(stdout=child.stdout.read(), stderr=child.stderr.read()), daemon=True)
     reader.start()
     reason, seen = None, {}
-    _state.children[id(child)] = (child, seen)
+    _state.children[id(child)] = (child, seen, work)
     try:
         while child.poll() is None:
             seen.update((p.pid, p) for p in _descendants(child.pid))
@@ -520,7 +522,7 @@ def _conversation(client, pids):
         {"type": "text", "text": ""}, {"type": "text", "text": "continue"}]}])
 
 
-def _guard(limit):
+def _guard(limit, work=None):
     """The child ends itself, with every process it started, when the Hermes process that started it is gone (its end
     of the child's stdin closes: it can no longer watch or kill it) or when its own time is up."""
     gone = threading.Event()
@@ -549,6 +551,9 @@ def _guard(limit):
                 proc.kill()
             except Exception:
                 pass
+        if work:
+            import shutil
+            shutil.rmtree(work, ignore_errors=True)  # Hermes is gone: nobody else removes it
         os._exit(3)
     threading.Thread(target=watch, name="directsdk-selftest-guard", daemon=True).start()
 
@@ -575,9 +580,12 @@ def judge(expected, actual, pids, reasons):
 
 
 def child(spec):
-    _guard(float(spec.get("time_limit") or TIME_LIMIT_S) + 30)
+    _guard(float(spec.get("time_limit") or TIME_LIMIT_S) + 30, spec.get("work"))
     if spec.get("loopback_up"):
-        _loopback_up()
+        try:
+            _loopback_up()
+        except OSError as error:
+            return {"passed": False, "reason": f"the test's network namespace could not bring loopback up: {error}"}
     sys.path[:0] = [str(_PLUGIN_DIR)] + [p for p in spec.get("sys_path", []) if p not in sys.path]
     work = Path(tempfile.mkdtemp(prefix="run-", dir=spec.get("work")))
     try:

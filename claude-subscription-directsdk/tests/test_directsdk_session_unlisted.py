@@ -191,6 +191,12 @@ def real_version():
     return re.search(r'\d+\.\d+\.\d+', out).group(0)
 
 
+def marker():
+    """A sleep duration no other run on this machine is using: the tests find their sleepers by it."""
+    import random
+    return random.randint(600000, 699999)
+
+
 def marked(seconds):
     """Processes on this machine sleeping exactly ``seconds`` (a duration only one test uses): found by command line,
     since inside the test's own pid namespace (Linux) a process's pid is not the one this side sees."""
@@ -247,7 +253,7 @@ def jail(request, monkeypatch):
 
 @posix
 def test_a_test_that_hangs_is_killed_with_everything_it_started(tmp_path, jail):
-    seconds = 6011 if jail == 'namespaces' else 6021
+    seconds = marker()
     script = stand_in(tmp_path, f'touch {tmp_path}/started\nsleep {seconds} &\nexec sleep {seconds}\n')
     started = time.monotonic()
     passed, reason, _ = selftest.run_child([script], UNLISTED, time_limit=15)
@@ -303,7 +309,7 @@ def test_a_kept_process_on_an_unlisted_version_ends_when_the_mode_goes_back_to_h
 def test_a_child_that_dies_leaves_no_process_it_started(tmp_path, monkeypatch, jail):
     """The stand-in starts a sleeper in a session of its own, then the test's child process is killed from outside:
     what it started must still go."""
-    seconds = 6012 if jail == 'namespaces' else 6022
+    seconds = marker()
     script = stand_in(tmp_path, f'touch {tmp_path}/started\n(setsid sleep {seconds} 2>/dev/null || sleep {seconds}) &\nexec sleep {seconds}\n')
     popen = selftest.subprocess.Popen
 
@@ -398,7 +404,7 @@ def test_hermes_ending_mid_test_leaves_no_process_behind(tmp_path, end):
     """A Hermes process starts a self-test whose binary hangs, then exits (its test thread is abandoned) or is killed
     (nothing of it runs any more). The test's child and what it started must go too."""
     import subprocess
-    seconds = 6013 if end.startswith('sys') else 6014
+    seconds = marker()
     started = tmp_path / 'started'
     script = stand_in(tmp_path, f'touch {started}\n(setsid sleep {seconds} 2>/dev/null || sleep {seconds}) &\nexec sleep {seconds}\n')
     code = HERMES.format(plugin=str(Path(selftest.__file__).parent), hermes=os.environ.get('HERMES_AGENT_REPO', ''),
@@ -565,7 +571,7 @@ except OSError as error:
     result = 'refused: ' + type(error).__name__
 open({str(outcome)!r}, 'w').write(result)
 PY
-exec sleep 6031
+exec sleep 600
 ''')
     passed, reason, _ = selftest.run_child([script], UNLISTED, time_limit=20)
     listener.close()
@@ -597,12 +603,83 @@ def test_a_process_left_by_claude_code_goes_when_hermes_is_killed_without_namesp
     """No namespaces: a stand-in starts a sleeper in a session of its own and leaves it (its subshell exits, so it is
     init's and in no group the child kills), then Hermes is killed. The child, which saw it start, ends it too."""
     import subprocess
-    seconds = 6041
+    seconds, other = marker(), marker()
     started = tmp_path / 'started'
-    script = stand_in(tmp_path, f'(setsid sleep {seconds} & touch {started}; sleep 1)\nexec sleep 6042\n')
+    script = stand_in(tmp_path, f'(setsid sleep {seconds} & touch {started}; sleep 1)\nexec sleep {other}\n')
     code = HERMES.format(plugin=str(Path(selftest.__file__).parent), hermes=os.environ.get('HERMES_AGENT_REPO', ''),
                          script=script, started=str(started), end='time.sleep(2); import os, signal; os.kill(os.getpid(), signal.SIGKILL)')
     code = code.replace('import selftest\n', 'import selftest\nselftest._namespaces = lambda: None\n')
     subprocess.run([sys.executable, '-c', code], timeout=120)
     assert started.exists(), 'the stand-in never ran: the test proves nothing'
-    assert not gone(seconds) and not gone(6042)
+    assert not gone(seconds) and not gone(other)
+
+
+@posix
+def test_hermes_exit_ends_a_running_test_and_removes_its_directory(tmp_path, monkeypatch):
+    """The exit hook alone (the stdin guard is not what ends it here): a running test's child, what it started and its
+    directory all go."""
+    work = tmp_path / 'tmp'
+    work.mkdir()
+    monkeypatch.setattr(selftest.tempfile, 'tempdir', str(work))
+    seconds, started = marker(), tmp_path / 'started'
+    script = stand_in(tmp_path, f'touch {started}\nexec sleep {seconds}\n')
+    runner = threading.Thread(target=selftest.run_child, args=([script], UNLISTED), kwargs={'time_limit': 120}, daemon=True)
+    runner.start()
+    deadline = time.monotonic() + 40
+    while not marked(seconds) and time.monotonic() < deadline:
+        time.sleep(.1)
+    assert started.exists(), 'the stand-in never ran: the test proves nothing'
+    selftest._state.end_children()
+    assert not gone(seconds)
+    assert list(work.iterdir()) == []
+    runner.join(30)
+
+
+@posix
+def test_a_pid_that_is_no_longer_the_process_seen_is_never_group_killed():
+    """A process seen during a test has gone and its pid now leads another group: nothing may signal that group."""
+    import subprocess
+    bystander = subprocess.Popen(['sleep', '600'], start_new_session=True)
+
+    class Stale:
+        pid = bystander.pid
+
+        def is_running(self):
+            return False  # what psutil says of a pid whose process changed since it was seen
+
+        def kill(self):
+            raise AssertionError('a stale process was killed')
+
+    child = subprocess.Popen(['sleep', '600'])  # the test's child stand-in: nothing under it
+    try:
+        selftest._kill_all(child, lambda child: None, [Stale()])
+        try:
+            bystander.wait(timeout=1)  # a signal sent takes a moment to show
+        except subprocess.TimeoutExpired:
+            pass
+        assert bystander.poll() is None, 'the stale pid\'s group was killed'
+    finally:
+        for proc in (bystander, child):
+            proc.kill()
+            proc.wait()
+
+
+@posix
+def test_no_hermes_setting_reaches_the_test(tmp_path, monkeypatch):
+    """A profile (or managed) claude_config_dir naming a real login must not become the test's config directory."""
+    login = tmp_path / 'real-login'
+    login.mkdir()
+    seen = tmp_path / 'seen'
+    script = stand_in(tmp_path, f'echo "$CLAUDE_CONFIG_DIR" > {seen}\nexit 1\n')
+    monkeypatch.setattr(directsdk_setup, '_setting',
+                        lambda key, default=None: str(login) if key == directsdk_setup.CONFIG_DIR_SETTING else default)
+    for name in ('session_min_rounds', 'max_concurrent', 'check_extra_usage', 'session_tested', 'session_settings'):
+        monkeypatch.setattr(directsdk, name, getattr(directsdk, name))
+    for name in ('HOME', 'USERPROFILE', 'HERMES_HOME'):
+        monkeypatch.setenv(name, os.environ.get(name, ''))
+    monkeypatch.setattr(directsdk.logger, 'level', directsdk.logger.level)
+    monkeypatch.setattr(directsdk.logger, 'handlers', list(directsdk.logger.handlers))
+    result = selftest.child({'command': [script], 'version': UNLISTED, 'sys_path': [], 'time_limit': 30, 'work': str(tmp_path)})
+    assert not result['passed']
+    assert seen.exists(), 'the stand-in never ran: the test proves nothing'
+    assert seen.read_text().strip() not in ('', str(login)), seen.read_text()

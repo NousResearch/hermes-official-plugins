@@ -628,8 +628,14 @@ def canonical_history(payload, frames):
                     raise HistoryMisaligned(f'row {k}: the steer is not where Hermes put it')
                 continue
             opens_turn = any(b.get('type') != 'tool_result' for b in frame['message']['content'])
-            # Assistant turns are native's own; a new user turn keeps the per-call transforms that follow.
-            if frame['type'] != 'user' or (k == len(frames) - 1 and opens_turn):
+            if frame['type'] != 'user':
+                # Native's record of a reply goes upstream as it is: it must be, mark aside, the reply a fresh
+                # replay sends from Hermes' frame, byte for byte, or the request is not per-call's.
+                if _bytes(_unmarked(sent.get('content'))) != _bytes(_unmarked(frame['message']['content'])):
+                    raise HistoryMisaligned(f"row {k}: native's record of the reply is not Hermes' frame")
+                continue
+            # A new user turn keeps the per-call transforms that follow.
+            if k == len(frames) - 1 and opens_turn:
                 continue
             if k == 0:
                 # A kept native replays its opening turn with the context per-call's _frame_first dropped from it.
@@ -652,6 +658,10 @@ def canonical_history(payload, frames):
         raise
     except (ValueError, TypeError, KeyError, AttributeError, IndexError) as error:
         raise HistoryMisaligned(f'{type(error).__name__}: {error}') from error
+
+
+def _bytes(value):
+    return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
 
 
 def _unmarked(value):

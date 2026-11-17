@@ -104,6 +104,68 @@ def test_a_steered_result_the_relay_cannot_restore_is_refused_and_replayed(home,
     assert actual == expected, first_difference(actual[2], expected[2])
 
 
+# A later reply.
+
+def tool(n):
+    return {'type': 'tool_use', 'id': f'toolu_{n:04d}', 'name': 'mcp__hermes__read_file', 'input': {'path': f'f{n}'}}
+
+
+class Replies(BaseHTTPRequestHandler):
+    """A tool call per step; the second reply leads with ``server.blocks``."""
+
+    def log_message(self, *_):
+        pass
+
+    def do_POST(self):
+        raw = self.rfile.read(int(self.headers['Content-Length']))
+        self.server.bodies.append(raw)
+        n = sum(m['role'] == 'assistant' for m in json.loads(raw)['messages'])
+        blocks = (self.server.blocks if n == 1 else []) + [tool(n)]
+        events = [{'type': 'message_start', 'message': {'id': f'msg_{n}', 'type': 'message', 'role': 'assistant',
+                                                       'model': MODEL, 'content': [], 'usage': USAGE}}]
+        for i, block in enumerate(blocks):
+            field, kind = ('input', 'input_json_delta') if block['type'] == 'tool_use' else ('text', 'text_delta')
+            delta = {'type': kind, **({'partial_json': json.dumps(block['input'])} if field == 'input' else {'text': block['text']})}
+            events += [{'type': 'content_block_start', 'index': i, 'content_block': {**block, field: {} if field == 'input' else ''}},
+                       {'type': 'content_block_delta', 'index': i, 'delta': delta},
+                       {'type': 'content_block_stop', 'index': i}]
+        events += [{'type': 'message_delta', 'delta': {'stop_reason': 'tool_use'}, 'usage': USAGE}, {'type': 'message_stop'}]
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.end_headers()
+        for event in events:
+            self.wfile.write(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode())
+        self.wfile.flush()
+
+
+@pytest.fixture
+def replies():
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Replies)
+    server.bodies, server.blocks = [], []
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+@pytest.mark.parametrize('blocks', [
+    pytest.param([{'type': 'text', 'text': '  \n\t'}], id='whitespace-text'),
+    pytest.param([{'type': 'text', 'text': 'one'}, {'type': 'text', 'text': 'two'}], id='two-texts')])
+def test_native_s_record_of_a_later_reply_goes_up_only_as_hermes_frame(home, replies, monkeypatch, blocks):
+    """The second reply leads with a whitespace-only text block. Claude Code's live history drops it; a per-call
+    replay sends it. Native's record of a reply now has to be Hermes' frame, byte for byte, or the request is
+    refused and replayed."""
+    replies.blocks = blocks
+
+    def script(c):
+        messages = [{'role': 'user', 'content': 'go'}]
+        for _ in range(4):
+            reply = c.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000).choices[0].message.model_dump()
+            messages += [keep(reply)] + [{'role': 'tool', 'tool_call_id': t['id'], 'content': 'ordinary result'} for t in reply['tool_calls']]
+    expected, actual, _ = both(home, replies, monkeypatch, script)
+    assert actual == expected, first_difference(actual[-1], expected[-1])
+
+
 # An earlier user turn with a mark of its own.
 
 def test_an_earlier_marked_user_turn_keeps_only_its_own_mark(home, upstream, monkeypatch):

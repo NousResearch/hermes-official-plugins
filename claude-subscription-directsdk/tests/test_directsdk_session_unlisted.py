@@ -344,3 +344,37 @@ def test_a_verdict_that_cannot_be_written_is_kept_for_this_process(cache, monkey
             time.sleep(.01)
     assert runs == [UNLISTED] and selftest.verdict(UNLISTED)['verdict'] == 'pass'
 
+
+HERMES = """
+import sys, time
+sys.path[:0] = [{plugin!r}, {hermes!r}]
+import selftest
+selftest.cache_path = lambda: None
+selftest.request([{script!r}], '9.9.9')
+deadline = time.time() + 30
+while time.time() < deadline and len(open({pids!r}).read().split()) < 2 if __import__('os').path.exists({pids!r}) else True:
+    time.sleep(.1)
+time.sleep(1)
+{end}
+"""
+
+
+@posix
+@pytest.mark.parametrize('end', ['sys.exit(0)', 'import os, signal; os.kill(os.getpid(), signal.SIGKILL)'], ids=['exits', 'killed'])
+def test_hermes_ending_mid_test_leaves_no_process_behind(tmp_path, end):
+    """A Hermes process starts a self-test whose binary hangs, then exits (its test thread is abandoned) or is killed
+    (nothing of it runs any more). The test's child and what it started must go too."""
+    import subprocess
+    pids = tmp_path / 'pids'
+    script = stand_in(tmp_path, f'setsid sleep 600 & echo $! >> {pids}\necho $$ >> {pids}\nexec sleep 600\n')
+    code = HERMES.format(plugin=str(Path(selftest.__file__).parent), hermes=os.environ.get('HERMES_AGENT_REPO', ''),
+                         script=script, pids=str(pids), end=end)
+    subprocess.run([sys.executable, '-c', code], timeout=120)
+    deadline, left = time.monotonic() + 15, []
+    while time.monotonic() < deadline:
+        left = [int(p) for p in pids.read_text().split()] if pids.exists() else []
+        left = [p for p in left if psutil.pid_exists(p) and psutil.Process(p).status() != psutil.STATUS_ZOMBIE]
+        if not left:
+            break
+        time.sleep(.2)
+    assert pids.exists() and not left, left

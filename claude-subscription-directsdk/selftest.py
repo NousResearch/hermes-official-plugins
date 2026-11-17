@@ -42,8 +42,23 @@ _CACHE_NAME = "session-selftest.json"
 _KEY = "_claude_subscription_directsdk_selftest_v1"
 _state = ModuleType(_KEY)
 _state.lock, _state.running, _state.logged = threading.Lock(), {}, set()
-_state.verdicts = {}  # verdicts this process reached (kept even if the file cannot be written)
-_state = sys.modules.setdefault(_KEY, _state)
+_state.verdicts, _state.children = {}, {}  # verdicts this process reached (kept even if the file cannot be written)
+
+
+def _end_children():
+    """At Hermes' exit a test's thread is abandoned: end its child and what that started here, not later."""
+    for child, seen in list(_state.children.values()):
+        try:
+            _kill_all(child, _process_tree()[0], seen.values())
+        except Exception:
+            pass
+
+
+_state.end_children = _end_children
+if sys.modules.setdefault(_KEY, _state) is _state:
+    import atexit
+    atexit.register(lambda: sys.modules[_KEY].end_children())
+_state = sys.modules[_KEY]
 
 
 def plugin_version():
@@ -182,16 +197,21 @@ def _kill_all(child, kill_process_tree, seen=()):
             pass
 
 
-def run_child(command, version, time_limit=None, memory_limit=None):
-    """Run the test in a child process and return ``(passed, reason, seconds)``; the child and everything it started
-    are gone when this returns."""
+def _process_tree():
     try:
         from .process_tree import kill_process_tree, own_process_group
     except ImportError:
         from process_tree import kill_process_tree, own_process_group
+    return kill_process_tree, own_process_group
+
+
+def run_child(command, version, time_limit=None, memory_limit=None):
+    """Run the test in a child process and return ``(passed, reason, seconds)``; the child and everything it started
+    are gone when this returns."""
+    kill_process_tree, own_process_group = _process_tree()
     time_limit = TIME_LIMIT_S if time_limit is None else time_limit
     memory_limit = MEMORY_LIMIT_BYTES if memory_limit is None else memory_limit
-    spec = {"command": command, "version": version, "sys_path": _hermes_paths()}
+    spec = {"command": command, "version": version, "sys_path": _hermes_paths(), "time_limit": time_limit}
     started = time.monotonic()
     try:
         child = subprocess.Popen([sys.executable, "-I", str(Path(__file__).resolve()), json.dumps(spec)],
@@ -203,6 +223,7 @@ def run_child(command, version, time_limit=None, memory_limit=None):
     reader = threading.Thread(target=lambda: out.update(stdout=child.stdout.read(), stderr=child.stderr.read()), daemon=True)
     reader.start()
     reason, seen = None, {}
+    _state.children[id(child)] = (child, seen)
     try:
         while child.poll() is None:
             seen.update((p.pid, p) for p in _descendants(child.pid))
@@ -219,6 +240,7 @@ def run_child(command, version, time_limit=None, memory_limit=None):
             child.wait(timeout=10)
         except subprocess.TimeoutExpired:
             pass
+        _state.children.pop(id(child), None)
         reader.join(timeout=5)
     seconds = round(time.monotonic() - started, 1)
     if reason is not None:
@@ -368,7 +390,27 @@ def _conversation(client, pids):
         {"type": "text", "text": ""}, {"type": "text", "text": "continue"}]}])
 
 
+def _guard(limit):
+    """The child ends itself, with every process it started, when the Hermes process that started it is gone (it can
+    no longer watch or kill it) or when its own time is up."""
+    parent, ends = os.getppid(), time.monotonic() + limit
+
+    def watch():
+        while os.getppid() == parent and time.monotonic() < ends:
+            time.sleep(0.5)
+        for proc in _descendants(os.getpid()):
+            try:
+                if os.name != "nt" and os.getpgid(proc.pid) == proc.pid:
+                    os.killpg(proc.pid, 9)  # windows-footgun: ok — POSIX only, guarded above
+                proc.kill()
+            except Exception:
+                pass
+        os._exit(3)
+    threading.Thread(target=watch, name="directsdk-selftest-guard", daemon=True).start()
+
+
 def child(spec):
+    _guard(float(spec.get("time_limit") or TIME_LIMIT_S) + 30)
     sys.path[:0] = [str(_PLUGIN_DIR)] + [p for p in spec.get("sys_path", []) if p not in sys.path]
     work = Path(tempfile.mkdtemp(prefix="directsdk-selftest-"))
     try:

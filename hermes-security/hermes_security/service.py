@@ -366,7 +366,7 @@ class SecurityService:
         except (SecurityError, OSError, ValueError) as exc:
             reason = f'Could not inventory the target: {exc}'[:500]
             self.store.update_scan_options(scan['scan_id'], {'preparing': False, 'dependenciesPending': False})
-            self.store.set_scan_status(scan['scan_id'], 'failed', reason=reason)
+            self.store.set_scan_status(scan['scan_id'], 'failed', reason=reason, only_from=('created',))
             self.store.add_event(scan['scan_id'], 'scan.failed', reason)
             return None
         scan = self.store.set_inventory(scan['scan_id'], target=resolved, inventory=inventory['files'],
@@ -390,8 +390,10 @@ class SecurityService:
         self.store.add_event(scan_id, 'dependencies.checked', dependencies.describe(receipt), dependencies.compact(receipt))
         scan = self.store.set_scan_option(scan_id, 'dependenciesPending', False)
         if scan['status'] == 'created':
-            scan = self.store.set_scan_status(scan_id, 'awaiting_analysis')
-            self.store.add_event(scan_id, 'scan.started', 'Snapshot inventoried; review packets ready.', {'packetCount': len(self._packets(scan))})
+            # A cancel can land between the read above and this write: only a still-created scan moves on.
+            scan = self.store.set_scan_status(scan_id, 'awaiting_analysis', only_from=('created',))
+            if scan['status'] == 'awaiting_analysis':
+                self.store.add_event(scan_id, 'scan.started', 'Snapshot inventoried; review packets ready.', {'packetCount': len(self._packets(scan))})
         return scan
 
     def _start_dependency_check(self, scan_id):

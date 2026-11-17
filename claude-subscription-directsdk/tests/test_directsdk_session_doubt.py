@@ -237,6 +237,30 @@ def test_a_process_that_doubted_and_exited_as_the_step_handed_it_over_is_ended(h
         c.close()
 
 
+def test_a_doubt_the_reader_logged_is_not_logged_again_by_the_next_step(home, upstream, monkeypatch, caplog):
+    """A kept process doubts between steps: its reader logs the reason and kills it. The next step takes the session
+    before the reader's exit has ended it (here the kill is held back), and restarts it: one log line for one restart.
+    Before, the step logged the restart a second time."""
+    c = client(home, upstream, monkeypatch, session=True, cap=1)
+    try:
+        with caplog.at_level('DEBUG', logger=directsdk.logger.name):
+            messages = [{'role': 'user', 'content': 'go'}]
+            reply = c.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000).choices[0].message.model_dump()
+            native = c._session
+            assert native is not None and not native.serving
+            with monkeypatch.context() as held:
+                held.setattr(native, 'kill', lambda: None)
+                native._doubt('event')
+            assert c._session is native
+            messages.append({k: v for k, v in reply.items() if k in ('role', 'content', 'tool_calls', 'reasoning_details') and v is not None})
+            messages += [{'role': 'tool', 'tool_call_id': call['id'], 'content': 'ok'} for call in reply['tool_calls']]
+            c.create(model=MODEL, messages=messages, tools=TOOLS, max_tokens=1000)
+        assert restarts(caplog) == ['Claude session restart (event): replaying into a new process']
+        assert native.process.poll() is not None
+    finally:
+        c.close()
+
+
 @pytest.mark.parametrize('fault', ['no_tool_id', 'non_object', 'non_json', 'eof', 'partial_eof'])
 def test_a_line_the_plugin_does_not_know_after_the_step_returned_ends_the_kept_process(home, upstream, monkeypatch, caplog, fault):
     """The bad line (or the end of native's output) arrives after the step has returned and the process holds its

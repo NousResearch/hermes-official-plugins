@@ -1349,7 +1349,10 @@ class Client:
     @staticmethod
     def _restart(native, why):
         """End a kept session this step cannot continue; Hermes' logs say why (a rising rate is visible there)."""
-        logger.debug('Claude session restart (%s): replaying into a new process', why)
+        if why is not None and why == native.doubt:
+            native.end_doubted()  # logs it, unless the reader or the hand-over already did
+        else:
+            logger.debug('Claude session restart (%s): replaying into a new process', why)
         native.kill()
         native.release()
 

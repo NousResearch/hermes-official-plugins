@@ -1013,6 +1013,13 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = restore_queried_turn(payload, gate.queried)
             except QueriedTurnMismatch as exc:
+                if resumed:
+                    # A kept native's newest frame that cannot be shown to be Hermes' is not per-call's: refuse
+                    # before upstream; the client replays the step into a new process.
+                    gate.diverged = True
+                    logging.getLogger(__name__).info('kept session request not restorable, replaying: %s', exc)
+                    self._refuse(b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_SESSION_DIVERGED"}}')
+                    return
                 # Restoration is hygiene, not a gate: a frame it cannot prove lossless forwards
                 # exactly as native built it (the pre-restoration behaviour), so a CLI that
                 # reshapes its tool results degrades to an uncached tail, never a failed turn.

@@ -79,6 +79,31 @@ def test_a_restart_for_another_model_sends_per_calls_bytes(home, upstream, monke
     assert actual == expected, first_difference(actual[-1], expected[-1])
 
 
+# A later result, plain or with a steer.
+
+def results(result, steer):
+    """Four steps; the second step's tool result is ``result``, followed by a steer when ``steer``."""
+    def script(c):
+        messages = [{'role': 'system', 'content': 'You are a fixture agent.'}, {'role': 'user', 'content': 'go'}]
+        for step in range(4):
+            reply = c.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000).choices[0].message.model_dump()
+            messages += [keep(reply), {'role': 'tool', 'tool_call_id': reply['tool_calls'][0]['id'],
+                                       **(result if step == 1 else {'content': 'ordinary result'})}]
+            if step == 1 and steer:
+                messages.append({'role': 'user', 'content': STEER})
+    return script
+
+
+@pytest.mark.parametrize('result', [
+    pytest.param({'content': ' \n\t'}, id='whitespace'), pytest.param({'content': 'x' * 600_000}, id='large')])
+def test_a_steered_result_the_relay_cannot_restore_is_refused_and_replayed(home, upstream, monkeypatch, result):
+    """Claude Code replaces a whitespace-only result with its own "completed with no output" text, and a very large
+    one with a preview. With a steer after it, the relay found the frame did not match Hermes' and still forwarded
+    native's version. Now a resumed request it cannot restore is refused before upstream and replayed."""
+    expected, actual, _ = both(home, upstream, monkeypatch, results(result, steer=True))
+    assert actual == expected, first_difference(actual[2], expected[2])
+
+
 # An earlier user turn with a mark of its own.
 
 def test_an_earlier_marked_user_turn_keeps_only_its_own_mark(home, upstream, monkeypatch):

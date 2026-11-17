@@ -157,7 +157,8 @@ hermes config set $S.upstream_ca_file /etc/ssl/corp-root.pem
 What it costs: memory between calls. During a call both modes hold one Claude Code process, about 200 to 250 MB. A kept
 process holds it between calls too, and it grows with the history it carries: 245 to 290 MB at round 200 on Linux, 284
 to 307 MB on macOS, 325 MB the most seen. So `max_sessions` 4 can hold about 1 to 1.3 GB while agents are idle, until
-`session_idle_seconds` ends them. Requests are byte-identical in both modes, so cost and caching do not change.
+`session_idle_seconds` ends them. A kept process's request goes upstream only as per-call's bytes (one the relay
+cannot make so is refused before upstream, and the step replays on a new process), so cost and caching do not change.
 
 Session mode runs only on the Claude Code versions its tests passed on, listed in `plugin.yaml`
 (`session_versions` on the `claude` dependency: 2.1.292, the CI pin, plus 2.1.322 to 2.1.326). Any other version

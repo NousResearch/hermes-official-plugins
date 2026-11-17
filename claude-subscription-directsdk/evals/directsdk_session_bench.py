@@ -101,8 +101,9 @@ class Upstream(BaseHTTPRequestHandler):
         blocks = [{'type': 'thinking', 'thinking': f'plan {rounds}', 'signature': f'sig{rounds:04d}'},
                   {'type': 'text', 'text': f'step {rounds}'}]
         if tool:
+            # "caller" as the Messages API sends it on every tool call (Claude Code drops it from its own record).
             blocks.append({'type': 'tool_use', 'id': f'toolu_{rounds:04d}', 'name': 'mcp__hermes__read_file',
-                           'input': {'path': f'f{rounds}'}})
+                           'input': {'path': f'f{rounds}'}, 'caller': {'type': 'direct'}})
         events = [{'type': 'message_start', 'message': {'id': f'msg_{rounds}', 'type': 'message', 'role': 'assistant',
                                                        'model': body['model'], 'content': [], 'usage': USAGE}}]
         for i, block in enumerate(blocks):

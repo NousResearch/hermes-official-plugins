@@ -121,3 +121,15 @@ config_schema:
       A kept process that waits this long for a new user turn ends (its memory, 200 to 300 MB, goes back); the next
       step starts a new one with the same bytes. A tool call it holds parked does not count as waiting. Default one
       hour, the prompt cache's lifetime.
+  session_unlisted_versions:
+    type: string
+    default: honor
+    choices: [honor, self-test, force]
+    label: Claude Code releases not on the tested list
+    description: >-
+      What session mode does on a Claude Code release that session_versions does not name. honor: every call runs
+      per-call, with one log line (the default). self-test: the plugin first tests that binary itself, offline and in
+      the background (a loopback upstream, a throwaway config directory, no login, nothing leaves the machine), and
+      keeps processes on it once every kept request has matched per-call's; until then, or if it fails, per-call.
+      The verdict is kept, so a release is tested once. force: keep processes on it, with one warning in the log.
+      Either way each kept step is still checked before upstream.

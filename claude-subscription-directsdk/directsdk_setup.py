@@ -28,12 +28,13 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 try:
-    from . import extra_usage
+    from . import extra_usage, selftest
     from .admission import Admission
     from .model_catalog import MODEL_METADATA, PICKER_ROUTES, native_model
     from .process_tree import kill_process_tree, own_process_group
 except ImportError:
     import extra_usage
+    import selftest
     from admission import Admission
     from model_catalog import MODEL_METADATA, PICKER_ROUTES, native_model
     from process_tree import kill_process_tree, own_process_group
@@ -219,17 +220,73 @@ def claude_version(command):
         return key in _versions, _versions.get(key)
 
 
-def session_tested(version):
-    """Whether session mode may run on this Claude Code version; one log line per other version saying why not."""
+UNLISTED_SETTING = "session_unlisted_versions"
+UNLISTED_MODES = ("honor", "self-test", "force")
+_said = set()
+
+
+def _once(key):
+    """True the first time ``key`` is seen in this Hermes process: each of the lines below is said once, not per call."""
+    with _versions_lock:
+        first = key not in _said
+        _said.add(key)
+    return first
+
+
+def session_unlisted_versions():
+    """The active profile's ``session_unlisted_versions``: what session mode does on a Claude Code release the tested
+    list does not name. ``honor`` (the default) runs it per-call, ``self-test`` keeps processes on it once the
+    plugin's own offline test of that binary has passed, ``force`` keeps processes on it. Anything else is honor."""
+    value = _setting(UNLISTED_SETTING, "honor")
+    mode = value.strip().lower().replace("_", "-") if isinstance(value, str) else None
+    if mode in UNLISTED_MODES:
+        return mode
+    if _once(("bad-mode", repr(value))):
+        _logger.warning("claude-subscription-directsdk: %s is %r, not one of %s; honor it is", UNLISTED_SETTING, value,
+                        ", ".join(UNLISTED_MODES))
+    return "honor"
+
+
+def session_tested(version, command=None):
+    """Whether session mode may keep a process on this Claude Code version (``command``: the binary, for a
+    self-test). Listed versions may; a version it could not read never may; any other follows
+    ``session_unlisted_versions``. Each outcome is logged once per version, never per call."""
     tested = session_versions()
     if version in tested:
         return True
+    listed = ", ".join(sorted(tested)) or "none listed"
+    mode = session_unlisted_versions() if version else "honor"
+    if mode == "force":
+        if _once(("force", version)):
+            _logger.warning("claude-subscription-directsdk: Claude Code %s is not on the tested list (%s); %s is force, "
+                            "so session mode keeps processes on it, each step still checked before upstream",
+                            version, listed, UNLISTED_SETTING)
+        return True
+    if mode == "self-test":
+        record = selftest.verdict(version)
+        if record is not None:
+            passed = record.get("verdict") == "pass"
+            if version not in selftest._state.logged and _once(("verdict", version)):
+                if passed:
+                    _logger.warning("claude-subscription-directsdk: Claude Code %s is not on the tested list; its "
+                                    "self-test passed, so session mode keeps processes on it, each step still checked "
+                                    "before upstream", version)
+                else:
+                    _logger.warning("claude-subscription-directsdk: Claude Code %s is not on the tested list and its "
+                                    "self-test failed (%s), so every call runs per-call", version, record.get("reason"))
+            return passed
+        if command:
+            selftest.request(command, version)
+        if _once(("testing", version)):
+            _logger.info("claude-subscription-directsdk: Claude Code %s is not on the tested list (%s); testing it "
+                         "offline in the background (%s: self-test); calls run per-call until it passes", version,
+                         listed, UNLISTED_SETTING)
+        return False
     with _versions_lock:
         first, _ = version not in _untested, _untested.add(version)
     if first:
         _logger.info("claude-subscription-directsdk: session mode runs only on Claude Code %s; this is %s, so every "
-                     "call runs per-call (a new process each)", ", ".join(sorted(tested)) or "(none listed)",
-                     version or "a version it could not read")
+                     "call runs per-call (a new process each)", listed, version or "a version it could not read")
     return False
 
 

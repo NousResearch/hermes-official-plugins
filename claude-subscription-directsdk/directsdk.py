@@ -1486,7 +1486,7 @@ class Client:
             # Kept mode runs only on a Claude Code version the session tests passed on; any other runs per-call. The
             # version is what a process of this binary reported in its init event: until one has, the step runs per-call.
             seen, version = claude_version(resolved) if session else (False, None)
-            tested = session and seen and session_tested(version)
+            tested = session and seen and session_tested(version, resolved)
             with self._lock:
                 # One step at a time uses the kept native; a concurrent call on this client runs one-shot.
                 session = stepping = session and not self._stepping

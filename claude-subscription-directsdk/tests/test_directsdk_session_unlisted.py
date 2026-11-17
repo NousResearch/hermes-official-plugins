@@ -46,6 +46,7 @@ def cache(tmp_path, monkeypatch):
     monkeypatch.setattr(selftest, 'cache_path', lambda: path)
     monkeypatch.setattr(selftest._state, 'logged', set())
     monkeypatch.setattr(selftest._state, 'verdicts', {})
+    monkeypatch.setattr(directsdk, '_unmatched', set(), raising=False)  # releases marked per-call by an earlier test
     return path
 
 
@@ -679,6 +680,7 @@ def test_no_hermes_setting_reaches_the_test(tmp_path, monkeypatch):
         monkeypatch.setenv(name, os.environ.get(name, ''))
     monkeypatch.setattr(directsdk.logger, 'level', directsdk.logger.level)
     monkeypatch.setattr(directsdk.logger, 'handlers', list(directsdk.logger.handlers))
+    monkeypatch.setattr(selftest, '_guard', lambda *a: None)  # in this process its watchdog would outlive the test
     result = selftest.child({'command': [script], 'version': UNLISTED, 'sys_path': [], 'time_limit': 30, 'work': str(tmp_path)})
     assert not result['passed']
     assert seen.exists(), 'the stand-in never ran: the test proves nothing'

@@ -23,9 +23,10 @@ def wait_for_slot(cancelled, timeout):
 
 
 @pytest.mark.parametrize('why', ['timeout', 'cancel'])
-def test_a_slot_freed_after_the_call_gave_up_is_not_taken(why):
-    """The only slot is freed 80 ms in, inside the waiter's 100 ms poll. Its timeout was 50 ms (or it was cancelled
-    at 20 ms). Before, waking on the release, it took the slot and started anyway."""
+def test_a_slot_freed_after_the_call_gave_up_is_not_taken(why, monkeypatch):
+    """The waiter sleeps in a long poll; its timeout passes (50 ms), or it is cancelled, and only then is the only
+    slot freed, which wakes it. Before, it took the slot and started anyway."""
+    monkeypatch.setattr(concurrency, '_POLL_S', 3.0)
     deadline = time.monotonic() + 5
     while concurrency._pool.held and time.monotonic() < deadline:
         time.sleep(.01)
@@ -34,10 +35,11 @@ def test_a_slot_freed_after_the_call_gave_up_is_not_taken(why):
     cancelled, out = threading.Event(), []
     waiter = threading.Thread(target=lambda: out.append(wait_for_slot(cancelled, .05 if why == 'timeout' else 5)))
     waiter.start()
+    while not concurrency._pool.waiting and waiter.is_alive():
+        time.sleep(.005)
+    time.sleep(.3)  # well past the waiter's 50 ms deadline, inside its 3 s poll
     if why == 'cancel':
-        time.sleep(.02)
         cancelled.set()
-    time.sleep(.08 if why == 'timeout' else .06)
     holder.release()
     waiter.join(5)
     try:

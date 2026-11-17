@@ -24,7 +24,7 @@ import threading
 import time
 import uuid
 import weakref
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 try:
     from . import concurrency
@@ -599,7 +599,12 @@ def _hand_off(native):
 
 # Kept-alive natives of every client in this process, against the max_sessions cap; one session idles out after
 # this long, the prompt cache's own lifetime.
-_live, _live_lock = set(), threading.Lock()
+# Hermes imports the plugin once per profile home, one module each (concurrency.py says the same of its pool): every
+# copy finds the one registry under this name, so max_sessions bounds the Hermes process, not each profile.
+_LIVE = sys.modules.setdefault('_claude_subscription_directsdk_live_v1', ModuleType('_claude_subscription_directsdk_live_v1'))
+if not hasattr(_LIVE, 'natives'):
+    _LIVE.natives, _LIVE.lock = set(), threading.Lock()
+_live, _live_lock = _LIVE.natives, _LIVE.lock
 SESSION_IDLE_S = 3600.0
 
 

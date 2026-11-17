@@ -280,3 +280,41 @@ def test_a_kept_process_that_exits_before_the_next_turn_is_written_is_replayed(h
             ['Claude session restart (exited): replaying into a new process']
     finally:
         c.close()
+
+
+def test_max_sessions_bounds_the_hermes_process_across_profiles(home, upstream, monkeypatch, tmp_path):
+    """Hermes loads the plugin once per profile home, each a module of its own (its own provider loader is used
+    here). With max_sessions 1, a second profile's agent runs per-call beside the first one's kept process. Before,
+    each module had its own registry, and both kept a process."""
+    import atexit
+    import providers
+    from test_directsdk_session import CLAUDE
+    captures, clients, modules, names = [], [], [], []
+    monkeypatch.setattr(providers, 'register_provider', captures.append)
+    root = Path(__file__).resolve().parents[1]
+    prototype = client(home, upstream, monkeypatch, session=True, cap=1)
+    version = directsdk.claude_version([CLAUDE])[1]
+    try:
+        for label in ('profile-a', 'profile-b'):
+            name = providers._user_module_name(root, str(tmp_path / label))
+            names.append(name)
+            providers._exec_plugin_module(root, 'user', name)
+            c = captures[-1].create_client(command=CLAUDE, timeout=30, env=prototype.env)
+            clients.append(c)
+            module = sys.modules[type(c).__module__]
+            modules.append(module)
+            module.note_version([CLAUDE], version)
+            monkeypatch.setattr(module, 'session_settings', lambda: (True, 1))
+            monkeypatch.setattr(module, 'session_min_rounds', lambda: 0)
+            c.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+        kept = [c for c in clients if c._session is not None and c._session.process.returncode is None]
+        assert modules[0]._live is modules[1]._live and len(kept) == 1, f'{len(kept)} kept with max_sessions 1'
+    finally:
+        prototype.close()
+        for c in clients:
+            c.close()
+        for module in modules:
+            atexit.unregister(module._kill_draining)
+        for name in tuple(sys.modules):
+            if any(name == n or name.startswith(n + '.') for n in names):
+                sys.modules.pop(name, None)

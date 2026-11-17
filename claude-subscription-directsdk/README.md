@@ -378,7 +378,7 @@ python evals/directsdk_admission.py /path/to/claude
 python evals/directsdk_cache_wire.py /path/to/claude
 ```
 
-CI runs both evals and the session tests that need the CLI (`tests/test_directsdk_session.py`, `_lifecycle.py`, `_parked.py`, `_steer.py`, `_doubt.py`, `_version.py` and `_memory.py`, which skip where no Claude Code is installed) on Linux and macOS through `evals/ci.sh`, against a pinned Claude Code installed from npm (`CLAUDE_CODE_VERSION`, default 2.1.292). They need no credentials and make no inference calls. Bump the pin to qualify a new Claude Code release: a change in native's wire shape fails here before it reaches users. Session mode then runs on that release once it is added to `session_versions` in `plugin.yaml` (`tests/test_directsdk_session_version.py` fails on a pin that is not listed).
+CI runs both evals and the session tests that need the CLI (`tests/test_directsdk_session.py`, `_lifecycle.py`, `_parked.py`, `_steer.py`, `_doubt.py`, `_version.py`, `_memory.py` and `_bytes.py`, which skip where no Claude Code is installed) on Linux and macOS through `evals/ci.sh`, against a pinned Claude Code installed from npm (`CLAUDE_CODE_VERSION`, default 2.1.292). They need no credentials and make no inference calls. Bump the pin to qualify a new Claude Code release: a change in native's wire shape fails here before it reaches users. Session mode then runs on that release once it is added to `session_versions` in `plugin.yaml` (`tests/test_directsdk_session_version.py` fails on a pin that is not listed).
 
 The long-session bench compares the per-call and kept-process paths on the real CLI against a scripted loopback
 upstream, with no credentials and no inference:

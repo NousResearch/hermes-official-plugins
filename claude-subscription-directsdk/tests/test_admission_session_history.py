@@ -256,6 +256,20 @@ def test_canonical_history_leaves_an_aligned_body_alone_but_for_the_results():
     assert out[3] == result(1)['message'] and out[5] == result(2)['message']
 
 
+def test_a_tool_call_s_caller_is_matched_as_a_replay_drops_it_and_refused_if_native_kept_it():
+    """Hermes' frame of a reply keeps the ``caller`` the Messages API puts on each tool call; a fresh native's replay
+    drops it, so native's record without it is the reply per-call sends. A record that kept it is not, and is refused."""
+    frames = copy.deepcopy(FRAMES)
+    for f in frames:
+        for block in f['message']['content']:
+            if block.get('type') == 'tool_use':
+                block['caller'] = {'type': 'direct'}
+    out = json.loads(canonical_history(wire(native_rows(FRAMES)), frames))['messages']
+    assert out[2] == call(1)['message'] and out[4] == call(2)['message']
+    with pytest.raises(HistoryMisaligned):
+        canonical_history(wire(native_rows(frames)), frames)
+
+
 STEER = {'type': 'text', 'text': '[OUT-OF-BAND USER MESSAGE]\nread g1 instead\n[/OUT-OF-BAND USER MESSAGE]'}
 
 

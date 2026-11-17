@@ -119,8 +119,10 @@ def test_a_later_error_result_goes_up_with_per_calls_key_order(home, upstream, m
 
 # A later reply.
 
-def tool(n):
-    return {'type': 'tool_use', 'id': f'toolu_{n:04d}', 'name': 'mcp__hermes__read_file', 'input': {'path': f'f{n}'}}
+def tool(n, caller=False):
+    # The Messages API adds "caller" to every tool call it sends (seen on every live reply since 2.1.322's runs).
+    return {'type': 'tool_use', 'id': f'toolu_{n:04d}', 'name': 'mcp__hermes__read_file', 'input': {'path': f'f{n}'},
+            **({'caller': {'type': 'direct'}} if caller else {})}
 
 
 class Replies(BaseHTTPRequestHandler):
@@ -133,7 +135,7 @@ class Replies(BaseHTTPRequestHandler):
         raw = self.rfile.read(int(self.headers['Content-Length']))
         self.server.bodies.append(raw)
         n = sum(m['role'] == 'assistant' for m in json.loads(raw)['messages'])
-        blocks = (self.server.blocks if n == 1 else []) + [tool(n)]
+        blocks = (self.server.blocks if n == 1 else []) + [tool(n, self.server.caller)]
         events = [{'type': 'message_start', 'message': {'id': f'msg_{n}', 'type': 'message', 'role': 'assistant',
                                                        'model': MODEL, 'content': [], 'usage': USAGE}}]
         for i, block in enumerate(blocks):
@@ -154,7 +156,7 @@ class Replies(BaseHTTPRequestHandler):
 @pytest.fixture
 def replies():
     server = ThreadingHTTPServer(('127.0.0.1', 0), Replies)
-    server.bodies, server.blocks = [], []
+    server.bodies, server.blocks, server.caller = [], [], False
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield server
     server.shutdown()
@@ -177,6 +179,28 @@ def test_native_s_record_of_a_later_reply_goes_up_only_as_hermes_frame(home, rep
             messages += [keep(reply)] + [{'role': 'tool', 'tool_call_id': t['id'], 'content': 'ordinary result'} for t in reply['tool_calls']]
     expected, actual, _ = both(home, replies, monkeypatch, script)
     assert actual == expected, first_difference(actual[-1], expected[-1])
+
+
+def test_a_reply_whose_tool_calls_carry_their_caller_keeps_its_process_and_per_calls_bytes(home, replies, monkeypatch, caplog):
+    """Every tool call the Messages API sends carries ``"caller": {"type": "direct"}``. Hermes' frame keeps it; Claude
+    Code drops it, in its own record of the reply and when a fresh process replays the frame. Five steps run on one
+    kept process, every request per-call's bytes. Before, each reply's record was held to the frame with the field,
+    so every kept step was refused and relaunched (a live run on 2.1.322 started a process per step)."""
+    replies.caller = True
+
+    def script(c):
+        messages, pids = [{'role': 'user', 'content': 'go'}], []
+        for _ in range(5):
+            reply = c.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000).choices[0].message.model_dump()
+            pids.append(c._session.process.pid if c._session is not None else None)
+            messages += [keep(reply)] + [{'role': 'tool', 'tool_call_id': t['id'], 'content': 'ordinary result'} for t in reply['tool_calls']]
+        return pids
+    with caplog.at_level('DEBUG', logger=directsdk.logger.name):
+        expected, actual, pids = both(home, replies, monkeypatch, script)
+    assert actual == expected, first_difference(actual[-1], expected[-1])
+    assert None not in pids and len(set(pids)) == 1, pids
+    assert not [r for r in caplog.records if 'session restart' in r.getMessage()]
+    assert all('"caller"' not in json.dumps(m['content']) for m in json.loads(expected[-1])['messages'] if m['role'] == 'assistant')
 
 
 # An unusual earlier user turn, on every later step.

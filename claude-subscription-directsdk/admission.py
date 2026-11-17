@@ -641,7 +641,7 @@ def canonical_history(payload, frames):
             if frame['type'] != 'user':
                 # Native's record of a reply goes upstream as it is: it must be, mark aside, the reply a fresh
                 # replay sends from Hermes' frame, byte for byte, or the request is not per-call's.
-                if _bytes(_unmarked(sent.get('content'))) != _bytes(_unmarked(frame['message']['content'])):
+                if _bytes(_unmarked(sent.get('content'))) != _bytes(_as_replayed(frame['message']['content'])):
                     raise HistoryMisaligned(f"row {k}: native's record of the reply is not Hermes' frame")
                 continue
             # A new user turn keeps the per-call transforms that follow.
@@ -672,6 +672,14 @@ def canonical_history(payload, frames):
         raise
     except (ValueError, TypeError, KeyError, AttributeError, IndexError) as error:
         raise HistoryMisaligned(f'{type(error).__name__}: {error}') from error
+
+
+def _as_replayed(content):
+    """Hermes' frame of a reply as a fresh native replays it: no cache mark, and no ``caller`` on a tool call (the
+    Messages API adds it to every one; Claude Code drops it from its record and from a replay). Only Hermes' side is
+    changed: a native record that kept the field no longer matches, and its request is refused."""
+    return [{k: v for k, v in block.items() if k != 'caller'} if isinstance(block, dict) and block.get('type') == 'tool_use'
+            else block for block in _unmarked(content)] if isinstance(content, list) else _unmarked(content)
 
 
 def _bytes(value):

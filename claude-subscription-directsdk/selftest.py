@@ -42,6 +42,7 @@ _CACHE_NAME = "session-selftest.json"
 _KEY = "_claude_subscription_directsdk_selftest_v1"
 _state = ModuleType(_KEY)
 _state.lock, _state.running, _state.logged = threading.Lock(), {}, set()
+_state.verdicts = {}  # verdicts this process reached (kept even if the file cannot be written)
 _state = sys.modules.setdefault(_KEY, _state)
 
 
@@ -82,10 +83,12 @@ def _read_cache(path):
 
 def verdict(version):
     """``{"verdict": "pass" | "fail", "reason", "seconds", "at"}`` for this release, or None (not tested yet)."""
-    return _read_cache(cache_path()).get(verdict_key(version))
+    key = verdict_key(version)
+    return _state.verdicts.get(key) or _read_cache(cache_path()).get(key)
 
 
 def _write(version, record):
+    _state.verdicts[verdict_key(version)] = record
     path = cache_path()
     if path is None:
         return

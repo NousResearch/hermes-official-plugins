@@ -44,6 +44,7 @@ def cache(tmp_path, monkeypatch):
     path = tmp_path / 'hermes' / 'cache' / 'session-selftest.json'
     monkeypatch.setattr(selftest, 'cache_path', lambda: path)
     monkeypatch.setattr(selftest._state, 'logged', set())
+    monkeypatch.setattr(selftest._state, 'verdicts', {})
     return path
 
 
@@ -328,3 +329,18 @@ def test_self_test_mode_runs_per_call_until_the_real_binary_passes_then_keeps(mo
             c.close()
             server.shutdown()
             server.server_close()
+
+
+def test_a_verdict_that_cannot_be_written_is_kept_for_this_process(cache, monkeypatch):
+    """No cache file (no Hermes home, a read-only or full disk): the verdict still holds here, and the release is not
+    tested again on every call."""
+    monkeypatch.setattr(selftest, 'cache_path', lambda: None)
+    runs = []
+    monkeypatch.setattr(selftest, 'run_child', lambda command, version: (runs.append(version), (True, 'fixture', 0.1))[1])
+    for _ in range(3):
+        selftest.request(['claude'], UNLISTED)
+        deadline = time.monotonic() + 5
+        while selftest._state.running and time.monotonic() < deadline:
+            time.sleep(.01)
+    assert runs == [UNLISTED] and selftest.verdict(UNLISTED)['verdict'] == 'pass'
+

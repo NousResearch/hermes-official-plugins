@@ -2,7 +2,7 @@
 
 ``http.server.HTTPServer.server_bind`` looks up the bound address's name (``socket.getfqdn``) only to fill
 ``server_name``, which the relay never reads. Every model call starts a relay, so on a host whose resolver stalls on
-127.0.0.1 every call waited out that lookup first (35 s on one macOS host).
+127.0.0.1 the first call of each process waited out that lookup (35 s on one macOS host).
 """
 import socket
 import sys

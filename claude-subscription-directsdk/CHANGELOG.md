@@ -8,8 +8,10 @@
   Code release `session_versions` does not name. `honor` runs it per-call, as before. `self-test` tests that binary
   first, offline and in the background (a loopback upstream, a throwaway home, no login; one Hermes-shaped
   conversation per-call and kept, every request compared byte for byte), keeps processes on it once it passes, and
-  keeps the verdict per plugin version, release and platform; until then, and on a fail, per-call with the reason
-  logged. `force` keeps processes on any release with one warning. Each kept step is still checked before upstream.
+  keeps the verdict per binary, plugin version and platform; until then, and on a fail (twice), per-call with the
+  reason logged. On Linux the test runs in network and pid namespaces of its own where they are allowed. `force`
+  keeps processes on any release with one warning. On a release not on the list a kept process's first request is
+  held to per-call's own build too, and each kept step is still checked before upstream.
 - Session mode (`session_mode`, default on; `max_sessions`, default 4): one Claude Code process per Hermes agent, kept
   alive between model calls. Hermes' tools are an SDK MCP server inside the plugin, so Claude Code never runs one, and
   a tool round no longer pays a process start and a history replay (0.5 to 1.0 s offline, growing with history; 0.03 s

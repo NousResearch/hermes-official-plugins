@@ -174,24 +174,35 @@ binary runs per-call; no extra process is started to ask.
 
 - `honor` (the default): every call runs per-call, as above.
 - `self-test`: the plugin tests that binary itself before it keeps a process on it. In the background, one test at a
-  time, it runs one Hermes-shaped conversation twice, per-call and kept, against a loopback upstream that answers the
-  same way every time: several tool rounds, two calls in one step, error results, a whitespace-only and a large
-  result, a `/steer` after three of them, a reply that leads with a whitespace-only block, then a compacted history
-  with an empty block and a cache mark and a new turn. Every kept request must equal per-call's, byte for byte, on a
-  process kept across the steps. The test runs in a child Python process with a throwaway home and config directory
-  and a placeholder API key; anything that is not loopback goes to a proxy that is not there, so no login is read and
-  nothing leaves the machine. It is bounded in time (240 s) and memory, and it ends with everything it started. About
-  5 s on the Linux test box. Until it has a verdict, calls run per-call; never does a call wait for it. Pass: session
-  mode keeps processes on that release. Fail, a timeout, or a test that cannot run: per-call, with the reason in the
-  log. The verdict is kept under Hermes' home (`cache/claude-subscription-directsdk-experimental/session-selftest.json`)
-  per plugin version, Claude Code version and platform, so a release is tested once; delete the file to test again.
+  time on the machine, it runs one Hermes-shaped conversation twice, per-call and kept, against a loopback upstream
+  that answers the same way every time: several tool rounds, two calls in one step, error results, a
+  whitespace-only and a large result, a `/steer` after three of them, a reply that leads with a whitespace-only
+  block, then a compacted history with an empty block and a cache mark and a new turn. Every kept request must equal
+  per-call's, byte for byte, on a process kept across the steps, and the binary must report the version it is
+  tested as. About 5 s per release on the Linux test box. Until it has a verdict, calls run per-call; no call waits
+  for it. Pass: session mode keeps processes on that binary. Fail (twice: one failing run is tried again), a timeout
+  or a test that cannot run: per-call, with the reason in the log. The verdict belongs to that binary's files (an
+  update in place, another install or a wrapper is tested anew), the plugin version and the platform, and is kept
+  under Hermes' home (`cache/claude-subscription-directsdk-experimental/session-selftest.json`); delete the file to
+  test again.
 - `force`: keep processes on any release, with one warning in the log.
 
+How the test is kept away from your login and the network: it runs in a child Python process with a throwaway home,
+Claude config directory and Hermes home, a placeholder API key, and every plugin setting at its default (no profile
+or managed Hermes setting reaches it). On Linux, where unprivileged user namespaces are allowed, it runs in network
+and pid namespaces of its own: loopback is its only network, and everything in it ends with it. Elsewhere (macOS,
+Windows, a Linux that refuses namespaces) Claude Code's traffic is pointed at loopback by its settings and proxy
+variables only; a binary that ignored them could reach the network, holding no login. It is bounded in time (240 s)
+and memory, it ends when Hermes does, and it ends with everything it started (with namespaces; elsewhere, everything
+it saw start).
+
 A pass shows those shapes, on this machine, for this binary; it does not stand in for the list, which names the
-releases the whole session suite passed on. Under `self-test` and `force` each kept step is still checked before
-upstream, as on a listed release, so a release that frames a request differently costs a restart into per-call, not
-different bytes. Each of these says so once in the log (`hermes logs`), never per call: the release and the mode, a
-self-test's pass or its failure with the reason, a value of the setting that is none of the three (taken as `honor`).
+releases the whole session suite passed on. On a release not on the list (`self-test` or `force`) each kept
+process's first request is also held to per-call's own build, as its first resumed one always is, and every kept
+step is still checked before upstream, so a release that frames a request differently costs a restart into
+per-call, not different bytes. Each of these says so once in the log (`hermes logs`), never per call: the release
+and the mode, a self-test's pass or its failure with the reason, a value of the setting that is none of the three
+(taken as `honor`).
 
 ```sh
 hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.session_mode false

@@ -328,6 +328,8 @@ def run(binary, rounds, park, repeats, out=None, steer_at=()):
     carry = directsdk.steer_tail
     for repeat in range(repeats):
         with tempfile.TemporaryDirectory(prefix='directsdk-bench-') as home:
+            # Claude Code's identity, written up front: it is on the wire, and a fresh directory can make up one per process.
+            Path(home, '.claude.json').write_text(json.dumps({'userID': 'ab' * 32}), encoding='utf-8')
             bodies = {}
             for mode, session in modes:
                 server = ThreadingHTTPServer(('127.0.0.1', 0), Upstream)

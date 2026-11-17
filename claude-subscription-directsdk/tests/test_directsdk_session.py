@@ -81,10 +81,21 @@ def upstream():
     server.server_close()
 
 
+FIXTURE_USER_ID = 'ab' * 32
+
+
+def seed_identity(path):
+    """Write the config directory's ``userID``: Claude Code puts it on the wire (``metadata.user_id.device_id``). In a
+    fresh directory each process makes up its own until one write of it lands, and on Windows two processes starting
+    at once (a kept native and the per-call build that proves it) each kept their own, so per-call and kept differed."""
+    Path(path, '.claude.json').write_text(json.dumps({'userID': FIXTURE_USER_ID}), encoding='utf-8')
+
+
 @pytest.fixture
 def home():
-    # One HOME for both runs: native derives its device id from it, and that id is on the wire.
+    # One HOME and config directory for both runs, with its identity written up front: that id is on the wire.
     with tempfile.TemporaryDirectory(prefix='directsdk-session-') as path:
+        seed_identity(path)
         yield path
 
 

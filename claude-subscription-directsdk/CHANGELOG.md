@@ -83,8 +83,8 @@
   another MCP server, for a tool Hermes did not offer or without a JSON-RPC id is never parked. `max_sessions` bounds
   the Hermes process across profiles (one registry for every copy of the plugin). Cancel reads a request's relay once,
   under the hand-over's lock. An idle timer that fired as a step took its process over cannot end its next park. A
-  process that exits between the resume check and the next write is replayed; a write that reaches the step's
-  deadline raises the timeout and is not replayed.
+  process that exits between the resume check and the next write is replayed; a write, or the per-call request a
+  first resumed step is checked against, that reaches the step's deadline raises the timeout and is not replayed.
 - Session mode fails closed (maintainer review of #361, items 1 to 4). A kept process's first resumed request goes
   upstream only if it equals the request a per-call step builds for the same history (a one-shot builds it into a
   relay that sends nothing upstream); before, only its opening turn was compared, so a tail native built differently

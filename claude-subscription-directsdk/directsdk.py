@@ -46,6 +46,10 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Read at import and written next to each request's tools.json: Hermes imports this module from a frozen copy in
+# the temp directory, and a temp cleaner can remove that copy while the process runs (hermes-agent#156493).
+INERT_MCP = Path(__file__).with_name('inert_mcp.py').read_text(encoding='utf-8')
+
 
 # Hermes picks retry vs fallback from an error's status_code (main loop and auxiliary ladder alike).
 class ClaudeCodeMissing(RuntimeError):
@@ -921,7 +925,8 @@ class Client:
                 mcp = {'mcpServers': {}}
                 if manifest:
                     (root / 'tools.json').write_text(json.dumps(manifest), encoding='utf-8')
-                    mcp = {'mcpServers': {'hermes': {'command': sys.executable, 'args': [str(Path(__file__).with_name('inert_mcp.py')), str(root / 'tools.json')]}}}
+                    (root / 'inert_mcp.py').write_text(INERT_MCP, encoding='utf-8')
+                    mcp = {'mcpServers': {'hermes': {'command': sys.executable, 'args': [str(root / 'inert_mcp.py'), str(root / 'tools.json')]}}}
                 env = _with_login_identity(_with_windows_essentials(dict(self.env if self.env is not None else os.environ)))
                 if self.env is None:
                     # Explicit env= is a controlled fixture and keeps its login; only Hermes' own env is filtered.

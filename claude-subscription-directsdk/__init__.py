@@ -12,10 +12,15 @@ try:
     from .model_catalog import ALIASES, MODEL_METADATA, MODEL_CAPABILITIES, PICKER_ROUTES, native_model
     from .directsdk_setup import INSTALL_HINT, _resolve
     from .extra_usage import usage_percent as _percent
+    # Imported with the package, not inside create_client: Hermes imports a provider plugin from a frozen copy
+    # in the temp directory, and a temp cleaner can remove that copy while the process runs (hermes-agent#156493). A
+    # first-use import would then fail.
+    from .directsdk import Client
 except ImportError:
     from model_catalog import ALIASES, MODEL_METADATA, MODEL_CAPABILITIES, PICKER_ROUTES, native_model
     from directsdk_setup import INSTALL_HINT, _resolve
     from extra_usage import usage_percent as _percent
+    from directsdk import Client
 
 logger = logging.getLogger(__name__)
 
@@ -145,10 +150,6 @@ class ClaudeOAuthDirectSDKProfile(ProviderProfile):
                           label=format_cost_label(amount), notes=('native API list-price equivalent; not subscription invoice; extra usage unknown',))
 
     def create_client(self, **client_kwargs):
-        try:
-            from .directsdk import Client
-        except ImportError:
-            from directsdk import Client
         return Client(**client_kwargs)
 
     def fetch_models(self, **kwargs):

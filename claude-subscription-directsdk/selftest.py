@@ -534,8 +534,13 @@ def _guard(limit):
     threading.Thread(target=stdin_closed, name="directsdk-selftest-parent", daemon=True).start()
 
     def watch():
-        gone.wait(limit)
-        for proc in _descendants(os.getpid()):
+        # Every process seen under the child, not only those still under it when it ends: one a Claude Code process
+        # started and left (it is init's now) still goes, as on the Hermes side; with namespaces nothing escapes.
+        seen, ends = {}, time.monotonic() + limit
+        while not gone.wait(0.25) and time.monotonic() < ends:
+            seen.update((p.pid, p) for p in _descendants(os.getpid()))
+        seen.update((p.pid, p) for p in _descendants(os.getpid()))
+        for proc in seen.values():
             try:
                 if not proc.is_running():
                     continue

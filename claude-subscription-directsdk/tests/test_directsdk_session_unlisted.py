@@ -590,3 +590,19 @@ def test_a_binary_replaced_during_its_test_gets_no_verdict(tmp_path, monkeypatch
     while selftest._state.running and time.monotonic() < deadline:
         time.sleep(.01)
     assert selftest.verdict(UNLISTED, [str(binary)]) is None
+
+
+@posix
+def test_a_process_left_by_claude_code_goes_when_hermes_is_killed_without_namespaces(tmp_path, monkeypatch):
+    """No namespaces: a stand-in starts a sleeper in a session of its own and leaves it (its subshell exits, so it is
+    init's and in no group the child kills), then Hermes is killed. The child, which saw it start, ends it too."""
+    import subprocess
+    seconds = 6041
+    started = tmp_path / 'started'
+    script = stand_in(tmp_path, f'(setsid sleep {seconds} & touch {started}; sleep 1)\nexec sleep 6042\n')
+    code = HERMES.format(plugin=str(Path(selftest.__file__).parent), hermes=os.environ.get('HERMES_AGENT_REPO', ''),
+                         script=script, started=str(started), end='time.sleep(2); import os, signal; os.kill(os.getpid(), signal.SIGKILL)')
+    code = code.replace('import selftest\n', 'import selftest\nselftest._namespaces = lambda: None\n')
+    subprocess.run([sys.executable, '-c', code], timeout=120)
+    assert started.exists(), 'the stand-in never ran: the test proves nothing'
+    assert not gone(seconds) and not gone(6042)

@@ -153,6 +153,7 @@ hermes config set $S.upstream_ca_file /etc/ssl/corp-root.pem
 | `session_min_rounds` | `8` | A conversation starts a kept process only once it has had this many tool rounds (sets of tool results); before that every call runs per-call. Short chats and most subagents then hold none. A process kept already meets every later step, and ends if the history no longer fits it (a compaction). `0`: keep from the first step. |
 | `max_sessions` | `4` | At most this many kept processes in one Hermes process. At the cap, the one that has waited longest for its user gives its place to the step asking now; if every one is serving a step or holds a parked tool call, that step runs per-call. |
 | `session_idle_seconds` | `3600` | A kept process that waits this long for its user ends. A parked tool call does not count as waiting: the process stays while Hermes runs the tool, and ends at the next step if that step cannot continue it, or when its client closes. The default is the prompt cache's lifetime. |
+| `session_unlisted_versions` | `honor` | On a Claude Code release the tested list does not name: `honor` runs every call per-call; `self-test` keeps processes on it once the plugin's own offline test of that binary has passed; `force` keeps processes on it, with one warning. See below. |
 
 What it costs: memory between calls. During a call both modes hold one Claude Code process, about 200 to 250 MB. A kept
 process holds it between calls too, and it grows with the history it carries: 245 to 290 MB at round 200 on Linux, 284
@@ -169,9 +170,33 @@ one the gate allowed is not kept (restart reason `version` for both). The versio
 init event (`claude_code_version`), kept per binary until the binary changes, so the first step on a new or updated
 binary runs per-call; no extra process is started to ask.
 
+`session_unlisted_versions` decides what happens on a release the list does not name:
+
+- `honor` (the default): every call runs per-call, as above.
+- `self-test`: the plugin tests that binary itself before it keeps a process on it. In the background, one test at a
+  time, it runs one Hermes-shaped conversation twice, per-call and kept, against a loopback upstream that answers the
+  same way every time: several tool rounds, two calls in one step, error results, a whitespace-only and a large
+  result, a `/steer` after three of them, a reply that leads with a whitespace-only block, then a compacted history
+  with an empty block and a cache mark and a new turn. Every kept request must equal per-call's, byte for byte, on a
+  process kept across the steps. The test runs in a child Python process with a throwaway home and config directory
+  and a placeholder API key; anything that is not loopback goes to a proxy that is not there, so no login is read and
+  nothing leaves the machine. It is bounded in time (240 s) and memory, and it ends with everything it started. About
+  5 s on the Linux test box. Until it has a verdict, calls run per-call; never does a call wait for it. Pass: session
+  mode keeps processes on that release. Fail, a timeout, or a test that cannot run: per-call, with the reason in the
+  log. The verdict is kept under Hermes' home (`cache/claude-subscription-directsdk-experimental/session-selftest.json`)
+  per plugin version, Claude Code version and platform, so a release is tested once; delete the file to test again.
+- `force`: keep processes on any release, with one warning in the log.
+
+A pass shows those shapes, on this machine, for this binary; it does not stand in for the list, which names the
+releases the whole session suite passed on. Under `self-test` and `force` each kept step is still checked before
+upstream, as on a listed release, so a release that frames a request differently costs a restart into per-call, not
+different bytes. Each of these says so once in the log (`hermes logs`), never per call: the release and the mode, a
+self-test's pass or its failure with the reason, a value of the setting that is none of the three (taken as `honor`).
+
 ```sh
 hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.session_mode false
 hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.session_idle_seconds 600
+hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.session_unlisted_versions self-test
 ```
 
 ## Transport

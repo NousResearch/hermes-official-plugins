@@ -372,10 +372,16 @@ def _test(command, version):
             return  # another Hermes process is testing; its verdict lands in the shared cache
         if verdict(version, command) is not None:
             return
+        tested = _binary_id(command)
         try:
             passed, reason, seconds = _run_once_more_on_fail(command, version)
         except Exception as error:  # a test that cannot run is a fail
             passed, reason, seconds = False, f"the test could not run: {error}", 0.0
+        if _binary_id(command) != tested:
+            # The binary was replaced while it was tested: the verdict is not this one's. The next call tests it.
+            _logger.info("claude-subscription-directsdk: Claude Code %s changed during its self-test; testing it again",
+                         version)
+            return
         record = {"verdict": "pass" if passed else "fail", "reason": reason, "seconds": seconds,
                   "at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
         _write(version, command, record)

@@ -572,3 +572,21 @@ exec sleep 6031
     assert outcome.exists(), 'the stand-in never ran: the test proves nothing'
     assert outcome.read_text().startswith('refused'), outcome.read_text()
     assert not passed
+
+
+def test_a_binary_replaced_during_its_test_gets_no_verdict(tmp_path, monkeypatch):
+    """The binary is updated in place while it is tested: the result was the old one's, so neither gets a verdict,
+    and the next call tests the new one."""
+    binary = tmp_path / 'claude'
+    binary.write_text('old')
+
+    def run(command, version):
+        time.sleep(.01)
+        binary.write_text('new and longer')
+        return True, 'fine', 1.0
+    monkeypatch.setattr(selftest, 'run_child', run)
+    selftest.request([str(binary)], UNLISTED)
+    deadline = time.monotonic() + 5
+    while selftest._state.running and time.monotonic() < deadline:
+        time.sleep(.01)
+    assert selftest.verdict(UNLISTED, [str(binary)]) is None

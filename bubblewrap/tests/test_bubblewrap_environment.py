@@ -1829,9 +1829,11 @@ class TestDeletedCwdRecovery:
             assert env.cwd == str(sub) and not sub.exists()
             with caplog.at_level(logging.WARNING):
                 first = env.execute("pwd")
-            # The wrapper still cd's to the gone directory on this spawn, as
-            # for the local backend; the tracked cwd is recovered from here on.
-            assert first["returncode"] == 126, first["output"]
+            # As for the local backend, this spawn already runs in the nearest
+            # usable ancestor and reports the move; the tracked cwd follows.
+            assert first["returncode"] == 0, first["output"]
+            assert first["output"].strip() == str(work)
+            assert first["cwd_fallback"] == {"requested": str(sub), "used": str(work)}
             assert "not visible inside the sandbox" not in first["output"]
             assert "bwrap:" not in first["output"]
             assert env.cwd == str(work)

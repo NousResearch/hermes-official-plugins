@@ -651,6 +651,10 @@ def canonical_history(payload, frames):
                 # A kept native replays its opening turn with the context per-call's _frame_first dropped from it.
                 changed = drop_prepended_context(sent.get('content'), frame['message']['content']) or changed
                 continue
+            if opens_turn and not steer:
+                # An earlier user turn of text: native holds it as it read it, as a replay builds it. Rewriting it to
+                # Hermes' frame put back what native drops (an empty block), so no later request extended the first.
+                continue
             want = copy.deepcopy(frame['message']['content'])
             got = sent.get('content')
             mark = next((b['cache_control'] for b in got if isinstance(b, dict) and 'cache_control' in b), None) if isinstance(got, list) else None

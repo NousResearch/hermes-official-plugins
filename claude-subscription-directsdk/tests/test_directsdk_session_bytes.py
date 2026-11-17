@@ -13,6 +13,7 @@ import threading
 
 import pytest
 
+import directsdk
 from test_directsdk_session import MODEL, TOOLS, USAGE, client, home  # noqa: F401  (fixtures)
 from test_directsdk_session_steer import STEER, upstream  # noqa: F401  (fixtures)
 
@@ -96,10 +97,11 @@ def results(result, steer):
 
 @pytest.mark.parametrize('result', [
     pytest.param({'content': ' \n\t'}, id='whitespace'), pytest.param({'content': 'x' * 600_000}, id='large')])
-def test_a_steered_result_the_relay_cannot_restore_is_refused_and_replayed(home, upstream, monkeypatch, result):
+def test_a_steered_result_claude_code_reworded_goes_up_as_per_calls_bytes(home, upstream, monkeypatch, result):
     """Claude Code replaces a whitespace-only result with its own "completed with no output" text, and a very large
     one with a preview. With a steer after it, the relay found the frame did not match Hermes' and still forwarded
-    native's version. Now a resumed request it cannot restore is refused before upstream and replayed."""
+    native's version. Now the steered frame is rewritten to Hermes' bytes (and one the relay still cannot restore is
+    refused before upstream)."""
     expected, actual, _ = both(home, upstream, monkeypatch, results(result, steer=True))
     assert actual == expected, first_difference(actual[2], expected[2])
 
@@ -177,22 +179,41 @@ def test_native_s_record_of_a_later_reply_goes_up_only_as_hermes_frame(home, rep
     assert actual == expected, first_difference(actual[-1], expected[-1])
 
 
-# An earlier user turn with a mark of its own.
+# An unusual earlier user turn, on every later step.
 
-def test_an_earlier_marked_user_turn_keeps_only_its_own_mark(home, upstream, monkeypatch):
-    """A second user turn holds two text blocks, the first marked. On later kept steps the relay rewrote that turn to
-    Hermes' frame and also copied the mark onto its last block: one mark more than per-call sends."""
+@pytest.fixture
+def turns():
+    """Five silent tool rounds per user turn, then thinking and text (``test_directsdk_session``'s upstream)."""
+    from test_directsdk_session import Upstream as Turns
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Turns)
+    server.bodies, server.slow = [], 0
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+@pytest.mark.parametrize('shape', FIRST)
+def test_an_unusual_earlier_user_turn_keeps_its_process_and_per_calls_bytes(home, turns, monkeypatch, caplog, shape):
+    """The second user turn holds an unusual content list, and its five tool rounds run on the kept process. On each
+    of them that turn is an earlier row. Before, the relay rewrote it to Hermes' frame: it put back the empty block
+    native drops, so no request extended the one before and every step was refused and relaunched; or it copied a
+    mark next to Hermes' own, one more than per-call sends."""
     def script(c):
-        messages = [{'role': 'system', 'content': 'You are a fixture agent.'}, {'role': 'user', 'content': 'go'}]
-        for turn in range(2):
-            if turn:
-                messages.append({'role': 'user', 'content': [{'type': 'text', 'text': 'a', 'cache_control': {'type': 'ephemeral'}},
-                                                             {'type': 'text', 'text': 'b'}]})
+        messages, pids = [{'role': 'system', 'content': 'You are a fixture agent.'}, {'role': 'user', 'content': 'go'}], []
+        for turn in ('go', FIRST[shape]):
+            if turn is not messages[1]['content']:
+                messages.append({'role': 'user', 'content': turn})
             while True:
                 reply = c.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000).choices[0].message.model_dump()
+                pids.append(c._session.process.pid if c._session else None)
                 messages.append(keep(reply))
                 if not reply.get('tool_calls'):
                     break
                 messages.append({'role': 'tool', 'tool_call_id': reply['tool_calls'][0]['id'], 'content': 'ordinary result'})
-    expected, actual, _ = both(home, upstream, monkeypatch, script)
+        return pids
+    with caplog.at_level('DEBUG', logger=directsdk.logger.name):
+        expected, actual, pids = both(home, turns, monkeypatch, script)
     assert len(actual) == len(expected) and actual == expected, first_difference(actual[-1], expected[-1])
+    assert len(set(pids)) == 1 and pids[0] is not None, pids
+    assert not [r for r in caplog.records if 'session restart' in r.getMessage()]

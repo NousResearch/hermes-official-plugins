@@ -428,11 +428,13 @@ class Request:
 
     def cancel(self):
         self.cancelled.set()
-        if self.admission is not None:
-            self.admission.abort()
+        # Read once, under the lock the hand-over to a kept session takes: it may clear the relay meanwhile.
         with self.lock:
+            admission = self.admission
             if self.process is not None:
                 kill_process_tree(self.process)
+        if admission is not None:
+            admission.abort()
 
     def spawn(self, command, *, stdin=subprocess.DEVNULL, **kwargs):
         with self.lock:
@@ -1216,9 +1218,11 @@ class Client:
         """Fast cross-thread cancellation: signal owned groups; never close caller-thread FDs."""
         with self._lock:
             requests = tuple(self._requests)
-        for request in requests:
-            request.cancel()
-        self._end_session()
+        try:
+            for request in requests:
+                request.cancel()
+        finally:
+            self._end_session()  # the kept process ends however the requests' cancels went
 
     def close(self):
         with self._lock:

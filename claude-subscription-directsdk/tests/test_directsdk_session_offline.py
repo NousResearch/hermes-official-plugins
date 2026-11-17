@@ -93,3 +93,33 @@ def test_a_launch_that_fails_before_its_relay_gives_its_place_back(first_step, m
     finally:
         with directsdk._live_lock:
             directsdk._live.clear()
+
+
+def test_cancel_reads_the_relay_once_while_the_hand_over_may_clear_it():
+    """The hand-over to a kept session clears the request's relay under the request's lock. Cancel read it twice, the
+    second time after the hand-over had cleared it, and raised before the client ended its session."""
+    reads, aborted = [], []
+
+    class Handing(directsdk.Request):
+        @property
+        def admission(self):
+            reads.append(True)
+            return SimpleNamespace(abort=lambda: aborted.append(True)) if len(reads) == 1 else None
+
+        @admission.setter
+        def admission(self, value):
+            pass
+    request = Handing(SimpleNamespace())
+    request.cancel()
+    assert request.cancelled.is_set() and aborted == [True]
+
+
+def test_client_cancel_ends_the_kept_session_even_when_a_request_cancel_fails(monkeypatch):
+    c = directsdk.Client(command=['claude'], env={})
+    ended = []
+    monkeypatch.setattr(c, '_end_session', lambda *a, **k: ended.append(True))
+    request = c._register()
+    monkeypatch.setattr(request, 'cancel', lambda: (_ for _ in ()).throw(RuntimeError('boom')))
+    with pytest.raises(RuntimeError, match='boom'):
+        c.cancel()
+    assert ended == [True]

@@ -187,10 +187,11 @@ keeps one Claude Code process alive between model calls:
 - What goes upstream is meant to be byte for byte what a fresh process would send for the same history, so prompt
   caching and cost are the same either way; where the relay cannot make it so, it refuses the request before it
   reaches Anthropic, and the step is replayed into a new process. A new process's first request is the replay itself
-  and goes up as built. On later requests the relay rewrites each replayed tool result to Hermes' own bytes (key order
-  included), requires Claude Code's record of each reply to be Hermes' frame byte for byte, and refuses any request
-  whose rows no longer line up with Hermes' history, whose newest frame it cannot restore to Hermes' (a whitespace-only
-  or very large result Claude Code reworded), or that does not extend the previous one. A kept process's first resumed request is the first with
+  and goes up as built. On later requests the relay rewrites each frame of tool results to Hermes' own bytes (key
+  order included, a steer after them too), leaves earlier user turns of text as the process holds them, requires
+  Claude Code's record of each reply to be Hermes' frame byte for byte, and refuses any request whose rows no longer
+  line up with Hermes' history, whose newest frame it cannot restore to Hermes', or that does not extend the previous
+  one. A kept process's first resumed request is the first with
   rows it built itself past its launch's replay, so no earlier request vouches for them: it goes upstream only if it
   equals the request a per-call step builds for the same history. A one-shot builds that request into a relay that
   sends nothing upstream, so each kept process pays one per-call launch once, at that step (two Claude Code processes

@@ -379,7 +379,10 @@ class TestExecuteCodeDispatch:
             result = cet.execute_code("print(1)", task_id="dispatch", enabled_tools=["terminal"])
 
         assert result == sentinel
-        remote.assert_called_once_with("print(1)", "dispatch", ["terminal"], reset=False)
+        # Only the dispatch is pinned; core may forward more context (session/turn ids) as kwargs.
+        remote.assert_called_once()
+        assert remote.call_args.args == ("print(1)", "dispatch", ["terminal"])
+        assert remote.call_args.kwargs["reset"] is False
         local_tmp.mkdtemp.assert_not_called()
 
 

@@ -219,3 +219,39 @@ def test_a_kept_process_ends_after_the_profiles_idle_limit(home, upstream, monke
         assert c._session is None and not directsdk._live
     finally:
         c.close()
+
+
+def test_an_idle_timer_that_fired_as_a_step_took_the_process_cannot_end_its_next_park(home, upstream, monkeypatch):
+    """The idle limit passes and the timer's callback starts, but a new step takes the process over before the
+    callback ends it, and parks a tool call. The late callback belongs to the earlier idle period. Before, it found
+    the same process as the client's session and killed the parked call's process."""
+    entered, release = threading.Event(), threading.Event()
+    Timer = threading.Timer
+
+    class Late(Timer):
+        def __init__(self, interval, function, args=None, kwargs=None):
+            def late(*a, **k):
+                entered.set()
+                release.wait(15)
+                function(*a, **k)
+            super().__init__(interval, late, args, kwargs)
+    monkeypatch.setattr(directsdk.threading, 'Timer', Late)
+    monkeypatch.setattr(directsdk, 'session_idle_seconds', lambda _: .05)
+    c = client(home, upstream, monkeypatch, session=True)
+    old = None
+    try:
+        history = converse(c, turns=('go',))
+        native = c._session
+        old = native.idle
+        assert entered.wait(5), 'the idle timer never fired'
+        history.append({'role': 'user', 'content': 'next turn'})
+        assert c.create(model=MODEL, messages=history, tools=TOOLS, max_tokens=1000).choices[0].message.tool_calls
+        assert c._session is native and native.idle is not old
+        release.set()
+        old.join(10)
+        assert c._session is native and native.process.returncode is None, 'the earlier idle period ended the new park'
+    finally:
+        release.set()
+        if old is not None:
+            old.join(15)
+        c.close()

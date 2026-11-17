@@ -699,6 +699,7 @@ class Native:
         self.doubt, self.asked, self.proven = None, set(), False
         # Kept and waiting for a new user turn since (monotonic), and its owner's way to end it: the cap's eviction order.
         self.idle_since = self.end = None
+        self.idle_gen = 0  # which idle period its timer belongs to
         self.cost, self.slot = 0, None
         self.process = request.spawn(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      text=True, encoding='utf-8', cwd=workdir, env=env)
@@ -1236,12 +1237,12 @@ class Client:
                 request.cancel()
         self._end_session()
 
-    def _end_session(self, native=None, idle=False):
+    def _end_session(self, native=None, idle=False, gen=None):
         """Kill the idle kept session (only ``native`` when given: the idle timer's own; with ``idle``, only while it
-        waits for its user, as eviction requires); whether it did."""
+        waits for its user, as eviction requires; with ``gen``, only in that idle period); whether it did."""
         with self._lock:
             if self._session is None or (native is not None and self._session is not native) or (
-                    idle and self._session.idle_since is None):
+                    idle and self._session.idle_since is None) or (gen is not None and self._session.idle_gen != gen):
                 return False
             native, self._session, self._kept['native'] = self._session, None, None
         native.kill()
@@ -1258,11 +1259,18 @@ class Client:
         # process, alive for the whole idle hour. Once the client is gone the timer ends the process itself.
         end = weakref.WeakMethod(self._end_session)
 
-        def ended():
-            """The idle hour passed, or native exited on its own (its reader calls this)."""
+        native.idle_gen = gen = native.idle_gen + 1
+
+        def ended(idle_gen=None):
+            """The idle hour passed (``idle_gen``: that idle period's), or native exited on its own (its reader calls
+            this). A timer that fired as a step took the process over must not end its next park or idle period."""
             method = end()
-            (method if method is not None else _end_orphan_native)(native)
-        native.idle, native.on_exit = threading.Timer(session_idle_seconds(SESSION_IDLE_S), ended), ended
+            if method is not None:
+                method(native, gen=idle_gen)
+            else:
+                _end_orphan_native(native)
+        native.idle = threading.Timer(session_idle_seconds(SESSION_IDLE_S), ended, kwargs={'idle_gen': gen})
+        native.on_exit = ended
         native.idle.daemon = True
         native.idle_since, native.end = (time.monotonic(), end) if expect == 'user' else (None, None)
         with self._lock, request.lock:

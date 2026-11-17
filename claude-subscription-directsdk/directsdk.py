@@ -806,6 +806,13 @@ class Native:
             self._write({'type': 'control_response', 'response': {'subtype': 'error', 'request_id': event.get('request_id'),
                                                                   'error': 'Hermes runs every tool'}})
             return
+        if self.tools is not None and (request.get('server_name') != 'hermes' or (
+                message.get('method') == 'tools/call' and ('id' not in message or (message.get('params') or {}).get('name')
+                                                           not in {t.get('name') for t in self.tools}))):
+            # Traffic for another server, a call that cannot be answered (no JSON-RPC id), or one for a tool Hermes
+            # did not offer: not the hermes server's, so never parked or answered.
+            self._doubt('control')
+            return
         if message.get('method') == 'tools/call':
             tool_id = ((message.get('params') or {}).get('_meta') or {}).get('claudecode/toolUseId')
             if not isinstance(tool_id, str):

@@ -258,3 +258,42 @@ def test_a_line_the_plugin_does_not_know_after_the_step_returned_ends_the_kept_p
     finally:
         returned.set()
         c.close()
+
+
+@pytest.mark.parametrize('fault', ['other_server', 'unknown_tool', 'missing_rpc_id'])
+def test_a_tool_call_that_is_not_the_hermes_servers_is_never_parked(home, upstream, monkeypatch, caplog, fault):
+    """The call carries an id the step did receive, but names another MCP server, a tool Hermes did not offer, or has
+    no JSON-RPC id to answer under. It is doubted (``control``) and never parked; the step's answer stands and the
+    next step runs on a new process. Before, it was parked; with no JSON-RPC id, the answer could never resolve it and
+    the next step waited out its timeout."""
+    changed, loads = [], json.loads
+
+    def corrupt(pipe):
+        for line in pipe:
+            event = loads(line)
+            request = event.get('request') or {} if isinstance(event, dict) else {}
+            message = request.get('message') or {}
+            if not changed and event.get('type') == 'control_request' and message.get('method') == 'tools/call':
+                if fault == 'other_server':
+                    request['server_name'] = 'some_other_server'
+                elif fault == 'unknown_tool':
+                    message['params']['name'] = 'tool_hermes_does_not_have'
+                else:
+                    del message['id']
+                changed.append(True)
+                line = json.dumps(event) + '\n'
+            yield line
+    filter_kept_stdout(monkeypatch, corrupt)
+    c = client(home, upstream, monkeypatch, session=True)
+    c.timeout = 10
+    try:
+        with caplog.at_level('DEBUG', logger=directsdk.logger.name):
+            messages = [{'role': 'user', 'content': 'go'}]
+            for _ in range(2):
+                reply = c.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000).choices[0].message.model_dump()
+                messages.append({k: v for k, v in reply.items() if k in ('role', 'content', 'tool_calls', 'reasoning_details') and v is not None})
+                messages += [{'role': 'tool', 'tool_call_id': t['id'], 'content': 'contents'} for t in reply['tool_calls']]
+        assert changed
+        assert restarts(caplog) == ['Claude session restart (control): replaying into a new process']
+    finally:
+        c.close()

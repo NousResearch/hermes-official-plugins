@@ -255,3 +255,28 @@ def test_an_idle_timer_that_fired_as_a_step_took_the_process_cannot_end_its_next
         if old is not None:
             old.join(15)
         c.close()
+
+
+def test_a_kept_process_that_exits_before_the_next_turn_is_written_is_replayed(home, upstream, monkeypatch, caplog):
+    """The kept process passes the resume check, then exits before the new user turn reaches its input. Nothing went
+    upstream, so the step replays on a new process (``exited``). Before, the write's broken pipe failed the call."""
+    c = client(home, upstream, monkeypatch, session=True)
+    try:
+        history = converse(c, turns=('go',))
+        native = c._session
+        history.append({'role': 'user', 'content': 'next turn'})
+        send = native.send
+
+        def exit_first(request, data, timeout):
+            directsdk.kill_process_tree(native.process)
+            native.reader.join(5)
+            return send(request, data, timeout)
+        monkeypatch.setattr(native, 'send', exit_first)
+        sent = len(upstream.bodies)
+        with caplog.at_level('DEBUG', logger=directsdk.logger.name):
+            c.create(model=MODEL, messages=history, tools=TOOLS, max_tokens=1000)
+        assert len(upstream.bodies) == sent + 1 and session_pids(c) and session_pids(c) != {native.process.pid}
+        assert [r.getMessage() for r in caplog.records if 'session restart' in r.getMessage()] == \
+            ['Claude session restart (exited): replaying into a new process']
+    finally:
+        c.close()

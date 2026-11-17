@@ -1497,14 +1497,21 @@ class Client:
                     native.admission.rearm(timeout, frames[-1]['message']['content'], frames, expected)
                     native.proven = True
                     native.admission.eager = session_id not in _BUFFER_TOOL_INPUT
-                    if how[0] == 'user':
-                        native.send(request, how[1], timeout)
-                    else:
-                        if how[0] == 'steer':
-                            # Native reads its stdin in order, so the steer is queued when the results arrive and goes
-                            # up with them in one request (as its own row; the relay puts it back where Hermes has it).
-                            native.send(request, how[2], timeout)
-                        native.deliver(how[1])
+                    try:
+                        if how[0] == 'user':
+                            native.send(request, how[1], timeout)
+                        else:
+                            if how[0] == 'steer':
+                                # Native reads its stdin in order, so the steer is queued when the results arrive and
+                                # goes up with them in one request (as its own row; the relay puts it back where Hermes
+                                # has it).
+                                native.send(request, how[2], timeout)
+                            native.deliver(how[1])
+                    except OSError:
+                        # It exited after the resume check, before this write: nothing went upstream. Replay instead.
+                        self._restart(native, 'exited')
+                        native = None
+                        continue
                 try:
                     if (yield from self._step(request, native, state, kwargs, hermes_names, session, session_id, resolved, env, frames, timeout)) != 'diverged':
                         break

@@ -123,15 +123,22 @@ def test_a_large_tool_result_arrives_in_full_on_the_same_process(home, upstream,
 
 @pytest.mark.skipif(os.name == 'nt', reason='POSIX SIGSTOP stands in for a native that stops reading')
 def test_a_tool_result_native_never_reads_times_out(home, upstream, monkeypatch):
-    """Native parks a call, then stops reading its stdin. The result does not fit the pipe, so its write waits; at
-    the request timeout the process must end and the step must raise the timeout error. Before, that write had no
-    bound and the step waited until someone cancelled it."""
+    """Native serves one resumed step (so the next step builds no per-call request first), parks a call, then stops
+    reading its stdin. The result does not fit the pipe, so its write waits; at the request timeout the process must
+    end and the step must raise the timeout error. Before, that write had no bound and the step waited until someone
+    cancelled it. The large write must have been entered: the test cannot pass on another timeout."""
+    import json
     kept = client(home, upstream, monkeypatch, session=True)
     messages = [{'role': 'system', 'content': 'You are a fixture agent.'}, {'role': 'user', 'content': 'go'}]
     first = step(kept, messages)
-    pid = next(iter(session_pids(kept)))
-    assert parked(kept._session), 'native did not park the call'
-    messages += large_results(first)
+    messages += results(first)
+    second = step(kept, messages)
+    native = kept._session
+    pid = native.process.pid
+    assert native.proven and parked(native), 'native did not serve a resumed step and park its next call'
+    messages += large_results(second)
+    entered, write = [], native._write
+    monkeypatch.setattr(native, '_write', lambda row: (entered.append(len(json.dumps(row))), write(row))[1])
     errors = []
 
     def deliver():
@@ -145,6 +152,7 @@ def test_a_tool_result_native_never_reads_times_out(home, upstream, monkeypatch)
         worker.start()
         worker.join(5)
         assert not worker.is_alive(), 'the result was still being written 5 s after a 0.2 s timeout'
+        assert any(n >= LARGE for n in entered), 'the large result write was never entered'
         assert errors == ['TimeoutError: Claude request timed out']
         assert not session_pids(kept) and not alive(pid)
         with directsdk._live_lock:

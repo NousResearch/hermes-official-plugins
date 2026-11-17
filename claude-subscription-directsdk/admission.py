@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import socket
+import socketserver
 import ssl
 import sys
 import threading
@@ -673,6 +674,13 @@ class _Server(HTTPServer):
         if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
             return
         super().handle_error(request, client_address)
+
+    def server_bind(self):
+        # HTTPServer.server_bind also asks DNS for the bound address's name (socket.getfqdn) only to fill
+        # server_name, which nothing here reads. Every call starts a relay, and on a host whose resolver stalls on
+        # 127.0.0.1 every call waited out that lookup (35 s on one macOS host).
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[0], self.server_address[1]
 
 
 class Admission:

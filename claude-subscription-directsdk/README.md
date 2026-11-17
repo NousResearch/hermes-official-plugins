@@ -179,7 +179,7 @@ binary runs per-call; no extra process is started to ask.
   whitespace-only and a large result, a `/steer` after three of them, a reply that leads with a whitespace-only
   block, then a compacted history with an empty block and a cache mark and a new turn. Every kept request must equal
   per-call's, byte for byte, on a process kept across the steps, and the binary must report the version it is
-  tested as. About 5 s per release on the Linux test box. Until it has a verdict, calls run per-call; no call waits
+  tested as. About 8 s per release on the Linux test box (7.6 to 8.4 s on each listed release). Until it has a verdict, calls run per-call; no call waits
   for it. Pass: session mode keeps processes on that binary. Fail (twice: one failing run is tried again), a timeout
   or a test that cannot run: per-call, with the reason in the log. The verdict belongs to that binary's files (an
   update in place, another install or a wrapper is tested anew), the plugin version and the platform, and is kept

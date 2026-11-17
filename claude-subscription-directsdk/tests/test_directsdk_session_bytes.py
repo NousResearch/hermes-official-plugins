@@ -104,6 +104,17 @@ def test_a_steered_result_the_relay_cannot_restore_is_refused_and_replayed(home,
     assert actual == expected, first_difference(actual[2], expected[2])
 
 
+@pytest.mark.parametrize('result, steer', [
+    pytest.param({'content': 'oops', 'is_error': True}, False, id='error'),
+    pytest.param({'content': 'oops', 'is_error': True}, True, id='error-steer'),
+    pytest.param({'content': '', 'is_error': True}, True, id='empty-error-steer')])
+def test_a_later_error_result_goes_up_with_per_calls_key_order(home, upstream, monkeypatch, result, steer):
+    """Native and Hermes hold an error result with the same keys in another order; equal as dicts, not as bytes.
+    The relay kept native's order. Now a result is compared, and rewritten, as bytes."""
+    expected, actual, _ = both(home, upstream, monkeypatch, results(result, steer))
+    assert actual == expected, first_difference(actual[2], expected[2])
+
+
 # A later reply.
 
 def tool(n):

@@ -626,6 +626,14 @@ def canonical_history(payload, frames):
                     sent['content'].append(dict(steer, **({} if folded is True else {'cache_control': folded})))
                 elif _plain(sent['content'][-1]) != steer:
                     raise HistoryMisaligned(f'row {k}: the steer is not where Hermes put it')
+                # The results before the steer go up as Hermes' bytes too, native's mark on the last block.
+                want = copy.deepcopy(frame['message']['content'])
+                marks = [b['cache_control'] for b in sent['content'] if isinstance(b, dict) and 'cache_control' in b]
+                if marks and not any(isinstance(b, dict) and 'cache_control' in b for b in want):
+                    want[-1]['cache_control'] = marks[-1]
+                if _bytes(sent['content']) != _bytes(want):
+                    messages[i] = {'role': 'user', 'content': want}
+                    changed = True
                 continue
             opens_turn = any(b.get('type') != 'tool_result' for b in frame['message']['content'])
             if frame['type'] != 'user':
@@ -648,7 +656,7 @@ def canonical_history(payload, frames):
                 mark = folded  # native's mark sat on the steer row folded in above
             if mark is not None:
                 want[-1].setdefault('cache_control', mark)
-            if got != want:
+            if _bytes(got) != _bytes(want):  # key order too: the claim is bytes
                 messages[i] = {'role': 'user', 'content': want}
                 changed = True
         if any(_steer_row(m) for m in messages):

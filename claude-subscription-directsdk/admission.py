@@ -997,19 +997,19 @@ class Handler(BaseHTTPRequestHandler):
             payload = self.rfile.read(int(self.headers['Content-Length']))
             if getattr(gate, 'one_shot', False):
                 payload = drop_message_breakpoints(payload)
-            if gate.frames is not None:
+            # A fresh native's first request is the replay itself, built as per-call builds it: it is not rewritten.
+            resumed = gate.frames is not None and gate.last_forwarded is not None
+            if resumed:
                 try:
                     payload = canonical_history(payload, gate.frames)
                 except HistoryMisaligned as misaligned:
-                    if gate.last_forwarded is not None:
-                        # Native's own history no longer lines up with Hermes' frames, so its replayed rows cannot be
-                        # rewritten to the bytes a fresh replay sends. Refuse before upstream, as a request that does
-                        # not extend the previous one is refused; the client replays the step into a new process. A
-                        # fresh native's first request is that replay itself, so it forwards as native built it.
-                        gate.diverged = True
-                        logging.getLogger(__name__).info('kept session history misaligned, replaying: %s', misaligned)
-                        self._refuse(b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_SESSION_DIVERGED"}}')
-                        return
+                    # Native's own history no longer lines up with Hermes' frames, so its replayed rows cannot be
+                    # rewritten to the bytes a fresh replay sends. Refuse before upstream, as a request that does
+                    # not extend the previous one is refused; the client replays the step into a new process.
+                    gate.diverged = True
+                    logging.getLogger(__name__).info('kept session history misaligned, replaying: %s', misaligned)
+                    self._refuse(b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_SESSION_DIVERGED"}}')
+                    return
             try:
                 payload = restore_queried_turn(payload, gate.queried)
             except QueriedTurnMismatch as exc:

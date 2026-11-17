@@ -35,7 +35,7 @@ try:
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, claude_version, drop_api_credentials, egress_env, max_concurrent, note_version,
         observe_rate_limit, version_key, reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_idle_seconds,
-        session_min_rounds, session_tested, Upstream)
+        session_min_rounds, session_tested, session_versions, Upstream)
 except ImportError:
     import concurrency
     from admission import steer_tail
@@ -45,7 +45,7 @@ except ImportError:
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, claude_version, drop_api_credentials, egress_env, max_concurrent, note_version,
         observe_rate_limit, version_key, reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_idle_seconds,
-        session_min_rounds, session_tested, Upstream)
+        session_min_rounds, session_tested, session_versions, Upstream)
 
 
 logger = logging.getLogger(__name__)
@@ -1502,6 +1502,14 @@ class Client:
                 if native is None:
                     # At the process cap with no kept process to evict, this step runs one-shot: the same bytes at the
                     # per-call cost.
+                    unproven_first = None
+                    if session and version not in session_versions():
+                        # A release not on the list (session_unlisted_versions force or self-test): the kept process's
+                        # first request is held to per-call's own build too, as its first resumed one always is, so no
+                        # request shape the self-test did not run reaches upstream unproven. None built: per-call.
+                        unproven_first = self._per_call_request(request, env, resolved, upstream, kwargs, body, manifest,
+                                                                system, frames, timeout, session_id)
+                        session = unproven_first is not None
                     reservation = _place(cap) if session else None
                     session = reservation is not None
                     try:
@@ -1512,6 +1520,8 @@ class Client:
                         with _live_lock:
                             _live.discard(reservation)
                     native.ident, native.version, native.slot = ident, version, slot
+                    if session and unproven_first is not None:
+                        native.admission.expected = unproven_first
                     try:
                         native.replay(request, frames, timeout)
                     except _Doubt as doubt:
@@ -1568,6 +1578,11 @@ class Client:
                     if native.admission.unversioned:
                         # Its own init never named the allowed version: this step runs per-call.
                         why, session = 'version', False
+                    elif native.admission.expected is not None and native.admission.last_forwarded is None and \
+                            native.version not in session_versions():
+                        # An unlisted release's new process did not send per-call's first request: another would not
+                        # either, so this step runs per-call.
+                        session = False
                 except _Doubt as doubt:
                     # Before its request went upstream: this step replays per-call bytes on a fresh one-shot.
                     why, session = doubt.why, False

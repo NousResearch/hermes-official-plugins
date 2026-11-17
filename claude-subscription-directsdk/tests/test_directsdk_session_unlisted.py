@@ -493,6 +493,48 @@ def test_a_cache_path_that_is_not_a_regular_file_holds_no_verdict_and_never_bloc
     assert out == [None]
 
 
+@needs_cli
+@posix
+def test_force_on_an_unlisted_release_holds_its_first_kept_request_to_per_calls(mode, monkeypatch, tmp_path, caplog):
+    """A release that is not listed sends, kept, one byte more in its system prompt (this stand-in, on any model the
+    self-test did not run). Its first kept request must not go upstream: it is held to per-call's own build, and the
+    step runs per-call. Before, only a kept process's first resumed request was held to that."""
+    from test_directsdk_session import MODEL, TOOLS, client
+    import test_directsdk_session as base
+    import tempfile
+    from http.server import ThreadingHTTPServer
+    script = stand_in(tmp_path, f'''for a in "$@"; do
+  case "$prev" in --system-prompt-file) prompt="$a";; esac
+  case "$a" in --allowedTools) kept=1;; esac
+  prev="$a"
+done
+[ -n "$kept" ] && [ -n "$prompt" ] && printf . >> "$prompt"
+exec "{CLAUDE}" "$@"
+''')
+    monkeypatch.setattr(base, 'CLAUDE', script)
+    monkeypatch.setattr(directsdk_setup, 'session_versions', lambda: frozenset())
+    monkeypatch.setattr(directsdk, 'session_versions', lambda: frozenset(), raising=False)
+    mode('force')
+    bodies = {}
+    with tempfile.TemporaryDirectory(prefix='directsdk-unlisted-') as home:  # one home for both runs, as elsewhere
+        for kept in (False, True):
+            server = ThreadingHTTPServer(('127.0.0.1', 0), base.Upstream)
+            server.bodies, server.slow = [], 0
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            c = client(home, server, monkeypatch, session=kept)
+            try:
+                with caplog.at_level('DEBUG'):
+                    c.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+            finally:
+                c.close()
+                server.shutdown()
+                server.server_close()
+            bodies[kept] = list(server.bodies)
+    import test_directsdk_session_bytes as b
+    assert bodies[True] == bodies[False], b.first_difference(bodies[True][0], bodies[False][0])
+    assert any('session restart (diverged)' in r.getMessage() for r in caplog.records)
+
+
 @posix
 def test_inside_its_namespaces_the_test_reaches_nothing_but_loopback(tmp_path):
     """A binary that ignores the proxy settings tries a listener on this machine's own non-loopback address. In the

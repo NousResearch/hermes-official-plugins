@@ -706,6 +706,7 @@ class Native:
         self.idle_since = self.end = None
         self.idle_gen = 0  # which idle period its timer belongs to
         self.serving = True  # serving a step, as opposed to kept between steps by its client
+        self.doubt_ended = False  # its doubt has been acted on (logged, the process ended): once only
         self.cost, self.slot = 0, None
         self.process = request.spawn(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      text=True, encoding='utf-8', cwd=workdir, env=env)
@@ -783,11 +784,19 @@ class Native:
         if self.doubt is None:
             self.doubt = why
             self.events.put(_Doubt(why))
-            if not self.serving:
+            if not self.serving and self.end_doubted():
                 # Kept between steps, nobody reads the queue until the next step: end it now. Its reader's exit hands
                 # the place and the relay back.
-                logger.debug('Claude session restart (%s): replaying into a new process', why)
                 self.kill()
+
+    def end_doubted(self):
+        """Claim acting on this native's doubt (log its reason); False when the reader or the hand-over already did."""
+        with self.lock:
+            if self.doubt_ended:
+                return False
+            self.doubt_ended = True
+        logger.debug('Claude session restart (%s): replaying into a new process', self.doubt)
+        return True
 
     def _expected(self):
         """The tool ids native may ask for now: the calls of the response this step received, else the parked ones."""
@@ -1313,9 +1322,8 @@ class Client:
             slot.release()
         if native.process.returncode is not None or native.doubt is not None:
             # It exited, or doubted, before it was the session: its reader found nothing to end.
-            if native.doubt is not None:
-                logger.debug('Claude session restart (%s): replaying into a new process', native.doubt)
-            ended()
+            if native.doubt is None or native.end_doubted():
+                ended()
         return True
 
     def _resume(self, ident, frames, version):
@@ -1844,7 +1852,7 @@ class Client:
         clean = (session and admission.used and not admission.denied and not native_error and not refused and not unparsed
                  and (routed if parked else final.get('subtype') == 'success' and not calls) and native.doubt is None)
         if session and native.doubt is not None:
-            logger.debug('Claude session restart (%s): replaying into a new process', native.doubt)
+            native.end_doubted()
         state['outcome'] = 'kept' if clean else 'handed_off' if fast else 'done'
         if fast:
             # The answer is complete at native's result: its exit is never waited for; the drain kills a native

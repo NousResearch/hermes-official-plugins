@@ -102,6 +102,11 @@ def _read_cache(path):
     if path is None:
         return {}
     try:
+        # Only a small regular file: a FIFO or a device there would block the call that reads it.
+        status = os.stat(path)
+        import stat as _stat
+        if not _stat.S_ISREG(status.st_mode) or status.st_size > 1_000_000:
+            return {}
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
@@ -216,6 +221,35 @@ def _kill_all(child, kill_process_tree, seen=()):
             pass
 
 
+def _namespaces():
+    """On Linux, the prefix that runs the child in user, network and pid namespaces of its own: loopback is its only
+    network, and every process in it ends with it. None where unprivileged namespaces are not allowed (macOS,
+    Windows, a locked-down Linux): there Claude Code's traffic is pointed at loopback by its settings only."""
+    if not sys.platform.startswith("linux"):
+        return None
+    import shutil
+    unshare = shutil.which("unshare", path=os.environ.get("PATH") or os.defpath)
+    if not unshare:
+        return None
+    prefix = [unshare, "--user", "--map-root-user", "--net", "--pid", "--fork", "--mount", "--mount-proc", "--kill-child"]
+    try:
+        ok = subprocess.run(prefix + ["true"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        ok = False
+    return prefix if ok else None
+
+
+def _loopback_up():
+    """Inside a fresh network namespace loopback starts down: bring it up (SIOCGIFFLAGS / SIOCSIFFLAGS, IFF_UP)."""
+    import fcntl
+    import socket
+    import struct
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        flags = struct.unpack("16sH", fcntl.ioctl(sock, 0x8913, struct.pack("16sH", b"lo", 0))[:18])[1]
+        fcntl.ioctl(sock, 0x8914, struct.pack("16sH", b"lo", flags | 1))
+
+
 def _process_tree():
     try:
         from .process_tree import kill_process_tree, own_process_group
@@ -245,8 +279,13 @@ def _run_child(command, version, time_limit, memory_limit, work, kill_process_tr
     started = time.monotonic()
     env = dict(_child_env(), TMPDIR=work, TEMP=work, TMP=work)
     try:
-        child = subprocess.Popen([sys.executable, "-I", str(Path(__file__).resolve()), json.dumps(spec)],
-                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        argv = [sys.executable, "-I", str(Path(__file__).resolve()), json.dumps(spec)]
+        jail = _namespaces()
+        if jail:
+            spec["loopback_up"] = True
+            argv = jail + [sys.executable, "-I", str(Path(__file__).resolve()), json.dumps(spec)]
+        # Hermes holds the child's stdin open and never writes it: when Hermes goes, it closes and the child ends.
+        child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                  env=env, cwd=work, **own_process_group())
     except OSError as error:
         return False, f"the test could not start: {error}", 0.0
@@ -267,6 +306,10 @@ def _run_child(command, version, time_limit, memory_limit, work, kill_process_tr
             time.sleep(0.25)
     finally:
         _kill_all(child, kill_process_tree, seen.values())
+        try:
+            child.stdin.close()
+        except OSError:
+            pass
         try:
             child.wait(timeout=10)
         except subprocess.TimeoutExpired:
@@ -472,13 +515,20 @@ def _conversation(client, pids):
 
 
 def _guard(limit):
-    """The child ends itself, with every process it started, when the Hermes process that started it is gone (it can
-    no longer watch or kill it) or when its own time is up."""
-    parent, ends = os.getppid(), time.monotonic() + limit
+    """The child ends itself, with every process it started, when the Hermes process that started it is gone (its end
+    of the child's stdin closes: it can no longer watch or kill it) or when its own time is up."""
+    gone = threading.Event()
+
+    def stdin_closed():
+        try:
+            sys.stdin.buffer.read()
+        except Exception:
+            return  # no pipe to watch (not started by run_child): the time limit alone ends it
+        gone.set()
+    threading.Thread(target=stdin_closed, name="directsdk-selftest-parent", daemon=True).start()
 
     def watch():
-        while os.getppid() == parent and time.monotonic() < ends:
-            time.sleep(0.5)
+        gone.wait(limit)
         for proc in _descendants(os.getpid()):
             try:
                 if not proc.is_running():
@@ -515,6 +565,8 @@ def judge(expected, actual, pids, reasons):
 
 def child(spec):
     _guard(float(spec.get("time_limit") or TIME_LIMIT_S) + 30)
+    if spec.get("loopback_up"):
+        _loopback_up()
     sys.path[:0] = [str(_PLUGIN_DIR)] + [p for p in spec.get("sys_path", []) if p not in sys.path]
     work = Path(tempfile.mkdtemp(prefix="run-", dir=spec.get("work")))
     try:
@@ -526,6 +578,10 @@ def child(spec):
         os.environ["HOME"] = os.environ["USERPROFILE"] = str(work)
         logging.basicConfig(level=logging.WARNING)
         import directsdk
+        import directsdk_setup
+        # No Hermes setting reaches the test (not the profile's, not a managed /etc/hermes one): every one is its
+        # default, so nothing can point it at a real Claude config directory or login.
+        directsdk_setup._setting = lambda key, default=None: default
         reasons = []
 
         class Restarts(logging.Handler):

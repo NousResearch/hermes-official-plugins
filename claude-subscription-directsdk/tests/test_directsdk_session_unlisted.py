@@ -191,6 +191,26 @@ def real_version():
     return re.search(r'\d+\.\d+\.\d+', out).group(0)
 
 
+def marked(seconds):
+    """Processes on this machine sleeping exactly ``seconds`` (a duration only one test uses): found by command line,
+    since inside the test's own pid namespace (Linux) a process's pid is not the one this side sees."""
+    found = []
+    for proc in psutil.process_iter(['cmdline', 'status']):
+        try:
+            if proc.info['cmdline'] and proc.info['cmdline'][-2:] == ['sleep', str(seconds)] and proc.info['status'] != psutil.STATUS_ZOMBIE:
+                found.append(proc.pid)
+        except psutil.Error:
+            pass
+    return found
+
+
+def gone(seconds, within=15):
+    deadline = time.monotonic() + within
+    while marked(seconds) and time.monotonic() < deadline:
+        time.sleep(.2)
+    return marked(seconds)
+
+
 def stand_in(tmp_path, body):
     script = tmp_path / 'claude'
     script.write_text('#!/bin/sh\n' + body)
@@ -215,23 +235,26 @@ exec "{CLAUDE}" "$@"
     assert not passed and 'differs from per-call' in reason, reason
 
 
+@pytest.fixture(params=['namespaces', 'no-namespaces'])
+def jail(request, monkeypatch):
+    """Both ways a self-test runs: in namespaces of its own (Linux, where allowed) and without (elsewhere)."""
+    if request.param == 'no-namespaces':
+        monkeypatch.setattr(selftest, '_namespaces', lambda: None)
+    elif not selftest._namespaces():
+        pytest.skip('unprivileged namespaces are not available here')
+    return request.param
+
+
 @posix
-def test_a_test_that_hangs_is_killed_with_everything_it_started(tmp_path):
-    pids = tmp_path / 'pids'
-    script = stand_in(tmp_path, f'sleep 600 & echo $! >> {pids}\necho $$ >> {pids}\nexec sleep 600\n')
+def test_a_test_that_hangs_is_killed_with_everything_it_started(tmp_path, jail):
+    seconds = 6011 if jail == 'namespaces' else 6021
+    script = stand_in(tmp_path, f'touch {tmp_path}/started\nsleep {seconds} &\nexec sleep {seconds}\n')
     started = time.monotonic()
     passed, reason, _ = selftest.run_child([script], UNLISTED, time_limit=15)
     assert not passed and 'did not finish' in reason
     assert time.monotonic() - started < 45
-    deadline = time.monotonic() + 5
-    left = []
-    while time.monotonic() < deadline:
-        left = [int(p) for p in pids.read_text().split()] if pids.exists() else []
-        left = [p for p in left if psutil.pid_exists(p) and psutil.Process(p).status() != psutil.STATUS_ZOMBIE]
-        if not left:
-            break
-        time.sleep(.1)
-    assert pids.exists() and not left, left
+    assert (tmp_path / 'started').exists(), 'the stand-in never ran: the test proves nothing'
+    assert not gone(seconds)
 
 
 @posix
@@ -277,35 +300,31 @@ def test_a_kept_process_on_an_unlisted_version_ends_when_the_mode_goes_back_to_h
 
 
 @posix
-def test_a_child_that_dies_leaves_no_process_it_started(tmp_path, monkeypatch):
+def test_a_child_that_dies_leaves_no_process_it_started(tmp_path, monkeypatch, jail):
     """The stand-in starts a sleeper in a session of its own, then the test's child process is killed from outside:
     what it started must still go."""
-    pids = tmp_path / 'pids'
-    script = stand_in(tmp_path, f'setsid sleep 600 & echo $! >> {pids}\nexec sleep 600\n')
+    seconds = 6012 if jail == 'namespaces' else 6022
+    script = stand_in(tmp_path, f'touch {tmp_path}/started\n(setsid sleep {seconds} 2>/dev/null || sleep {seconds}) &\nexec sleep {seconds}\n')
     popen = selftest.subprocess.Popen
 
     def watched(*args, **kwargs):
         child = popen(*args, **kwargs)
+        if '--version' in args[0] or 'true' in args[0][-1:]:
+            return child
 
         def kill_later():
-            deadline = time.monotonic() + 20
-            while not pids.exists() and time.monotonic() < deadline:
+            deadline = time.monotonic() + 40
+            while len(marked(seconds)) < 2 and time.monotonic() < deadline:
                 time.sleep(.05)
-            time.sleep(.6)  # the watch loop has seen the sleeper
+            time.sleep(.6)  # the watch loop has seen the sleepers
             child.kill()
         threading.Thread(target=kill_later, daemon=True).start()
         return child
     monkeypatch.setattr(selftest.subprocess, 'Popen', watched)
     passed, reason, _ = selftest.run_child([script], UNLISTED, time_limit=60)
     assert not passed
-    deadline, left = time.monotonic() + 5, []
-    while time.monotonic() < deadline:
-        left = [int(p) for p in pids.read_text().split()]
-        left = [p for p in left if psutil.pid_exists(p) and psutil.Process(p).status() != psutil.STATUS_ZOMBIE]
-        if not left:
-            break
-        time.sleep(.1)
-    assert not left, left
+    assert (tmp_path / 'started').exists(), 'the stand-in never ran: the test proves nothing'
+    assert not gone(seconds)
 
 
 @needs_cli
@@ -364,10 +383,11 @@ sys.path[:0] = [{plugin!r}, {hermes!r}]
 import selftest
 selftest.cache_path = lambda: None
 selftest.request([{script!r}], '9.9.9')
-deadline = time.time() + 30
-while time.time() < deadline and len(open({pids!r}).read().split()) < 2 if __import__('os').path.exists({pids!r}) else True:
+import os
+deadline = time.time() + 40
+while time.time() < deadline and not os.path.exists({started!r}):
     time.sleep(.1)
-time.sleep(1)
+time.sleep(1.5)
 {end}
 """
 
@@ -378,19 +398,14 @@ def test_hermes_ending_mid_test_leaves_no_process_behind(tmp_path, end):
     """A Hermes process starts a self-test whose binary hangs, then exits (its test thread is abandoned) or is killed
     (nothing of it runs any more). The test's child and what it started must go too."""
     import subprocess
-    pids = tmp_path / 'pids'
-    script = stand_in(tmp_path, f'setsid sleep 600 & echo $! >> {pids}\necho $$ >> {pids}\nexec sleep 600\n')
+    seconds = 6013 if end.startswith('sys') else 6014
+    started = tmp_path / 'started'
+    script = stand_in(tmp_path, f'touch {started}\n(setsid sleep {seconds} 2>/dev/null || sleep {seconds}) &\nexec sleep {seconds}\n')
     code = HERMES.format(plugin=str(Path(selftest.__file__).parent), hermes=os.environ.get('HERMES_AGENT_REPO', ''),
-                         script=script, pids=str(pids), end=end)
+                         script=script, started=str(started), end=end)
     subprocess.run([sys.executable, '-c', code], timeout=120)
-    deadline, left = time.monotonic() + 15, []
-    while time.monotonic() < deadline:
-        left = [int(p) for p in pids.read_text().split()] if pids.exists() else []
-        left = [p for p in left if psutil.pid_exists(p) and psutil.Process(p).status() != psutil.STATUS_ZOMBIE]
-        if not left:
-            break
-        time.sleep(.2)
-    assert pids.exists() and not left, left
+    assert started.exists(), 'the stand-in never ran: the test proves nothing'
+    assert not gone(seconds)
 
 
 def test_a_verdict_belongs_to_the_binary_not_to_every_one_reporting_that_version(tmp_path):
@@ -464,3 +479,54 @@ def test_another_hermes_process_testing_holds_this_one_off(monkeypatch):
     while selftest._state.running and time.monotonic() < deadline:
         time.sleep(.01)
     assert runs == [1] and selftest.verdict(UNLISTED, CMD)['verdict'] == 'pass'
+
+
+@posix
+def test_a_cache_path_that_is_not_a_regular_file_holds_no_verdict_and_never_blocks(cache):
+    cache.parent.mkdir(parents=True)
+    os.mkfifo(cache)
+    out = []
+    reader = threading.Thread(target=lambda: out.append(selftest.verdict(UNLISTED, CMD)), daemon=True)
+    reader.start()
+    reader.join(5)
+    assert not reader.is_alive(), 'reading the verdict blocked the call'
+    assert out == [None]
+
+
+@posix
+def test_inside_its_namespaces_the_test_reaches_nothing_but_loopback(tmp_path):
+    """A binary that ignores the proxy settings tries a listener on this machine's own non-loopback address. In the
+    test's network namespace (Linux, where allowed) it cannot reach it; this is what keeps a self-test offline
+    whatever the binary does with its network."""
+    import socket
+    if not selftest._namespaces():
+        pytest.skip('unprivileged namespaces are not available here')
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(('192.0.2.1', 9))  # no packet is sent: this only picks the outward interface's address
+        address = probe.getsockname()[0]
+    finally:
+        probe.close()
+    if address.startswith('127.'):
+        pytest.skip('this machine has no non-loopback address')
+    listener = socket.socket()
+    listener.bind((address, 0))
+    listener.listen()
+    listener.settimeout(20)
+    port, outcome = listener.getsockname()[1], tmp_path / 'outcome'
+    script = stand_in(tmp_path, f'''python3 - <<'PY'
+import socket
+try:
+    socket.create_connection(({address!r}, {port}), timeout=3).close()
+    result = 'reached'
+except OSError as error:
+    result = 'refused: ' + type(error).__name__
+open({str(outcome)!r}, 'w').write(result)
+PY
+exec sleep 6031
+''')
+    passed, reason, _ = selftest.run_child([script], UNLISTED, time_limit=20)
+    listener.close()
+    assert outcome.exists(), 'the stand-in never ran: the test proves nothing'
+    assert outcome.read_text().startswith('refused'), outcome.read_text()
+    assert not passed

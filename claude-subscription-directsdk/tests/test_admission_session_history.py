@@ -268,6 +268,10 @@ def test_a_tool_call_s_caller_is_matched_as_a_replay_drops_it_and_refused_if_nat
     assert out[2] == call(1)['message'] and out[4] == call(2)['message']
     with pytest.raises(HistoryMisaligned):
         canonical_history(wire(native_rows(frames)), frames)
+    # Any other caller is not known to drop out of a replay: native's record without it is refused.
+    frames[1]['message']['content'][1]['caller'] = {'type': 'code_execution_20250825', 'tool_id': 'srvtoolu_0001'}
+    with pytest.raises(HistoryMisaligned):
+        canonical_history(wire(native_rows(FRAMES)), frames)
 
 
 STEER = {'type': 'text', 'text': '[OUT-OF-BAND USER MESSAGE]\nread g1 instead\n[/OUT-OF-BAND USER MESSAGE]'}

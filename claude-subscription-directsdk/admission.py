@@ -674,12 +674,17 @@ def canonical_history(payload, frames):
         raise HistoryMisaligned(f'{type(error).__name__}: {error}') from error
 
 
+_DIRECT = {'type': 'direct'}
+
+
 def _as_replayed(content):
-    """Hermes' frame of a reply as a fresh native replays it: no cache mark, and no ``caller`` on a tool call (the
-    Messages API adds it to every one; Claude Code drops it from its record and from a replay). Only Hermes' side is
-    changed: a native record that kept the field no longer matches, and its request is refused."""
-    return [{k: v for k, v in block.items() if k != 'caller'} if isinstance(block, dict) and block.get('type') == 'tool_use'
-            else block for block in _unmarked(content)] if isinstance(content, list) else _unmarked(content)
+    """Hermes' frame of a reply as a fresh native replays it: no cache mark, and no ``"caller": {"type": "direct"}``
+    on a tool call (the Messages API adds it to every one; Claude Code drops it from its record and from a replay).
+    Only Hermes' side is changed, and only that exact value: a native record that kept it, or any other caller, no
+    longer matches, and its request is refused."""
+    return [{k: v for k, v in block.items() if not (k == 'caller' and v == _DIRECT)}
+            if isinstance(block, dict) and block.get('type') == 'tool_use' else block
+            for block in _unmarked(content)] if isinstance(content, list) else _unmarked(content)
 
 
 def _bytes(value):

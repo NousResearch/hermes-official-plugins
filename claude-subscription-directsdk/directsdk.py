@@ -601,9 +601,10 @@ def _hand_off(native):
 # this long, the prompt cache's own lifetime.
 # Hermes imports the plugin once per profile home, one module each (concurrency.py says the same of its pool): every
 # copy finds the one registry under this name, so max_sessions bounds the Hermes process, not each profile.
-_LIVE = sys.modules.setdefault('_claude_subscription_directsdk_live_v1', ModuleType('_claude_subscription_directsdk_live_v1'))
-if not hasattr(_LIVE, 'natives'):
-    _LIVE.natives, _LIVE.lock = set(), threading.Lock()
+# Filled in before it is published, so a copy importing at the same time finds it whole or not at all.
+_LIVE = ModuleType('_claude_subscription_directsdk_live_v1')
+_LIVE.natives, _LIVE.lock = set(), threading.Lock()
+_LIVE = sys.modules.setdefault(_LIVE.__name__, _LIVE)
 _live, _live_lock = _LIVE.natives, _LIVE.lock
 SESSION_IDLE_S = 3600.0
 

@@ -123,3 +123,28 @@ def test_client_cancel_ends_the_kept_session_even_when_a_request_cancel_fails(mo
     with pytest.raises(RuntimeError, match='boom'):
         c.cancel()
     assert ended == [True]
+
+
+def test_the_kept_process_registry_is_whole_when_another_profile_can_find_it(monkeypatch):
+    """Two profiles can import the plugin at once, each its own module; the shared registry must hold its set and lock
+    when the other can first see it. Before, it was published empty and filled in after, so each copy could fill it with
+    a set of its own and keep a process past max_sessions."""
+    import importlib.util
+    key = '_claude_subscription_directsdk_live_v1'
+    published = []
+
+    class Modules(dict):
+        def setdefault(self, name, value=None):
+            if name == key and name not in self:
+                published.append(hasattr(value, 'natives') and hasattr(value, 'lock'))
+            return super().setdefault(name, value)
+
+    monkeypatch.delitem(sys.modules, key)
+    monkeypatch.setattr(sys, 'modules', Modules(sys.modules))
+    spec = importlib.util.spec_from_file_location('directsdk_profile_copy', directsdk.__file__)
+    copy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(copy)
+    import atexit
+    atexit.unregister(copy._kill_draining)
+    assert published == [True], 'the registry was published before its set and lock'
+    assert copy._live is sys.modules[key].natives and copy._live_lock is sys.modules[key].lock

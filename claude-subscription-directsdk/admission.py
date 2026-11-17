@@ -29,6 +29,8 @@ MAX_BREAKPOINTS = 4
 # (180 s, native 2.1.263-2.1.286). Behind this relay native widens its watchdog to 300 s, the same as Hermes'
 # compression floor and stall detector, so a silent upstream surfaced as a stall instead of this error.
 UPSTREAM_IDLE_SECONDS = 180
+# How long a kept native's relay waits for that native's own init event before it refuses its request.
+INIT_WAIT_SECONDS = 10.0
 # Probe a quiet upstream socket so a dead path fails in ~30 s instead of waiting on TCP retransmits.
 KEEPALIVE = (('TCP_KEEPIDLE', 15), ('TCP_KEEPALIVE', 15), ('TCP_KEEPINTVL', 5), ('TCP_KEEPCNT', 3))
 GZIP_HOSTS = ('api.anthropic.com',)
@@ -865,6 +867,9 @@ class Admission:
         # A probe relay keeps per-call's request for a step (``probed``) and sends nothing; a kept native's relay
         # forwards its request only when it equals ``expected``, when that is set.
         self.probe, self.probed, self.expected = False, None, None
+        # A kept native's relay: set once its native's init named the Claude Code version the gate allowed
+        # (``init_ok``), or named another or none (``unversioned``); None for a one-shot.
+        self.init_ok, self.unversioned = None, False
         self.prefix = '/admit/' + secrets.token_urlsafe(32)
         self.server = _Server(('127.0.0.1', 0), Handler)
         self.server.admission = self
@@ -1046,6 +1051,11 @@ class Handler(BaseHTTPRequestHandler):
             payload = pin_message_breakpoint(payload, gate.queried)
             if gate.eager:
                 payload = stream_tool_input(payload)
+            if gate.init_ok is not None and (not gate.init_ok.wait(min(gate.timeout, INIT_WAIT_SECONDS)) or gate.unversioned):
+                # Kept mode runs only on a version this very process reported: nothing goes upstream before it has.
+                gate.diverged = gate.unversioned = True
+                self._refuse(b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_SESSION_DIVERGED"}}')
+                return
             if gate.probe:
                 gate.probed = payload
                 self._refuse(b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_PER_CALL_PROBE"}}')

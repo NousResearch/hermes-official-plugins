@@ -738,7 +738,10 @@ class Native:
                         note_version(None, reported, self.binary)
                         if self.tools is not None and reported != self.version:
                             # The binary changed under the gate: this process is not the version it allowed.
+                            self.admission.unversioned = True
                             self._doubt('version')
+                        if self.tools is not None and self.admission.init_ok is not None:
+                            self.admission.init_ok.set()
                     self.events.put(event)
         except Exception as error:
             if self.tools is not None and not isinstance(error, TimeoutError):
@@ -1546,6 +1549,9 @@ class Client:
                     # The relay refused the kept native's request before upstream (rows that do not line up, not the
                     # previous request extended, not per-call's bytes). Replay instead.
                     why = 'diverged'
+                    if native.admission.unversioned:
+                        # Its own init never named the allowed version: this step runs per-call.
+                        why, session = 'version', False
                 except _Doubt as doubt:
                     # Before its request went upstream: this step replays per-call bytes on a fresh one-shot.
                     why, session = doubt.why, False
@@ -1599,6 +1605,7 @@ class Client:
         admission.probe = probe
         admission.eager = session_id not in _BUFFER_TOOL_INPUT
         if session:
+            admission.init_ok = threading.Event()
             # The relay keeps a kept native's requests byte-identical to what a fresh replay sends.
             admission.frames = frames
         with request.lock:

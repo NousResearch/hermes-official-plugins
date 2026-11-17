@@ -900,8 +900,6 @@ class Admission:
         return message if isinstance(message, str) else text
 
     def abort(self):
-        if self.init_ok is not None:
-            self.init_ok.set()  # a request waiting for its native's init sees the cancel, and is refused, at once
         with self.lock:
             self.cancelled = True
             for sock in self.sockets:
@@ -917,6 +915,10 @@ class Admission:
                             socket.close(fd)
                     except OSError:
                         pass
+        if self.init_ok is not None:
+            # Only now, with the cancel marked: a request waiting for its native's init wakes to find it, and is
+            # refused, at once. Woken before, it could find no cancel yet and go upstream with no init read.
+            self.init_ok.set()
 
     def close(self):
         self.abort()

@@ -295,3 +295,42 @@ def test_a_cancel_wakes_a_request_waiting_for_its_native_s_init(peer):
     gate.close()
     assert time.monotonic() - started < 2 and not peer.received
     sender.join(5)
+
+
+def test_a_cancel_is_marked_before_it_wakes_a_request_waiting_for_its_native_s_init(peer):
+    """The cancel's thread stalls between waking the init wait and taking the relay's lock. The request it woke must
+    still be refused: nothing has named the native's version. Before, the wake came first, the request found no cancel
+    and went upstream."""
+    import time
+
+    class Stalls:
+        """The relay's lock, slow to take only in the cancelling thread."""
+        def __init__(self):
+            self.inner, self.slow = threading.Lock(), None
+
+        def __enter__(self):
+            if threading.current_thread() is self.slow:
+                time.sleep(1)
+            return self.inner.__enter__()
+
+        def __exit__(self, *exc):
+            return self.inner.__exit__(*exc)
+
+    gate = Admission(f'http://127.0.0.1:{peer.server_port}', 30, queried=FRAMES[0]['message']['content'])
+    gate.init_ok, gate.lock = threading.Event(), Stalls()
+
+    def send():
+        try:
+            post(gate, native_rows(FRAMES[:1]))
+        except OSError:
+            pass  # the cancel closed the connection
+    sender = threading.Thread(target=send, daemon=True)
+    sender.start()
+    time.sleep(.3)
+    cancel = threading.Thread(target=gate.abort)
+    gate.lock.slow = cancel
+    cancel.start()
+    cancel.join(5)
+    sender.join(5)
+    gate.close()
+    assert not peer.received, 'a request went upstream before its native named its version'

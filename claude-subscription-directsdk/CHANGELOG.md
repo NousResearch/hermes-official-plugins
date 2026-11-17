@@ -73,6 +73,16 @@
   2.1.323 is not 2.1.323), and a version that cannot be read means per-call.
 - `session_idle_seconds` setting (default 3600, the prompt cache's lifetime): how long a kept process may idle. The
   session settings and their memory cost are documented in the README.
+- Session mode, after a further review found histories where a kept process's request was not per-call's: a new
+  process's first request goes up as built, not rewritten; a resumed request whose newest frame cannot be restored to
+  Hermes' (a whitespace-only or very large result Claude Code reworded, with a steer after it) is refused before
+  upstream and replayed; Claude Code's record of each later reply must be Hermes' frame byte for byte; results are
+  compared and rewritten as bytes, key order included. A kept process's relay waits for that process's own init event
+  and its version. A doubt or the end of output after a step returned ends the process at once; a tool call for
+  another MCP server, for a tool Hermes did not offer or without a JSON-RPC id is never parked. `max_sessions` bounds
+  the Hermes process across profiles (one registry for every copy of the plugin). Cancel reads a request's relay once,
+  under the hand-over's lock. An idle timer that fired as a step took its process over cannot end its next park. A
+  process that exits between the resume check and the next write is replayed.
 - Session mode fails closed (maintainer review of #361, items 1 to 4). A kept process's first resumed request goes
   upstream only if it equals the request a per-call step builds for the same history (a one-shot builds it into a
   relay that sends nothing upstream); before, only its opening turn was compared, so a tail native built differently

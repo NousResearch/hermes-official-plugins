@@ -184,10 +184,13 @@ keeps one Claude Code process alive between model calls:
 - The next upstream request then leaves in about 0.03 s instead of the 0.5 to 1.0 s a fresh process needs to start and
   replay the history (offline, Linux; more with longer histories). A live tool round is about 1.7 to 2.3 s, so this is
   roughly a quarter to a half of each round.
-- What goes upstream is byte for byte what a fresh process would send for the same history, so prompt caching and cost
-  are the same either way. The relay rewrites each replayed tool result to Hermes' own bytes, and refuses, before it
-  reaches Anthropic, any request that does not extend the previous one or whose rows no longer line up with Hermes'
-  history. That step is then replayed into a new process. A kept process's first resumed request is the first with
+- What goes upstream is meant to be byte for byte what a fresh process would send for the same history, so prompt
+  caching and cost are the same either way; where the relay cannot make it so, it refuses the request before it
+  reaches Anthropic, and the step is replayed into a new process. A new process's first request is the replay itself
+  and goes up as built. On later requests the relay rewrites each replayed tool result to Hermes' own bytes (key order
+  included), requires Claude Code's record of each reply to be Hermes' frame byte for byte, and refuses any request
+  whose rows no longer line up with Hermes' history, whose newest frame it cannot restore to Hermes' (a whitespace-only
+  or very large result Claude Code reworded), or that does not extend the previous one. A kept process's first resumed request is the first with
   rows it built itself past its launch's replay, so no earlier request vouches for them: it goes upstream only if it
   equals the request a per-call step builds for the same history. A one-shot builds that request into a relay that
   sends nothing upstream, so each kept process pays one per-call launch once, at that step (two Claude Code processes
@@ -208,12 +211,15 @@ keeps one Claude Code process alive between model calls:
   `diverged`, `unproven`, `no_tool_id`, `tool_id`, `control`, `event`, `version`).
 - A kept process that does something the plugin does not know is not trusted again: a tool call without
   `claudecode/toolUseId`, with an id its step never received or one it asked for before, a control request other than
-  the hermes server's MCP traffic, or an output line that is not a JSON object. Its call is never parked or waited on.
+  the hermes server's MCP traffic (another server, a tool Hermes did not offer, no JSON-RPC id), or an output line
+  that is not a JSON object. Its call is never parked or waited on. One that comes after its step returned, or the end
+  of its output, ends the process at once. A kept process's relay forwards nothing until that process's own init
+  event has named the Claude Code version the gate allowed (`version` otherwise).
   If its request had not gone upstream, the step replays on a fresh one-shot; if it had, the process is not kept
   after the step (the answer stands, or the step fails if native's output no longer parses). `unproven` means the per-call request for the first resumed step could not be built.
 - A kept process counts against `max_concurrent` only while it serves a step. Between steps, idle or with a tool
   parked, it holds no place, so idle agents do not block title and summary calls; `max_sessions` bounds how many
-  stay alive.
+  stay alive, across every profile the Hermes process serves.
 - These calls still start a fresh process for one step (a one-shot): a conversation's steps before it has had
   `session_min_rounds` tool rounds (sets of tool results; the step that brings the last of them starts the kept
   process), auxiliary calls (titles, summaries), calls without tools, a second call on the same client while one is

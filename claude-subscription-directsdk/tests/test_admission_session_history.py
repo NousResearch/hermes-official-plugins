@@ -183,6 +183,20 @@ def test_a_first_resumed_request_goes_upstream_only_as_per_calls_own(peer, drift
         gate.close()
 
 
+def test_a_resumed_request_whose_newest_frame_cannot_be_restored_is_refused(peer):
+    """A resumed kept relay whose newest frame does not match the results Hermes queried refuses before upstream.
+    Before, it recorded ``unrestored`` and forwarded native's version, as the per-call path may."""
+    gate = kept(peer, FRAMES)
+    gate.rearm(5, [{'type': 'tool_result', 'tool_use_id': 'toolu_9999', 'content': 'another result'}], FRAMES)
+    forwarded = len(peer.received)
+    try:
+        status, body = post(gate, native_rows(FRAMES))
+        assert status == 400 and DIVERGED in body
+        assert gate.diverged and len(peer.received) == forwarded
+    finally:
+        gate.close()
+
+
 def test_a_misaligned_prefix_is_refused_as_not_extending_the_previous_request(peer):
     """Later steps: a replayed result already sits in the forwarded prefix in Hermes' bytes, so a request whose rows
     shifted there fails ``extends_previous`` whatever ``canonical_history`` does. Both gates refuse the same way."""
@@ -259,3 +273,4 @@ def test_a_steer_row_goes_back_into_its_frame_and_nowhere_else(native):
     out = json.loads(canonical_history(wire(rows), steered))['messages']
     assert [m['role'] for m in out] == ['system', 'user', 'assistant', 'user', 'assistant', 'user']
     assert out[-1]['content'][-1] == dict(STEER, cache_control={'type': 'ephemeral'})
+

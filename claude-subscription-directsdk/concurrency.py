@@ -88,6 +88,10 @@ def acquire(limit, cancelled, timeout, beat):
                     slot = _take(me)
                 running = _pool.held
             waited = time.monotonic() - started
+            if slot is not None and (cancelled.is_set() or waited >= timeout):
+                # Freed only after this call had given up or been interrupted: hand it on, never start a late call.
+                slot.release()
+                slot = None
             if slot is not None:
                 if noticed:
                     logger.info('Claude Code call started after waiting %.1f s for a free slot', waited)

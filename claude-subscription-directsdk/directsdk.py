@@ -1599,6 +1599,8 @@ class Client:
             probe.send(request, None, timeout)
             while probe.admission.probed is None and probe.receive(request, timeout) is not None:
                 pass
+        except TimeoutError:
+            raise  # the step's deadline passed while the probe built nothing: no replay after it
         except (RuntimeError, OSError):
             if request.cancelled.is_set():
                 raise

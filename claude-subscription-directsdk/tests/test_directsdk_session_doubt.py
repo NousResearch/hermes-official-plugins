@@ -181,6 +181,36 @@ def test_a_per_call_request_that_cannot_be_built_restarts_the_kept_process(home,
     assert len(expected) == ROUNDS + 1 and upstream.bodies == expected
 
 
+def test_a_per_call_request_that_takes_the_whole_deadline_ends_the_step_with_the_timeout(home, upstream, monkeypatch):
+    """The one-shot that builds per-call's request for the first resumed step is still silent at the step's deadline
+    (forced). The step must raise its timeout and end the kept process, not restart it and replay on a new one with a
+    fresh deadline. Before, the probe's timeout was taken for a request that could not be built: the step restarted
+    (``unproven``) and answered after its deadline."""
+    receive = directsdk.Native.receive
+
+    def silent(self, request, timeout):
+        if self.admission.probe:
+            time.sleep(timeout)
+            raise TimeoutError('Claude request timed out')
+        return receive(self, request, timeout)
+    kept = client(home, upstream, monkeypatch, session=True)
+    try:
+        messages = [{'role': 'user', 'content': 'go'}]
+        reply = kept.create(model=MODEL, messages=list(messages), tools=TOOLS, max_tokens=1000).choices[0].message.model_dump()
+        native = kept._session
+        assert native is not None and not native.proven
+        messages.append({k: v for k, v in reply.items() if k in ('role', 'content', 'tool_calls', 'reasoning_details') and v is not None})
+        messages += [{'role': 'tool', 'tool_call_id': call['id'], 'content': 'ok'} for call in reply['tool_calls']]
+        sent = len(upstream.bodies)
+        monkeypatch.setattr(directsdk.Native, 'receive', silent)
+        with pytest.raises(TimeoutError):
+            kept.create(model=MODEL, messages=messages, tools=TOOLS, max_tokens=1000, timeout=2)
+        assert len(upstream.bodies) == sent, 'the step went upstream after its deadline'
+        assert kept._session is None and native.process.poll() is not None and not session_pids(kept)
+    finally:
+        kept.close()
+
+
 class Filtered:
     """A kept process's stdout as the plugin reads it, through ``transform``."""
 

@@ -580,6 +580,30 @@ def test_delete_scan_requires_consent_and_a_stopped_scan(populated):
             assert conn.execute('SELECT count(*) FROM ' + table).fetchone()[0] == 0, table
 
 
+def test_cancel_during_the_background_check_stays_canceled(api, tmp_path, monkeypatch):
+    # The background check reads status 'created', then writes 'awaiting_analysis'. A cancel landing
+    # between the two used to be overwritten, so the scan reopened and Delete answered 409.
+    import threading
+    module, client = api
+    service = module.get_service()
+    reached, release = threading.Event(), threading.Event()
+    real_set_status = service.store.set_scan_status
+    def set_status(scan_id, status, **kw):
+        if status == 'awaiting_analysis' and threading.current_thread().name == 'security-dependency-check':
+            reached.set(); release.wait(10)
+        return real_set_status(scan_id, status, **kw)
+    monkeypatch.setattr(service.store, 'set_scan_status', set_status)
+    root = tmp_path / 'repo'; root.mkdir()
+    (root / 'app.py').write_text('print(1)\n')
+    sid = client.post(PREFIX + '/scans', json={'path': str(root)}).json()['scanId']
+    assert reached.wait(10)
+    assert client.post(PREFIX + f'/scans/{sid}/cancel').status_code == 200
+    release.set()
+    settled(module, sid)
+    assert client.get(PREFIX + '/scans/' + sid).json()['status'] == 'canceled'
+    assert client.post(PREFIX + f'/scans/{sid}/delete', json={'confirm': sid}).json()['deleted'] is True
+
+
 def test_delete_keeps_triage_a_remaining_scan_still_reports(populated, tmp_path):
     module, client, root, sid, fid, secret = populated
     service = module.get_service()

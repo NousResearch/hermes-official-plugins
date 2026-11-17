@@ -705,6 +705,7 @@ class Native:
         # Kept and waiting for a new user turn since (monotonic), and its owner's way to end it: the cap's eviction order.
         self.idle_since = self.end = None
         self.idle_gen = 0  # which idle period its timer belongs to
+        self.serving = True  # serving a step, as opposed to kept between steps by its client
         self.cost, self.slot = 0, None
         self.process = request.spawn(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      text=True, encoding='utf-8', cwd=workdir, env=env)
@@ -744,6 +745,10 @@ class Native:
                 self._doubt('event')  # A line that is not JSON; a control write that timed out stays a timeout.
             self.events.put(error)
         finally:
+            if self.tools is not None:
+                # Its output ended (or broke): a kept native that can no longer be read is no session. End it rather
+                # than wait on a process that may never exit.
+                kill_process_tree(process)
             # The consumer may close while paused at a yielded chunk. Reaping belongs to this owner thread, never
             # cancel(). Clear the group first: a launcher that exits leaves children the reap would orphan.
             if os.name != 'nt' and hasattr(os, 'waitid') and unreaped(process, block=True):
@@ -775,6 +780,11 @@ class Native:
         if self.doubt is None:
             self.doubt = why
             self.events.put(_Doubt(why))
+            if not self.serving:
+                # Kept between steps, nobody reads the queue until the next step: end it now. Its reader's exit hands
+                # the place and the relay back.
+                logger.debug('Claude session restart (%s): replaying into a new process', why)
+                self.kill()
 
     def _expected(self):
         """The tool ids native may ask for now: the calls of the response this step received, else the parked ones."""
@@ -1282,6 +1292,7 @@ class Client:
             if self._closed or request.cancelled.is_set():
                 return False
             self._session, self._stepping, self._kept['native'] = native, False, native
+            native.serving = False
             request.process = request.admission = None
             # Idle from here on, so its max_concurrent slot goes back now, not when the caller ends the stream.
             slot, native.slot = native.slot, None
@@ -1290,8 +1301,11 @@ class Client:
                 native.idle.start()
         if slot is not None:
             slot.release()
-        if native.process.returncode is not None:
-            ended()  # It exited before it was the session, so its reader found nothing to end.
+        if native.process.returncode is not None or native.doubt is not None:
+            # It exited, or doubted, before it was the session: its reader found nothing to end.
+            if native.doubt is not None:
+                logger.debug('Claude session restart (%s): replaying into a new process', native.doubt)
+            ended()
         return True
 
     def _resume(self, ident, frames, version):
@@ -1299,6 +1313,8 @@ class Client:
         Claude Code version this step may keep a process on, None for none)."""
         with self._lock:
             native, self._session, self._kept['native'] = self._session, None, None
+            if native is not None:
+                native.serving = True
         if native is not None:
             native.idle.cancel()
             native.idle_since = None  # serving a step now: never evicted

@@ -7,6 +7,8 @@ the step never received or one already asked, a control request of an unknown ki
 Skipped without the CLI; ``CLAUDE_CODE_BIN`` picks a binary.
 """
 import json
+import threading
+import time
 import os
 from pathlib import Path
 import shutil
@@ -177,3 +179,82 @@ def test_a_per_call_request_that_cannot_be_built_restarts_the_kept_process(home,
     assert failed and pids[1] != pids[0] and len(set(pids[1:])) == 1 and None not in pids, pids
     assert restarts(caplog) == ['Claude session restart (unproven): replaying into a new process']
     assert len(expected) == ROUNDS + 1 and upstream.bodies == expected
+
+
+class Filtered:
+    """A kept process's stdout as the plugin reads it, through ``transform``."""
+
+    def __init__(self, pipe, transform):
+        self.pipe, self.transform = pipe, transform
+
+    def __iter__(self):
+        return iter(self.transform(self.pipe))
+
+    def __getattr__(self, key):
+        return getattr(self.pipe, key)
+
+
+def filter_kept_stdout(monkeypatch, transform):
+    spawn = directsdk.Request.spawn
+
+    def wrapped(self, command, **kwargs):
+        process = spawn(self, command, **kwargs)
+        if '--allowedTools' in command:  # a kept process, not a one-shot
+            process.stdout = Filtered(process.stdout, transform)
+        return process
+    monkeypatch.setattr(directsdk.Request, 'spawn', wrapped)
+
+
+def waited(predicate, within=5):
+    deadline = time.monotonic() + within
+    while time.monotonic() < deadline and not predicate():
+        time.sleep(.01)
+    return predicate()
+
+
+@pytest.mark.parametrize('fault', ['no_tool_id', 'non_object', 'non_json', 'eof', 'partial_eof'])
+def test_a_line_the_plugin_does_not_know_after_the_step_returned_ends_the_kept_process(home, upstream, monkeypatch, caplog, fault):
+    """The bad line (or the end of native's output) arrives after the step has returned and the process holds its
+    parked call, so no step reads the doubt. The process ends at once, with its reason in the log. Before, it stayed
+    with its place and its relay, and no idle limit runs while a call is parked."""
+    returned, loads = threading.Event(), json.loads
+
+    def late(pipe):
+        held = None
+        for line in pipe:
+            event = loads(line)
+            message = (event.get('request') or {}).get('message') or {} if isinstance(event, dict) else {}
+            if held is None and isinstance(event, dict) and event.get('type') == 'control_request' and message.get('method') == 'tools/call':
+                held = event  # its first tools/call comes after the step returned, broken as the fault says
+                continue
+            yield line
+            if held and isinstance(event, dict) and event.get('type') == 'stream_event' and event['event'].get('type') == 'message_stop':
+                returned.wait(10)
+                if fault == 'no_tool_id':
+                    del held['request']['message']['params']['_meta']['claudecode/toolUseId']
+                    yield json.dumps(held) + '\n'
+                elif fault == 'non_object':
+                    yield '[]\n'
+                elif fault == 'non_json':
+                    yield 'not json\n'
+                elif fault == 'partial_eof':
+                    yield '{"type":'
+                    return
+                if fault == 'eof':
+                    return
+                held = False
+    filter_kept_stdout(monkeypatch, late)
+    c = client(home, upstream, monkeypatch, session=True, cap=1)
+    try:
+        with caplog.at_level('DEBUG', logger=directsdk.logger.name):
+            c.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+            native = c._session
+            assert native is not None
+            returned.set()
+            assert waited(lambda: c._session is None and native not in directsdk._live and native.process.poll() is not None), \
+                dict(doubt=native.doubt, kept=c._session is native, alive=native.process.returncode is None)
+        if fault != 'eof':
+            assert restarts(caplog) == [f'Claude session restart ({"no_tool_id" if fault == "no_tool_id" else "event"}): replaying into a new process']
+    finally:
+        returned.set()
+        c.close()

@@ -247,7 +247,7 @@ Configure, inspect, or test the System-1 Decider from any surface:
   /delegation decider test Design a multi-file database migration
   /delegation decider history
   ```
-- **Hermes Desktop UI**: **Settings → Model → System-1 Decider** (or `/delegation` from the sidebar / Command Palette) provides a full workbench to toggle modes, edit primary & fallback endpoints, check/uncheck auto-eligible routes, run live routing probes, and inspect recent routing decisions.
+- **Hermes Desktop UI**: **Settings → Plugins → Advanced Delegation** (on hosts with plugin settings pages), the **Delegation** sidebar item, and **Open Advanced Delegation & System-1 Decider** in the Command Palette open the workbench. It toggles modes, edits primary & fallback endpoints, checks/unchecks auto-eligible routes, runs live routing probes, and displays recent routing decisions. Older hosts without plugin settings pages retain the sidebar and palette entry. After updating the unified package, use **Capabilities → Plugins → Rescan** to refresh its Desktop half; no app or gateway restart is needed.
 
 ### Profile routes (`profile_routes`)
 

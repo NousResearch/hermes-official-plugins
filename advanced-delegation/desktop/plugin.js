@@ -1,7 +1,6 @@
 import {
   PALETTE_AREA,
   ROUTES_AREA,
-  SETTINGS_TABS_AREA,
   SIDEBAR_NAV_AREA,
   host,
   queryClient,
@@ -104,7 +103,7 @@ function Badge({ text, tone = 'neutral' }) {
 }
 
 export function DelegationWorkbench() {
-  const profile = useValue(host.profile) || 'default'
+  const profile = useValue(host.state.profile) || 'default'
   const stateQuery = useQuery({
     queryKey: [ID, profile, 'state'],
     queryFn: () => request('/state?limit=30')
@@ -153,11 +152,14 @@ export function DelegationWorkbench() {
     data.decider?.timeout
   ])
 
+  const reportError = error => setNotice(`Request failed: ${error.message || String(error)}`)
+
   const modeMutation = useMutation({
+    onError: reportError,
     mutationFn: (mode) =>
       request('/mode', {
         method: 'POST',
-        body: JSON.stringify({ mode })
+        body: { mode }
       }),
     onSuccess: (next) => {
       queryClient.setQueryData([ID, profile, 'state'], next)
@@ -166,10 +168,11 @@ export function DelegationWorkbench() {
   })
 
   const deciderMutation = useMutation({
+    onError: reportError,
     mutationFn: (payload) =>
       request('/decider', {
         method: 'PUT',
-        body: JSON.stringify(payload)
+        body: payload
       }),
     onSuccess: (next) => {
       queryClient.setQueryData([ID, profile, 'state'], next)
@@ -178,10 +181,11 @@ export function DelegationWorkbench() {
   })
 
   const probeMutation = useMutation({
+    onError: reportError,
     mutationFn: (payload) =>
       request('/probe', {
         method: 'POST',
-        body: JSON.stringify(payload)
+        body: payload
       }),
     onSuccess: (res) => {
       setProbeResult(res)
@@ -189,12 +193,21 @@ export function DelegationWorkbench() {
   })
 
   const clearHistoryMutation = useMutation({
+    onError: reportError,
     mutationFn: () => request('/decisions', { method: 'DELETE' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [ID, profile, 'state'] })
       setNotice('Cleared Decider routing history.')
     }
   })
+
+  if (stateQuery.error) {
+    return jsx('div', {
+      role: 'alert',
+      style: { padding: '24px', color: 'var(--ui-text-secondary)' },
+      children: `Advanced Delegation backend is not reachable: ${stateQuery.error.message || String(stateQuery.error)}`
+    })
+  }
 
   if (stateQuery.isLoading || !form) {
     return jsx('div', {
@@ -724,17 +737,6 @@ export default {
     pluginCtx = ctx
     ctx.registerMany([
       {
-        id: 'settings-tab',
-        area: SETTINGS_TABS_AREA,
-        data: {
-          id: 'delegation-decider',
-          label: 'System-1 Decider',
-          group: 'Model',
-          order: 25
-        },
-        render: () => jsx(DelegationWorkbench, {})
-      },
-      {
         id: 'route',
         area: ROUTES_AREA,
         data: { path: '/delegation' },
@@ -756,6 +758,12 @@ export default {
         }
       }
     ])
+    // Newer hosts provide a plugin-owned Settings page. Keep the route/sidebar/palette usable
+    // on older hosts without importing a constant that may not exist in their SDK module.
+    ctx.registerSettingsPage?.({
+      id: 'main', title: 'Advanced Delegation', icon: 'type-hierarchy-sub', order: 25,
+      render: () => jsx(DelegationWorkbench, {})
+    })
     ctx.onEvent('plugin.advanced-delegation.updated', () =>
       queryClient.invalidateQueries({ queryKey: [ID] })
     )

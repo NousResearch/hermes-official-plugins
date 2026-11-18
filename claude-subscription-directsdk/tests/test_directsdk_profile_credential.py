@@ -495,7 +495,8 @@ def test_the_opt_in_is_read_with_cores_parser_not_pyyaml(profile, monkeypatch):
         assert _apply({"UNRELATED": "kept"}) == {"UNRELATED": "kept"}
 
 
-@pytest.mark.parametrize("rewrite", [lambda text: "", lambda text: "- plugins\n", lambda text: text + "plugins: {}\n"],
+@pytest.mark.parametrize("rewrite", [lambda text: "", lambda text: "- plugins\n", lambda text: text.replace("inherit_launch_login: true",
+                                                   "inherit_launch_login: false\n        inherit_launch_login: true")],
                          ids=["empty", "list-root", "duplicate-key"])
 def test_a_config_core_would_not_read_as_this_setting_does_not_opt_in(profile, monkeypatch, rewrite):
     """An empty file, a root that is not a mapping, and a duplicated key (core's parser rejects it) all count as
@@ -509,6 +510,39 @@ def test_a_config_core_would_not_read_as_this_setting_does_not_opt_in(profile, m
     assert directsdk_setup._own_setting_is_true(directsdk_setup.INHERIT_LOGIN_SETTING) is False
     with _own_cron_fire(), pytest.raises(directsdk_setup.ClaudeCodeLoggedOut):
         _apply({"UNRELATED": "kept"})
+
+
+@pytest.mark.parametrize("answer", ["no-file", "unavailable", "error"])
+def test_a_local_opt_in_does_not_count_when_core_serves_config_without_a_file(profile, monkeypatch, answer):
+    """With a config backend that has no config file (a remote backend), a config.yaml left in the profile's home is
+    not its config: a ``true`` there must not opt it in. A backend that cannot answer counts the same."""
+    import directsdk_setup
+    from hermes_constants import get_hermes_home
+    config_backend = pytest.importorskip("hermes_cli.config_backend")
+    monkeypatch.delenv(TOKEN, raising=False)
+    _settings(get_hermes_home(), inherit_launch_login=True)
+    with _own_cron_fire():
+        assert _apply({"UNRELATED": "kept"}) == {"UNRELATED": "kept"}
+
+    def supports_file_tooling():
+        if answer == "unavailable":
+            raise config_backend.ConfigBackendUnavailable("no such backend")
+        if answer == "error":
+            raise RuntimeError("backend broke")
+        return False
+    monkeypatch.setattr(config_backend, "supports_file_tooling", supports_file_tooling)
+    assert directsdk_setup._own_setting_is_true(directsdk_setup.INHERIT_LOGIN_SETTING) is False
+    with _own_cron_fire(), pytest.raises(directsdk_setup.ClaudeCodeLoggedOut):
+        _apply({"UNRELATED": "kept"})
+
+
+def test_a_core_without_config_backends_reads_the_local_file(profile, monkeypatch):
+    """A core from before config backends has only the file, so the opt-in in it still counts."""
+    import directsdk_setup
+    from hermes_constants import get_hermes_home
+    _settings(get_hermes_home(), inherit_launch_login=True)
+    monkeypatch.setitem(sys.modules, "hermes_cli.config_backend", None)
+    assert directsdk_setup._own_setting_is_true(directsdk_setup.INHERIT_LOGIN_SETTING) is True
 
 
 @pytest.mark.parametrize("process, config, stamp", [("other", "opted", "opted"), ("opted", "other", "opted"),

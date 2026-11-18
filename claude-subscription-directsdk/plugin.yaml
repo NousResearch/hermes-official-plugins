@@ -25,6 +25,16 @@ config_schema:
     default: ""
     label: Claude login config directory
     description: Select this profile's logged-in Claude config directory, overriding process environment directories.
+  inherit_launch_login:
+    type: bool
+    default: false
+    label: Use the login this Hermes process inherited
+    description: >-
+      For the profile whose Claude login is the shared ~/.claude (or the process's token). Under multiplexing, its
+      own tasks that core stamps with the process home (gateway turns, cron fires, the delegate route, the
+      dashboard's own-profile path) keep that login when the profile has none of its own, instead of being
+      refused. Read from this profile's own config.yaml only; it counts only in a process started for this profile
+      and never inside core's restart-safe cron worker. Leave off for any other profile.
   claude_code_telemetry:
     type: bool
     default: false

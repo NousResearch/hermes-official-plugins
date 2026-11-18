@@ -274,10 +274,26 @@ def _in_cron_worker():
     return getattr(spec, "name", None) == "cron.scheduler"
 
 
+def _config_is_a_local_file():
+    """False when core serves config from a backend with no config file (a remote backend): a config.yaml left in
+    the profile's home is then not its config. A core from before config backends has only the file."""
+    try:
+        from hermes_cli.config_backend import ConfigBackendUnavailable, supports_file_tooling
+    except ImportError:
+        return True
+    try:
+        return supports_file_tooling() is True
+    except (Exception, ConfigBackendUnavailable):  # ConfigBackendUnavailable is a SystemExit
+        return False
+
+
 def _own_setting_is_true(key):
     """True only when the active profile's own config.yaml parses and sets this plugin's ``key`` to a YAML boolean
     true, read with core's own parser (``hermes_yaml``; core does not depend on PyYAML). No managed overlay, no
-    last-good fallback: an unreadable or malformed file, or a core without that parser, means not set."""
+    last-good fallback: an unreadable or malformed file, a core without that parser, or a config backend with no
+    config file (the local file is then not the profile's config) means not set."""
+    if not _config_is_a_local_file():
+        return False
     try:
         from hermes_constants import get_hermes_home
         from hermes_yaml import safe_load

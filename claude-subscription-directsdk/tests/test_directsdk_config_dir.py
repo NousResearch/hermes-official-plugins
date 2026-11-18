@@ -171,3 +171,13 @@ def test_manifest_declares_the_setting_under_the_key_the_code_reads(profile):
     assert directsdk_setup.CONFIG_DIR_SETTING == SETTING
     assert field["type"] == "string" and field["default"] == ""
     assert field["label"] and field["description"]
+
+
+def test_manifest_declares_the_inherit_login_setting_under_the_key_the_code_reads(profile):
+    from hermes_cli.plugins_settings import plugin_settings_fields
+    import directsdk_setup
+    root = Path(directsdk_setup.__file__).resolve().parent
+    fields = {field["key"]: field for field in plugin_settings_fields(PLUGIN_NAME, root)}
+    field = fields[directsdk_setup.INHERIT_LOGIN_SETTING]
+    assert field["type"] == "boolean" and field["default"] is False
+    assert field["label"] and field["description"]

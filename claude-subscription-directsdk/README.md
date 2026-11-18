@@ -208,6 +208,10 @@ Selecting the provider asks the Claude CLI itself, never Anthropic, before anyth
 
 The same `discover_models()` feeds `provider_model_ids()`, so the TUI/Desktop pickers and `/model` list the account's picker too.
 
+## Cache lifetime
+
+Claude Code chooses the prompt-cache tier per request: a `claude -p` turn is its main conversation, which asks for the one-hour tier on a subscription within plan usage (and the five-minute tier once the account draws extra usage), at 2x the input rate per write against 1.25x for five minutes. Hermes core never gives a delegated child the one-hour tier, since a subagent calls every few seconds and is gone, but it can only clamp markers it builds; here native places them. The provider therefore asks for five minutes on a delegated child's requests by starting its Claude Code with `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` (a value you export yourself wins). The child is recognised by core's child cache scope (`sub_<hash>`); every other request keeps native's default.
+
 ## Subscription usage
 
 Claude Code names its caller on every request, and subscriptions meter the 5-hour window by that name: `claude -p` defaults to `sdk-cli`, which draws the window about 2x faster per token than the interactive CLI or a client's own name ([anthropics/claude-code#97074](https://github.com/anthropics/claude-code/issues/97074)). The plugin runs native as `hermes-agent`, overwriting any name inherited from a host (`sdk-py`, `claude-desktop`). Measured Oct 31 2026 on a Max plan with Opus 5.5 and Claude Code 2.1.316, four arms of four fresh ~43K-token requests each ($1.09 list-equivalent per arm, output pinned), 5-hour utilization read after each arm:

@@ -82,15 +82,27 @@ def test_tools_mode_refuses_local_files_before_dispatch(real_tools, tool, args):
 def test_tools_mode_passes_web_urls_and_drops_output_path(real_tools):
     server = bridge.create_mcp_server(event_bridge=bridge.EventBridge(), include_tools=True)
     _call(server, "vision_analyze", {"query": "q", "image_url": "https://example.com/image.png"})
-    _call(server, "vision_analyze", {"query": "q", "image_url": "localhost:8080/img.png"})
     _call(server, "vision_analyze", {"query": "q", "image_url": "data:image/png;base64,AAAA"})
     _call(server, "text_to_speech", {"query": "q", "output_path": "/home/me/notes.mp3"})
     assert real_tools == [
         ("vision_analyze", {"query": "q", "image_url": "https://example.com/image.png"}),
-        ("vision_analyze", {"query": "q", "image_url": "localhost:8080/img.png"}),
         ("vision_analyze", {"query": "q", "image_url": "data:image/png;base64,AAAA"}),
         ("text_to_speech", {"query": "q"}),
     ]
+
+
+def test_tools_mode_refuses_bare_host_for_vision(real_tools):
+    """``_URL_ARGS`` keeps the bare-host allowance for ``web_extract`` only: ``vision_analyze``
+    takes an http(s) or data: image, never a bare ``localhost:8080/...`` path."""
+    server = bridge.create_mcp_server(event_bridge=bridge.EventBridge(), include_tools=True)
+    assert "not local files" in _call(
+        server, "vision_analyze", {"query": "q", "image_url": "localhost:8080/img.png"})["error"]
+    assert real_tools == []
+
+
+def test_bare_host_allowance_is_web_extract_only():
+    assert hermes_tools._URL_ARGS["web_extract"][2] is True   # allow_bare
+    assert hermes_tools._URL_ARGS["vision_analyze"][2] is False
 
 
 def test_tools_mode_offers_tool_search_deferred_tools(monkeypatch, require_mcp_2_sdk):

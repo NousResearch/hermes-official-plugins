@@ -10,6 +10,7 @@
 
 ### Changed
 
+- Replaying a long history starts one stdin watchdog thread per request instead of one `threading.Timer` thread per frame (602 thread starts for a 300-round history). The plugin's own CPU per call drops by about 45% at 100 and 300 tool rounds (0.42 to 0.23 s at 300 rounds, 4 vCPU Linux, Claude Code 2.1.327 against a loopback upstream). A write that blocks is still killed at its own deadline.
 - `claude_code_telemetry` is off by default (#331): every Claude Code child starts with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_TELEMETRY` and `DISABLE_ERROR_REPORTING` set unless the setting is turned on, which also takes about 0.25 s off each spawn. The model picker stays complete: its zero-inference `initialize` handshake leaves `DISABLE_TELEMETRY` and the nonessential-traffic flag unset (either one shrinks the CLI picker from 13 rows to 5 on 2.1.319), so it lists the same 12 routes as with telemetry on. A flag you export yourself is kept.
 
 ### Fixed

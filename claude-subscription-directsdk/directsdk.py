@@ -659,6 +659,46 @@ def _stderr_tail(native_stderr):
     return f' (native stderr: {text[:400]})' if text else ''
 
 
+class _StdinWatch:
+    """One watchdog thread for every stdin write of a request.
+
+    A child that stops reading stdin blocks a plain write past the timeout; ``on_stall`` kills it then. A
+    ``threading.Timer`` per write was one thread started per replayed frame (602 for a 300-round history).
+    Here a write only records when it began. The thread never sleeps past ``timeout``, so it always wakes before
+    the deadline of a write that began while it slept, and then sleeps until exactly that deadline.
+    """
+
+    def __init__(self, timeout, on_stall):
+        self.timeout, self.on_stall = timeout, on_stall
+        self.stalled = threading.Event()
+        self._began = None
+        self._done = threading.Event()
+        self._thread = None
+
+    def __enter__(self):
+        self._began = time.monotonic()
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._run, daemon=True, name='claude-directsdk-stdin-watch')
+            self._thread.start()
+        return self
+
+    def __exit__(self, *_):
+        self._began = None
+
+    def _run(self):
+        wait = self.timeout
+        while not self._done.wait(wait):
+            began = self._began
+            wait = self.timeout if began is None else began + self.timeout - time.monotonic()
+            if wait <= 0:
+                self.stalled.set()
+                self.on_stall()
+                return
+
+    def stop(self):
+        self._done.set()
+
+
 class Stream:
     def __init__(self, iterator, request):
         self.iterator, self.request = iterator, request
@@ -906,6 +946,7 @@ class Client:
         reader = None
         err_drain = None
         slot = None
+        watch = None
         native_stderr = deque(maxlen=40)
         try:
             timeout = kwargs.get('timeout', self.timeout)
@@ -1041,23 +1082,20 @@ class Client:
                             raise RuntimeError('Invalid native stream-json output: ' + repr((getattr(event, 'doc', None) or str(event))[:300]) + _stderr_tail(native_stderr)) from event
                         deadline = time.monotonic() + timeout
                         return event
+                # A child that stops reading stdin blocks a plain write past the timeout: kill it then.
+                watch = _StdinWatch(timeout, request.cancel)
                 def send(data):
-                    # A child that stops reading stdin blocks a plain write past the timeout: kill it then.
-                    stalled = threading.Event()
-                    timer = threading.Timer(timeout, lambda: (stalled.set(), request.cancel()))
-                    timer.start()
-                    try:
-                        if data is None:
-                            p.stdin.close()
-                        else:
-                            p.stdin.write(data)
-                            p.stdin.flush()
-                    except OSError:
-                        if not request.cancelled.is_set():
-                            raise
-                    finally:
-                        timer.cancel()
-                    if stalled.is_set():
+                    with watch:
+                        try:
+                            if data is None:
+                                p.stdin.close()
+                            else:
+                                p.stdin.write(data)
+                                p.stdin.flush()
+                        except OSError:
+                            if not request.cancelled.is_set():
+                                raise
+                    if watch.stalled.is_set():
                         raise TimeoutError('Claude request timed out')
                     if request.cancelled.is_set():
                         raise RuntimeError('Claude request cancelled')
@@ -1081,6 +1119,7 @@ class Client:
                                     raise RuntimeError('Native history replay not supported: expected zero-turn acknowledgment' + _stderr_tail(native_stderr))
                                 break
                 send(None)
+                watch.stop()
                 assistants, results, stopped, emitted = [], [], False, ''
                 rate_limit = None
                 tool_stream = _ToolStream(hermes_names)
@@ -1245,6 +1284,8 @@ class Client:
                 yield chunk
         finally:
             try:
+                if watch is not None:
+                    watch.stop()
                 request.cancel()
                 if request.admission is not None:
                     request.admission.close()

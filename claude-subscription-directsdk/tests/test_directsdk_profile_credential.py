@@ -484,6 +484,33 @@ def test_a_malformed_profile_config_does_not_opt_in(profile, monkeypatch):
         _apply({"UNRELATED": "kept"})
 
 
+def test_the_opt_in_is_read_with_cores_parser_not_pyyaml(profile, monkeypatch):
+    """Core parses YAML with its own hermes_yaml and does not depend on PyYAML, so the setting is read without it:
+    with ``yaml`` unimportable (a plain core install) the opt-in still applies."""
+    from hermes_constants import get_hermes_home
+    monkeypatch.setitem(sys.modules, "yaml", None)
+    monkeypatch.delenv(TOKEN, raising=False)
+    _settings(get_hermes_home(), inherit_launch_login=True)
+    with _own_cron_fire():
+        assert _apply({"UNRELATED": "kept"}) == {"UNRELATED": "kept"}
+
+
+@pytest.mark.parametrize("rewrite", [lambda text: "", lambda text: "- plugins\n", lambda text: text + "plugins: {}\n"],
+                         ids=["empty", "list-root", "duplicate-key"])
+def test_a_config_core_would_not_read_as_this_setting_does_not_opt_in(profile, monkeypatch, rewrite):
+    """An empty file, a root that is not a mapping, and a duplicated key (core's parser rejects it) all count as
+    off."""
+    import directsdk_setup
+    from hermes_constants import get_hermes_home
+    monkeypatch.delenv(TOKEN, raising=False)
+    home = get_hermes_home()
+    _settings(home, inherit_launch_login=True)
+    (home / "config.yaml").write_text(rewrite((home / "config.yaml").read_text(encoding="utf-8")), encoding="utf-8")
+    assert directsdk_setup._own_setting_is_true(directsdk_setup.INHERIT_LOGIN_SETTING) is False
+    with _own_cron_fire(), pytest.raises(directsdk_setup.ClaudeCodeLoggedOut):
+        _apply({"UNRELATED": "kept"})
+
+
 @pytest.mark.parametrize("process, config, stamp", [("other", "opted", "opted"), ("opted", "other", "opted"),
                                                      ("opted", "opted", "other")],
                          ids=["process-home-differs", "config-home-differs", "stamp-differs"])

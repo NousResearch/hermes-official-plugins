@@ -828,15 +828,12 @@ class Client:
             request.cancel()
 
     def close(self):
-        with self._lock:
-            self._closed = True
-            requests = tuple(self._requests)
-        for request in requests:
-            stream = request.stream() if request.stream else None
-            if stream is not None:
-                stream.close()
-            else:
-                request.cancel()
+        # No-op by design (#378): Hermes' auxiliary cache closes a client bound to a different
+        # live event loop, and cancelling its requests here kills parallel tool calls that are
+        # still running on that loop. Each request owns and reaps its own native process, so
+        # nothing shared is leaked by leaving them alone; Stream.close()/cancel() remain the
+        # explicit per-request stop path.
+        return None
 
     def _workdir(self):
         """The shared cwd, else the one private cwd of this process."""

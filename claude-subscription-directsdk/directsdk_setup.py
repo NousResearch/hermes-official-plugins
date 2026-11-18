@@ -235,11 +235,12 @@ def _in_cron_worker():
 
 def _own_setting_is_true(key):
     """True only when the active profile's own config.yaml parses and sets this plugin's ``key`` to a YAML boolean
-    true. No managed overlay, no last-good fallback: an unreadable or malformed file means not set."""
+    true, read with core's own parser (``hermes_yaml``; core does not depend on PyYAML). No managed overlay, no
+    last-good fallback: an unreadable or malformed file, or a core without that parser, means not set."""
     try:
-        import yaml
         from hermes_constants import get_hermes_home
-        value = yaml.safe_load((get_hermes_home() / "config.yaml").read_text(encoding="utf-8"))
+        from hermes_yaml import safe_load
+        value = safe_load((get_hermes_home() / "config.yaml").read_text(encoding="utf-8"))
     except Exception:
         return False
     for segment in ("plugins", "entries", PLUGIN_ID, "settings", key):

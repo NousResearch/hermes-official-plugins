@@ -119,6 +119,15 @@ def usage_windows(payload):
     return windows, _usage_details(payload, windows)
 
 
+def _delegated_child(cache_scope_id):
+    """Whether core stamped this request's cache scope as one a parent's delegated children share (``sub_<hash>``)."""
+    try:
+        from agent.prompt_cache_scope import is_sibling_cache_scope
+    except ImportError:  # a core without the helper mints the same prefix
+        return isinstance(cache_scope_id, str) and cache_scope_id.startswith('sub_')
+    return is_sibling_cache_scope(cache_scope_id)
+
+
 class ClaudeOAuthDirectSDKProfile(ProviderProfile):
     model_metadata = MODEL_METADATA
 
@@ -171,7 +180,13 @@ class ClaudeOAuthDirectSDKProfile(ProviderProfile):
         # conversation context its chat path always passes (session_id). Mark them so the client can skip
         # a message cache write that no later request would read.
         auxiliary = context.get('task') is not None or 'session_id' not in context
-        return extra, ({'hermes_auxiliary': True} if auxiliary else {})
+        top = {'hermes_auxiliary': True} if auxiliary else {}
+        # A delegated child never uses the 1h cache tier in core (``_apply_child_cache_ttl``), but core can only
+        # clamp the markers it builds, and here native places them: a `claude -p` turn is Claude Code's main
+        # conversation, which asks for one hour on a subscription. Say 5m for the child's requests.
+        if _delegated_child(context.get('cache_scope_id')):
+            top['hermes_cache_ttl'] = '5m'
+        return extra, top
 
     def fetch_account_usage(self, *, base_url=None, api_key=None):
         """`/usage` plan limits, asked of Claude Code itself; every failure is an `Unavailable:` line, never a raise."""

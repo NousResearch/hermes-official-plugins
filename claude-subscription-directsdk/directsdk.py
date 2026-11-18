@@ -335,7 +335,7 @@ def native_format_schema(node):
 def request_body(kwargs):
     allowed = {'model', 'messages', 'tools', 'stream', 'stream_options', 'max_tokens', 'max_completion_tokens',
                'temperature', 'top_p', 'stop', 'extra_body', 'extra_headers', 'timeout', 'tool_choice', 'parallel_tool_calls', 'n', 'response_format',
-               'hermes_auxiliary'}
+               'hermes_auxiliary', 'hermes_cache_ttl'}
     unknown = set(kwargs) - allowed
     if unknown:
         raise RequestRejected('Unsupported request parameters: ' + ', '.join(sorted(unknown)))
@@ -1029,6 +1029,10 @@ class Client:
                 env.update(ENABLE_TOOL_SEARCH='false', CLAUDE_CODE_MAX_RETRIES='0', DISABLE_AUTO_COMPACT='1', DISABLE_COMPACT='1')
                 # Telemetry and feature flags follow the user's claude_code_telemetry setting, read per spawn.
                 apply_traffic_policy(env)
+                # Hermes asked for a 5m cache on this request (a delegated child). A `-p` turn is native's main
+                # conversation bucket, so its own variable is the one that applies; a tier the user exported wins.
+                if kwargs.get('hermes_cache_ttl') == '5m':
+                    env.setdefault('CLAUDE_CODE_PROMPT_CACHE_TTL', '5m')
                 egress_env(env, upstream)
                 # Hermes owns budgets; native's replayed reminder invalidates cached history.
                 env['CLAUDE_CODE_TOTAL_TOKENS_REMINDER'] = 'off'

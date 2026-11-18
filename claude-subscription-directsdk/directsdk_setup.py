@@ -18,6 +18,7 @@ import os
 import shutil
 import ssl
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -84,6 +85,11 @@ def _resolve(command, env):
 PLUGIN_ID = "claude-subscription-directsdk-experimental"
 TELEMETRY_SETTING = "claude_code_telemetry"
 CONFIG_DIR_SETTING = "claude_config_dir"
+# Set by the profile whose Claude login is the one the Hermes process inherited (the shared ~/.claude, or the
+# process's token), so its tasks that core stamps with the process home keep that login under multiplexing.
+# Setting claude_config_dir to ~/.claude is no substitute: Claude Code keys its Keychain login by config directory,
+# so an explicit CLAUDE_CONFIG_DIR=~/.claude finds no login.
+INHERIT_LOGIN_SETTING = "inherit_launch_login"
 # Set on every child unless the user turns claude_code_telemetry on (#331).
 QUIET_TRAFFIC = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1"}
 # Either one turns off the feature-flag fetch that the account's own picker needs (2.1.319: 13 rows
@@ -197,6 +203,83 @@ def _secret_scope():
     return get_secret, routed
 
 
+def _serves_launch_profile():
+    """True when the bound scope is the launch profile's own under multiplexing. Multiplexing makes every task
+    routed, the launch profile's own turns included (a Desktop backend serving several profiles). Core binds that
+    profile's secrets unstamped ("the stamp marks a FOREIGN home": launch_profile_runtime_scope, model_switch), and
+    its login is the process's own. A stamp, even one equal to the process home, is not enough: a cron worker
+    started with HERMES_HOME=<served profile> stamps that profile's scope with its own home, which is then the
+    process home, while ~/.claude still holds the launch profile's login. Not multiplexing, no scope bound, inside
+    core's restart-safe cron worker, or a core without these names: False."""
+    try:
+        from agent.secret_scope import current_secret_scope, current_secret_scope_home, is_multiplex_active
+    except ImportError:
+        return False
+    return (is_multiplex_active() and not _in_cron_worker() and current_secret_scope() is not None
+            and current_secret_scope_home() is None)
+
+
+# Set by core's restart-safe cron worker (cron/scheduler.py) while it runs a job.
+_CRON_WORKER_ENV = "_HERMES_CRON_EXTERNAL_WORKER"
+
+
+def _in_cron_worker():
+    """True inside the process of core's restart-safe cron worker. Its process home is the fired profile's whichever
+    gateway started it, so it can't show that the login it inherited is that profile's. Core's worker entry is
+    ``python -m cron.scheduler``; the env marker covers the job itself."""
+    if os.environ.get(_CRON_WORKER_ENV):
+        return True
+    spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+    return getattr(spec, "name", None) == "cron.scheduler"
+
+
+def _own_setting_is_true(key):
+    """True only when the active profile's own config.yaml parses and sets this plugin's ``key`` to a YAML boolean
+    true. No managed overlay, no last-good fallback: an unreadable or malformed file means not set."""
+    try:
+        import yaml
+        from hermes_constants import get_hermes_home
+        value = yaml.safe_load((get_hermes_home() / "config.yaml").read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    for segment in ("plugins", "entries", PLUGIN_ID, "settings", key):
+        if not isinstance(value, Mapping) or segment not in value:
+            return False
+        value = value[segment]
+    return value is True
+
+
+def _keeps_inherited_login():
+    """True when a routed task with no Claude login of its own may keep the one this process inherited: the launch
+    profile's own unstamped turn, or a profile whose own config sets ``inherit_launch_login`` in a process started
+    for it."""
+    return _serves_launch_profile() or (_own_setting_is_true(INHERIT_LOGIN_SETTING) and _scope_is_process_profile())
+
+
+def _scope_is_process_profile():
+    """True when the bound scope's profile is the one this process was started for: its stamp, and the home the
+    task reads its config from, name the routing process home (core stamps that profile's own tasks that way in a
+    process started for it). Inside a cron worker, unstamped, unbound, a foreign stamp, or a core without these
+    names: False."""
+    if _in_cron_worker():
+        return False
+    try:
+        from agent.secret_scope import current_secret_scope, current_secret_scope_home
+        from hermes_constants import get_hermes_home, get_routing_process_hermes_home, hermes_home_key
+    except ImportError:
+        return False
+    if current_secret_scope() is None:
+        return False
+    home = current_secret_scope_home()
+    if home is None:
+        return False
+    try:
+        key = hermes_home_key(home)
+        return key == hermes_home_key(get_routing_process_hermes_home()) == hermes_home_key(get_hermes_home())
+    except Exception:
+        return False
+
+
 def _scoped(get_secret, name):
     value = get_secret(name)
     return value.strip() if isinstance(value, str) and value.strip() else None
@@ -222,11 +305,14 @@ def apply_profile_credential(env):
     inherits that process's token, gateway headers or config directory (#313); a nonempty
     ``claude_config_dir`` setting also drops an inherited token so the selected login is used. A served
     profile with neither its own token nor its own directory is refused (``ClaudeCodeLoggedOut``): the
-    child would fall back to ``~/.claude`` under the inherited HOME, the launch profile's login. With no
-    scope bound, ``UnscopedSecretError`` propagates: no child starts on a guess. ``os.environ`` is never
-    changed and no value is logged.
+    child would fall back to ``~/.claude`` under the inherited HOME, the launch profile's login. Instead of
+    that refusal, the launch profile's own unstamped turns under multiplexing, and the stamped tasks of a profile
+    that sets ``inherit_launch_login`` in a process started for it, keep the inherited login. With no scope
+    bound, ``UnscopedSecretError`` propagates: no child starts on a guess. ``os.environ`` is never changed and
+    no value is logged.
     """
     get_secret, routed = _secret_scope()
+    inherited = {name: env.get(name) for name in PROFILE_SECRETS}
     for name in PROFILE_SECRETS:
         value = _scoped(get_secret, name) if get_secret else None
         if value:
@@ -246,6 +332,9 @@ def apply_profile_credential(env):
             env["CLAUDE_CONFIG_DIR"] = os.path.expanduser(own)
         elif env.get(OAUTH_TOKEN_ENV):
             env.pop("CLAUDE_CONFIG_DIR", None)
+        elif _keeps_inherited_login():
+            # No login of its own, and the one this process inherited is this profile's: keep it, as on one profile.
+            env.update({name: value for name, value in inherited.items() if value and not env.get(name)})
         else:
             raise ClaudeCodeLoggedOut(PROFILE_LOGIN_HINT.format(OAUTH_TOKEN_ENV))
     return env

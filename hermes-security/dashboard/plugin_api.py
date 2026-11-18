@@ -175,6 +175,13 @@ def delegation():
     return _delegation_info()
 
 
+@router.get('/owner')
+def owner():
+    """The Hermes profile whose plugin store holds these scans: the agent that runs and fixes them.
+    Chats are created on this profile explicitly; an omitted profile lands on the socket's launch profile."""
+    return {'profile': get_service().profile}
+
+
 @router.post('/scans')
 def start_scan(body: dict = Body(...)):
     service = get_service()

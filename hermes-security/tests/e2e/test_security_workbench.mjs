@@ -17,6 +17,7 @@ const env = (globalThis.__securityTest = {
   profile: 'remote-profile',
   fixtures: {
     '/summary': { profile: 'remote-profile', scans: 2, findings: 1 },
+    '/owner': { profile: 'scan-agent' },
     '/scans': {
       items: [
         { scanId: 'scan_test', mode: 'deep', status: 'interrupted', target: { root: '/remote/project' } }
@@ -180,6 +181,8 @@ test('start form matches the simple flow and launches the scan in a background c
     assert.equal(create.options.timeoutMs, 60000)
     assert.equal(started, 'scan_new')
     assert.deepEqual(env.rpc.map(([m]) => m), ['session.create', 'prompt.submit'])
+    // The scan's chat runs on the profile that owns the scan, never on the socket's launch profile.
+    assert.deepEqual(env.rpc.map(([, p]) => p.profile), ['scan-agent', 'scan-agent'])
     assert.match(env.rpc[1][1].text, /scan_new/)
     assert.match(env.rpc[1][1].text, /section summary.*user-supplied context/)
     assert.match(env.rpc[1][1].text, /context unchanged to every reviewer and validator/)
@@ -606,9 +609,34 @@ test('all finding tabs and repository metadata render without missing SDK refere
   assert.match(env.rpc.find(([method]) => method === 'session.create')[1].title,
     /^Fix: Test finding · test · [A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}:\d{2}$/)
   assert.equal(plugin.fixesStarting.size, 0)
+  // The fix chat runs on the scan's own agent, never on the socket's launch profile.
+  assert.deepEqual(env.rpc.map(([, p]) => p.profile), ['scan-agent', 'scan-agent'])
+  assert.match(env.rpc[1][1].text, /Read it with the security tools first/)
+  assert.equal(env.session, 'st_1')
   // Once it finished, a later click starts another chat.
   await findFixButton().props.onClick()
   assert.equal(env.rpc.filter(([method]) => method === 'session.create').length, 2)
+  // Another agent can take the fix: its chat is created on that profile, with the finding inline as data.
+  env.fixtures['agent-options'] = ['scan-agent', 'other-agent', 'third-agent']
+  const picker = nodes(plugin.FindingDetail({ id: 'hsf_test', onBack() {} })).find((n) => n.props?.['aria-label'] === 'Agent for the fix')
+  assert.deepEqual(nodes(picker.props.children).filter((n) => n.type === 'option').map((n) => n.props.value), ['', 'other-agent', 'third-agent'])
+  assert.match(render(picker), /Scan agent \(scan-agent\)/)
+  env.rpc = []
+  env.states = ['', null, 'other-agent']
+  await findFixButton().props.onClick()
+  assert.deepEqual(env.rpc.map(([m, p]) => [m, p.profile]), [['session.create', 'other-agent'], ['prompt.submit', 'other-agent']])
+  assert.match(env.rpc[1][1].text, /scan ran on profile scan-agent/)
+  assert.match(env.rpc[1][1].text, /untrusted data/)
+  assert.match(env.rpc[1][1].text, /Missing guard/)
+  delete env.fixtures['agent-options']
+  env.states = []
+  // A secret finding handed to another agent carries where to look, never its evidence text.
+  const secret = plugin.fixPrompt({ title: 'Key in repo', secret: true, summary: 'sk-live-xyz', rootCause: 'sk-live-xyz',
+    locations: [{ path: 'a.py', startLine: 3 }] }, 'hsf_s', '/r', 'other-agent', 'scan-agent')
+  assert.doesNotMatch(secret, /sk-live-xyz/)
+  assert.match(secret, /a\.py/)
+  assert.equal(plugin.fixPrompt({ title: 't' }, 'hsf_s', '/r', 'scan-agent', 'scan-agent'),
+    plugin.fixPrompt({ title: 't' }, 'hsf_s', '/r', '', 'scan-agent'))
   env.states = []
   const page = render(plugin.BrowserView({ kind: 'Findings', selected: null, setSelected() {}, onFinding: {}, newScan: false, setNewScan() {} }))
   assert.match(page, /A member reads another tenant invoice/)
@@ -749,7 +777,7 @@ test('a paused open scan says why and continues in its own chat', async () => {
     .find((n) => n.type === 'button' && n.props.children === 'Continue scan')
   env.rpc = []
   await button().props.onClick()
-  assert.deepEqual(env.rpc, [['prompt.submit', { session_id: 'rt_1', text: plugin.continuePrompt('scan_paused') }]])
+  assert.deepEqual(env.rpc, [['prompt.submit', { session_id: 'rt_1', text: plugin.continuePrompt('scan_paused'), profile: 'scan-agent' }]])
   assert.match(plugin.continuePrompt('scan_paused'), /^Continue security scan scan_paused\. Read security_scan_get section next/)
   // A chat the backend no longer holds is reopened from its saved id, then relinked.
   env.rpc = []
@@ -759,7 +787,7 @@ test('a paused open scan says why and continues in its own chat', async () => {
   }
   await button().props.onClick()
   delete env.rpcHandler
-  assert.deepEqual(env.rpc.map(([m, p]) => [m, p.session_id]), [['prompt.submit', 'rt_1'], ['session.resume', 'st_1'], ['prompt.submit', 'rt_2']])
+  assert.deepEqual(env.rpc.map(([m, p]) => [m, p.session_id, p.profile]), [['prompt.submit', 'rt_1', 'scan-agent'], ['session.resume', 'st_1', 'scan-agent'], ['prompt.submit', 'rt_2', 'scan-agent']])
   assert.deepEqual(env.calls.filter((c) => c.path === '/scans/scan_paused/session').at(-1).options.body, { sessionId: 'rt_2', storedSessionId: 'st_1' })
   // Finished or stopped scans offer no continue; running scans without the reason read as running.
   env.fixtures['/scans/scan_paused'].reason = null
@@ -825,13 +853,13 @@ test('model and subagent pickers reach the scan and its chat; subagents only wit
     const create = env.calls.filter((c) => c.path === '/scans').at(-1)
     assert.deepEqual(create.options.body, { path: '/remote/repo', mode: 'standard', model: 'x/fast', provider: 'openrouter',
       delegate: { backend: 'model_map', name: 'deep' } })
-    assert.deepEqual(env.rpc[0], ['session.create', { cwd: '/remote/repo', title: 'Security scan · repo · new', model: 'x/fast', provider: 'openrouter' }])
+    assert.deepEqual(env.rpc[0], ['session.create', { cwd: '/remote/repo', title: 'Security scan · repo · new', model: 'x/fast', provider: 'openrouter', profile: 'scan-agent' }])
     // Default model: the scan records it and its chat is created on it, not on the profile's default.
     env.states = [{ path: '/remote/repo', otherPath: '', changes: false, deep: false, tests: false, folder: '', context: '', model: '', delegate: '' }, null, false]
     env.rpc = []
     await nodes(plugin.NewScan({})).find((n) => n.type === 'button' && n.props.children === 'Start scan').props.onClick()
     assert.deepEqual(env.calls.filter((c) => c.path === '/scans').at(-1).options.body, { path: '/remote/repo', mode: 'standard', model: 'claude-opus-5-5' })
-    assert.deepEqual(env.rpc[0], ['session.create', { cwd: '/remote/repo', title: 'Security scan · repo · new', model: 'claude-opus-5-5', provider: 'anthropic' }])
+    assert.deepEqual(env.rpc[0], ['session.create', { cwd: '/remote/repo', title: 'Security scan · repo · new', model: 'claude-opus-5-5', provider: 'anthropic', profile: 'scan-agent' }])
     assert.deepEqual(plugin.chatRoute('x/fast', env.fixtures['model-options']), { model: 'x/fast', provider: 'openrouter' })
     assert.deepEqual(plugin.chatRoute('unlisted', env.fixtures['model-options']), { model: 'unlisted' })
     assert.deepEqual(plugin.chatRoute('', env.fixtures['model-options']), {})

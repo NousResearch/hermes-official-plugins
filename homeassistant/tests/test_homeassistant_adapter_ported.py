@@ -1005,7 +1005,7 @@ class _Runner:
     def _authorization_adapter(self, platform, profile):
         return self._adapter
 
-    def _profile_name_for_source(self, source, profile=None):
+    def _profile_name_for_source(self, source, profile=None, **kwargs):
         return self.home_profile or "default"
 
     class _cfg:
@@ -1841,5 +1841,7 @@ async def test_session_mode_degrades_to_broadcast_when_markers_unknown(monkeypat
 
     await adapter._handle_ha_event(_make_event("sensor.s", "0", "1"))
 
-    assert not target.handled, "no injection while the sanitizer is unknown"
-    assert adapter.handle_message.await_count == 1, "event must reach the source session"
+    assert not target.handled, "no model-turn injection while the sanitizer is unknown"
+    assert target.sent, "the alert must still be delivered as plain text"
+    assert adapter.handle_message.await_count == 0, (
+        "the source-session turn would hand unsanitized text to the model")

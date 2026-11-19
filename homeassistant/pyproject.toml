@@ -1,6 +1,6 @@
 [project]
 name = "hermes-homeassistant"
-version = "2.0.1"
+version = "2.0.2"
 description = "Home Assistant gateway platform and smart-home tools for Hermes Agent (official plugin)"
 readme = "README.md"
 license = { text = "MIT" }

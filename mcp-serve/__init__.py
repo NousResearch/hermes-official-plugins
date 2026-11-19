@@ -21,7 +21,7 @@ def register(ctx) -> None:
         name="mcp-serve", help="Run Hermes as an MCP server (expose conversations, optionally tools, to other agents)",
         description="Run Hermes as a stdio MCP server. MCP client config: "
                     '{"command": "hermes", "args": ["mcp-serve"]}. Add --tools to also expose Hermes\' '
-                    "web, browser, vision, image generation, skills and TTS tools.",
+                    "web, vision, image generation, skills and TTS tools.",
         setup_fn=setup_cli, handler_fn=handle_cli)
 
 

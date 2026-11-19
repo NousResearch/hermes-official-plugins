@@ -736,7 +736,7 @@ _BRIDGE_INSTRUCTIONS = (
     "Matrix, and other connected platforms."
 )
 _TOOLS_INSTRUCTIONS = (
-    " Also exposes Hermes' own capabilities (web search/extract, browser automation, "
+    " Also exposes Hermes' own capabilities (web search/extract, "
     "vision analysis, image generation, skills and text-to-speech) as directly callable tools."
 )
 

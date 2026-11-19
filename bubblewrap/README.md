@@ -144,8 +144,10 @@ on the host shows up in the next command.
 
 ### The Hermes home
 
-The Hermes home (`HERMES_HOME`, normally `.hermes` in your home directory) is hidden as well. Two
-directories under it stay reachable: the backend's own state directory
+The Hermes home (`HERMES_HOME`, normally `.hermes` in your home directory) is hidden as well. A few
+directories under it stay reachable: the directories where Hermes stages what you hand the agent in a
+chat (`HERMES_HOME/attachments`, `HERMES_HOME/images`, `HERMES_HOME/composer-pastes`), read-only at
+their own paths so the agent can open the file its prompt names; the backend's own state directory
 (`HERMES_HOME/sandboxes/bwrap-*`) and the Hermes scratch directory (`HERMES_HOME/cache/scratch`, the
 path Hermes names in its system prompt and points `TMPDIR`, `TMP` and `TEMP` at). On the host the
 scratch directory is shared by every Hermes process and session, so the sandbox mounts its own
@@ -158,8 +160,9 @@ shared directory are not visible. "Session" is the terminal session Hermes keys 
 CLI, cron jobs and subagents share their parent's, so they share one scratch directory as they share
 one sandbox. Unused for a day, the directory is removed by Hermes' scratch pruning. With
 `terminal.home_mode: profile`, `HERMES_HOME/home` is the subprocess `HOME` and stays readable and
-writable; the rest of `HERMES_HOME` stays hidden, the files other sessions staged there (attachments,
-cached documents, images, pastes) included. When `HERMES_HOME` points elsewhere (a profile under
+writable. The rest of `HERMES_HOME` stays hidden, the documents cached from messaging platforms
+included. A staging directory that is a symlink into the rest of the Hermes home or into a directory a
+sandbox can write to is not bound (one warning in the log). When `HERMES_HOME` points elsewhere (a profile under
 `.hermes/profiles/<name>`), the default `.hermes` is hidden too, so a profile's sandbox cannot read the
 default home's `.env` or `auth.json`.
 

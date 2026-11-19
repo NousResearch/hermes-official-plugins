@@ -365,7 +365,7 @@ class TestConstructionTimeMounts:
         # ever comes from inside a sandbox.
         assert params == ["config", "initial_cwd", "state_dir", "home", "hermes_home", "tracked_cwd", "bwrap_path",
                           "hidden_paths", "home_root", "home_allow", "ca_bundles", "scratch_dir",
-                          "scratch_private", "profile_home", "sandbox_root"]
+                          "scratch_private", "profile_home", "sandbox_root", "staged_inputs"]
 
     def test_chdir_follows_tracked_cwd_with_fixed_mounts(self, sandbox_root, work_dir):
         home = os.path.expanduser("~")

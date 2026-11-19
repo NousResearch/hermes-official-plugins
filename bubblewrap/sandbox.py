@@ -157,6 +157,15 @@ CA_BUNDLE_VARS: tuple[str, ...] = (
     "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "GIT_SSL_CAINFO", "PIP_CERT",
 )
 
+# Directories of HERMES_HOME where Hermes stages what the user hands the
+# agent in a chat: file.attach uploads, pasted or dropped images, large
+# Desktop pastes. The prompt names the staged file by its host path (an
+# @file: reference), so each is bound back read-only at its own path; core
+# lists the same directories for its container backends
+# (tools/credential_files.py _CACHE_DIRS). Read-only, so a command cannot
+# plant a file there that a later turn would take for an upload.
+STAGED_INPUT_DIRS: tuple[str, ...] = ("attachments", "images", "composer-pastes")
+
 DEFAULT_PROFILE = "network"
 DEFAULT_HOME_MODE = "auto"
 DEFAULT_MEMORY_MB = 256
@@ -597,6 +606,37 @@ def ca_bundle_binds(
     )
 
 
+def staged_input_binds(hermes_home: str, guard: bubblewrap_binds.BindGuard) -> tuple[tuple[str, str], ...]:
+    """(source, destination) pairs that show the STAGED_INPUT_DIRS of *hermes_home* read-only.
+
+    A missing directory is made first, as core does for its container
+    backends: the environment outlives many turns, and a directory that
+    only appeared with the first upload would have no bind. Each one is
+    resolved once and must lie in itself (a plain directory) or outside
+    every hidden path: a link into another part of a Hermes home, or into
+    a directory a sandbox can write to, is refused with one warning. A link
+    out of the hidden set needs no bind, since the staged path Hermes hands
+    over is the resolved one.
+    """
+    binds: list[tuple[str, str]] = []
+    for name in STAGED_INPUT_DIRS:
+        spelled = os.path.join(hermes_home, name)
+        try:
+            os.makedirs(spelled, mode=0o700, exist_ok=True)
+        except OSError:
+            continue
+        resolved = os.path.realpath(spelled)
+        if not any(_is_within(resolved, mask) for mask in guard.masks):
+            continue
+        real = bubblewrap_binds.validated_bind_source(
+            f"the Hermes {name} dir", spelled, guard, kind=bubblewrap_binds.DIRECTORY,
+            public=() if os.path.islink(spelled) else (spelled,),
+        )
+        if real is not None:
+            binds.append((real, spelled))
+    return tuple(binds)
+
+
 def resolve_scratch_dir(hermes_home: str) -> str:
     """Real path of the Hermes scratch dir for *hermes_home* (``<home>/cache/scratch``), created if missing."""
     from hermes_constants import get_scratch_dir
@@ -808,8 +848,9 @@ def _late_mounts(
     profile_home: tuple[str, str] | None,
     sandbox_root: str | None,
     sandbox_views: Sequence[str] = (),
+    staged_inputs: Sequence[tuple[str, str]] = (),
 ) -> list[tuple[str, ...]]:
-    """The mounts that go on top of every overlay, in order: the sandbox dir, trust anchors, scratch, the profile home, the state dir."""
+    """The mounts that go on top of every overlay, in order: the sandbox dir, trust anchors, scratch, staged inputs, the profile home, the state dir."""
     late: list[tuple[str, ...]] = []
     # The sandbox dir holds the state dir, the empty file and the scratch
     # name of every environment. Outside the hidden set it gets an empty
@@ -832,6 +873,9 @@ def _late_mounts(
     # read-only under the restricted profile so a write fails loudly.
     if scratch_dir and scratch_private:
         late.append(("--bind-try" if profile.writable_cwd else "--ro-bind-try", scratch_private, scratch_dir))
+    # What the user attached in a chat, staged under the hidden HERMES_HOME
+    # (STAGED_INPUT_DIRS): read-only at the path the prompt names.
+    late += [("--ro-bind-try", src, dest) for src, dest in staged_inputs]
     # Under home_mode=profile the subprocess HOME is HERMES_HOME/home
     # (hermes_constants.get_subprocess_home), so bind it back read-write on
     # top of the overlay, from the directory it resolved to at construction
@@ -867,6 +911,7 @@ def build_bwrap_args(
     scratch_private: str | None = None,
     profile_home: tuple[str, str] | None | object = _UNRESOLVED,
     sandbox_root: str | None = None,
+    staged_inputs: Sequence[tuple[str, str]] = (),
 ) -> list[str]:
     """Build the bwrap argv prefix; the caller appends the shell argv after the trailing ``--``.
 
@@ -883,7 +928,9 @@ def build_bwrap_args(
     (private_scratch_path), mounted at *scratch_dir*; without it nothing of
     the scratch dir is bound. *sandbox_root*, when given, is hidden but for
     the state dir (the environment passes it when no hidden path covers
-    it), and so is each second view of it through an operator bind. The listing of the top of HOME is the one input read from the host
+    it), and so is each second view of it through an operator bind.
+    *staged_inputs* are the (source, destination) pairs of
+    staged_input_binds, bound read-only; none when omitted. The listing of the top of HOME is the one input read from the host
     at each call, so a directory made on the host later shows in the next
     spawn.
     """
@@ -967,6 +1014,7 @@ def build_bwrap_args(
         profile_home=profile_home,  # type: ignore[arg-type]
         sandbox_root=sandbox_root,
         sandbox_views=sandbox_dir_views(sandbox_root, binds) if sandbox_root else (),
+        staged_inputs=staged_inputs,
     )
 
     if home_root is None:
@@ -1585,6 +1633,7 @@ class BubblewrapEnvironment(LocalEnvironment):
         self._config = replace(self._config, binds=tuple(kept))
         self._profile_home_bind = self._validated_profile_home(guard)
         self._ca_bundles = ca_bundle_binds(guard)
+        self._staged_inputs = staged_input_binds(self._hermes_home, guard)
         if self._scratch_dir:
             self._scratch_dir = bubblewrap_binds.validated_bind_source(
                 "the Hermes scratch dir", self._scratch_dir, guard, kind=bubblewrap_binds.DIRECTORY,
@@ -2054,6 +2103,7 @@ class BubblewrapEnvironment(LocalEnvironment):
             scratch_private=self._scratch_private,
             profile_home=self._profile_home_bind,
             sandbox_root=self._sandbox_root,
+            staged_inputs=self._staged_inputs,
         )
 
     def _reset_masked_cwd(self) -> str | None:

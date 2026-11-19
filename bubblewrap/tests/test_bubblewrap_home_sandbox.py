@@ -157,11 +157,14 @@ def test_home_allow_shows_an_extra_dot_entry_but_never_a_credential_store(home):
     assert SECRET not in pgpass
 
 
-def test_files_another_session_staged_are_not_visible(home):
-    """Session A stages documents, images and pastes under HERMES_HOME; session B's sandbox cannot read them."""
+def test_cached_data_under_the_hermes_home_is_not_visible(home):
+    """Documents, media and tool results Hermes caches under HERMES_HOME stay hidden; only the chat
+    input staging dirs (STAGED_INPUT_DIRS, read-only) are bound back."""
     from tools import credential_files
+    from bubblewrap_plugin.sandbox import STAGED_INPUT_DIRS
 
     roots = [Path(mount["host_path"]) for mount in credential_files.get_cache_directory_mounts()]
+    roots = [root for root in roots if root.name not in STAGED_INPUT_DIRS]
     assert roots, "the staged data registry lists no directories"
     for root in roots:
         root.mkdir(parents=True, exist_ok=True)

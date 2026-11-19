@@ -26,7 +26,22 @@ def test_installed_plugin_registers_and_constructs_client_without_native_process
         client.close()
 
 
-def test_missing_claude_is_reported_on_every_path(profile, tmp_path, caplog):
+@pytest.fixture
+def no_system_claude(profile, monkeypatch):
+    """Keep missing-CLI probes independent of real system-wide installations."""
+    import directsdk_setup  # Load the flat copy as well as profile's package-relative copy.
+
+    modules = [module for name, module in tuple(sys.modules.items())
+               if name.rsplit(".", 1)[-1] == "directsdk_setup"
+               and module is not None and hasattr(module, "_SYSTEM_PREFIXES")]
+    assert directsdk_setup in modules
+    assert any(module.__name__.startswith(type(profile).__module__ + ".") for module in modules)
+    for module in modules:
+        monkeypatch.setattr(module, "_SYSTEM_PREFIXES", ())
+    return modules
+
+
+def test_missing_claude_is_reported_on_every_path(profile, tmp_path, caplog, no_system_claude):
     """No `claude` binary: setup says so, the picker degrades to the catalog, a request refuses with
     the install hint instead of a Popen traceback, and plugin load logged a warning."""
     env = {"PATH": str(tmp_path / "empty-bin"), "HOME": str(tmp_path)}
@@ -54,7 +69,7 @@ def test_missing_claude_is_reported_on_every_path(profile, tmp_path, caplog):
     assert providers.get_provider_profile(PLUGIN_NAME) is not None
 
 
-def test_resolve_honors_the_env_dict_not_the_process_path(profile, tmp_path):
+def test_resolve_honors_the_env_dict_not_the_process_path(profile, tmp_path, no_system_claude):
     """_resolve must look up `claude` on the PATH of the env it is handed. The process PATH of a
     test/CI runner is unrelated: a host that happens to have claude installed must not make an
     env-scoped 'no claude' probe find it (the bug behind the flaky missing-CLI gate)."""
@@ -71,6 +86,24 @@ def test_resolve_honors_the_env_dict_not_the_process_path(profile, tmp_path):
     assert _resolve(None, {"PATH": str(tmp_path / "nowhere")}) is None
     # No PATH key at all falls back to exec's own default search path, not the interpreter's PATH.
     assert _resolve(None, {}) == _resolve(None, {"PATH": os.defpath})
+
+
+@pytest.mark.skipif(os.name == "nt", reason="system-prefix fallback is POSIX-only")
+def test_system_install_prefix_remains_a_fallback_not_an_explicit_command_override(
+        profile, tmp_path, monkeypatch, no_system_claude):
+    prefix = tmp_path / "system-bin"
+    prefix.mkdir()
+    binary = prefix / "claude"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+    env = {"PATH": str(tmp_path / "empty-bin"), "HOME": str(tmp_path)}
+    for module in no_system_claude:
+        monkeypatch.setattr(module, "_SYSTEM_PREFIXES", (str(prefix),))
+        assert module._resolve(None, env) == [str(binary)]
+        assert module._resolve(["claude", "--verbose"], env) == [str(binary), "--verbose"]
+        assert module._resolve([str(tmp_path / "missing-claude")], env) is None
+        assert module._resolve(None, {**env, "CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND":
+                                      str(tmp_path / "missing-override")}) is None
 
 
 def test_native_alias_metadata_is_bounded_and_never_claims_subscription_invoice(profile):

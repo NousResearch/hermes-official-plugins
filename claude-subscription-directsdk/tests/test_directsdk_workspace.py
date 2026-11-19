@@ -101,7 +101,9 @@ def unsafe(kind, tmp_path, monkeypatch):
     root.mkdir(mode=0o700)
     monkeypatch.setattr(native.tempfile, "tempdir", str(root))
     if kind == "no_uid":
-        # No uid and, on Windows, no user name to key the shared path by: only the private fallback is left.
+        # No uid and, on Windows, no user name to key the shared path by: only the private fallback is left. It
+        # removes UID support, not the synthetic host's login identity.
+        monkeypatch.setenv("USER", "test-workspace-user")
         monkeypatch.delattr(native.os, "getuid", raising=False)
         monkeypatch.delenv("USERNAME", raising=False)
         return

@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 PLUGIN_ID = "claude-subscription-directsdk-experimental"
 MODE_SETTING = "extra_usage"
 ALLOW_SETTING = "extra_usage_allowed_until"
+# Opt-in early stop (#398): refuse under ask/stop once an account-wide plan window reaches this
+# percent, before the first request that would be billed as extra usage. Unset/invalid = 100.
+RESERVE_SETTING = "extra_usage_reserve_percent"
 MODES = ("allow", "notify", "ask", "stop")
 DEFAULT_MODE = "notify"
 # How long a probe or event answer stands when it names no reset time.
@@ -79,6 +82,14 @@ def _record(key, using, resets_at, now=None):
 def observe(key, summary, setting=None):
     """Feed one native ``rate_limit_event`` summary; warns once per window under ``notify``."""
     using, resets_at = bool(summary.get("using_overage")), _epoch(summary.get("resets_at"))
+    # A reserve below 100 counts a nearly full window as spilling under ask/stop, from the same event, so a
+    # running process does not wait for its next probe while turns keep going (#398). Only where extra usage
+    # is permitted at all ("allowed"); otherwise nothing past the limit can be billed.
+    if (not using and setting is not None and summary.get("overage_status") == "allowed"
+            and mode(setting) in ("ask", "stop")):
+        reserve = reserve_percent(setting)
+        used = usage_percent(summary.get("utilization"), fraction=True)
+        using = reserve < 100 and used is not None and used >= reserve
     _record(key, using, resets_at)
     if not using or setting is None or mode(setting) != "notify":
         return
@@ -98,19 +109,31 @@ def usage_percent(value, fraction=False):
     return value * 100.0 if fraction and value <= 1 else float(value)
 
 
-def observe_usage(key, limits):
+def reserve_percent(setting):
+    """The opt-in early-stop threshold as a percent in (0, 100]; unset or invalid means 100 (#398)."""
+    value = setting(RESERVE_SETTING, "") if setting else ""
+    try:
+        percent = float(value)
+    except (TypeError, ValueError):
+        return 100.0
+    if not math.isfinite(percent) or percent <= 0 or percent > 100:
+        return 100.0
+    return percent
+
+
+def observe_usage(key, limits, threshold=100.0):
     """Feed a ``get_usage`` ``rate_limits`` body and return ``(using_overage, resets_at)``: spilling means extra
-    usage is on and an account-wide plan window is full."""
+    usage is on and an account-wide plan window is full. ``threshold`` below 100 stops before the wall (#398)."""
     extra = limits.get("extra_usage") if isinstance(limits.get("extra_usage"), dict) else {}
     full = []
     for entry in limits.get("limits") if isinstance(limits.get("limits"), list) else ():
         if isinstance(entry, dict) and entry.get("kind") in ("session", "weekly_all"):
-            if (usage_percent(entry.get("percent")) or 0) >= 100:
+            if (usage_percent(entry.get("percent")) or 0) >= threshold:
                 full.append(entry.get("resets_at"))
     if not limits.get("limits"):
         for name in ("five_hour", "seven_day"):
             window = limits.get(name) if isinstance(limits.get(name), dict) else {}
-            if (usage_percent(window.get("utilization"), fraction=True) or 0) >= 100:
+            if (usage_percent(window.get("utilization"), fraction=True) or 0) >= threshold:
                 full.append(window.get("resets_at"))
     resets = [_parse(value) for value in full]
     resets_at = max((r for r in resets if r), default=None)
@@ -161,7 +184,7 @@ def admit(key, setting, probe):
                 f"extra_usage setting is '{current}', so the request was not sent. Fix the cause and send the message "
                 f"again, or run `hermes config set plugins.entries.{PLUGIN_ID}.settings.{MODE_SETTING} notify` to "
                 f"send without this check.")
-        using, resets_at = observe_usage(key, limits)
+        using, resets_at = observe_usage(key, limits, threshold=reserve_percent(setting))
     else:
         using, resets_at = known["using_overage"], known["resets_at"]
     if not using:
@@ -175,9 +198,11 @@ def admit(key, setting, probe):
     else:
         how = (f" To continue on extra usage, run `hermes config set {base}.{MODE_SETTING} ask` (asks once per "
                f"limit window) or `... {MODE_SETTING} allow`.")
-    raise ClaudeExtraUsageBlocked("Claude plan limit reached: this account is now drawing paid extra usage, and the "
-                                  f"extra_usage setting is '{current}', so the request was not sent.{when}{how}",
-                                  resets_at)
+    reserve = reserve_percent(setting)
+    what = (f"a plan window has reached the {reserve:g}% extra_usage_reserve_percent, so the next request may be "
+            "billed as extra usage" if reserve < 100 else "this account is now drawing paid extra usage")
+    raise ClaudeExtraUsageBlocked(f"Claude plan limit reached: {what}, and the extra_usage setting is '{current}', so "
+                                  f"the request was not sent.{when}{how}", resets_at)
 
 
 def reset():

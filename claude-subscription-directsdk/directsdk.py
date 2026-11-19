@@ -73,17 +73,19 @@ class ClaudeAPIError(RuntimeError):
 # The relay records a transport failure as an exception class name (``UpstreamIdle``,
 # ``ConnectionResetError``). Core's classifier reads the message, not this plugin's types, so a
 # status-less wrapper used to reach it as an unclassifiable error: no same-provider retry, no
-# fallback, and no compression network-failure guard (#396). Name the failure with the canonical
-# wording core already matches, keeping the original label for reports.
+# fallback, and no compression network-failure guard (#396). Name the failure with wording core
+# already matches, keeping the original label for reports. Mid-stream failures use core's
+# premature-close wording, never its server-disconnect wording: on a large session with a
+# non-reasoning model core reads a disconnect as a probable context overflow and compresses.
 _TRANSPORT_PHRASES = {
-    "UpstreamIdle": "server disconnected",
-    "ConnectionResetError": "connection reset by peer",
-    "ConnectionAbortedError": "connection reset by peer",
-    "ConnectionRefusedError": "connection refused",
-    "BrokenPipeError": "connection reset by peer",
+    "UpstreamIdle": "response ended prematurely",
+    "ConnectionResetError": "connection reset",
+    "ConnectionAbortedError": "connection reset",
+    "BrokenPipeError": "connection reset",
     "RemoteProtocolError": "response ended prematurely",
     "LocalProtocolError": "response ended prematurely",
-    "IncompleteRead": "incomplete chunked read",
+    "IncompleteRead": "response ended prematurely",
+    "ConnectionRefusedError": "connection refused",
     "TimeoutError": "timed out",
     "socket.timeout": "timed out",
 }

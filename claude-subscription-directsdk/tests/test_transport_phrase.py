@@ -2,35 +2,34 @@
 
 import pytest
 
-from directsdk import transport_phrase
+from directsdk import ClaudeAPIError, transport_phrase
 
 
-@pytest.mark.parametrize("label,phrase", [
-    ("UpstreamIdle", "server disconnected"),
-    ("ConnectionResetError", "connection reset by peer"),
-    ("RemoteProtocolError", "response ended prematurely"),
-    ("IncompleteRead", "incomplete chunked read"),
-    ("TimeoutError", "timed out"),
-])
-def test_known_failures_map_to_canonical_wording(label, phrase):
-    assert transport_phrase(label) == phrase
+def _wrapped(label):
+    """The message the client raises for an HTTP-200 capture cut short by ``label``."""
+    return ClaudeAPIError(f"Incomplete upstream response (first upstream attempt: status 200, capture incomplete, "
+                          f"relay failure {label}, native retries denied: 2) [{transport_phrase(label)}]", None)
+
+
+@pytest.mark.parametrize("label", ["UpstreamIdle", "ConnectionResetError", "BrokenPipeError",
+                                   "RemoteProtocolError", "IncompleteRead"])
+@pytest.mark.parametrize("model", ["claude-haiku-4-5", "claude-opus-5-5[1m]"])
+def test_mid_stream_failure_is_a_connection_retry_never_a_compression(label, model):
+    """Through core's real classifier: a transport failure, retried, and never read as an overflow, even on a
+    large session with a non-reasoning model (core compresses on its server-disconnect wording there)."""
+    from agent.error_classifier import FailoverReason, classify_api_error
+    verdict = classify_api_error(_wrapped(label), provider="claude-subscription-directsdk-experimental", model=model,
+                                 approx_tokens=180000, context_length=200000, num_messages=300)
+    assert verdict.reason is FailoverReason.timeout
+    assert verdict.error_context.get("transport") == "connection"
+    assert verdict.retryable and not verdict.should_compress
 
 
 def test_qualified_name_is_normalised():
-    assert transport_phrase("http.client.IncompleteRead") == "incomplete chunked read"
+    assert transport_phrase("http.client.IncompleteRead") == transport_phrase("IncompleteRead") != ""
 
 
 def test_unknown_or_empty_failure_adds_nothing():
     assert transport_phrase("KeyError") == ""
     assert transport_phrase(None) == ""
     assert transport_phrase("") == ""
-
-
-def test_phrase_is_recognised_by_core_classifier():
-    """The wording must be one core already matches, so no core change is needed."""
-    from agent.error_classifier import (
-        _SERVER_DISCONNECT_PATTERNS, _PREMATURE_CLOSE_PATTERNS, _CONNECTION_MESSAGE_PATTERNS,
-    )
-    known = set(_SERVER_DISCONNECT_PATTERNS) | set(_PREMATURE_CLOSE_PATTERNS) | set(_CONNECTION_MESSAGE_PATTERNS)
-    for label in ("UpstreamIdle", "ConnectionResetError", "RemoteProtocolError", "IncompleteRead"):
-        assert transport_phrase(label) in known

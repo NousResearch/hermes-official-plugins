@@ -15,6 +15,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import shutil
 import ssl
 import subprocess
@@ -75,17 +76,26 @@ def _install_prefixes(env):
 _MIN_CLAUDE_VERSION = (2, 1, 280)
 
 
+_cli_versions = {}  # (path, mtime_ns, size) -> version tuple or None: `--version` runs once per installed binary
+
+
 def _cli_version(exe, env):
-    """``(major, minor, patch)`` from ``<exe> --version``, or None when it cannot be read."""
-    import re
-    import subprocess
+    """``(major, minor, patch)`` from ``<exe> --version``, or None when it cannot be read. Cached per binary
+    (path, mtime, size), since every turn resolves the CLI and `claude update` replaces the file."""
     try:
-        out = subprocess.run([exe, "--version"], capture_output=True, text=True,
-                             timeout=5, env=env).stdout
-    except (OSError, subprocess.SubprocessError):
+        stat = os.stat(exe)
+    except OSError:
         return None
-    match = re.search(r"(\d+)\.(\d+)\.(\d+)", out or "")
-    return tuple(int(x) for x in match.groups()) if match else None
+    key = (os.path.realpath(exe), stat.st_mtime_ns, stat.st_size)
+    if key not in _cli_versions:
+        try:
+            out = subprocess.run([exe, "--version"], capture_output=True, text=True, encoding="utf-8",
+                                 errors="replace", timeout=5, env=env).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None  # not cached: a transient failure is asked again next time
+        match = re.search(r"(\d+)\.(\d+)\.(\d+)", out or "")
+        _cli_versions[key] = tuple(int(x) for x in match.groups()) if match else None
+    return _cli_versions[key]
 
 
 def _resolve(command, env):
@@ -98,8 +108,9 @@ def _resolve(command, env):
         found = _cli_version(exe, env)
         if found is not None and found < _MIN_CLAUDE_VERSION:
             for prefix in _install_prefixes(env):
-                candidate = os.path.join(prefix, head)
-                if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                # which() per prefix, so Windows finds claude.exe / claude.cmd through PATHEXT.
+                candidate = shutil.which(head, path=prefix)
+                if candidate and os.path.normcase(candidate) != os.path.normcase(exe):
                     version = _cli_version(candidate, env)
                     if version is not None and version >= _MIN_CLAUDE_VERSION:
                         exe = candidate

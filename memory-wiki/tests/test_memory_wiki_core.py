@@ -192,7 +192,7 @@ class _MemoryWikiFakeDB:
         self.list_limits = []
         self.message_session_ids = []
 
-    def list_sessions_rich(self, *, limit, include_children, order_by_last_active):
+    def list_sessions_rich(self, *, limit, include_children, order_by_last_active, exclude_sources=None):
         self.list_limits.append(limit)
         assert include_children is False
         assert order_by_last_active is True

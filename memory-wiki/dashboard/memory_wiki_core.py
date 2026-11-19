@@ -390,11 +390,12 @@ def _read_memory_entries(path: Path, delimiter: str) -> list[str]:
 def build_memory_overview(db, *, subject_limit: int = 50, day_limit: int = 30) -> dict:
     """Return overview payload for Memory Wiki dashboard/API consumers."""
 
-    recent = _conversation_sessions(db.list_sessions_rich(
+    recent = db.list_sessions_rich(
         limit=10,
         include_children=False,
         order_by_last_active=True,
-    ))
+        exclude_sources=list(NON_CONVERSATION_SOURCES),
+    )
     return {
         "subjects": build_memory_subjects(db, limit=subject_limit),
         "daily_logs": build_daily_logs(db, limit_days=day_limit),
@@ -405,12 +406,10 @@ def build_memory_overview(db, *, subject_limit: int = 50, day_limit: int = 30) -
 
 # Cron scaffolding and delegated subagents are activity records, not conversations. Their prompt
 # text otherwise dominates the subject index and the Recent sessions list (#379). The daily log
-# keeps full coverage: it is an activity record, so it still includes them.
-NON_CONVERSATION_SOURCES = frozenset({"cron", "subagent"})
-
-
-def _conversation_sessions(sessions):
-    return [s for s in sessions if (s.get("source") or "") not in NON_CONVERSATION_SOURCES]
+# keeps full coverage: it is an activity record, so it still includes them. The filter runs in the
+# query so the limit counts conversations: filtering after it left Recent sessions empty whenever the
+# newest rows were all cron runs.
+NON_CONVERSATION_SOURCES = ("cron", "subagent")
 
 
 def _load_memory_sessions(db, *, limit: int, conversations_only: bool = True) -> list[tuple[dict, list[dict]]]:
@@ -418,9 +417,8 @@ def _load_memory_sessions(db, *, limit: int, conversations_only: bool = True) ->
         limit=limit,
         include_children=False,
         order_by_last_active=True,
+        exclude_sources=list(NON_CONVERSATION_SOURCES) if conversations_only else None,
     )
-    if conversations_only:
-        sessions = _conversation_sessions(sessions)
     return [(session, db.get_messages(session["id"])) for session in sessions]
 
 

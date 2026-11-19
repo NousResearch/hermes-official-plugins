@@ -722,11 +722,17 @@ class HomeAssistantAdapter(BasePlatformAdapter):
         """
         try:
             if _GATEWAY_SILENCE_MARKERS is None:
+                # Unknown markers mean the text cannot be sanitized: routing it through the
+                # agent (the source-session path) would let an entity value's marker come back
+                # in the reply and silence its own alert. Degrade to a plain cross-platform
+                # alert instead - the same tested broadcast arm, which never passes the text
+                # through a model, keeps the home thread and falls back to the HA notification.
                 logger.warning(
-                    "[%s] Gateway silence markers unavailable; delivering '%s' via the source "
-                    "session instead of injecting unsanitized text", self.name, entity_id,
+                    "[%s] Gateway silence markers unavailable; delivering '%s' as a plain alert "
+                    "instead of injecting it into a model turn", self.name, entity_id,
                 )
-                return False
+                await self.send(f"ha_events:{target_platform_name}", message)
+                return True
             if not getattr(self, "gateway_runner", None):
                 logger.warning(
                     "[%s] No gateway runner; delivering '%s' via the source session",

@@ -34,7 +34,12 @@ def test_requests_work_after_the_frozen_copy_is_deleted(profile, tmp_path, monke
     copy = Path(package.__file__).resolve().parent
     installed = Path(os.environ['HERMES_HOME']).resolve() / 'plugins'
     assert installed not in copy.parents, 'core no longer imports from a frozen copy; this test proves nothing'
+    setup = sys.modules[package.__name__ + '.directsdk_setup']
+    tested = setup.session_versions()
+    assert tested
     shutil.rmtree(copy)
+    # The session gate still knows the tested versions: a kept conversation must not quietly turn per-call.
+    assert setup.session_versions() == tested
 
     native = tmp_path / 'native.py'
     native.write_text(NATIVE)

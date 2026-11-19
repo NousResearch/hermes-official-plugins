@@ -218,13 +218,22 @@ _SESSION_VERSIONS = re.compile(r"^\s*session_versions:\s*\[([^\]]*)\]", re.M)
 _versions, _untested, _versions_lock = {}, set(), threading.Lock()
 
 
-def session_versions():
-    """The Claude Code versions the session tests passed on (plugin.yaml ``session_versions``); none if unreadable."""
+def _read_session_versions():
     try:
         match = _SESSION_VERSIONS.search(Path(__file__).with_name("plugin.yaml").read_text(encoding="utf-8"))
     except OSError:
         return frozenset()
     return frozenset(v.strip().strip("'\"") for v in match.group(1).split(",") if v.strip()) if match else frozenset()
+
+
+# Read once, at import: a temp cleaner can delete core's frozen copy of the plugin while Hermes runs (#406), and a
+# read after that would find no list and quietly send every kept conversation per-call.
+_TESTED = _read_session_versions()
+
+
+def session_versions():
+    """The Claude Code versions the session tests passed on (plugin.yaml ``session_versions``); none if unreadable."""
+    return _TESTED
 
 
 def _file_key(arg):

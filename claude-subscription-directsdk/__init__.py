@@ -227,6 +227,11 @@ def classify_api_error(error, **_):
     # Matched by class name: the plugin can load as a package or as top-level modules, so the class may be either copy.
     if type(error).__name__ == 'RequestRejected':
         return {'reason': 'format_error', 'retryable': False, 'should_fallback': True}
+    # No Claude Code or no login where native runs: a retry cannot fix it and a fallback provider would bill a
+    # different account, so fail closed with the install/login hint (hermes-agent#132337). Matched by name: the
+    # Hermes loader and the flat test path import directsdk as two different modules.
+    if type(error).__name__ in ('ClaudeCodeMissing', 'ClaudeCodeLoggedOut'):
+        return {'reason': 'auth_permanent', 'retryable': False, 'should_fallback': False}
     return None
 
 

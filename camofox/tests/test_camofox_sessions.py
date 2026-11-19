@@ -26,6 +26,13 @@ class TestIdentity:
         assert client.get_session("t1")["user_id"] == first
         assert client.get_session("t2")["user_id"] != first
 
+    def test_a_later_call_in_a_fresh_process_finds_the_navigated_tab(self, camofox):
+        # Default config (no adopt_existing_tab): issue #215's navigate -> snapshot across processes.
+        assert json.loads(t.browser_navigate("https://example.com", task_id="t1"))["success"] is True
+        client._sessions.clear()
+        assert json.loads(t.browser_snapshot(task_id="t1"))["success"] is True
+        assert len(camofox.calls("POST", "/tabs")) == 1
+
     def test_managed_persistence_is_stable_and_matches_core(self, camofox, write_config, _isolated_home):
         """Same derivation core used, so a migrated profile keeps its Camofox browser profile."""
         import uuid

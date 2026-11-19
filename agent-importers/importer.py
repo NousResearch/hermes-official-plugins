@@ -19,29 +19,26 @@ from typing import Any, Mapping, Optional, Sequence
 
 # Entry delimiter of the Hermes memory store (memories/MEMORY.md, as MemoryStore writes it).
 ENTRY_DELIMITER = "\n§\n"
-# Fallback char budget when the live config cannot be read. It MUST match the memory tool's own
-# default (2200), never the old hardcoded 20_000 — see _memory_char_limit below (issue #148472).
-_MEMORY_CHAR_LIMIT_FALLBACK = 2200
+# Memory store budgets: (config key, MemoryStore's own default) per store file. The merge must
+# honor the budget the memory tool enforces: against a larger one the imported store arrives
+# over its limit and the memory tool refuses every write to it, consolidation included.
+_STORE_BUDGETS = {"MEMORY.md": ("memory_char_limit", 2200), "USER.md": ("user_char_limit", 1375)}
 
 
-def _memory_char_limit() -> int:
-    """Live character budget for merged memory files (config ``memory.memory_char_limit``).
-
-    The merge must honor the budget the memory tool actually enforces: import against a larger
-    hardcoded one and the resulting store exceeds what MemoryStore accepts, leaving the imported
-    home with a memory file the tool then refuses to touch (issue #148472). The config is read
-    through the raw (seed-free) path and handed to ``get_builtin_memory_config`` explicitly —
-    its zero-arg form loads config, which materializes a missing home (SOUL.md, dirs), a write
-    even in ``--dry-run``. When the config (or core itself) is unreadable, fall back to the
-    store's own default — never a larger budget.
-    """
+def memory_char_limit(target_root: Path, store: str) -> int:
+    """The char budget of memory store ``store`` in the profile at ``target_root``: that
+    profile's ``memory.<key>`` (the target's config, not the running profile's), else the
+    store's default. An unreadable config falls back to the default too: never a larger budget."""
+    key, default = _STORE_BUDGETS.get(store, _STORE_BUDGETS["MEMORY.md"])
     try:
-        from hermes_cli.config import read_raw_config_readonly
-        from tools.memory_tool import get_builtin_memory_config
-        return int(get_builtin_memory_config(read_raw_config_readonly()).get(
-            "memory_char_limit", _MEMORY_CHAR_LIMIT_FALLBACK))
-    except Exception:
-        return _MEMORY_CHAR_LIMIT_FALLBACK
+        section = load_config_file(target_root / "config.yaml").get("memory")
+    except ConfigReadError:
+        return default
+    value = section.get(key) if isinstance(section, dict) else None
+    try:
+        return int(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
 
 
 SUPPORTED_AGENTS = ("claude-code", "codex", "cursor")
@@ -467,10 +464,15 @@ class AgentImporter:
         """Merge ``incoming`` entries into the memory store file ``destination`` (deduplicated,
         within the char budget), backing the old file up first."""
         existing = parse_existing_memory_entries(destination)
-        merged, stats = merge_entries(existing, incoming, _memory_char_limit())
+        limit = memory_char_limit(self.target_root, destination.name)
+        merged, stats = merge_entries(existing, incoming, limit)
         details = {"existing_entries": stats["existing"], "added_entries": stats["added"],
                    "duplicate_entries": stats["duplicates"],
                    "overflowed_entries": stats["overflowed"]}
+        if stats["overflowed"]:  # left out, never dropped silently
+            self.record(kind, source, destination, "skipped",
+                        f"{stats['overflowed']} entry(ies) did not fit {destination.name}'s "
+                        f"{limit:,}-char budget; raise it in config.yaml memory: or trim the store")
         if stats["added"] == 0:
             self.record(kind, source, destination, "skipped", "No new entries to import", **details)
             return

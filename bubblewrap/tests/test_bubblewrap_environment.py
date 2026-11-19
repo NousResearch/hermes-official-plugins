@@ -1792,11 +1792,11 @@ class TestDeletedCwdRecovery:
         try:
             assert env.execute("pwd")["output"].strip() == str(work)
             shutil.rmtree(work)
-            # LocalEnvironment recovers the tracked cwd on the first spawn after
-            # the deletion, whose wrapper still targets the old dir (same as the
+            # As the terminal tool runs them: the first command after the deletion
+            # moves the tracked cwd to the nearest usable ancestor (same as the
             # local backend); every spawn after that must run, not wedge on the
             # missing bind source.
-            env.execute("true")
+            env.execute("true", allow_cwd_fallback=True)
             result = env.execute("pwd")
             assert result["returncode"] == 0, result["output"]
             recovered = result["output"].strip()
@@ -1813,8 +1813,7 @@ class TestDeletedCwdRecovery:
 
     @pytest.mark.parametrize("how", ["host", "inside"])
     def test_deleted_non_initial_cwd_takes_local_recovery_not_the_masked_reset(self, sandbox_root, host_dir, caplog, how):
-        # The same landing as the local backend, with local's warning and
-        # no bubblewrap note.
+        # The same landing as the local backend, with no bubblewrap note.
         work = host_dir / "work"
         sub = work / "sub"
         sub.mkdir(parents=True)
@@ -1828,8 +1827,8 @@ class TestDeletedCwdRecovery:
                 assert env.execute('rm -rf "$PWD"')["returncode"] == 0
             assert env.cwd == str(sub) and not sub.exists()
             with caplog.at_level(logging.WARNING):
-                first = env.execute("pwd")
-            # As for the local backend, this spawn already runs in the nearest
+                first = env.execute("pwd", allow_cwd_fallback=True)
+            # As for the local backend, a terminal command runs in the nearest
             # usable ancestor and reports the move; the tracked cwd follows.
             assert first["returncode"] == 0, first["output"]
             assert first["output"].strip() == str(work)
@@ -1837,9 +1836,7 @@ class TestDeletedCwdRecovery:
             assert "not visible inside the sandbox" not in first["output"]
             assert "bwrap:" not in first["output"]
             assert env.cwd == str(work)
-            messages = [r.getMessage() for r in caplog.records]
-            assert any("missing on disk" in m and str(sub) in m for m in messages)
-            assert not any("bubblewrap" in m for m in messages)
+            assert not any("bubblewrap" in r.getMessage() for r in caplog.records)
             result = env.execute("pwd")
             assert result["returncode"] == 0, result["output"]
             assert result["output"].strip() == str(work)

@@ -375,3 +375,18 @@ def test_fallback_reasoning_is_validated(config_file):
     with pytest.raises(ValueError, match="reasoning"):
         store.save_preset("bad")
     assert config_file.read_bytes() == before
+
+
+def test_daybreak_route_survives_a_preset_round_trip(config_file, monkeypatch):
+    """A main-branch Daybreak route (``daybreak: true``) saves, lists and applies like any other route."""
+    monkeypatch.setattr(store, "offered_daybreak", lambda route: True)
+    daybreak = {"name": "deep", "description": "Hard work", "provider": "openai-codex",
+                "model": "gpt-5.5", "daybreak": True}
+    store.save_routes([daybreak], "deep")
+    store.save_preset("codex")
+    store.save_routes([{**OPTION}], "local")
+    assert store.list_presets(section(config_file)) == ["codex"]
+    store.use_preset("codex")
+    current = section(config_file)
+    assert current["backends"]["model_map"]["options"] == [daybreak]
+    assert store.active_preset(current) == "codex"

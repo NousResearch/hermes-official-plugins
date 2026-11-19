@@ -25,6 +25,7 @@ MODE_BLURBS: dict[str, str] = {
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 #: Route keys the editor writes, in the order they are saved.
 ROUTE_KEYS = ("name", "description", "provider", "base_url", "model", "reasoning_effort", "service_tier", "daybreak")
+_STRING_ROUTE_KEYS = tuple(key for key in ROUTE_KEYS if key != "daybreak")  # daybreak is a bool
 
 
 def delegation_section(config: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
@@ -181,12 +182,16 @@ def offered_daybreak(route: Mapping[str, Any]) -> bool:
                             base_url=_text(route.get("base_url")) or None)
 
 
-def _daybreak_problem(route: Mapping[str, Any]) -> str:
+def _daybreak_shape_problem(route: Mapping[str, Any]) -> str:
     daybreak = route.get("daybreak")
-    if daybreak in (None, False):
-        return ""
-    if daybreak is not True:
+    if daybreak not in (None, True, False):
         return f"daybreak must be true or false, not {daybreak!r}."
+    return ""
+
+
+def _daybreak_problem(route: Mapping[str, Any]) -> str:
+    if route.get("daybreak") is not True:
+        return _daybreak_shape_problem(route)
     provider = _text(route.get("provider"))
     from hermes_cli.models import normalize_provider
     if not provider or normalize_provider(provider) != "openai-codex":
@@ -239,7 +244,8 @@ def _validate_route(route: Mapping[str, Any], others: Sequence[Mapping[str, Any]
                 tier = f"Unknown speed tier {route.get('service_tier')!r}."
     if tier:
         problems.append(tier)
-    daybreak = _daybreak_problem(route) if not problems else ""
+    # A saved preset's Daybreak flag is checked for shape only; the account catalog is read at save/use.
+    daybreak = "" if problems else _daybreak_problem(route) if runtime else _daybreak_shape_problem(route)
     if daybreak:
         problems.append(daybreak)
     return problems
@@ -277,7 +283,7 @@ def _snapshot(block: Mapping[str, Any], *, runtime: bool = False) -> dict[str, A
     for entry in options:
         if not isinstance(entry, Mapping):
             raise ValueError("Each preset option must be a mapping.")
-        for key in (*ROUTE_KEYS, "api_key", "api_mode"):
+        for key in (*_STRING_ROUTE_KEYS, "api_key", "api_mode"):
             if key in entry and entry[key] is not None and not isinstance(entry[key], str):
                 raise ValueError(f"Route field {key} must be a string.")
         name = entry.get("name")
@@ -292,7 +298,7 @@ def _snapshot(block: Mapping[str, Any], *, runtime: bool = False) -> dict[str, A
                 raise ValueError("fallback_providers must be a list of mappings.")
             for item in chain:
                 if any(value is not None and not isinstance(value, str)
-                       for key, value in item.items() if key in (*ROUTE_KEYS, "api_key", "api_mode")):
+                       for key, value in item.items() if key in (*_STRING_ROUTE_KEYS, "api_key", "api_mode")):
                     raise ValueError("Fallback route fields must be strings.")
                 problems = _validate_route(
                     {**entry, **item, "name": "fallback", "description": "Fallback route"}, [], runtime=runtime)

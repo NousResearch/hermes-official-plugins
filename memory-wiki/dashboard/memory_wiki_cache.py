@@ -15,8 +15,7 @@ survive gateway restarts; one shared lock makes concurrent scans reuse each
 other's work, and each ``cache_dir`` gets its own instance, so profiles (and
 ``HERMES_HOME`` switches) never share units. The sidecar lives under
 ``HERMES_HOME/cache/memory-wiki/``. The store is bounded by unit count and
-serialized size; least-recently-active units are evicted first. Set
-``MEMORY_WIKI_CACHE=off`` to fall back to the uncached path.
+serialized size; least-recently-active units are evicted first.
 """
 
 from __future__ import annotations
@@ -135,7 +134,10 @@ class SessionUnitCache:
         tmp = self._path.with_name(f"{self._path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(payload, encoding="utf-8")
+            # Session titles and snippets: owner-only, like state.db itself.
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(payload)
             os.replace(tmp, self._path)
         except OSError:
             try:
@@ -206,19 +208,15 @@ class SessionUnitCache:
                 self._bytes += self._sizes[key]
 
 
-def default_cache(cache_dir: str | Path | None = None) -> SessionUnitCache | None:
-    """Process-wide cache per ``cache_dir``; ``None`` (caching off) wins via env.
+def default_cache(cache_dir: str | Path | None = None) -> SessionUnitCache:
+    """Process-wide cache per ``cache_dir`` (``None``: in-process only).
 
-    ``MEMORY_WIKI_CACHE=off`` disables caching entirely. Each resolved
+    Each resolved
     directory owns one stable instance under a shared lock, so a fresh
     ``HERMES_HOME`` (tests, profile switch) never swaps out another profile's
     cache with dirty units pending — every owner keeps flushing its own
     sidecar, and profiles never share units.
     """
-
-    flag = os.environ.get("MEMORY_WIKI_CACHE", "").strip().lower()
-    if flag in {"off", "0", "false", "no"}:
-        return None
 
     resolved = Path(cache_dir) if cache_dir is not None else None
     sidecar = resolved / CACHE_FILENAME if resolved is not None else None

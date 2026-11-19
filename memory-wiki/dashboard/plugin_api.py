@@ -27,39 +27,44 @@ _log = logging.getLogger(__name__)
 router = APIRouter()
 
 _CORE_MODULE = "hermes_dashboard_plugin_memory_wiki_core"
-_CORE_LOAD_LOCK = threading.Lock()
+_CACHE_MODULE = "hermes_dashboard_plugin_memory_wiki_cache"  # same name memory_wiki_core loads it under
+_LOAD_LOCK = threading.Lock()
 
 
-def _core():
-    """The sibling ``memory_wiki_core`` module, loaded by path (the host imports this file via
-    ``spec_from_file_location`` with no package, so a relative import is not available)."""
-    mod = sys.modules.get(_CORE_MODULE)
+def _sibling(name: str, filename: str):
+    """A sibling module loaded by path (the host imports this file via ``spec_from_file_location``
+    with no package, so a relative import is not available)."""
+    mod = sys.modules.get(name)
     if mod is not None:
         return mod
-    with _CORE_LOAD_LOCK:  # double-checked: concurrent first requests must not exec twice
-        mod = sys.modules.get(_CORE_MODULE)
+    with _LOAD_LOCK:  # double-checked: concurrent first requests must not exec twice
+        mod = sys.modules.get(name)
         if mod is not None:
             return mod
-        path = Path(__file__).with_name("memory_wiki_core.py")
-        spec = importlib.util.spec_from_file_location(_CORE_MODULE, path)
+        path = Path(__file__).with_name(filename)
+        spec = importlib.util.spec_from_file_location(name, path)
         if spec is None or spec.loader is None:  # pragma: no cover
-            raise ImportError(f"cannot load memory-wiki core module from {path}")
+            raise ImportError(f"cannot load memory-wiki module from {path}")
         mod = importlib.util.module_from_spec(spec)
-        sys.modules[_CORE_MODULE] = mod
+        sys.modules[name] = mod
         try:
             spec.loader.exec_module(mod)
         except Exception:
-            sys.modules.pop(_CORE_MODULE, None)
+            sys.modules.pop(name, None)
             raise
         return mod
+
+
+def _core():
+    return _sibling(_CORE_MODULE, "memory_wiki_core.py")
 
 
 def _memory_cache():
     """Process-wide per-session aggregation cache (#49): memoizes each session's
     extraction under a cheap fingerprint so dashboard refreshes stop re-reading the
-    whole history. ``MEMORY_WIKI_CACHE=off`` falls back to the uncached path; the
-    sidecar lives under ``HERMES_HOME/cache/memory-wiki/`` (profile-scoped)."""
-    cache = _core()._cache_module()
+    whole history. The sidecar lives under ``HERMES_HOME/cache/memory-wiki/``, resolved
+    per call so each profile gets its own."""
+    cache = _sibling(_CACHE_MODULE, "memory_wiki_cache.py")
     try:
         from hermes_constants import get_hermes_home
 
@@ -99,9 +104,7 @@ async def _with_db(label: str, fn, *, empty):
                 payload = fn(db)
             finally:
                 db.close()
-            cache = _memory_cache()
-            if cache is not None:
-                cache.flush()
+            _memory_cache().flush()
             return payload
         except HTTPException:
             raise

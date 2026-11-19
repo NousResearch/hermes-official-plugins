@@ -62,6 +62,10 @@ logger = logging.getLogger(__name__)
 MAX_MESSAGE_LENGTH = 9500
 
 DEFAULT_POLL_INTERVAL = 10.0
+# Between discoveries every known conversation gets an events read each cycle, and the events
+# endpoint has its own per-account allowance (10,000 per 24 h measured, #228). Keep that spend
+# under this many reads a day by stretching the cycle as the conversation count grows.
+EVENTS_READS_PER_DAY = 9000
 ERROR_BACKOFF = [5, 15, 30, 60, 120]
 DEDUP_MAX_SIZE = 5000
 # Bounded cache of recent decrypted events per conversation — used to build
@@ -588,7 +592,7 @@ class XChatAdapter(BasePlatformAdapter):
                     await self._poll_conversation(conv_id)
 
                 backoff_idx = 0
-                await asyncio.sleep(self._poll_interval)
+                await asyncio.sleep(self._cycle_interval())
             except asyncio.CancelledError:
                 return
             except XChatRateLimited as e:
@@ -601,6 +605,11 @@ class XChatAdapter(BasePlatformAdapter):
                 backoff_idx += 1
                 logger.warning("[xchat] poll error (retry in %ds): %s", delay, e)
                 await asyncio.sleep(delay)
+
+    def _cycle_interval(self) -> float:
+        """The poll interval, stretched so reading every known conversation each cycle stays
+        inside the events allowance (one conversation at 10 s fits; ten need ~96 s)."""
+        return max(self._poll_interval, len(self._conversations) * 86400.0 / EVENTS_READS_PER_DAY)
 
     def _discovery_due(self) -> bool:
         """Discovery runs at most once per cadence (default 10 min, at least 20 poll
@@ -653,6 +662,8 @@ class XChatAdapter(BasePlatformAdapter):
             logger.warning("[xchat] could not persist conversation list: %s", e)
 
     def _load_conversations(self) -> None:
+        if self._pinned_conversations:
+            return  # pinned: poll exactly those, never widen the set
         path = _conversations_path()
         before = len(self._conversations)
         try:

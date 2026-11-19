@@ -7,7 +7,6 @@ network, no gateway process.
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -1256,16 +1255,6 @@ async def test_idle_conversation_not_reread(monkeypatch):
     assert reads == []
 
 
-def test_send_target_forms():
-    """`hermes send xchat:<id>` accepts the ids the API and events use; anything else is refused."""
-    parse = xchat_adapter._parse_target_ref
-    assert parse("111-999") == ("111-999", None)
-    assert parse("111:999") == ("111-999", None)
-    assert parse("999") == ("999", None)
-    assert parse("g12345") == ("g12345", None)
-    assert parse("#general") is None
-
-
 @pytest.mark.asyncio
 async def test_degraded_discovery_polls_known_conversations(monkeypatch, tmp_path):
     monkeypatch.setattr(xchat_adapter, "_state_dir", lambda: tmp_path)
@@ -1317,7 +1306,7 @@ def test_known_conversations_persist_across_restart(monkeypatch, tmp_path):
     assert path.exists()
     # chmod(0o600) does not change the mode Windows reports (666). The mode is a
     # POSIX property; the restart check below is what this test exists to prove.
-    if os.name != "nt":
+    if xchat_adapter.os.name != "nt":
         assert oct(path.stat().st_mode)[-3:] == "600"
 
     second = _make_adapter(monkeypatch)
@@ -1332,3 +1321,33 @@ def test_known_conversations_recover_from_cursor_state(monkeypatch, tmp_path):
     adapter._cursors = {"111-999": "e1"}
     adapter._load_conversations()
     assert "111-999" in adapter._conversations
+
+
+def test_poll_cycle_stays_inside_the_events_allowance(monkeypatch):
+    """#228: between discoveries each known conversation costs one events read per cycle, so
+    the cycle must stretch as conversations accumulate or the 10,000/day events budget dies too."""
+    adapter = _make_adapter(monkeypatch)
+    adapter._conversations = {"111-999"}
+    assert adapter._cycle_interval() == adapter._poll_interval
+    adapter._conversations = {f"{i}-999" for i in range(10)}
+    interval = adapter._cycle_interval()
+    assert 10 * 86400 / interval <= xchat_adapter.EVENTS_READS_PER_DAY
+
+
+def test_pinned_conversations_are_not_widened_by_persisted_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(xchat_adapter, "_state_dir", lambda: tmp_path)
+    (tmp_path / "conversations.json").write_text('["111-999", "222-999"]')
+    adapter = _make_adapter(monkeypatch, conversation_ids=["333-999"])
+    adapter._cursors["444-999"] = "e1"
+    adapter._load_conversations()
+    assert adapter._conversations == {"333-999"}
+
+
+def test_send_target_forms():
+    """`hermes send xchat:<id>` accepts the ids the API and events use; anything else is refused."""
+    parse = xchat_adapter._parse_target_ref
+    assert parse("111-999") == ("111-999", None)
+    assert parse("111:999") == ("111-999", None)
+    assert parse("999") == ("999", None)
+    assert parse("g12345") == ("g12345", None)
+    assert parse("#general") is None

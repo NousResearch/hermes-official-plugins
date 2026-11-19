@@ -1,20 +1,85 @@
-import {
-  PALETTE_AREA,
-  ROUTES_AREA,
-  SIDEBAR_NAV_AREA,
-  host,
-  queryClient,
-  useMutation,
-  useQuery,
-  useValue
-} from '@hermes/plugin-sdk'
-import { useEffect, useState } from 'react'
+// Advanced Delegation, Desktop half: one page under Settings ▸ Plugins for the System-1 Decider
+// auto-router (on/off, endpoint, fallback, thresholds), the model routes it may pick, a live test
+// and recent decisions. The delegation mode and the routes themselves stay where core edits them:
+// Settings ▸ Model ▸ Subagents.
+//
+// SDK names are read off the namespace, never imported by name: a named import the running host
+// does not export fails the whole module at link time. UI kit pieces fall back to plain elements.
+import * as sdk from '@hermes/plugin-sdk'
+import { useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const ID = 'advanced-delegation'
+const ICON = 'type-hierarchy-sub'
+const SUBAGENTS_HREF = '/settings?tab=config:model&page=delegation'
 let pluginCtx = null
 
-const ALLOWED_PATHS = new Set(['/state', '/mode', '/decider', '/probe', '/decisions'])
+export const settingsHref = () => sdk.pluginSettingsHref?.(ID) ?? `/settings?tab=plugins&plugin=${ID}`
+
+const S = {
+  section: { marginBottom: 24 },
+  heading: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    paddingTop: 8,
+    marginBottom: 4,
+    fontSize: 'var(--conversation-text-font-size)',
+    fontWeight: 500
+  },
+  caption: {
+    fontSize: 'var(--conversation-caption-font-size)',
+    lineHeight: 'var(--conversation-caption-line-height)',
+    color: 'var(--ui-text-tertiary)'
+  },
+  error: { fontSize: 'var(--conversation-caption-font-size)', color: 'var(--ui-red)' },
+  actions: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  item: { borderTop: '1px solid var(--ui-stroke-tertiary)', padding: '8px 0' }
+}
+
+// Plain stand-ins for UI kit pieces a host may not export.
+const Fallback = {
+  Badge: ({ children }) =>
+    jsx('span', { style: { fontSize: 11, padding: '1px 6px', borderRadius: 3, background: 'var(--ui-bg-tertiary)' }, children }),
+  Button: ({ variant, size, ...props }) => jsx('button', { type: 'button', ...props }),
+  Input: ({ size, ...props }) => jsx('input', props),
+  Switch: ({ checked, onCheckedChange, ...props }) =>
+    jsx('input', { ...props, type: 'checkbox', role: 'switch', checked: Boolean(checked), onChange: e => onCheckedChange?.(e.currentTarget.checked) }),
+  Checkbox: ({ checked, onCheckedChange, ...props }) =>
+    jsx('input', { ...props, type: 'checkbox', checked: Boolean(checked), onChange: e => onCheckedChange?.(e.currentTarget.checked) }),
+  Skeleton: () => jsx('div', { style: S.caption, children: 'Loading…' }),
+  EmptyState: ({ title, description }) =>
+    jsxs('div', { style: { padding: '24px 0' }, children: [
+      jsx('div', { style: S.heading, children: title }),
+      description ? jsx('div', { style: S.caption, children: description }) : null
+    ] }),
+  ListRow: ({ title, description, hint, action, below }) =>
+    jsxs('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '12px 0' }, children: [
+      jsxs('div', { style: { minWidth: 0, flex: 1 }, children: [
+        jsx('div', { style: { fontWeight: 500 }, children: title }),
+        description ? jsx('div', { style: S.caption, children: description }) : null,
+        hint ? jsx('div', { style: { ...S.caption, fontFamily: 'var(--font-mono, monospace)' }, children: hint }) : null,
+        below ?? null
+      ] }),
+      action ? jsx('div', { style: S.actions, children: action }) : null
+    ] }),
+  ToggleRow: ({ label, description, hint, checked, disabled, onChange }) =>
+    jsx(ListRow, { title: label, description, hint, action: jsx(Switch, { 'aria-label': label, checked, disabled, onCheckedChange: onChange }) })
+}
+const ui = name => sdk[name] ?? Fallback[name]
+const Badge = ui('Badge')
+const Button = ui('Button')
+const Input = ui('Input')
+const Switch = ui('Switch')
+const Checkbox = ui('Checkbox')
+const Skeleton = ui('Skeleton')
+const EmptyState = ui('EmptyState')
+const ListRow = ui('ListRow')
+const ToggleRow = ui('ToggleRow')
+
+// --- backend -------------------------------------------------------------------------------------
+
+const ALLOWED_PATHS = new Set(['/state', '/decider', '/probe', '/decisions'])
 
 export function assertBackendPath(path) {
   const base = String(path || '').split('?')[0]
@@ -24,11 +89,19 @@ export function assertBackendPath(path) {
   return path
 }
 
+/** A readable message from a host REST error or a backend `{ "detail": ... }` refusal. */
+export function errorText(error) {
+  const text = error instanceof Error ? error.message : String(error ?? '')
+  const detail = /"detail"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text)
+  return (detail ? detail[1] : text).slice(0, 300)
+}
+
 export async function request(path, options = {}) {
   assertBackendPath(path)
   if (!pluginCtx) {
-    throw new Error('Plugin context is not initialized')
+    throw new Error('Advanced Delegation is not loaded')
   }
+  // `body` stays an object: the host JSON-encodes it.
   const res = await pluginCtx.rest(path, { timeoutMs: 25000, ...options })
   if (res && res.error) {
     throw new Error(res.error.message || String(res.error))
@@ -36,740 +109,298 @@ export async function request(path, options = {}) {
   return res
 }
 
-const cardStyle = {
-  background: 'var(--card)',
-  border: '1px solid var(--border)',
-  borderRadius: '10px',
-  padding: '16px',
-  marginBottom: '16px'
+export const api = {
+  state: () => request('/state?limit=30'),
+  saveDecider: settings => request('/decider', { method: 'PUT', body: settings }),
+  probe: payload => request('/probe', { method: 'POST', body: payload }),
+  clearDecisions: () => request('/decisions', { method: 'DELETE' })
 }
 
-const inputStyle = {
-  width: '100%',
-  padding: '8px 10px',
-  borderRadius: '6px',
-  border: '1px solid var(--border)',
-  background: 'transparent',
-  color: 'var(--foreground)',
-  fontSize: '13px'
+// --- form ----------------------------------------------------------------------------------------
+
+export function toForm(decider) {
+  const d = decider && typeof decider === 'object' ? decider : {}
+  return {
+    enabled: Boolean(d.enabled),
+    url: d.url ?? '',
+    model: d.model ?? '',
+    allow_fallback: d.allow_fallback !== false,
+    fallback_url: d.fallback_url ?? '',
+    fallback_model: d.fallback_model ?? '',
+    specialist_threshold: String(d.specialist_threshold ?? 0.7),
+    confidence_threshold: String(d.confidence_threshold ?? 0.6),
+    timeout: String(d.timeout ?? 18),
+    excluded_options: Array.isArray(d.excluded_options) ? [...d.excluded_options] : []
+  }
 }
 
-const btnPrimary = {
-  padding: '8px 14px',
-  borderRadius: '6px',
-  border: 'none',
-  background: 'var(--accent)',
-  color: '#fff',
-  fontWeight: 600,
-  fontSize: '13px',
-  cursor: 'pointer'
+export function toPayload(form) {
+  const num = (value, fallback) => {
+    const n = Number.parseFloat(value)
+    return Number.isFinite(n) ? n : fallback
+  }
+  return {
+    ...form,
+    url: form.url.trim(),
+    model: form.model.trim(),
+    fallback_url: form.fallback_url.trim(),
+    fallback_model: form.fallback_model.trim(),
+    specialist_threshold: num(form.specialist_threshold, 0.7),
+    confidence_threshold: num(form.confidence_threshold, 0.6),
+    timeout: num(form.timeout, 18)
+  }
 }
 
-const btnSecondary = {
-  padding: '6px 12px',
-  borderRadius: '6px',
-  border: '1px solid var(--border)',
-  background: 'transparent',
-  color: 'var(--foreground)',
-  fontSize: '12px',
-  cursor: 'pointer'
+const fixed = value => Number(value || 0).toFixed(2)
+const openSubagents = () => sdk.host.navigate(SUBAGENTS_HREF)
+
+function Section({ title, aside, children }) {
+  return jsxs('section', { style: S.section, children: [
+    jsxs('div', { style: S.heading, children: [jsx('span', { style: { flex: 1 }, children: title }), aside ?? null] }),
+    children
+  ] })
 }
 
-function Badge({ text, tone = 'neutral' }) {
-  const bg =
-    tone === 'success'
-      ? 'rgba(34, 197, 94, 0.16)'
-      : tone === 'warn'
-        ? 'rgba(234, 179, 8, 0.16)'
-        : 'rgba(148, 163, 184, 0.16)'
-  const fg =
-    tone === 'success'
-      ? '#4ade80'
-      : tone === 'warn'
-        ? '#facc15'
-        : 'var(--muted-foreground)'
-  return jsx('span', {
-    style: {
-      display: 'inline-block',
-      padding: '2px 8px',
-      borderRadius: '999px',
-      fontSize: '11px',
-      fontWeight: 600,
-      background: bg,
-      color: fg
-    },
-    children: text
+function TextRow({ title, description, value, onChange, ...props }) {
+  return jsx(ListRow, {
+    title,
+    description,
+    action: jsx(Input, { 'aria-label': title, value, onChange: e => onChange(e.currentTarget.value), ...props })
   })
 }
 
-export function DelegationWorkbench() {
+// --- page ----------------------------------------------------------------------------------------
+
+export function DeciderSettings() {
+  const { host, queryClient, useMutation, useQuery, useValue } = sdk
   const profile = useValue(host.state.profile) || 'default'
-  const stateQuery = useQuery({
-    queryKey: [ID, profile, 'state'],
-    queryFn: () => request('/state?limit=30')
+  const key = [ID, profile, 'state']
+  const state = useQuery({ queryKey: key, queryFn: api.state })
+  const [draft, setDraft] = useState(null)
+  const [goal, setGoal] = useState('Analyze screenshot.png and list the UI layout bugs')
+  const [images, setImages] = useState(true)
+  const [probe, setProbe] = useState(null)
+  const [notice, setNotice] = useState(null)
+
+  const failed = error => setNotice({ error: true, text: errorText(error) })
+  const save = useMutation({
+    mutationFn: api.saveDecider,
+    onError: failed,
+    onSuccess: next => {
+      queryClient.setQueryData(key, next)
+      setDraft(null)
+      setNotice({ error: false, text: 'Saved. New subagent spawns use it right away.' })
+    }
+  })
+  const runProbe = useMutation({ mutationFn: api.probe, onError: failed, onSuccess: setProbe })
+  const clear = useMutation({
+    mutationFn: api.clearDecisions,
+    onError: failed,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: key })
   })
 
-  const data = stateQuery.data || {}
-  const dec = data.decider || {}
+  if (state.error) {
+    return jsx(EmptyState, {
+      title: 'Advanced Delegation backend is not reachable',
+      description: `${errorText(state.error)}. Turn the plugin on for this profile in Capabilities ▸ Plugins.`
+    })
+  }
+  if (state.isLoading || !state.data) {
+    return jsx(Skeleton, { style: { height: 160 } })
+  }
+
+  const data = state.data
+  const form = draft ?? toForm(data.decider)
+  const edit = patch => setDraft({ ...form, ...patch })
+  const commit = patch => save.mutate(toPayload({ ...form, ...patch }))
   const routes = Array.isArray(data.routes) ? data.routes : []
   const decisions = Array.isArray(data.decisions) ? data.decisions : []
-  const modes = Array.isArray(data.modes) ? data.modes : []
-
-  const [form, setForm] = useState(null)
-  const [probeGoal, setProbeGoal] = useState(
-    'Analyze screenshot.png and extract the rendered UI error dialog'
-  )
-  const [probeImages, setProbeImages] = useState(true)
-  const [probeResult, setProbeResult] = useState(null)
-  const [notice, setNotice] = useState('')
-
-  useEffect(() => {
-    if (data.decider) {
-      setForm({
-        enabled: Boolean(data.decider.enabled),
-        url: data.decider.url || 'http://localhost:11434/v1/systemone',
-        model: data.decider.model || 'pplx-decider:27b-nvfp4',
-        allow_fallback: Boolean(data.decider.allow_fallback ?? true),
-        fallback_url: data.decider.fallback_url || 'https://api.typesafe.ai/v1/systemone',
-        fallback_model: data.decider.fallback_model || 'jev-latest',
-        specialist_threshold: Number(data.decider.specialist_threshold ?? 0.7),
-        confidence_threshold: Number(data.decider.confidence_threshold ?? 0.6),
-        timeout: Number(data.decider.timeout ?? 18.0),
-        excluded_options: Array.isArray(data.decider.excluded_options)
-          ? [...data.decider.excluded_options]
-          : []
-      })
-    }
-  }, [
-    data.decider?.enabled,
-    data.decider?.url,
-    data.decider?.model,
-    data.decider?.allow_fallback,
-    data.decider?.fallback_url,
-    data.decider?.fallback_model,
-    data.decider?.specialist_threshold,
-    data.decider?.confidence_threshold,
-    data.decider?.timeout
-  ])
-
-  const reportError = error => setNotice(`Request failed: ${error.message || String(error)}`)
-
-  const modeMutation = useMutation({
-    onError: reportError,
-    mutationFn: (mode) =>
-      request('/mode', {
-        method: 'POST',
-        body: { mode }
-      }),
-    onSuccess: (next) => {
-      queryClient.setQueryData([ID, profile, 'state'], next)
-      setNotice(`Saved delegation mode: ${next.mode_label}. New sessions pick this up.`)
-    }
-  })
-
-  const deciderMutation = useMutation({
-    onError: reportError,
-    mutationFn: (payload) =>
-      request('/decider', {
-        method: 'PUT',
-        body: payload
-      }),
-    onSuccess: (next) => {
-      queryClient.setQueryData([ID, profile, 'state'], next)
-      setNotice('Saved System-1 Decider settings.')
-    }
-  })
-
-  const probeMutation = useMutation({
-    onError: reportError,
-    mutationFn: (payload) =>
-      request('/probe', {
-        method: 'POST',
-        body: payload
-      }),
-    onSuccess: (res) => {
-      setProbeResult(res)
-    }
-  })
-
-  const clearHistoryMutation = useMutation({
-    onError: reportError,
-    mutationFn: () => request('/decisions', { method: 'DELETE' }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [ID, profile, 'state'] })
-      setNotice('Cleared Decider routing history.')
-    }
-  })
-
-  if (stateQuery.error) {
-    return jsx('div', {
-      role: 'alert',
-      style: { padding: '24px', color: 'var(--ui-text-secondary)' },
-      children: `Advanced Delegation backend is not reachable: ${stateQuery.error.message || String(stateQuery.error)}`
-    })
+  const excluded = new Set(form.excluded_options)
+  const eligibleCount = routes.filter(r => !excluded.has(r.name)).length
+  const setEligible = (name, on) => {
+    const next = new Set(excluded)
+    on ? next.delete(name) : next.add(name)
+    commit({ excluded_options: [...next] })
   }
 
-  if (stateQuery.isLoading || !form) {
-    return jsx('div', {
-      style: { padding: '24px', color: 'var(--muted-foreground)' },
-      children: 'Loading Advanced Delegation & System-1 Decider...'
-    })
-  }
-
-  const toggleExcludedRoute = (routeName) => {
-    const current = new Set(form.excluded_options || [])
-    if (current.has(routeName)) {
-      current.delete(routeName)
-    } else {
-      current.add(routeName)
-    }
-    const nextForm = { ...form, excluded_options: Array.from(current) }
-    setForm(nextForm)
-    deciderMutation.mutate(nextForm)
-  }
-
-  return jsxs('div', {
-    style: { padding: '20px', maxWidth: '920px', color: 'var(--foreground)' },
-    children: [
-      jsxs('div', {
-        style: {
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '16px'
-        },
-        children: [
-          jsxs('div', {
-            children: [
-              jsx('h2', {
-                style: { margin: 0, fontSize: '20px', fontWeight: 700 },
-                children: 'Advanced Delegation & System-1 Decider'
-              }),
-              jsx('p', {
-                style: { margin: '4px 0 0', fontSize: '13px', color: 'var(--muted-foreground)' },
-                children:
-                  'Configure subagent delegation modes, Model routes, and automatic System-1 Decider (/v1/systemone) routing.'
-              })
-            ]
-          }),
-          jsx(Badge, {
-            text: form.enabled ? 'Decider Auto-Router: ON' : 'Decider Auto-Router: OFF',
-            tone: form.enabled ? 'success' : 'neutral'
-          })
-        ]
-      }),
-
-      notice
-        ? jsx('div', {
-            style: {
-              padding: '10px 14px',
-              borderRadius: '8px',
-              marginBottom: '16px',
-              background: 'rgba(59, 130, 246, 0.14)',
-              border: '1px solid var(--border)',
-              fontSize: '13px'
-            },
-            children: notice
-          })
-        : null,
-
-      jsxs('div', {
-        style: cardStyle,
-        children: [
-          jsx('h3', {
-            style: { margin: '0 0 10px', fontSize: '15px' },
-            children: '1. Delegation Mode'
-          }),
-          jsx('div', {
-            style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px' },
-            children: modes.map((m) => {
-              const active = data.mode === m.id
-              return jsxs(
-                'button',
-                {
-                  type: 'button',
-                  onClick: () => modeMutation.mutate(m.id),
-                  style: {
-                    textAlign: 'left',
-                    padding: '12px',
-                    borderRadius: '8px',
-                    border: active ? '2px solid var(--accent)' : '1px solid var(--border)',
-                    background: 'transparent',
-                    color: 'var(--foreground)',
-                    cursor: 'pointer'
-                  },
-                  children: [
-                    jsxs('div', {
-                      style: { display: 'flex', justifyContent: 'space-between', fontWeight: 600, fontSize: '13px' },
-                      children: [
-                        jsx('span', { children: m.label }),
-                        active ? jsx(Badge, { text: 'Active', tone: 'success' }) : null
-                      ]
-                    }),
-                    jsx('div', {
-                      style: { marginTop: '6px', fontSize: '12px', color: 'var(--muted-foreground)' },
-                      children: m.blurb
-                    })
-                  ]
-                },
-                m.id
-              )
+  return jsxs('div', { children: [
+    jsxs(Section, {
+      title: 'System-1 Decider',
+      aside: jsx(Badge, { variant: form.enabled ? 'success' : 'muted', children: form.enabled ? 'On' : 'Off' }),
+      children: [
+        jsx('div', { style: S.caption, children:
+          'Picks a model route for subagent tasks that name none, in one /v1/systemone call. A specialist route is used only when both thresholds pass; otherwise the default route.' }),
+        notice ? jsx('div', { role: 'status', style: { ...(notice.error ? S.error : S.caption), paddingTop: 6 }, children: notice.text }) : null,
+        data.mode !== 'model_map'
+          ? jsx(ListRow, {
+              title: 'Needs Model routes mode',
+              description: `Subagents currently use ${data.mode_label || data.mode}. The Decider only routes in Model routes mode.`,
+              action: jsx(Button, { size: 'sm', variant: 'outline', onClick: openSubagents, children: 'Open Model ▸ Subagents' })
             })
-          })
-        ]
-      }),
+          : null,
+        jsx(ToggleRow, {
+          label: 'Auto-route subagents',
+          description: 'For delegate_task calls that leave the route out.',
+          checked: form.enabled,
+          disabled: save.isPending,
+          onChange: on => commit({ enabled: on })
+        }),
+        jsx(TextRow, { title: 'Endpoint', description: 'Your /v1/systemone server, e.g. Ollama.', value: form.url, onChange: url => edit({ url }) }),
+        jsx(TextRow, { title: 'Decision model', value: form.model, onChange: model => edit({ model }) }),
+        jsx(ToggleRow, {
+          label: 'Cloud fallback',
+          description: 'Used when the endpoint is busy or unreachable.',
+          checked: form.allow_fallback,
+          disabled: save.isPending,
+          onChange: on => commit({ allow_fallback: on })
+        }),
+        form.allow_fallback
+          ? jsx(TextRow, { title: 'Fallback endpoint', value: form.fallback_url, onChange: fallback_url => edit({ fallback_url }) })
+          : null,
+        form.allow_fallback
+          ? jsx(TextRow, { title: 'Fallback model', value: form.fallback_model, onChange: fallback_model => edit({ fallback_model }) })
+          : null,
+        jsx(TextRow, {
+          title: 'Specialist threshold',
+          description: '0–1: how sure the Decider must be that the task needs a specialist route.',
+          inputMode: 'decimal',
+          value: form.specialist_threshold,
+          onChange: specialist_threshold => edit({ specialist_threshold })
+        }),
+        jsx(TextRow, {
+          title: 'Route confidence',
+          description: '0–1: how sure it must be about which specialist route.',
+          inputMode: 'decimal',
+          value: form.confidence_threshold,
+          onChange: confidence_threshold => edit({ confidence_threshold })
+        }),
+        jsx(TextRow, {
+          title: 'Timeout',
+          description: 'Seconds before the fallback (or the default route) takes over.',
+          inputMode: 'decimal',
+          value: form.timeout,
+          onChange: timeout => edit({ timeout })
+        }),
+        draft
+          ? jsxs('div', { style: { ...S.actions, paddingTop: 4 }, children: [
+              jsx(Button, { size: 'sm', disabled: save.isPending, onClick: () => commit({}), children: save.isPending ? 'Saving…' : 'Save' }),
+              jsx(Button, { size: 'sm', variant: 'ghost', onClick: () => setDraft(null), children: 'Discard' })
+            ] })
+          : null
+      ]
+    }),
 
-      jsxs('div', {
-        style: cardStyle,
-        children: [
-          jsxs('div', {
-            style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' },
-            children: [
-              jsx('h3', {
-                style: { margin: 0, fontSize: '15px' },
-                children: '2. System-1 Decider Auto-Router (/v1/systemone)'
-              }),
-              jsxs('label', {
-                style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer' },
-                children: [
-                  jsx('input', {
-                    type: 'checkbox',
-                    checked: form.enabled,
-                    onChange: (e) => {
-                      const next = { ...form, enabled: e.target.checked }
-                      setForm(next)
-                      deciderMutation.mutate(next)
-                    }
-                  }),
-                  jsx('span', {
-                    style: { fontWeight: 600 },
-                    children: 'Enable automatic subagent routing when option is omitted'
-                  })
-                ]
-              })
-            ]
-          }),
-
-          jsxs('div', {
-            style: { display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px', marginBottom: '12px' },
-            children: [
-              jsxs('div', {
-                children: [
-                  jsx('label', {
-                    style: { display: 'block', fontSize: '12px', color: 'var(--muted-foreground)', marginBottom: '4px' },
-                    children: 'Primary Endpoint URL (Ollama / LAN / Local)'
-                  }),
-                  jsx('input', {
-                    style: inputStyle,
-                    value: form.url,
-                    onChange: (e) => setForm({ ...form, url: e.target.value })
-                  })
-                ]
-              }),
-              jsxs('div', {
-                children: [
-                  jsx('label', {
-                    style: { display: 'block', fontSize: '12px', color: 'var(--muted-foreground)', marginBottom: '4px' },
-                    children: 'Primary Decision Model'
-                  }),
-                  jsx('input', {
-                    style: inputStyle,
-                    value: form.model,
-                    onChange: (e) => setForm({ ...form, model: e.target.value })
-                  })
-                ]
-              })
-            ]
-          }),
-
-          jsxs('div', {
-            style: { display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px', marginBottom: '12px' },
-            children: [
-              jsxs('div', {
-                children: [
-                  jsx('label', {
-                    style: { display: 'block', fontSize: '12px', color: 'var(--muted-foreground)', marginBottom: '4px' },
-                    children: 'Cloud Fallback URL (TypeSafe ZDR)'
-                  }),
-                  jsx('input', {
-                    style: inputStyle,
-                    value: form.fallback_url,
-                    onChange: (e) => setForm({ ...form, fallback_url: e.target.value })
-                  })
-                ]
-              }),
-              jsxs('div', {
-                children: [
-                  jsx('label', {
-                    style: { display: 'block', fontSize: '12px', color: 'var(--muted-foreground)', marginBottom: '4px' },
-                    children: 'Fallback Model'
-                  }),
-                  jsx('input', {
-                    style: inputStyle,
-                    value: form.fallback_model,
-                    onChange: (e) => setForm({ ...form, fallback_model: e.target.value })
-                  })
-                ]
-              })
-            ]
-          }),
-
-          jsxs('div', {
-            style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '14px' },
-            children: [
-              jsxs('div', {
-                children: [
-                  jsx('label', {
-                    style: { display: 'block', fontSize: '12px', color: 'var(--muted-foreground)', marginBottom: '4px' },
-                    children: `Specialist Threshold (${Number(form.specialist_threshold).toFixed(2)})`
-                  }),
-                  jsx('input', {
-                    type: 'number',
-                    step: '0.05',
-                    min: '0',
-                    max: '1',
-                    style: inputStyle,
-                    value: form.specialist_threshold,
-                    onChange: (e) => setForm({ ...form, specialist_threshold: parseFloat(e.target.value || '0.7') })
-                  })
-                ]
-              }),
-              jsxs('div', {
-                children: [
-                  jsx('label', {
-                    style: { display: 'block', fontSize: '12px', color: 'var(--muted-foreground)', marginBottom: '4px' },
-                    children: `Confidence Threshold (${Number(form.confidence_threshold).toFixed(2)})`
-                  }),
-                  jsx('input', {
-                    type: 'number',
-                    step: '0.05',
-                    min: '0',
-                    max: '1',
-                    style: inputStyle,
-                    value: form.confidence_threshold,
-                    onChange: (e) => setForm({ ...form, confidence_threshold: parseFloat(e.target.value || '0.6') })
-                  })
-                ]
-              }),
-              jsxs('div', {
-                children: [
-                  jsx('label', {
-                    style: { display: 'block', fontSize: '12px', color: 'var(--muted-foreground)', marginBottom: '4px' },
-                    children: 'Timeout (seconds)'
-                  }),
-                  jsx('input', {
-                    type: 'number',
-                    step: '1',
-                    min: '1',
-                    max: '120',
-                    style: inputStyle,
-                    value: form.timeout,
-                    onChange: (e) => setForm({ ...form, timeout: parseFloat(e.target.value || '18') })
-                  })
-                ]
-              })
-            ]
-          }),
-
-          jsxs('div', {
-            style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-            children: [
-              jsxs('label', {
-                style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', cursor: 'pointer' },
-                children: [
-                  jsx('input', {
-                    type: 'checkbox',
-                    checked: form.allow_fallback,
-                    onChange: (e) => setForm({ ...form, allow_fallback: e.target.checked })
-                  }),
-                  jsx('span', {
-                    children: 'Allow automatic failover to TypeSafe Cloud when LAN Decider is busy or unreachable'
-                  })
-                ]
-              }),
-              jsx('button', {
-                type: 'button',
-                style: btnPrimary,
-                disabled: deciderMutation.isPending,
-                onClick: () => deciderMutation.mutate(form),
-                children: deciderMutation.isPending ? 'Saving...' : 'Save Decider Settings'
-              })
-            ]
-          })
-        ]
-      }),
-
-      jsxs('div', {
-        style: cardStyle,
-        children: [
-          jsx('h3', {
-            style: { margin: '0 0 8px', fontSize: '15px' },
-            children: `3. Configured Model Routes (${routes.length}) & Auto-Routing Eligibility`
-          }),
-          jsx('p', {
-            style: { margin: '0 0 12px', fontSize: '12px', color: 'var(--muted-foreground)' },
-            children:
-              'Check which routes the System-1 Decider is allowed to select automatically when delegate_task omits option. Paid or advisor-only routes should stay unchecked so they are only used when explicitly requested.'
-          }),
-          routes.length === 0
-            ? jsx('div', {
-                style: { fontSize: '13px', color: 'var(--muted-foreground)' },
-                children: 'No model routes configured yet. Add routes in Settings → Model → Subagents or run `hermes delegation config`.'
-              })
-            : jsx('div', {
-                style: { display: 'flex', flexDirection: 'column', gap: '8px' },
-                children: routes.map((r) => {
-                  const isExcluded = (form.excluded_options || []).includes(r.name)
-                  const isDefault = data.route_default === r.name
-                  return jsxs(
-                    'div',
-                    {
-                      style: {
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '10px 12px',
-                        borderRadius: '8px',
-                        border: '1px solid var(--border)'
-                      },
-                      children: [
-                        jsxs('div', {
-                          style: { flex: 1, paddingRight: '12px' },
-                          children: [
-                            jsxs('div', {
-                              style: { display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '13px' },
-                              children: [
-                                jsx('span', { children: r.name }),
-                                isDefault ? jsx(Badge, { text: 'default', tone: 'success' }) : null,
-                                jsx('span', {
-                                  style: { fontWeight: 400, fontSize: '12px', color: 'var(--muted-foreground)' },
-                                  children: r.summary
-                                })
-                              ]
-                            }),
-                            jsx('div', {
-                              style: { marginTop: '4px', fontSize: '12px', color: 'var(--muted-foreground)' },
-                              children: r.description
-                            })
-                          ]
-                        }),
-                        jsxs('label', {
-                          style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer', whiteSpace: 'nowrap' },
-                          children: [
-                            jsx('input', {
-                              type: 'checkbox',
-                              checked: !isExcluded,
-                              onChange: () => toggleExcludedRoute(r.name)
-                            }),
-                            jsx('span', { children: !isExcluded ? 'Auto-eligible' : 'Explicit only' })
-                          ]
-                        })
-                      ]
-                    },
-                    r.name
-                  )
+    jsxs(Section, {
+      title: `Routes it may pick (${eligibleCount}/${routes.length})`,
+      children: [
+        jsxs('div', { style: S.caption, children: [
+          'Switched-off routes run only when a task names them. Keep paid and advisor routes off. ',
+          jsx(Button, { size: 'inline', variant: 'textStrong', onClick: openSubagents, children: 'Edit routes' })
+        ] }),
+        routes.length
+          ? jsx('div', { children: routes.map(r =>
+              jsx(ListRow, {
+                title: jsxs('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6 }, children: [
+                  r.name,
+                  data.route_default === r.name ? jsx(Badge, { variant: 'muted', children: 'default' }) : null
+                ] }),
+                description: r.description,
+                hint: r.summary,
+                action: jsx(Switch, {
+                  'aria-label': `Let the Decider pick ${r.name}`,
+                  checked: !excluded.has(r.name),
+                  disabled: save.isPending,
+                  onCheckedChange: on => setEligible(r.name, on)
                 })
-              })
-        ]
-      }),
+              }, r.name)) })
+          : jsx(EmptyState, { title: 'No model routes yet', description: 'Add them in Model ▸ Subagents.' })
+      ]
+    }),
 
-      jsxs('div', {
-        style: cardStyle,
-        children: [
-          jsx('h3', {
-            style: { margin: '0 0 10px', fontSize: '15px' },
-            children: '4. Live Routing Probe (Test a Subagent Goal)'
-          }),
-          jsxs('div', {
-            style: { display: 'flex', gap: '10px', marginBottom: '10px' },
-            children: [
-              jsx('input', {
-                style: { ...inputStyle, flex: 1 },
-                placeholder: 'Enter a sample subagent goal to test...',
-                value: probeGoal,
-                onChange: (e) => setProbeGoal(e.target.value)
-              }),
-              jsx('button', {
-                type: 'button',
-                style: btnPrimary,
-                disabled: probeMutation.isPending,
-                onClick: () =>
-                  probeMutation.mutate({
-                    goal: probeGoal,
-                    has_images: probeImages
-                  }),
-                children: probeMutation.isPending ? 'Probing...' : 'Test Route'
-              })
-            ]
-          }),
-          jsxs('label', {
-            style: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', cursor: 'pointer' },
-            children: [
-              jsx('input', {
-                type: 'checkbox',
-                checked: probeImages,
-                onChange: (e) => setProbeImages(e.target.checked)
-              }),
-              jsx('span', { children: 'Simulate image/screenshot attachments on the task (has_images: true)' })
-            ]
-          }),
-          probeResult
-            ? jsx('div', {
-                style: {
-                  marginTop: '12px',
-                  padding: '12px',
-                  borderRadius: '8px',
-                  border: '1px solid var(--border)',
-                  fontSize: '13px'
-                },
-                children: probeResult.ok
-                  ? jsxs('div', {
-                      children: [
-                        jsxs('div', {
-                          style: { display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600 },
-                          children: [
-                            jsx('span', { children: `Effective Route: ${probeResult.effective_route}` }),
-                            jsx(Badge, {
-                              text: probeResult.upgraded ? 'UPGRADED TO SPECIALIST' : 'KEPT ON DEFAULT',
-                              tone: probeResult.upgraded ? 'success' : 'neutral'
-                            }),
-                            jsx('span', {
-                              style: { fontWeight: 400, fontSize: '12px', color: 'var(--muted-foreground)' },
-                              children: `${Math.round(probeResult.latency_ms || 0)} ms on ${probeResult.model}${probeResult.fallback_used ? ' (cloud fallback)' : ''}`
-                            })
-                          ]
-                        }),
-                        jsx('div', {
-                          style: { marginTop: '6px', fontSize: '12px', color: 'var(--muted-foreground)' },
-                          children: `Candidate: ${probeResult.candidate_route} · needs_specialist: ${Number(probeResult.needs_specialist).toFixed(2)} · confidence: ${Number(probeResult.confidence).toFixed(2)}`
-                        })
-                      ]
-                    })
-                  : jsx('div', {
-                      style: { color: '#f87171' },
-                      children: `Probe failed: ${probeResult.error}`
-                    })
-              })
-            : null
-        ]
-      }),
+    jsxs(Section, {
+      title: 'Test a goal',
+      children: [
+        jsx('div', { style: S.caption, children: 'Runs one live routing decision. Nothing is spawned.' }),
+        jsxs('div', { style: { ...S.actions, paddingTop: 8 }, children: [
+          jsx('div', { style: { flex: 1, minWidth: '16rem' }, children:
+            jsx(Input, { 'aria-label': 'Subagent goal', value: goal, onChange: e => setGoal(e.currentTarget.value) }) }),
+          jsx(Button, {
+            size: 'sm',
+            disabled: !goal.trim() || runProbe.isPending,
+            onClick: () => runProbe.mutate({ goal: goal.trim(), has_images: images }),
+            children: runProbe.isPending ? 'Deciding…' : 'Test'
+          })
+        ] }),
+        jsxs('label', { style: { ...S.actions, ...S.caption, paddingTop: 6 }, children: [
+          jsx(Checkbox, { checked: images, onCheckedChange: on => setImages(on === true) }),
+          'The task has images attached'
+        ] }),
+        probe
+          ? jsx('div', { style: { ...S.item, marginTop: 8 }, children: probe.ok
+              ? jsxs('div', { children: [
+                  jsxs('div', { style: S.actions, children: [
+                    jsx('b', { children: probe.effective_route }),
+                    jsx(Badge, { variant: probe.upgraded ? 'success' : 'muted', children: probe.upgraded ? 'specialist' : 'default route' }),
+                    jsx('span', { style: S.caption, children:
+                      `${Math.round(probe.latency_ms || 0)} ms · ${probe.model}${probe.fallback_used ? ' (fallback)' : ''}` })
+                  ] }),
+                  jsx('div', { style: S.caption, children:
+                    `candidate ${probe.candidate_route || '—'} · needs specialist ${fixed(probe.needs_specialist)} · confidence ${fixed(probe.confidence)}` })
+                ] })
+              : jsx('div', { style: S.error, children: `Test failed: ${probe.error}` }) })
+          : null
+      ]
+    }),
 
-      jsxs('div', {
-        style: cardStyle,
-        children: [
-          jsxs('div', {
-            style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' },
-            children: [
-              jsx('h3', {
-                style: { margin: 0, fontSize: '15px' },
-                children: `5. Recent Routing Decisions (${decisions.length})`
-              }),
-              decisions.length > 0
-                ? jsx('button', {
-                    type: 'button',
-                    style: btnSecondary,
-                    onClick: () => clearHistoryMutation.mutate(),
-                    children: 'Clear History'
-                  })
-                : null
-            ]
-          }),
-          decisions.length === 0
-            ? jsx('div', {
-                style: { fontSize: '13px', color: 'var(--muted-foreground)' },
-                children: 'No automatic routing decisions logged yet.'
-              })
-            : jsx('div', {
-                style: { display: 'flex', flexDirection: 'column', gap: '6px' },
-                children: decisions.map((d, i) =>
-                  jsxs(
-                    'div',
-                    {
-                      style: {
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: '8px 10px',
-                        borderRadius: '6px',
-                        border: '1px solid var(--border)',
-                        fontSize: '12px'
-                      },
-                      children: [
-                        jsxs('div', {
-                          style: { flex: 1, paddingRight: '12px' },
-                          children: [
-                            jsxs('div', {
-                              style: { display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600 },
-                              children: [
-                                jsx(Badge, {
-                                  text: d.route,
-                                  tone: d.action === 'upgraded' ? 'success' : 'neutral'
-                                }),
-                                jsx('span', {
-                                  style: { color: 'var(--muted-foreground)', fontWeight: 400 },
-                                  children: `spec=${Number(d.needs_specialist || 0).toFixed(2)} · conf=${Number(d.confidence || 0).toFixed(2)} · ${Math.round(d.latency_ms || 0)}ms${d.fallback_used ? ' (fallback)' : ''}`
-                                })
-                              ]
-                            }),
-                            jsx('div', {
-                              style: { marginTop: '4px', color: 'var(--foreground)' },
-                              children: d.goal
-                            })
-                          ]
-                        })
-                      ]
-                    },
-                    `${d.timestamp || i}-${i}`
-                  )
-                )
-              })
-        ]
-      })
-    ]
-  })
+    jsx(Section, {
+      title: `Recent decisions (${decisions.length})`,
+      aside: decisions.length
+        ? jsx(Button, { size: 'sm', variant: 'ghost', disabled: clear.isPending, onClick: () => clear.mutate(), children: 'Clear' })
+        : null,
+      children: decisions.length
+        ? jsx('div', { children: decisions.map((d, i) =>
+            jsxs('div', { style: S.item, children: [
+              jsxs('div', { style: S.actions, children: [
+                jsx(Badge, { variant: d.action === 'upgraded' ? 'success' : 'muted', children: d.route }),
+                jsx('span', { style: S.caption, children:
+                  `specialist ${fixed(d.needs_specialist)} · confidence ${fixed(d.confidence)} · ${Math.round(d.latency_ms || 0)} ms${d.fallback_used ? ' · fallback' : ''}` })
+              ] }),
+              jsx('div', { style: { ...S.caption, color: 'var(--ui-text-secondary)', paddingTop: 2, overflowWrap: 'anywhere' }, children: d.goal })
+            ] }, `${d.timestamp ?? ''}-${i}`)) })
+        : jsx('div', { style: S.caption, children: 'No automatic routing decisions yet.' })
+    })
+  ] })
 }
 
 export default {
   id: ID,
-  name: 'Advanced Delegation & System-1 Decider',
+  name: 'Advanced Delegation',
+  description: 'System-1 Decider auto-router settings for delegate_task.',
   defaultEnabled: true,
   register(ctx) {
     pluginCtx = ctx
-    ctx.registerMany([
-      {
-        id: 'route',
-        area: ROUTES_AREA,
-        data: { path: '/delegation' },
-        render: () => jsx(DelegationWorkbench, {})
-      },
-      {
-        id: 'sidebar',
-        area: SIDEBAR_NAV_AREA,
-        data: { path: '/delegation', label: 'Delegation', codicon: 'type-hierarchy-sub' }
-      },
-      {
-        id: 'palette',
-        area: PALETTE_AREA,
+    const render = () => jsx(DeciderSettings, {})
+    if (ctx.registerSettingsPage) {
+      ctx.registerSettingsPage({ id: 'main', title: 'Advanced Delegation', icon: ICON, order: 25, render })
+    } else {
+      ctx.register({ id: 'main', area: sdk.SETTINGS_PLUGINS_AREA ?? 'settings.plugins', title: 'Advanced Delegation', render, data: { icon: ICON } })
+    }
+    if (sdk.PALETTE_AREA) {
+      ctx.register({
+        id: 'open',
+        area: sdk.PALETTE_AREA,
         data: {
           id: 'advanced-delegation.open',
-          label: 'Open Advanced Delegation & System-1 Decider',
-          keywords: ['delegation', 'subagents', 'decider', 'systemone', 'routes', 'model_map'],
-          run: () => host.navigate('/delegation')
+          label: 'Advanced Delegation settings',
+          keywords: ['delegation', 'subagents', 'decider', 'systemone', 'routes'],
+          run: () => sdk.host.navigate(settingsHref())
         }
-      }
-    ])
-    // Newer hosts provide a plugin-owned Settings page. Keep the route/sidebar/palette usable
-    // on older hosts without importing a constant that may not exist in their SDK module.
-    ctx.registerSettingsPage?.({
-      id: 'main', title: 'Advanced Delegation', icon: 'type-hierarchy-sub', order: 25,
-      render: () => jsx(DelegationWorkbench, {})
-    })
-    ctx.onEvent('plugin.advanced-delegation.updated', () =>
-      queryClient.invalidateQueries({ queryKey: [ID] })
-    )
-    ctx.onEvent('gateway.ready', () => queryClient.removeQueries({ queryKey: [ID] }))
+      })
+    }
+    ctx.onEvent('plugin.advanced-delegation.updated', () => sdk.queryClient.invalidateQueries({ queryKey: [ID] }))
+    ctx.onEvent('gateway.ready', () => sdk.queryClient.removeQueries({ queryKey: [ID] }))
     ctx.onDispose(() => {
-      queryClient.removeQueries({ queryKey: [ID] })
+      sdk.queryClient.removeQueries({ queryKey: [ID] })
       pluginCtx = null
     })
   }

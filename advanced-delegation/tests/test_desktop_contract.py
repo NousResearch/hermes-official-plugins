@@ -9,8 +9,14 @@ ROOT = Path(__file__).resolve().parents[1]
 NODE = shutil.which("node")
 
 
+SCENARIOS = [
+    "settings-only", "old-host", "no-mode-picker", "mode-hint", "toggle-saves",
+    "route-eligibility", "probe-body", "error", "mutation-error", "paths",
+]
+
+
 @pytest.mark.skipif(NODE is None, reason="Node.js is needed for Desktop ESM contract tests")
-@pytest.mark.parametrize("scenario", ["link", "profile", "body", "error", "mutation-error", "no-settings"])
+@pytest.mark.parametrize("scenario", SCENARIOS)
 def test_desktop_public_host_contract(scenario):
     result = subprocess.run(
         [NODE, "--experimental-vm-modules", str(ROOT / "tests" / "desktop-contract.mjs"),

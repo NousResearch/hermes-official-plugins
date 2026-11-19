@@ -405,16 +405,16 @@ class GrokBotImporter(AgentImporter):
         from datetime import date
 
         rendered = ", ".join(
-            f"{str(i.get('destination') or '').removeprefix('cron job ').strip(chr(39))}"
-            + (f" (id {i['job_id']})" if i.get("job_id") else "")
+            f"'{i['job_name']}'" + (f" (id {i['job_id']})" if i.get("job_id") else "")
             + (" [paused]" if i.get("paused") else "")
             for i in jobs)
-        notes = self.target_root / f"{self.AGENT}-import" / f"{_slug(bot_name)}-event-routines.md"
+        # The full path: the agent has no other way to find the notes (#266).
+        notes = next((i["destination"] for i in self.items
+                      if i.get("kind") == "event-routines" and i.get("source") == source), None)
+        left_out = (f" Routines the import could not turn into jobs are in {notes}." if notes else "")
         entry = (f"Imported from {self.PRODUCT} on {date.today().isoformat()}: Bot '{bot_name}' "
-                 f"routines became Hermes cron jobs: {rendered}. Routines the import could not "
-                 f"turn into jobs are in {notes.name} (same folder as this profile's "
-                 f"{self.AGENT}-import notes). Do not recreate these routines — they already "
-                 f"exist as cron jobs; resume or edit them instead.")
+                 f"routines became Hermes cron jobs: {rendered}.{left_out} Do not recreate these "
+                 f"routines — they already exist as cron jobs; resume or edit them instead.")
         self.merge_memory_entries("import-record", source,
                                   self.target_root / "memories" / "MEMORY.md", [entry])
 
@@ -552,6 +552,7 @@ class GrokBotImporter(AgentImporter):
                                                    skills=job_skills or None, **kwargs)
                     details["job_id"] = job.get("id")
 
+                details["job_name"] = job_name  # the import record names jobs by this (#266)
                 self.apply("routine", f"{source} / {label}", where,
                            f"Would create a {'paused ' if paused else ''}cron job ({schedule})",
                            create, details)
@@ -571,7 +572,8 @@ class GrokBotImporter(AgentImporter):
         destination = self.target_root / f"{self.AGENT}-import" / f"{_slug(bot_name)}-event-routines.md"
         lines = [f"# {bot_name}: {self.PRODUCT} routines that run on an event", "",
                  "These start on something happening instead of a schedule, so they were not turned into "
-                 "cron jobs. Recreate each in Hermes (ask Hermes to set it up from this file).", ""]
+                 "cron jobs. Recreate each in Hermes (ask Hermes to set it up from this file).", ""
+                 ] if routines else []
         for r in routines:
             lines += [f"## {str(r.get('name') or 'routine').strip()}", "",
                       f"- Trigger: {r.get('trigger') or 'unknown'}",

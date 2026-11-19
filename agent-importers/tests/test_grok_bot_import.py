@@ -206,4 +206,11 @@ def test_schedule_text_only_routine_needs_a_schedule_and_import_is_recorded(tmp_
     notes = (home / "grok-bot-import" / "account-health-event-routines.md").read_text(encoding="utf-8")
     assert "# Routines that need a schedule" in notes and "VAT reminder" in notes
     memory = (home / "memories" / "MEMORY.md").read_text(encoding="utf-8")
-    assert "Do not recreate these routines" in memory and "Morning watch list" in memory
+    assert "Do not recreate these routines" in memory and "'Account Health: Morning watch list'" in memory
+    assert f"(id {job['id']}) [paused]" in memory
+    assert str(home / "grok-bot-import" / "account-health-event-routines.md") in memory
+    # Only a schedule-less routine: the notes carry no empty "run on an event" section.
+    assert "routines that run on an event" not in notes
+
+    _run(["grok-bot", "--source", str(reply), "-y"])  # a re-run adds no second record
+    assert (home / "memories" / "MEMORY.md").read_text(encoding="utf-8") == memory

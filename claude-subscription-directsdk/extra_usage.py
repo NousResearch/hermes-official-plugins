@@ -82,6 +82,14 @@ def _record(key, using, resets_at, now=None):
 def observe(key, summary, setting=None):
     """Feed one native ``rate_limit_event`` summary; warns once per window under ``notify``."""
     using, resets_at = bool(summary.get("using_overage")), _epoch(summary.get("resets_at"))
+    # A reserve below 100 counts a nearly full window as spilling under ask/stop, from the same event, so a
+    # running process does not wait for its next probe while turns keep going (#398). Only where extra usage
+    # is permitted at all ("allowed"); otherwise nothing past the limit can be billed.
+    if (not using and setting is not None and summary.get("overage_status") == "allowed"
+            and mode(setting) in ("ask", "stop")):
+        reserve = reserve_percent(setting)
+        used = usage_percent(summary.get("utilization"), fraction=True)
+        using = reserve < 100 and used is not None and used >= reserve
     _record(key, using, resets_at)
     if not using or setting is None or mode(setting) != "notify":
         return
@@ -190,9 +198,11 @@ def admit(key, setting, probe):
     else:
         how = (f" To continue on extra usage, run `hermes config set {base}.{MODE_SETTING} ask` (asks once per "
                f"limit window) or `... {MODE_SETTING} allow`.")
-    raise ClaudeExtraUsageBlocked("Claude plan limit reached: this account is now drawing paid extra usage, and the "
-                                  f"extra_usage setting is '{current}', so the request was not sent.{when}{how}",
-                                  resets_at)
+    reserve = reserve_percent(setting)
+    what = (f"a plan window has reached the {reserve:g}% extra_usage_reserve_percent, so the next request may be "
+            "billed as extra usage" if reserve < 100 else "this account is now drawing paid extra usage")
+    raise ClaudeExtraUsageBlocked(f"Claude plan limit reached: {what}, and the extra_usage setting is '{current}', so "
+                                  f"the request was not sent.{when}{how}", resets_at)
 
 
 def reset():

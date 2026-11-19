@@ -85,7 +85,15 @@ def _gateway_silence_markers() -> tuple:
     try:
         from gateway.response_filters import LIVE_GATEWAY_SILENT_MARKERS
         return tuple(sorted(LIVE_GATEWAY_SILENT_MARKERS, key=len, reverse=True))
-    except Exception:
+    except Exception as e:
+        # Fail visible, not silent: without the gateway's list an entity value carrying a
+        # silence marker is no longer stripped from the injected payload, which would let an
+        # entity suppress its own alert. Keep delivering (an unmarked event is still worth
+        # shipping) but say so once, at import, where the operator can act on it.
+        logger.warning(
+            "[homeassistant] Could not read the gateway's silence markers (%s); injected "
+            "payloads will be delivered without marker stripping", e,
+        )
         return ()
 
 
@@ -600,7 +608,7 @@ class HomeAssistantAdapter(BasePlatformAdapter):
             platform_name = _tag_body.split(";")[0]
             if not platform_name:
                 return await self._send_ha_notification(content)
-            if not self.gateway_runner:
+            if not getattr(self, "gateway_runner", None):
                 logger.warning(
                     "[%s] No gateway runner for cross-platform delivery to '%s'; "
                     "falling back to HA notification",
@@ -652,7 +660,30 @@ class HomeAssistantAdapter(BasePlatformAdapter):
 
                 # Broadcast delivery (default #96930 behavior, and the fallback when
                 # session mode is off or injection was not possible).
-                return await adapter.send(home.chat_id, content, metadata=metadata)
+                #
+                # A home channel pinned inside a forum topic carries the topic in
+                # ``home.thread_id``; core routes a home-channel send to that topic by
+                # injecting ``thread_id`` into the metadata (gateway/delivery.py). Dropping
+                # it delivers the alert to the root chat instead of the configured topic.
+                send_metadata = dict(metadata or {})
+                home_thread = getattr(home, "thread_id", None)
+                if home_thread and "thread_id" not in send_metadata:
+                    send_metadata["thread_id"] = home_thread
+                result = await adapter.send(
+                    home.chat_id, content, metadata=send_metadata or None)
+                # Adapters report a transport refusal as SendResult(success=False) instead of
+                # raising (core inspects the result for exactly this reason). The exception
+                # arm below never sees it, so an unchecked return would drop the event with
+                # no fallback and no warning from this plugin.
+                if getattr(result, "success", True) is False:
+                    logger.warning(
+                        "[%s] Cross-platform delivery to '%s' was refused (%s); "
+                        "falling back to HA notification",
+                        self.name, platform_name,
+                        getattr(result, "error", None) or "no error detail",
+                    )
+                    return await self._send_ha_notification(content)
+                return result
             except Exception as e:
                 logger.warning(
                     "[%s] Cross-platform delivery to '%s' failed (%s); "
@@ -678,7 +709,7 @@ class HomeAssistantAdapter(BasePlatformAdapter):
         established path, not drop the event.
         """
         try:
-            if not self.gateway_runner:
+            if not getattr(self, "gateway_runner", None):
                 logger.warning(
                     "[%s] No gateway runner; delivering '%s' via the source session",
                     self.name, entity_id,
@@ -744,12 +775,16 @@ class HomeAssistantAdapter(BasePlatformAdapter):
             # SHARED chat's key (what any member's message would build), not the pinning
             # user's. /sethome persists the operator's user_id on the channel; passing
             # it here would append a participant slot and miss every real session key
-            # under group_sessions_per_user (either value). Same for thread_id: the
-            # thread of whoever ran /sethome is not the thread events belong in.
+            # under group_sessions_per_user (either value).
+            #
+            # The THREAD is different: when /sethome ran inside a forum topic, the home
+            # channel IS that topic and the session key layout carries the thread slot
+            # (gateway.session.build_session_key). Deriving without it targets the root
+            # chat's session, i.e. a different conversation than the configured home.
             home_source = SessionSource(
                 platform=target_platform, chat_id=home.chat_id,
                 chat_type=home_chat_type,
-                thread_id=None,
+                thread_id=getattr(home, "thread_id", None),
                 user_id=None,
                 profile=want_profile if want_profile != "default" else None,
             )

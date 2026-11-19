@@ -4,6 +4,8 @@ Tests real logic: state change formatting, event filtering pipeline,
 cooldown behavior, config integration, and adapter initialization.
 """
 
+import logging
+import sys
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -338,10 +340,16 @@ def _make_deliver_adapter(**extra) -> HomeAssistantAdapter:
     return HomeAssistantAdapter(config)
 
 
-def _fake_home_channel(chat_id: str):
-    """Minimal stand-in for a GatewayConfig home-channel entry."""
+def _fake_home_channel(chat_id: str, thread_id=None):
+    """Minimal stand-in for a GatewayConfig home-channel entry.
+
+    ``thread_id`` is set explicitly: on a bare MagicMock the attribute is
+    auto-created and truthy, which would inject a bogus thread into the
+    delivery metadata (the real HomeChannel defaults to None).
+    """
     home = MagicMock()
     home.chat_id = chat_id
+    home.thread_id = thread_id
     return home
 
 
@@ -964,8 +972,9 @@ class _Store:
 class _RecordingAdapter:
     """Target adapter fake: records handle_message / send calls."""
 
-    def __init__(self, accept=True):
+    def __init__(self, accept=True, send_result=None):
         self.accept = accept
+        self.send_result = send_result
         self.handled = []
         self.sent = []
 
@@ -975,19 +984,23 @@ class _RecordingAdapter:
             event._gateway_accepted = True
 
     async def send(self, chat_id, content, reply_to=None, metadata=None):
-        self.sent.append((chat_id, content))
+        self.sent.append((chat_id, content, metadata))
+        if self.send_result is not None:
+            return self.send_result
         return SendResult(success=True, message_id="bc-1")
 
 
 class _Runner:
     """GatewayRunner stand-in: profile-scoped adapter + home channel + store."""
 
-    def __init__(self, adapter, store, home_chat_id="G", home_chat_type="group", home_profile=None):
+    def __init__(self, adapter, store, home_chat_id="G", home_chat_type="group",
+                 home_profile=None, home_thread_id=None):
         self._adapter = adapter
         self.session_store = store
         self.home_chat_id = home_chat_id
         self.home_chat_type = home_chat_type
         self.home_profile = home_profile
+        self.home_thread_id = home_thread_id
 
     def _authorization_adapter(self, platform, profile):
         return self._adapter
@@ -1003,10 +1016,12 @@ class _Runner:
     config = _cfg()
 
     def home(self):
+        runner = self
+
         class _h:
-            chat_id = self.home_chat_id
-            chat_type = self.home_chat_type
-            thread_id = None
+            chat_id = runner.home_chat_id
+            chat_type = runner.home_chat_type
+            thread_id = runner.home_thread_id
             user_id = None
         return _h()
 
@@ -1654,3 +1669,127 @@ async def test_injection_not_accepted_degrades_to_source_session(monkeypatch):
 
     assert wa.handled, "injection was attempted"
     adapter.handle_message.assert_called_once()  # degraded, not dropped
+
+
+# ---------------------------------------------------------------------------
+# Deliver: configured-thread routing, transport refusals, compat wrapper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_broadcast_routes_to_the_configured_home_thread():
+    """A home pinned inside a forum topic must receive the alert in that topic.
+
+    Core routes a home-channel send to the /sethome topic by injecting
+    ``thread_id`` into the send metadata (gateway/delivery.py). Dropping it
+    delivers to the root chat instead of the configured destination.
+    """
+    adapter = _make_deliver_adapter(watch_entities=["sensor.s"], deliver="telegram")
+    target = _RecordingAdapter()
+    runner = _Runner(target, _Store([]), home_chat_id="12345", home_chat_type="group",
+                     home_thread_id="777")
+    adapter.gateway_runner = runner
+    adapter._target_home_channel = MagicMock(return_value=runner.home())
+
+    result = await adapter.send("ha_events:telegram", "fixture alert")
+
+    assert result.success is True
+    assert target.sent, "broadcast must reach the target adapter"
+    chat_id, _content, metadata = target.sent[0]
+    assert chat_id == "12345"
+    assert metadata["thread_id"] == "777"
+
+
+@pytest.mark.asyncio
+async def test_broadcast_without_home_thread_passes_metadata_through():
+    """No configured thread: the original metadata is forwarded unchanged (no invented key)."""
+    adapter = _make_deliver_adapter(watch_entities=["sensor.s"], deliver="telegram")
+    target = _RecordingAdapter()
+    runner = _Runner(target, _Store([]), home_chat_id="12345", home_chat_type="group")
+    adapter.gateway_runner = runner
+    adapter._target_home_channel = MagicMock(return_value=runner.home())
+
+    await adapter.send("ha_events:telegram", "fixture alert", metadata={"user_id": "u1"})
+
+    assert target.sent[0][2] == {"user_id": "u1"}
+
+
+@pytest.mark.asyncio
+async def test_broadcast_transport_refusal_falls_back_to_ha(caplog):
+    """An adapter that reports SendResult(success=False) must degrade to the HA notification.
+
+    Adapters signal a transport refusal by returning a failed result instead of
+    raising, so an unchecked return drops the alert with no fallback and no
+    warning from this plugin.
+    """
+    adapter = _make_deliver_adapter(watch_entities=["sensor.s"], deliver="telegram")
+    target = _RecordingAdapter(send_result=SendResult(success=False, error="not connected"))
+    runner = _Runner(target, _Store([]), home_chat_id="12345", home_chat_type="group")
+    adapter.gateway_runner = runner
+    adapter._target_home_channel = MagicMock(return_value=runner.home())
+    fallback = AsyncMock(return_value=SendResult(success=True, message_id="ha-1"))
+
+    with caplog.at_level(logging.WARNING):
+        with patch.object(HomeAssistantAdapter, "_send_ha_notification", fallback):
+            result = await adapter.send("ha_events:telegram", "fixture alert")
+
+    assert fallback.await_count == 1, "a refused send must fall back to HA"
+    assert result.message_id == "ha-1"
+    assert any("refused" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_session_mode_derives_the_topic_session_key():
+    """Session mode must target the topic session of a thread-scoped home channel."""
+    from gateway.session import SessionSource, build_session_key
+
+    adapter = _make_session_mode_adapter(
+        watch_entities=["sensor.s"], deliver="telegram", deliver_mode="session")
+    target = _RecordingAdapter()
+    home_key = build_session_key(
+        SessionSource(platform=Platform.TELEGRAM, chat_id="12345", chat_type="group",
+                      thread_id="777"),
+        group_sessions_per_user=True,
+    )
+    store = _Store([_Entry(home_key, "12345")])
+    runner = _Runner(target, store, home_chat_id="12345", home_chat_type="group",
+                     home_thread_id="777")
+    _wire_session_mode(adapter, runner, runner.home())
+    adapter.handle_message = AsyncMock()
+
+    await adapter._handle_ha_event(_make_event("sensor.s", "0", "1"))
+
+    assert target.handled, "the topic session must accept the injection"
+    assert target.handled[0].metadata["gateway_session_key"] == home_key
+    assert store.created == [], "never mint a session"
+
+
+@pytest.mark.asyncio
+async def test_missing_gateway_runner_attribute_degrades_instead_of_raising():
+    """A core that drops the ``gateway_runner`` attribute must not break send()."""
+    import gateway.platforms.base as base
+
+    adapter = _make_deliver_adapter(watch_entities=["sensor.s"], deliver="telegram")
+    fallback = AsyncMock(return_value=SendResult(success=True, message_id="ha-1"))
+    saved = base.BasePlatformAdapter.gateway_runner
+    del base.BasePlatformAdapter.gateway_runner
+    try:
+        with patch.object(HomeAssistantAdapter, "_send_ha_notification", fallback):
+            result = await adapter.send("ha_events:telegram", "fixture alert")
+    finally:
+        base.BasePlatformAdapter.gateway_runner = saved
+
+    assert fallback.await_count == 1
+    assert result.message_id == "ha-1"
+
+
+def test_marker_import_failure_warns_instead_of_degrading_silently(caplog, monkeypatch):
+    """Losing the gateway's marker list must be visible: it disables sanitization."""
+    import homeassistant_plugin.adapter as adapter_mod
+
+    monkeypatch.setitem(sys.modules, "gateway.response_filters", None)
+    with caplog.at_level(logging.WARNING):
+        markers = adapter_mod._gateway_silence_markers()
+
+    assert markers == ()
+    assert any("silence markers" in rec.message for rec in caplog.records)

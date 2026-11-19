@@ -310,7 +310,8 @@ def test_build_memory_notes_missing_files_yield_empty_lists(memory_wiki_core, he
     assert notes == {"memory": [], "user": [], "memory_count": 0, "user_count": 0}
 
 
-def _dated_session(db, session_id, messages, *, hidden=False):
+def _dated_session(db, db_path, session_id, messages, *, hidden=False):
+    # The plugin-facing SessionDB carries no hide setter or db_path; seed both columns directly.
     import sqlite3
     from datetime import datetime
 
@@ -318,10 +319,10 @@ def _dated_session(db, session_id, messages, *, hidden=False):
     db.create_session(session_id, "cli")
     for offset, content in messages:
         db.append_message(session_id, "assistant", "Updated: " + content, timestamp=day_a + offset)
-    if hidden:
-        db.set_session_hidden(session_id, True)
-    with sqlite3.connect(db.db_path) as conn:
-        conn.execute("UPDATE sessions SET started_at = ? WHERE id = ?", (day_a, session_id))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE sessions SET started_at = ?, hidden = ? WHERE id = ?", (day_a, int(hidden), session_id)
+        )
     return day_a
 
 
@@ -330,7 +331,7 @@ def test_build_hidden_session_subjects_and_daily_logs(memory_wiki_core, tmp_path
 
     db = SessionDB(db_path=tmp_path / "state.db")
     try:
-        _dated_session(db, "hidden", [(0, "Update hidden/project.py")], hidden=True)
+        _dated_session(db, tmp_path / "state.db", "hidden", [(0, "Update hidden/project.py")], hidden=True)
         subjects = memory_wiki_core.build_memory_subjects(db)
         logs = memory_wiki_core.build_daily_logs(db)
         assert any(subject["slug"] == "hidden-project-py" for subject in subjects)
@@ -345,7 +346,7 @@ def test_build_forever_session_buckets_messages_by_day(memory_wiki_core, tmp_pat
 
     db = SessionDB(db_path=tmp_path / "state.db")
     try:
-        started = _dated_session(db, "forever", [
+        started = _dated_session(db, tmp_path / "state.db", "forever", [
             (0, "Update alpha/first.py"),
             (60, "Review alpha/second.py"),
             (86400, "Fix beta/third.py"),
@@ -376,7 +377,7 @@ def test_build_single_day_session_unchanged(memory_wiki_core, tmp_path):
 
     db = SessionDB(db_path=tmp_path / "state.db")
     try:
-        started = _dated_session(db, "normal", [(0, "Update normal/file.py")])
+        started = _dated_session(db, tmp_path / "state.db", "normal", [(0, "Update normal/file.py")])
         session, messages = memory_wiki_core._load_memory_sessions(db, limit=100)[0]
         candidates = memory_wiki_core.extract_subject_candidates(session, messages)
         subjects = [{"slug": c.slug, "name": c.name, "count": 1} for c in candidates]

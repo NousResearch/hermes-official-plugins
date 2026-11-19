@@ -45,7 +45,7 @@ class _RankedDB:
         }
         self.list_limits = []
 
-    def list_sessions_rich(self, *, limit, include_children, order_by_last_active):
+    def list_sessions_rich(self, *, limit, include_children, order_by_last_active, **_filters):
         assert include_children is False
         assert order_by_last_active is True
         self.list_limits.append(limit)

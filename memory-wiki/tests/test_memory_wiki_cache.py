@@ -155,6 +155,37 @@ def test_cached_result_is_identical_to_the_uncached_path(tmp_path, memory_wiki_c
         db.close()
 
 
+def test_multi_day_session_buckets_identically_cached_and_uncached(tmp_path, memory_wiki_core, memory_wiki_cache):
+    """A session spanning midnight lands on each of its message days on both paths, warm or cold."""
+
+    from datetime import datetime
+
+    db_path = tmp_path / "state.db"
+    day_a = datetime(2026, 10, 20, 12).timestamp()
+    writer = hermes_state.SessionDB(db_path=db_path)
+    try:
+        writer.create_session("s-forever", "cli")
+        writer.append_message("s-forever", "user", "Update alpha/first.py", timestamp=day_a)
+        writer.append_message("s-forever", "user", "Fix beta/third.py", timestamp=day_a + 86400)
+    finally:
+        writer.close()
+    db = hermes_state.SessionDB(db_path=db_path, read_only=True)
+    try:
+        sidecar = tmp_path / "sidecar.json"
+        cache = memory_wiki_cache.SessionUnitCache(sidecar)
+        cold = memory_wiki_core.build_daily_logs(db, cache=cache)
+        cache.flush()
+        from_disk = memory_wiki_core.build_daily_logs(db, cache=memory_wiki_cache.SessionUnitCache(sidecar))
+        uncached = memory_wiki_core.build_daily_logs(db)
+
+        assert [day["date"] for day in uncached] == ["2026-10-21", "2026-10-20"]
+        assert [day["message_count"] for day in uncached] == [1, 1]
+        assert cold == uncached
+        assert from_disk == uncached
+    finally:
+        db.close()
+
+
 def test_corrupt_sidecar_is_discarded_not_fatal(tmp_path, memory_wiki_core, memory_wiki_cache):
     db = _three_sessions(tmp_path / "state.db")
     try:

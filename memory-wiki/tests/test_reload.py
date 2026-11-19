@@ -62,7 +62,7 @@ def test_existing_router_uses_fresh_core_after_register(
     stale_core = ModuleType(plugin_api._CORE_MODULE)
     stale_queries = []
 
-    def old_subjects(db, *, limit, query):
+    def old_subjects(db, *, limit, query, **_kwargs):
         stale_queries.append(query)
         return []
 

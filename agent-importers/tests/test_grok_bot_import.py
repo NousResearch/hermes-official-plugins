@@ -73,22 +73,6 @@ def test_pasted_export_becomes_paused_cron_jobs_skills_memories_and_soul(tmp_pat
     assert "hermes cron resume" in capsys.readouterr().out
 
 
-def test_imported_routine_delivers_to_the_configured_home_channel(tmp_path, monkeypatch):
-    """#264: with TELEGRAM_HOME_CHANNEL configured, imported jobs deliver there instead of
-    silently landing in cron/output; with no target they stay local."""
-    from hermes_cli.default_soul import DEFAULT_SOUL_MD
-    home = tmp_path / ".hermes"
-    (home / "SOUL.md").write_text(DEFAULT_SOUL_MD, encoding="utf-8")
-    reply = tmp_path / "reply.md"
-    reply.write_text("```json\n" + json.dumps(EXPORT, indent=2) + "\n```\n", encoding="utf-8")
-
-    monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", "8370408611")
-    _run(["grok-bot", "--source", str(reply), "-y"])
-
-    [job] = _jobs(home)
-    assert job["deliver"] == "telegram"
-
-
 def test_without_an_export_it_prints_the_prompt_and_failures_exit_non_zero(tmp_path, capsys):
     """Nothing to read yet: the user gets the message to paste into the Bot and nothing is written. A
     missing --source or a credential-carrying export fails the command (exit 1) and imports nothing;
@@ -165,6 +149,37 @@ def _cache_blob(folder: Path, slice_id: str, value) -> None:
     import base64
     name = base64.b32encode(slice_id.encode()).decode().rstrip("=").lower()
     (folder / f"{name}.blob").write_text(json.dumps({"schemaVersion": 1, "value": value}), encoding="utf-8")
+
+
+def test_imported_routine_delivers_to_the_configured_home_channel(tmp_path, monkeypatch, capsys):
+    """#264: with TELEGRAM_HOME_CHANNEL configured, imported jobs deliver there instead of
+    silently landing in cron/output; with no target they stay local and the summary names the
+    job's output folder. The running process's env is the launch profile's: another profile's
+    jobs only deliver through channels that profile itself configures."""
+    from agent_importers_plugin.grok_bot import _delivery_target
+    from hermes_cli.default_soul import DEFAULT_SOUL_MD
+    home = tmp_path / ".hermes"
+    (home / "SOUL.md").write_text(DEFAULT_SOUL_MD, encoding="utf-8")
+    reply = tmp_path / "reply.md"
+    reply.write_text("```json\n" + json.dumps(EXPORT, indent=2) + "\n```\n", encoding="utf-8")
+
+    _run(["grok-bot", "--source", str(reply), "-y", "--dry-run"])
+    assert "delivers to local" in capsys.readouterr().out
+
+    monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", "8370408611")
+    _run(["grok-bot", "--source", str(reply), "-y"])
+    [job] = _jobs(home)
+    assert job["deliver"] == "telegram"
+
+    other = home / "profiles" / "scout"
+    other.mkdir(parents=True)
+    assert _delivery_target(other) is None
+    (other / ".env").write_text("DISCORD_HOME_CHANNEL=123\n", encoding="utf-8")
+    assert _delivery_target(other) == "discord"
+    (other / ".env").unlink()
+    (other / "config.yaml").write_text(
+        "platforms:\n  slack:\n    home_channel:\n      platform: slack\n      chat_id: C1\n", encoding="utf-8")
+    assert _delivery_target(other) == "slack"
 
 
 def test_the_grok_bot_apps_local_cache_flags_bots_and_routines_the_export_missed(tmp_path, capsys):

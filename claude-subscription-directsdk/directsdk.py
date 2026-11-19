@@ -729,6 +729,10 @@ class Native:
         self.events, self.stderr = queue.Queue(), deque(maxlen=40)
         self.lock, self.writing = threading.Lock(), threading.Lock()
         self.watch = None  # the step's stdin watchdog (one thread a step, #419)
+        self.rate_limit = None  # the plan window as this process last reported it (rate_limit_event)
+        # A kept native may write rate_limit_event after its step has ended (and settled() would drop it): its reader
+        # feeds the extra-usage policy as the event arrives, before the next step's check (#398).
+        self.observe = (lambda summary: observe_rate_limit(env, summary)) if tools is not None else None
         self.parked, self.results = {}, {}
         # A kept session: what it was launched with, the frames it holds, and what the next step must bring.
         self.ident = self.frames = self.expect = self.idle = self.on_exit = None
@@ -777,6 +781,8 @@ class Native:
                             self._doubt('version')
                         if self.tools is not None and self.admission.init_ok is not None:
                             self.admission.init_ok.set()
+                    if self.observe is not None and event.get('type') == 'rate_limit_event':
+                        self._observe(event)
                     self.events.put(event)
         except Exception as error:
             if self.tools is not None and not isinstance(error, TimeoutError):
@@ -796,6 +802,15 @@ class Native:
             # A kept native that exits while idle gives its relay and its place back now, not at its next use.
             if self.on_exit is not None:
                 self.on_exit()
+
+    def _observe(self, event):
+        summary = _rate_limit_summary(event)
+        if summary:
+            self.rate_limit = summary
+            try:
+                self.observe(summary)
+            except Exception:  # The policy's bookkeeping must not end the reader, and with it the process.
+                logger.exception('claude-subscription-directsdk: rate_limit_event not recorded')
 
     def _write(self, row):
         """One control row to native, bounded by the step's timeout as send() is: a native that stops reading stdin
@@ -1804,7 +1819,8 @@ class Client:
                 summary = _rate_limit_summary(event)
                 if summary:
                     rate_limit = summary
-                    observe_rate_limit(env, summary)
+                    if native.observe is None:  # a kept native's reader has fed it already
+                        observe_rate_limit(env, summary)
             elif kind == 'stream_event':
                 event = event['event']
                 if event['type'] == 'message_stop':
@@ -1847,6 +1863,12 @@ class Client:
         # A kept native refused by the relay, or gone before this step reached it: replay into a new one.
         if admission.diverged or (native.frames is not None and not admission.used and not assistants and not results):
             return 'diverged'
+        if session and rate_limit is None and admission.used and native.rate_limit:
+            # Native reports the plan window only when it changes: a kept one says nothing on a step that found the
+            # window as its last report did, where a new process (per-call) reports that state again. The reserve
+            # (#398) must see every step, so this one feeds the state the process last reported.
+            rate_limit = native.rate_limit
+            observe_rate_limit(env, rate_limit)
         if admission.used:
             if admission.status != 200 or not admission.capture.complete:
                 # Native's last error is the admission denial; name the first attempt's outcome so reports are diagnosable.

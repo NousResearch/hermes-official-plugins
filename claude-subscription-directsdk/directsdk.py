@@ -817,7 +817,7 @@ class Client:
         command = command or source_env.get('CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND') or 'claude'
         self.command = ([command] if isinstance(command, str) else list(command)) + list(args or [])
         self.timeout = timeout if isinstance(timeout, (int, float)) else 180
-        self._lock, self._requests, self._closed = threading.Lock(), set(), False
+        self._lock, self._requests = threading.Lock(), set()
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
 
     def cancel(self):
@@ -869,8 +869,6 @@ class Client:
     def _register(self):
         request = Request(self)
         with self._lock:
-            if self._closed:
-                raise RuntimeError('Claude client is closed')
             self._requests.add(request)
         return request
 

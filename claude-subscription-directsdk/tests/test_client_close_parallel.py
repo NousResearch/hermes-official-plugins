@@ -26,7 +26,6 @@ def _client_with(fake_requests):
     c = object.__new__(Client)
     c._lock = threading.Lock()
     c._requests = set(fake_requests)
-    c._closed = False
     return c
 
 
@@ -38,10 +37,9 @@ def test_close_does_not_cancel_in_flight_requests():
     assert all(r.cancelled == [] for r in reqs)
 
 
-def test_close_does_not_mark_client_closed():
+def test_a_closed_client_still_takes_new_requests():
     req = _Request()
     client = _client_with([req])
     client.close()
     # Hermes reuses cached clients across concurrent tool calls: create() must still work.
-    client._register()
-    assert client._closed is False
+    assert client._register() in client._requests

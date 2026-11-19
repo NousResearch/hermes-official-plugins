@@ -384,12 +384,15 @@ def test_exited_launcher_with_inherited_stdout_is_cleaned_on_timeout(cli):
                             'stdout=None,\n                     stderr=')
     script = cli.root / 'inherited_pipe.py'
     script.write_text(source)
-    client = cli.make('launcher_exit', timeout=.3)
+    # Long enough for two interpreter starts under load; the descendant sleeps 20 s, so a cleanup that waited for it
+    # still fails the bound below.
+    timeout = 2
+    client = cli.make('launcher_exit', timeout=timeout)
     client.command = [sys.executable, '-I', str(script)]
     began = time.monotonic()
     with pytest.raises(TimeoutError):
         client._create(**query())
-    assert time.monotonic() - began < 2, 'cleanup waited for a descendant holding stdout'
+    assert time.monotonic() - began < timeout + 2, 'cleanup waited for a descendant holding stdout'
     records = [json.loads(line) for line in (cli.root / 'pids.jsonl').read_text().splitlines()]
     assert len(records) == 2
     eventually(lambda: not any(living(row['pid']) for row in records))

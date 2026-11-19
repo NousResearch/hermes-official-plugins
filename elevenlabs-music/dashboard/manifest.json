@@ -1,0 +1,13 @@
+{
+  "name": "elevenlabs-music",
+  "label": "ElevenLabs Music",
+  "description": "Backend for the ElevenLabs Music Desktop card and music library: streams the profile's generated tracks.",
+  "icon": "Puzzle",
+  "version": "1.0.0",
+  "tab": {
+    "path": "/elevenlabs-music",
+    "hidden": true
+  },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}

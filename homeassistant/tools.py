@@ -23,7 +23,9 @@ import fnmatch
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from agent.secret_scope import get_secret
 
@@ -236,7 +238,8 @@ def _service_call_violation(domain: str, service: str, payload: Any) -> Optional
 
     With neither list set nothing is checked (behaviour unchanged). Otherwise:
 
-    1. Every entity the payload names must pass the same check as ha_get_state
+    1. Every entity the payload names, and the script selected by a custom
+       ``script.<name>`` service, must pass the same check as ha_get_state
        (deny is a final veto; with an allowlist, every entity must match it).
     2. Area/device/floor/label targets are refused: they select entities on the
        server, where the lists cannot be checked.
@@ -261,14 +264,14 @@ def _service_call_violation(domain: str, service: str, payload: Any) -> Optional
         return (f"{domain}.{service} with entity_id 'all' would act on every entity, which "
                 f"HASS_ENTITY_ALLOWLIST/HASS_ENTITY_DENYLIST do not permit. {hint}")
     entity_ids.discard("none")
+    # The service name selects this script even when its payload names other entities.
+    if domain == "script" and service not in _SCRIPT_BUILTIN_SERVICES:
+        entity_ids.add(f"script.{service}")
     if not entity_ids:
         if domain in _NON_ENTITY_DOMAINS:
             return None
-        if domain == "script" and service not in _SCRIPT_BUILTIN_SERVICES:
-            entity_ids = {f"script.{service}"}
-        else:
-            return (f"{domain}.{service} names no entity, so it could act on every {domain} "
-                    f"entity while HASS_ENTITY_ALLOWLIST/HASS_ENTITY_DENYLIST are set. {hint}")
+        return (f"{domain}.{service} names no entity, so it could act on every {domain} "
+                f"entity while HASS_ENTITY_ALLOWLIST/HASS_ENTITY_DENYLIST are set. {hint}")
     for eid in sorted(entity_ids):
         if deny:
             hit = next((p for p in deny if _entity_matches(eid, [p])), None)
@@ -566,11 +569,103 @@ async def _async_list_entities(
         max_entities=max_entities, entity_area=entity_area, entity_device=entity_device)
 
 
+# ── Local-time twins for the timestamps Home Assistant answers in UTC (#155) ──────
+# HA reports every timestamp in UTC, so the agent has to convert it by hand - which is where the
+# wrong dates come from (a security device's last trigger read as the wrong evening). The instance's
+# own zone is the one its frontend shows, so the local twin is computed with that;
+# platforms.homeassistant.extra.timezone in config.yaml overrides it, and an unknown zone falls back
+# to the machine's local time.
+_HASS_TIMEZONE: str = ""
+_TZ_CACHE: Dict[str, Any] = {"ts": 0.0, "name": "", "url": ""}
+_TZ_TTL = 3600.0  # the instance's zone changes with its configuration, not with the minute
+
+
+def _get_timezone_config() -> str:
+    """The operator's timezone override (``platforms.homeassistant.extra.timezone``), empty when unset.
+
+    A behaviour setting, so it lives in the active profile's config.yaml, not in ``.env``.
+    """
+    if _HASS_TIMEZONE:
+        return _HASS_TIMEZONE.strip()
+    from hermes_cli.config import cfg_get, read_raw_config_readonly
+    value = cfg_get(read_raw_config_readonly(), "platforms", "homeassistant", "extra", "timezone")
+    return value.strip() if isinstance(value, str) else ""
+
+
+async def _instance_timezone() -> str:
+    """The instance's configured time_zone (``/api/config``), cached for an hour.
+
+    Empty when it cannot be read (the call failed, or the instance does not answer it): the
+    caller then falls back to the machine's local time.
+    """
+    import time as _time
+    override = _get_timezone_config()
+    if override:
+        return override
+    try:
+        hass_url, _token = _get_config()
+    except ValueError:
+        return ""
+    now = _time.time()
+    # Keyed by instance, like the registry cache above: two profiles pointing at different Home
+    # Assistants must not see each other's zone.
+    if _TZ_CACHE.get("url") == hass_url and now - _TZ_CACHE.get("ts", 0.0) < _TZ_TTL:
+        return _TZ_CACHE["name"]
+    try:
+        config = await _api_json("GET", "/api/config", 10)
+    except Exception:  # the zone is a nicety: a failed call must not fail the read
+        logger.debug("homeassistant: could not read the instance time zone", exc_info=True)
+        return ""
+    name = config.get("time_zone") if isinstance(config, dict) else ""
+    if not isinstance(name, str) or not name.strip():
+        _TZ_CACHE.update(name="", ts=now, url=hass_url)
+        return ""
+    _TZ_CACHE.update(name=name.strip(), ts=now, url=hass_url)
+    return _TZ_CACHE["name"]
+
+
+def _local_timestamp(value: Any, tz_name: str = "") -> Optional[str]:
+    """One HA timestamp as an ISO string in ``tz_name`` (the machine's local zone when empty).
+
+    None when the value is not a readable timestamp: the raw field then stays as it is.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    zone = None
+    if tz_name:
+        try:
+            zone = ZoneInfo(tz_name)
+        except (KeyError, ValueError):
+            zone = None
+    try:
+        return moment.astimezone(zone).isoformat()
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
 async def _async_get_state(entity_id: str) -> Dict[str, Any]:
     data = await _api_json("GET", f"/api/states/{entity_id}", 10)
-    return {
-        "entity_id": data["entity_id"], "state": data["state"], "attributes": data.get("attributes", {}),
+    tz_name = await _instance_timezone()
+    attributes = dict(data.get("attributes") or {})
+    local = _local_timestamp(attributes.get("last_triggered"), tz_name)
+    if local:
+        attributes["last_triggered_local"] = local
+    out = {
+        "entity_id": data["entity_id"], "state": data["state"], "attributes": attributes,
         "last_changed": data.get("last_changed"), "last_updated": data.get("last_updated")}
+    # The UTC values stay as they are; the local twin is what the agent can present without doing
+    # the conversion itself (and getting the date wrong).
+    for field in ("last_changed", "last_updated"):
+        local = _local_timestamp(out.get(field), tz_name)
+        if local:
+            out[f"{field}_local"] = local
+    return out
 
 
 def _build_service_payload(entity_id: Optional[str] = None, data: Optional[Dict[str, Any]] = None) -> Dict:
@@ -651,10 +746,80 @@ async def _async_call_service(
                 f"of their own domain — call {actual_domain}.{service} instead."
             )
             return out
-        # Exists in the right domain: the state was already as requested — intent satisfied.
-        out["success"] = True
-        del out["error"]
-        out["note"] = f"{entity_id} was already in state '{state['state']}' — nothing to change."
+        return await _verify_unchanged_entity(out, domain, service, entity_id, state.get("state"))
+    return out
+
+
+# How long to wait for a device that confirms after the service call returns (#213): a Zigbee or
+# Wi-Fi plug flips its state ~150-300 ms after HA answers, so HA's empty "changed states" list
+# does not mean the call was a no-op. Re-read the state at these intervals (1.5 s in all).
+_STATE_CONFIRM_DELAYS = (0.25, 0.5, 0.75)
+
+# Services that name the state they put an entity in, and the states that satisfy them.
+_TARGET_STATES = {
+    "turn_off": ("off",),
+    "lock": ("locked",),
+    "unlock": ("unlocked",),
+    "open": ("open",),
+    "open_cover": ("open",),
+    "close_cover": ("closed",),
+    "open_valve": ("open",),
+    "close_valve": ("closed",),
+}
+
+
+def _requested_state_reached(service: str, state: Any) -> Optional[bool]:
+    """Whether *state* is the state *service* asks for; None when the service names no state.
+
+    ``toggle`` always asks for a change, so it is never already satisfied. ``turn_on`` is met by
+    any active state: a media player or climate entity reports ``playing``/``heat``, not ``on``.
+    """
+    if service == "toggle":
+        return False
+    if service == "turn_on":
+        return state not in ("off", "unavailable", "unknown", None)
+    targets = _TARGET_STATES.get(service)
+    return None if targets is None else state in targets
+
+
+async def _verify_unchanged_entity(
+    out: Dict[str, Any], domain: str, service: str, entity_id: str, observed: Any,
+) -> Dict[str, Any]:
+    """HA accepted the call and reported no changed state for an entity that exists in the right
+    domain. Say what actually happened instead of assuming the request was already satisfied."""
+    del out["error"]
+    out["success"] = True
+    reached = _requested_state_reached(service, observed)
+    if reached:
+        out["note"] = f"{entity_id} was already in state '{observed}' — nothing to change."
+        return out
+    if reached is None:
+        # No target state to compare with (set_cover_position, set_temperature, ...).
+        out["note"] = (
+            f"{domain}.{service} was accepted; Home Assistant reported no state change for "
+            f"{entity_id} (state '{observed}'). Check with ha_get_state if the change matters."
+        )
+        return out
+    current, recheck_failed = observed, False
+    for delay in _STATE_CONFIRM_DELAYS:
+        await asyncio.sleep(delay)
+        try:
+            current = (await _api_json("GET", f"/api/states/{entity_id}", 5)).get("state")
+        except Exception:
+            recheck_failed = True
+            break
+        moved = current != observed and current not in ("unavailable", "unknown", None)
+        if moved or _requested_state_reached(service, current):
+            out["affected_entities"] = [{"entity_id": entity_id, "state": current}]
+            out["note"] = f"{entity_id} is now '{current}' (the device confirmed after the call returned)."
+            return out
+    out["success"] = False
+    waited = "could not be re-checked" if recheck_failed else f"after {sum(_STATE_CONFIRM_DELAYS):g} s"
+    still = "still " if current == observed else ""
+    out["error"] = (
+        f"{domain}.{service} was accepted but {entity_id} is {still}'{current}' ({waited}): the device "
+        "may be offline or slow to confirm. Check it with ha_get_state before retrying."
+    )
     return out
 
 
@@ -720,8 +885,10 @@ def _handle_get_state(args: dict, **kw) -> str:
     entity_id = args.get("entity_id", "")
     if not entity_id:
         return tool_error("Missing required parameter: entity_id")
-    if not _ENTITY_ID_RE.match(entity_id):
-        return tool_error(f"Invalid entity_id format: {entity_id}")
+    # fullmatch: a terminal LF passes match(), misses an exact denylist entry, and is
+    # dropped from the request URL, so the denied entity would be read.
+    if not _ENTITY_ID_RE.fullmatch(entity_id):
+        return tool_error(f"Invalid entity_id format: {entity_id!r}")
     violation = _operator_filter_violation(entity_id)
     if violation:
         return tool_error(
@@ -736,18 +903,19 @@ def _handle_call_service(args: dict, **kw) -> str:
     service = args.get("service", "")
     if not domain or not service:
         return tool_error("Missing required parameters: domain and service")
-    # Format check BEFORE the blocklist: rejects "shell_command/../light" style bypasses.
-    if not _SERVICE_NAME_RE.match(domain):
+    # Validate the whole selector BEFORE the blocklist. Unlike match(), fullmatch()
+    # rejects a terminal LF, which a URL parser could otherwise remove after this check.
+    if not _SERVICE_NAME_RE.fullmatch(domain):
         return tool_error(f"Invalid domain format: {domain!r}")
-    if not _SERVICE_NAME_RE.match(service):
+    if not _SERVICE_NAME_RE.fullmatch(service):
         return tool_error(f"Invalid service format: {service!r}")
     if domain in _BLOCKED_DOMAINS:
         return tool_error(
             f"Service domain '{domain}' is blocked for security. "
             f"Blocked domains: {', '.join(sorted(_BLOCKED_DOMAINS))}")
     entity_id = args.get("entity_id")
-    if entity_id and not _ENTITY_ID_RE.match(entity_id):
-        return tool_error(f"Invalid entity_id format: {entity_id}")
+    if entity_id and not _ENTITY_ID_RE.fullmatch(entity_id):
+        return tool_error(f"Invalid entity_id format: {entity_id!r}")
     data = args.get("data")
     if isinstance(data, str):  # XML tool-calling mode delivers data as a JSON string
         try:
@@ -852,7 +1020,11 @@ HA_GET_STATE_SCHEMA: Dict[str, Any] = {
     "name": "ha_get_state",
     "description": (
         "Get the detailed state of a single Home Assistant entity, including all "
-        "attributes (brightness, color, temperature setpoint, sensor readings, etc.)."
+        "attributes (brightness, color, temperature setpoint, sensor readings, etc.). "
+        "Home Assistant answers timestamps in UTC; the response also carries them in the "
+        "instance's local timezone (last_changed_local, last_updated_local, and "
+        "last_triggered_local for automations) - present those to the user instead of "
+        "converting the UTC values by hand."
     ),
     "parameters": {
         "type": "object",
@@ -903,7 +1075,7 @@ HA_CALL_SERVICE_SCHEMA: Dict[str, Any] = {
         "switch.* entity needs switch.turn_on, an input_boolean.* toggle needs "
         "input_boolean.turn_on — calling the wrong domain affects nothing. The "
         "error field explains exactly what went wrong (missing entity, wrong "
-        "domain, or already in that state) — follow its suggestion and retry. "
+        "domain, or a device that has not confirmed the change) — follow its suggestion. "
         "If the operator restricts entities, target explicit entity_ids: calls "
         "on restricted entities, or by area/device/label or with no target, are refused."
     ),
@@ -933,12 +1105,18 @@ HA_CALL_SERVICE_SCHEMA: Dict[str, Any] = {
                 ),
             },
             "data": {
-                "type": "string",
+                # A plain object is what models emit natively; the handler has always
+                # accepted one. A JSON-encoded string stays valid for XML tool-calling
+                # mode, which can only pass strings.
+                "type": ["string", "object"],
                 "description": (
-                    "Additional service data as a JSON string. Examples: "
+                    "Additional service data. Prefer a plain object: "
                     '{"brightness": 255, "color_name": "blue"} for lights, '
                     '{"temperature": 22, "hvac_mode": "heat"} for climate, '
-                    '{"volume_level": 0.5} for media players.'
+                    '{"volume_level": 0.5} for media players, '
+                    '{"media_content_id": "radar weekly", "media_content_type": "playlist"} '
+                    "for media_player.play_media. A JSON-encoded string of the same object "
+                    "is also accepted."
                 ),
             },
         },

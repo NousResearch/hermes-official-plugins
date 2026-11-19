@@ -1,6 +1,6 @@
 /**
  * The three.js stage: owns one WebGLRenderer, a camera with orbit controls, studio lighting, and
- * whichever GLB is loaded. Plain DOM + three, no React: the React side mounts a <div>, hands it to
+ * whichever model is loaded (GLB/glTF, FBX, OBJ, STL, USDZ or 3MF: see parse-model.ts). Plain DOM + three, no React: the React side mounts a <div>, hands it to
  * `createStage`, and calls `dispose()` on unmount, so a scrolled-away transcript card frees its GPU
  * context instead of leaking one per message (Chromium caps live WebGL contexts at ~16).
  */
@@ -28,9 +28,10 @@ import {
   Vector3,
   WebGLRenderer
 } from 'three'
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
+
+import { type ParseOptions, parseModel } from './parse-model.ts'
 
 export interface ModelStats {
   triangles: number
@@ -43,7 +44,8 @@ export interface ModelStats {
 }
 
 export interface Stage {
-  load: (bytes: ArrayBuffer) => Promise<ModelStats>
+  /** `options.name` picks the loader by extension (default glTF/GLB); `options.siblings` carries an OBJ's .mtl/texture. */
+  load: (bytes: ArrayBuffer, options?: ParseOptions) => Promise<ModelStats>
   setAutoRotate: (on: boolean) => void
   setWireframe: (on: boolean) => void
   setGrid: (on: boolean) => void
@@ -64,6 +66,26 @@ export interface Stage {
   dispose: () => void
 }
 
+/** A CSS colour as #rrggbb. Theme variables resolve to forms three.js cannot parse (color-mix(...)), so let the
+ *  browser paint it and read the pixel back; an invalid value keeps the fallback. */
+export function cssHex(value: string, fallback = '#1b1d22'): string {
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = 1
+    const g = canvas.getContext('2d')
+    if (!g) {
+      return fallback
+    }
+    g.fillStyle = fallback
+    g.fillStyle = value
+    g.fillRect(0, 0, 1, 1)
+    const [r, gr, b] = g.getImageData(0, 0, 1, 1).data
+    return `#${[r, gr, b].map(n => n.toString(16).padStart(2, '0')).join('')}`
+  } catch {
+    return fallback
+  }
+}
+
 export function createStage(host: HTMLElement, background: string): Stage {
   const renderer = new WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
@@ -76,7 +98,7 @@ export function createStage(host: HTMLElement, background: string): Stage {
   host.appendChild(renderer.domElement)
 
   const scene = new Scene()
-  scene.background = new Color(background)
+  scene.background = new Color(cssHex(background))
   const pmrem = new PMREMGenerator(renderer)
   const envTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
   scene.environment = envTexture
@@ -231,20 +253,15 @@ export function createStage(host: HTMLElement, background: string): Stage {
   }
 
   return {
-    async load(bytes) {
-      if (externalResources(bytes).length) {
-        // The viewer receives one file's bytes from the backend, so sibling .bin/texture files cannot load (they
-        // would resolve against the app page). Say so instead of failing with a fetch error.
-        throw new Error('This .gltf references external files. Open the .glb, or a .gltf with embedded data.')
-      }
-      const gltf = await new GLTFLoader().parseAsync(bytes, '')
+    async load(bytes, options) {
+      const parsed = await parseModel(bytes, options)
       if (disposed) {
         throw new Error('viewer closed')
       }
       disposeModel()
-      model = gltf.scene
+      model = parsed.root
       scene.add(model)
-      clips = gltf.animations ?? []
+      clips = parsed.clips
       if (clips.length) {
         mixer = new AnimationMixer(model)
         // Play-once: hold the last pose and let the UI flip back to "paused".
@@ -388,25 +405,4 @@ export function dataUrlToBuffer(dataUrl: string): ArrayBuffer {
     out[i] = bin.charCodeAt(i)
   }
   return out.buffer
-}
-
-/** URIs of buffers/images a glTF (JSON or GLB) loads from outside its own bytes; `data:` URIs are embedded. */
-export function externalResources(bytes: ArrayBuffer): string[] {
-  let json: unknown
-  try {
-    const view = new DataView(bytes)
-    if (bytes.byteLength >= 20 && view.getUint32(0, true) === 0x46546c67) {
-      // GLB: 12-byte header, then the JSON chunk (length, type 'JSON', data).
-      const length = view.getUint32(12, true)
-      json = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, 20, Math.min(length, bytes.byteLength - 20))))
-    } else {
-      json = JSON.parse(new TextDecoder().decode(bytes))
-    }
-  } catch {
-    return [] // not parseable here: let the loader report it
-  }
-  const doc = json as { buffers?: Array<{ uri?: unknown }>; images?: Array<{ uri?: unknown }> }
-  return [...(Array.isArray(doc?.buffers) ? doc.buffers : []), ...(Array.isArray(doc?.images) ? doc.images : [])]
-    .map(entry => entry?.uri)
-    .filter((uri): uri is string => typeof uri === 'string' && !/^data:/i.test(uri))
 }

@@ -1,0 +1,384 @@
+{
+  "gates": [
+    {
+      "gate": "dev-run-1:completed-case-coverage",
+      "measured": 0.0,
+      "status": "FAIL",
+      "threshold": 1.0
+    },
+    {
+      "gate": "dev-run-1:precision",
+      "measured": 0.8181818181818182,
+      "status": "FAIL",
+      "threshold": 0.95
+    },
+    {
+      "gate": "dev-run-1:recall",
+      "measured": 0.6923076923076923,
+      "status": "FAIL",
+      "threshold": 0.85
+    },
+    {
+      "gate": "dev-run-1:highCriticalRecall",
+      "measured": 0.75,
+      "status": "FAIL",
+      "threshold": 0.95
+    },
+    {
+      "gate": "dev-run-1:severityExact",
+      "measured": 0.0,
+      "status": "FAIL",
+      "threshold": 0.85
+    },
+    {
+      "gate": "dev-run-1:severityWithinOne",
+      "measured": 0.46153846153846156,
+      "status": "FAIL",
+      "threshold": 0.95
+    },
+    {
+      "gate": "dev-run-1:highCriticalPrecision",
+      "measured": null,
+      "status": "FAIL",
+      "threshold": 0.95
+    }
+  ],
+  "mode": "score-bundles",
+  "notRun": [
+    {
+      "command": "python scripts/run-evals.py --score-bundles /path/to/five-run-bundles",
+      "gate": "five-run-agreement:openai-codex/gpt-6-astra",
+      "reason": "exactly five independent runs required",
+      "status": "NOT RUN"
+    }
+  ],
+  "runs": [
+    {
+      "inputErrors": [],
+      "model": "gpt-6-astra",
+      "provider": "openai-codex",
+      "runId": "dev-run-1",
+      "score": {
+        "abstentions": 0,
+        "cases": [
+          {
+            "caseId": "access-control-vulnerable",
+            "correctVerdict": false,
+            "matchedRoots": [
+              "access-control"
+            ],
+            "missedRoots": [],
+            "predictionSet": [
+              [
+                "authz.tenant",
+                "app.py/get_invoice"
+              ]
+            ],
+            "status": "deferred"
+          },
+          {
+            "caseId": "access-control-fixed",
+            "correctVerdict": false,
+            "matchedRoots": [],
+            "missedRoots": [],
+            "predictionSet": [],
+            "status": "deferred"
+          },
+          {
+            "caseId": "business-logic-vulnerable",
+            "correctVerdict": false,
+            "matchedRoots": [
+              "business-logic"
+            ],
+            "missedRoots": [],
+            "predictionSet": [
+              [
+                "logic.replay",
+                "app.py/refund"
+              ]
+            ],
+            "status": "deferred"
+          },
+          {
+            "caseId": "business-logic-fixed",
+            "correctVerdict": false,
+            "matchedRoots": [],
+            "missedRoots": [],
+            "predictionSet": [],
+            "status": "deferred"
+          },
+          {
+            "caseId": "injection-vulnerable",
+            "correctVerdict": false,
+            "matchedRoots": [
+              "injection"
+            ],
+            "missedRoots": [],
+            "predictionSet": [
+              [
+                "injection.sql",
+                "app.py/lookup"
+              ]
+            ],
+            "status": "deferred"
+          },
+          {
+            "caseId": "injection-fixed",
+            "correctVerdict": false,
+            "matchedRoots": [],
+            "missedRoots": [],
+            "predictionSet": [],
+            "status": "deferred"
+          },
+          {
+            "caseId": "ssrf-vulnerable",
+            "correctVerdict": false,
+            "matchedRoots": [],
+            "missedRoots": [
+              "ssrf"
+            ],
+            "predictionSet": [],
+            "status": "deferred"
+          },
+          {
+            "caseId": "ssrf-fixed",
+            "correctVerdict": false,
+            "matchedRoots": [],
+            "missedRoots": [],
+            "predictionSet": [],
+            "status": "deferred"
+          },
+          {
+            "caseId": "traversal-vulnerable",
+            "correctVerdict": false,
+            "matchedRoots": [
+              "traversal"
+            ],
+            "missedRoots": [],
+            "predictionSet": [
+              [
+                "path.escape",
+                "app.py/read"
+              ]
+            ],
+            "status": "deferred"
+          },
+          {
+            "caseId": "traversal-fixed",
+            "correctVerdict": false,
+            "matchedRoots": [],
+            "missedRoots": [],
+            "predictionSet": [],
+            "status": "deferred"
+          },
+          {
+            "caseId": "deserialization-vulnerable",
+            "correctVerdict": false,
+            "matchedRoots": [
+              "deserialization"
+            ],
+            "missedRoots": [],
+            "predictionSet": [
+              [
+                "deserialize.pickle",
+                "app.py/decode"
+              ]
+            ],
+            "status": "deferred"
+          },
+          {
+            "caseId": "deserialization-fixed",
+            "correctVerdict": false,
+            "matchedRoots": [],
+            "missedRoots": [],
+            "predictionSet": [],
+            "status": "deferred"
+          },
+          {
+            "caseId": "upload-vulnerable",
+            "correctVerdict": false,
+            "matchedRoots": [
+              "upload"
+            ],
+            "missedRoots": [],
+            "predictionSet": [
+              [
+                "path.escape",
+                "app.py/upload"
+              ],
+              [
+                "upload.executable",
+                "app.py/upload"
+              ]
+            ],
+            "status": "deferred"
+          },
+          {
+            "caseId": "upload-fixed",
+            "correctVerdict": false,
+            "matchedRoots": [],
+            "missedRoots": [],
+            "predictionSet": [],
+            "status": "deferred"
+          },
+          {
+            "caseId": "crypto-vulnerable",
+            "correctVerdict": false,
+            "matchedRoots": [
+              "crypto"
+            ],
+            "missedRoots": [],
+            "predictionSet": [
+              [
+                "crypto.predictable-token",
+                "app.py/token"
+              ]
+            ],
+            "status": "deferred"
+          },
+          {
+            "caseId": "crypto-fixed",
+            "correctVerdict": false,
+            "matchedRoots": [],
+            "missedRoots": [],
+            "predictionSet": [],
+            "status": "deferred"
+          },
+          {
+            "caseId": "exceptional-conditions-vulnerable",
+            "correctVerdict": false,
+            "matchedRoots": [
+              "exceptional-conditions"
+            ],
+            "missedRoots": [],
+            "predictionSet": [
+              [
+                "auth.fail-open",
+                "app.py/allowed"
+              ]
+            ],
+            "status": "deferred"
+          },
+          {
+            "caseId": "exceptional-conditions-fixed",
+            "correctVerdict": false,
+            "matchedRoots": [],
+            "missedRoots": [],
+            "predictionSet": [],
+            "status": "deferred"
+          },
+          {
+            "caseId": "secrets-vulnerable",
+            "correctVerdict": false,
+            "matchedRoots": [],
+            "missedRoots": [
+              "secrets"
+            ],
+            "predictionSet": [],
+            "status": "deferred"
+          },
+          {
+            "caseId": "secrets-fixed",
+            "correctVerdict": false,
+            "matchedRoots": [],
+            "missedRoots": [],
+            "predictionSet": [],
+            "status": "deferred"
+          },
+          {
+            "caseId": "sca-vulnerable",
+            "correctVerdict": false,
+            "matchedRoots": [],
+            "missedRoots": [
+              "sca"
+            ],
+            "predictionSet": [],
+            "status": "deferred"
+          },
+          {
+            "caseId": "sca-fixed",
+            "correctVerdict": false,
+            "matchedRoots": [],
+            "missedRoots": [],
+            "predictionSet": [],
+            "status": "deferred"
+          },
+          {
+            "caseId": "iac-vulnerable",
+            "correctVerdict": false,
+            "matchedRoots": [],
+            "missedRoots": [
+              "iac"
+            ],
+            "predictionSet": [
+              [
+                "iac.public-ingress",
+                "main.tf/resource"
+              ]
+            ],
+            "status": "deferred"
+          },
+          {
+            "caseId": "iac-fixed",
+            "correctVerdict": false,
+            "matchedRoots": [],
+            "missedRoots": [],
+            "predictionSet": [],
+            "status": "deferred"
+          },
+          {
+            "caseId": "ci-supply-chain-vulnerable",
+            "correctVerdict": false,
+            "matchedRoots": [
+              "ci-supply-chain"
+            ],
+            "missedRoots": [],
+            "predictionSet": [
+              [
+                "ci.untrusted-checkout",
+                "workflow.yml/job"
+              ]
+            ],
+            "status": "deferred"
+          },
+          {
+            "caseId": "ci-supply-chain-fixed",
+            "correctVerdict": false,
+            "matchedRoots": [],
+            "missedRoots": [],
+            "predictionSet": [],
+            "status": "deferred"
+          }
+        ],
+        "deferred": 26,
+        "errors": 0,
+        "falseNegatives": 4,
+        "falsePositives": 2,
+        "goldHighCritical": 12,
+        "goldRoots": 13,
+        "highCriticalPrecision": null,
+        "highCriticalRecall": 0.75,
+        "missing": 0,
+        "precision": 0.8181818181818182,
+        "recall": 0.6923076923076923,
+        "reported": 11,
+        "retained": 0,
+        "severityExact": 0.0,
+        "severityWithinOne": 0.46153846153846156,
+        "truePositives": 9,
+        "unsupported": 0
+      }
+    }
+  ]
+}
+
+Gate | Threshold | Measured | Status
+--- | --- | --- | ---
+dev-run-1:completed-case-coverage | 1.0 | 0.0 | FAIL
+dev-run-1:precision | 0.95 | 0.8181818181818182 | FAIL
+dev-run-1:recall | 0.85 | 0.6923076923076923 | FAIL
+dev-run-1:highCriticalRecall | 0.95 | 0.75 | FAIL
+dev-run-1:severityExact | 0.85 | 0.0 | FAIL
+dev-run-1:severityWithinOne | 0.95 | 0.46153846153846156 | FAIL
+dev-run-1:highCriticalPrecision | 0.95 | None | FAIL
+five-run-agreement:openai-codex/gpt-6-astra | — | — | NOT RUN: python scripts/run-evals.py --score-bundles /path/to/five-run-bundles

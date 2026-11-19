@@ -1,0 +1,2861 @@
+{
+  "version": "5.0.0",
+  "source": "https://raw.githubusercontent.com/OWASP/ASVS/v5.0.0/5.0/docs_en/OWASP_Application_Security_Verification_Standard_5.0.0_en.json",
+  "attribution": {
+    "holder": "OWASP Foundation and contributors",
+    "license": "CC BY-SA 4.0",
+    "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0/",
+    "changes": "Curated and paraphrased by hermes-security; surface and cross-standard associations are editorial review aids, not official equivalences or certification."
+  },
+  "chapters": [
+    {
+      "id": "V1",
+      "name": "Encoding and Sanitization"
+    },
+    {
+      "id": "V2",
+      "name": "Validation and Business Logic"
+    },
+    {
+      "id": "V3",
+      "name": "Web Frontend Security"
+    },
+    {
+      "id": "V4",
+      "name": "API and Web Service"
+    },
+    {
+      "id": "V5",
+      "name": "File Handling"
+    },
+    {
+      "id": "V6",
+      "name": "Authentication"
+    },
+    {
+      "id": "V7",
+      "name": "Session Management"
+    },
+    {
+      "id": "V8",
+      "name": "Authorization"
+    },
+    {
+      "id": "V9",
+      "name": "Self-contained Tokens"
+    },
+    {
+      "id": "V10",
+      "name": "OAuth and OIDC"
+    },
+    {
+      "id": "V11",
+      "name": "Cryptography"
+    },
+    {
+      "id": "V12",
+      "name": "Secure Communication"
+    },
+    {
+      "id": "V13",
+      "name": "Configuration"
+    },
+    {
+      "id": "V14",
+      "name": "Data Protection"
+    },
+    {
+      "id": "V15",
+      "name": "Secure Coding and Architecture"
+    },
+    {
+      "id": "V16",
+      "name": "Security Logging and Error Handling"
+    },
+    {
+      "id": "V17",
+      "name": "WebRTC"
+    }
+  ],
+  "controls": [
+    {
+      "id": "V1.1.1",
+      "chapter": "V1",
+      "summary": "Decode expected encodings once into canonical form before validation or other processing.",
+      "level": 2,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store",
+        "deserialization",
+        "llm-agent"
+      ],
+      "owasp": [
+        "A05:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V1.1.2",
+      "chapter": "V1",
+      "summary": "Encode or escape output at the last step before the target interpreter consumes it.",
+      "level": 2,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store",
+        "deserialization",
+        "llm-agent"
+      ],
+      "owasp": [
+        "A05:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V1.2.1",
+      "chapter": "V1",
+      "summary": "Use output encoding appropriate to each HTML, XML, CSS, or HTTP header context.",
+      "level": 1,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store",
+        "deserialization",
+        "llm-agent"
+      ],
+      "owasp": [
+        "A05:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V1.2.2",
+      "chapter": "V1",
+      "summary": "Encode untrusted URL parts for their context and allow only safe URL schemes.",
+      "level": 1,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store",
+        "deserialization",
+        "llm-agent"
+      ],
+      "owasp": [
+        "A05:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V1.2.3",
+      "chapter": "V1",
+      "summary": "Escape dynamically generated JavaScript and JSON to prevent structural changes.",
+      "level": 1,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store",
+        "deserialization",
+        "llm-agent"
+      ],
+      "owasp": [
+        "A05:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V1.2.4",
+      "chapter": "V1",
+      "summary": "Parameterize database queries, including queries inside stored procedures.",
+      "level": 1,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store",
+        "deserialization",
+        "llm-agent"
+      ],
+      "owasp": [
+        "A05:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V1.2.5",
+      "chapter": "V1",
+      "summary": "Use safe argument handling or contextual escaping to prevent OS command injection.",
+      "level": 1,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store",
+        "deserialization",
+        "llm-agent"
+      ],
+      "owasp": [
+        "A05:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V1.2.6",
+      "chapter": "V1",
+      "summary": "Prevent LDAP injection with query-safe handling of untrusted values.",
+      "level": 2,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store",
+        "deserialization",
+        "llm-agent"
+      ],
+      "owasp": [
+        "A05:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V1.2.7",
+      "chapter": "V1",
+      "summary": "Use parameterized or precompiled XPath queries.",
+      "level": 2,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store",
+        "deserialization",
+        "llm-agent"
+      ],
+      "owasp": [
+        "A05:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V1.3.1",
+      "chapter": "V1",
+      "summary": "Sanitize untrusted HTML with a maintained, security-focused library or framework feature.",
+      "level": 1,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store",
+        "deserialization",
+        "llm-agent"
+      ],
+      "owasp": [
+        "A05:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V1.3.2",
+      "chapter": "V1",
+      "summary": "Avoid dynamic code execution; sanitize user input where execution cannot be avoided.",
+      "level": 1,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store",
+        "deserialization",
+        "llm-agent"
+      ],
+      "owasp": [
+        "A05:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V1.3.6",
+      "chapter": "V1",
+      "summary": "Allowlist outbound protocols, domains, paths, and ports and sanitize input to prevent SSRF.",
+      "level": 2,
+      "surfaces": [
+        "outbound-http",
+        "api",
+        "llm-agent"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V1.3.7",
+      "chapter": "V1",
+      "summary": "Do not build templates from untrusted input without strict validation or sanitization.",
+      "level": 2,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store",
+        "deserialization",
+        "llm-agent"
+      ],
+      "owasp": [
+        "A05:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V1.4.1",
+      "chapter": "V1",
+      "summary": "Use memory-safe string, copy, and pointer operations to prevent buffer overflows.",
+      "level": 2,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store",
+        "deserialization",
+        "llm-agent"
+      ],
+      "owasp": [
+        "A05:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V1.4.2",
+      "chapter": "V1",
+      "summary": "Validate signs and ranges to prevent integer overflows.",
+      "level": 2,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store",
+        "deserialization",
+        "llm-agent"
+      ],
+      "owasp": [
+        "A05:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V1.4.3",
+      "chapter": "V1",
+      "summary": "Release allocated resources and clear freed references to prevent use-after-free.",
+      "level": 2,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store",
+        "deserialization",
+        "llm-agent"
+      ],
+      "owasp": [
+        "A05:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V1.5.1",
+      "chapter": "V1",
+      "summary": "Disable unsafe XML parser features, including external entity resolution.",
+      "level": 1,
+      "surfaces": [
+        "deserialization",
+        "api"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V1.5.2",
+      "chapter": "V1",
+      "summary": "Restrict deserialized object types and avoid unsafe deserializers for untrusted data.",
+      "level": 2,
+      "surfaces": [
+        "deserialization",
+        "api"
+      ],
+      "owasp": [
+        "A08:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V2.1.1",
+      "chapter": "V2",
+      "summary": "Document the expected structures and validation rules for input data.",
+      "level": 1,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store"
+      ],
+      "owasp": [
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V2.1.2",
+      "chapter": "V2",
+      "summary": "Document consistency checks between related input values.",
+      "level": 2,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store"
+      ],
+      "owasp": [
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V2.1.3",
+      "chapter": "V2",
+      "summary": "Document per-user and application-wide business limits.",
+      "level": 2,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store"
+      ],
+      "owasp": [
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V2.2.1",
+      "chapter": "V2",
+      "summary": "Validate input against permitted values, structures, ranges, and business rules.",
+      "level": 1,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store"
+      ],
+      "owasp": [
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V2.2.2",
+      "chapter": "V2",
+      "summary": "Enforce validation in a trusted service, not only in the client.",
+      "level": 1,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store"
+      ],
+      "owasp": [
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V2.2.3",
+      "chapter": "V2",
+      "summary": "Check related input values together for logical consistency.",
+      "level": 2,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store"
+      ],
+      "owasp": [
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V2.3.1",
+      "chapter": "V2",
+      "summary": "Enforce the intended business workflow order for each user without skipped steps.",
+      "level": 1,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store"
+      ],
+      "owasp": [
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V2.3.2",
+      "chapter": "V2",
+      "summary": "Enforce documented business limits.",
+      "level": 2,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store"
+      ],
+      "owasp": [
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V2.3.3",
+      "chapter": "V2",
+      "summary": "Make business operations atomic: complete every step or restore the prior correct state.",
+      "level": 2,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store"
+      ],
+      "owasp": [
+        "A06:2025",
+        "A10:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V2.3.4",
+      "chapter": "V2",
+      "summary": "Lock limited resources to prevent double booking under concurrent requests.",
+      "level": 2,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store"
+      ],
+      "owasp": [
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V2.3.5",
+      "chapter": "V2",
+      "summary": "Require multiple approvers for high-value business operations.",
+      "level": 3,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store"
+      ],
+      "owasp": [
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V2.4.1",
+      "chapter": "V2",
+      "summary": "Limit automated calls that could exhaust resources, quotas, or availability or extract excessive data.",
+      "level": 2,
+      "surfaces": [
+        "web-route",
+        "api",
+        "data-store"
+      ],
+      "owasp": [
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V3.1.1",
+      "chapter": "V3",
+      "summary": "Document required browser security features and behavior when they are unavailable.",
+      "level": 3,
+      "surfaces": [
+        "client-web",
+        "web-route"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V3.2.1",
+      "chapter": "V3",
+      "summary": "Prevent browsers from rendering responses in unintended contexts.",
+      "level": 1,
+      "surfaces": [
+        "client-web",
+        "web-route"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V3.2.2",
+      "chapter": "V3",
+      "summary": "Render plain text with text-only DOM APIs rather than HTML interpreters.",
+      "level": 1,
+      "surfaces": [
+        "client-web",
+        "web-route"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V3.2.3",
+      "chapter": "V3",
+      "summary": "Prevent DOM clobbering through explicit declarations, strict typing, and namespace isolation.",
+      "level": 3,
+      "surfaces": [
+        "client-web",
+        "web-route"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V3.3.1",
+      "chapter": "V3",
+      "summary": "Set Secure on cookies and use the __Secure- prefix when not using __Host-.",
+      "level": 1,
+      "surfaces": [
+        "client-web",
+        "web-route"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V3.3.2",
+      "chapter": "V3",
+      "summary": "Choose SameSite cookie settings to match their purpose and limit cross-site attacks.",
+      "level": 2,
+      "surfaces": [
+        "client-web",
+        "web-route"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V4.1.1",
+      "chapter": "V4",
+      "summary": "Return a Content-Type matching each response body, with a safe charset where applicable.",
+      "level": 1,
+      "surfaces": [
+        "api",
+        "web-route"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V4.1.2",
+      "chapter": "V4",
+      "summary": "Do not silently redirect service clients from plaintext HTTP; reserve automatic redirects for browser-facing endpoints.",
+      "level": 2,
+      "surfaces": [
+        "api",
+        "web-route"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V4.1.3",
+      "chapter": "V4",
+      "summary": "Ensure users cannot override trusted proxy-provided identity and forwarding headers.",
+      "level": 2,
+      "surfaces": [
+        "api",
+        "web-route"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V4.1.4",
+      "chapter": "V4",
+      "summary": "Block HTTP methods that the application does not explicitly support.",
+      "level": 3,
+      "surfaces": [
+        "api",
+        "web-route"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V4.1.5",
+      "chapter": "V4",
+      "summary": "Use message signatures for highly sensitive transactions or requests traversing multiple systems.",
+      "level": 3,
+      "surfaces": [
+        "api",
+        "web-route"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V4.2.1",
+      "chapter": "V4",
+      "summary": "Ensure intermediaries and servers agree on HTTP message boundaries to prevent request smuggling.",
+      "level": 2,
+      "surfaces": [
+        "api",
+        "web-route"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V4.3.1",
+      "chapter": "V4",
+      "summary": "Bound GraphQL query depth, volume, or cost, or allowlist queries to prevent expensive execution.",
+      "level": 2,
+      "surfaces": [
+        "graphql"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V4.3.2",
+      "chapter": "V4",
+      "summary": "Disable production GraphQL introspection unless the API is intended for other parties.",
+      "level": 2,
+      "surfaces": [
+        "graphql"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V4.4.1",
+      "chapter": "V4",
+      "summary": "Use TLS-protected WebSocket connections.",
+      "level": 1,
+      "surfaces": [
+        "websocket"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V4.4.2",
+      "chapter": "V4",
+      "summary": "Validate the WebSocket handshake Origin against allowed origins.",
+      "level": 2,
+      "surfaces": [
+        "websocket"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V5.1.1",
+      "chapter": "V5",
+      "summary": "Document permitted upload types, extensions, size limits, and safe handling of malicious files.",
+      "level": 2,
+      "surfaces": [
+        "file-upload",
+        "file-io"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V5.2.1",
+      "chapter": "V5",
+      "summary": "Reject files too large to process safely without exhausting service capacity.",
+      "level": 1,
+      "surfaces": [
+        "file-upload",
+        "file-io"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V5.2.2",
+      "chapter": "V5",
+      "summary": "Check accepted file extensions and actual content against expected file types.",
+      "level": 1,
+      "surfaces": [
+        "file-upload",
+        "file-io"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V5.2.3",
+      "chapter": "V5",
+      "summary": "Bound archive expansion size and entry count before extraction.",
+      "level": 2,
+      "surfaces": [
+        "file-upload",
+        "file-io"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V5.2.4",
+      "chapter": "V5",
+      "summary": "Enforce per-user file count and storage quotas.",
+      "level": 3,
+      "surfaces": [
+        "file-upload",
+        "file-io"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V5.2.5",
+      "chapter": "V5",
+      "summary": "Reject archive symlinks unless required and confined to an explicit target allowlist.",
+      "level": 3,
+      "surfaces": [
+        "file-upload",
+        "file-io"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V5.3.1",
+      "chapter": "V5",
+      "summary": "Prevent uploaded or untrusted generated files from executing as server-side code.",
+      "level": 1,
+      "surfaces": [
+        "file-upload",
+        "file-io"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V5.3.2",
+      "chapter": "V5",
+      "summary": "Build file paths from trusted data or strictly validate user names and metadata to prevent traversal and inclusion.",
+      "level": 1,
+      "surfaces": [
+        "file-upload",
+        "file-io"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V6.1.1",
+      "chapter": "V6",
+      "summary": "Document anti-automation and rate-limit settings that resist password attacks without enabling malicious lockout.",
+      "level": 1,
+      "surfaces": [
+        "auth"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V6.1.2",
+      "chapter": "V6",
+      "summary": "Document context-specific words that users must not choose as passwords.",
+      "level": 2,
+      "surfaces": [
+        "auth"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V6.1.3",
+      "chapter": "V6",
+      "summary": "Document every authentication path and the required consistent authentication strength.",
+      "level": 2,
+      "surfaces": [
+        "auth"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V6.2.1",
+      "chapter": "V6",
+      "summary": "Require passwords of at least eight characters; prefer a minimum of fifteen.",
+      "level": 1,
+      "surfaces": [
+        "auth"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V6.2.2",
+      "chapter": "V6",
+      "summary": "Allow users to change their passwords.",
+      "level": 1,
+      "surfaces": [
+        "auth"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V6.2.3",
+      "chapter": "V6",
+      "summary": "Require both the current and new password when changing a password.",
+      "level": 1,
+      "surfaces": [
+        "auth"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V7.1.1",
+      "chapter": "V7",
+      "summary": "Document idle and absolute session timeouts and justify departures from NIST reauthentication guidance.",
+      "level": 2,
+      "surfaces": [
+        "session"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V7.1.2",
+      "chapter": "V7",
+      "summary": "Document the concurrent-session limit and behavior when it is reached.",
+      "level": 2,
+      "surfaces": [
+        "session"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V7.1.3",
+      "chapter": "V7",
+      "summary": "Document federated session issuers and coordinated expiration, termination, and reauthentication.",
+      "level": 2,
+      "surfaces": [
+        "session"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V7.2.1",
+      "chapter": "V7",
+      "summary": "Verify session tokens in a trusted backend service.",
+      "level": 1,
+      "surfaces": [
+        "session"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V7.2.2",
+      "chapter": "V7",
+      "summary": "Use dynamically generated session tokens rather than static API keys.",
+      "level": 1,
+      "surfaces": [
+        "session"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V7.2.3",
+      "chapter": "V7",
+      "summary": "Generate unique reference session tokens with a CSPRNG and at least 128 bits of entropy.",
+      "level": 1,
+      "surfaces": [
+        "session"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V8.1.1",
+      "chapter": "V8",
+      "summary": "Document function and object access rules based on caller permissions and resource attributes.",
+      "level": 1,
+      "surfaces": [
+        "authz",
+        "web-route",
+        "api"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V8.1.2",
+      "chapter": "V8",
+      "summary": "Document field read and write restrictions, including rules dependent on object state.",
+      "level": 2,
+      "surfaces": [
+        "authz",
+        "web-route",
+        "api"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V8.1.3",
+      "chapter": "V8",
+      "summary": "Document contextual attributes used to make security decisions.",
+      "level": 3,
+      "surfaces": [
+        "authz",
+        "web-route",
+        "api"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V8.1.4",
+      "chapter": "V8",
+      "summary": "Document contextual risk thresholds and resulting allow, deny, challenge, or step-up decisions.",
+      "level": 3,
+      "surfaces": [
+        "authz",
+        "web-route",
+        "api"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V8.2.1",
+      "chapter": "V8",
+      "summary": "Require explicit permission for each protected function.",
+      "level": 1,
+      "surfaces": [
+        "authz",
+        "web-route",
+        "api"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V8.2.2",
+      "chapter": "V8",
+      "summary": "Require permission for each specific object to prevent object-level authorization bypass.",
+      "level": 1,
+      "surfaces": [
+        "authz",
+        "web-route",
+        "api"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V8.2.3",
+      "chapter": "V8",
+      "summary": "Enforce explicit permissions on individual fields for both reads and writes.",
+      "level": 2,
+      "surfaces": [
+        "authz",
+        "web-route",
+        "api"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V8.3.1",
+      "chapter": "V8",
+      "summary": "Enforce authorization in a trusted service rather than client-controlled code.",
+      "level": 1,
+      "surfaces": [
+        "authz",
+        "web-route",
+        "api"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V8.4.1",
+      "chapter": "V8",
+      "summary": "Prevent tenant operations from affecting tenants outside the caller permissions.",
+      "level": 2,
+      "surfaces": [
+        "authz",
+        "web-route",
+        "api"
+      ],
+      "owasp": [
+        "A01:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V9.1.1",
+      "chapter": "V9",
+      "summary": "Verify a token signature or MAC before trusting self-contained token data.",
+      "level": 1,
+      "surfaces": [
+        "auth",
+        "session"
+      ],
+      "owasp": [
+        "A07:2025",
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V9.1.2",
+      "chapter": "V9",
+      "summary": "Allowlist token algorithms and prevent unsigned tokens and symmetric/asymmetric key confusion.",
+      "level": 1,
+      "surfaces": [
+        "auth",
+        "session"
+      ],
+      "owasp": [
+        "A07:2025",
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V9.1.3",
+      "chapter": "V9",
+      "summary": "Accept token verification keys only from trusted issuer-specific sources.",
+      "level": 1,
+      "surfaces": [
+        "auth",
+        "session"
+      ],
+      "owasp": [
+        "A07:2025",
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V9.2.1",
+      "chapter": "V9",
+      "summary": "Enforce token validity windows, including not-before and expiry claims.",
+      "level": 1,
+      "surfaces": [
+        "auth",
+        "session"
+      ],
+      "owasp": [
+        "A07:2025",
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V9.2.2",
+      "chapter": "V9",
+      "summary": "Accept only the token type appropriate to the intended purpose.",
+      "level": 2,
+      "surfaces": [
+        "auth",
+        "session"
+      ],
+      "owasp": [
+        "A07:2025",
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V9.2.3",
+      "chapter": "V9",
+      "summary": "Verify that the token audience includes the receiving service.",
+      "level": 2,
+      "surfaces": [
+        "auth",
+        "session"
+      ],
+      "owasp": [
+        "A07:2025",
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V10.1.1",
+      "chapter": "V10",
+      "summary": "Send tokens only to components that require them; keep backend-for-frontend tokens on the backend.",
+      "level": 2,
+      "surfaces": [
+        "auth"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V10.1.2",
+      "chapter": "V10",
+      "summary": "Bind unpredictable OAuth transaction secrets to the initiating client, user-agent session, and transaction.",
+      "level": 2,
+      "surfaces": [
+        "auth"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V10.2.1",
+      "chapter": "V10",
+      "summary": "Protect authorization-code token requests against CSRF using PKCE or verified state.",
+      "level": 2,
+      "surfaces": [
+        "auth"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V10.2.2",
+      "chapter": "V10",
+      "summary": "Prevent authorization-server mix-up when the client supports multiple issuers.",
+      "level": 2,
+      "surfaces": [
+        "auth"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V10.2.3",
+      "chapter": "V10",
+      "summary": "Request only the OAuth scopes and permissions that the client needs.",
+      "level": 3,
+      "surfaces": [
+        "auth"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V10.3.1",
+      "chapter": "V10",
+      "summary": "Accept access tokens only when their audience includes the resource server.",
+      "level": 2,
+      "surfaces": [
+        "auth"
+      ],
+      "owasp": [
+        "A07:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V11.1.1",
+      "chapter": "V11",
+      "summary": "Document a standard-based key lifecycle and limit sharing of secret and private keys.",
+      "level": 2,
+      "surfaces": [
+        "crypto",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V11.1.2",
+      "chapter": "V11",
+      "summary": "Maintain a current inventory of cryptographic keys, certificates, algorithms, and permitted uses.",
+      "level": 2,
+      "surfaces": [
+        "crypto",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V11.1.3",
+      "chapter": "V11",
+      "summary": "Discover encryption, hashing, and signing operations across the system.",
+      "level": 3,
+      "surfaces": [
+        "crypto",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V11.1.4",
+      "chapter": "V11",
+      "summary": "Maintain a cryptographic inventory and migration plan for future standards and threats.",
+      "level": 3,
+      "surfaces": [
+        "crypto",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V11.2.1",
+      "chapter": "V11",
+      "summary": "Use industry-validated cryptographic implementations.",
+      "level": 2,
+      "surfaces": [
+        "crypto",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V11.2.2",
+      "chapter": "V11",
+      "summary": "Permit safe upgrades of cryptographic algorithms, parameters, keys, and encrypted data.",
+      "level": 2,
+      "surfaces": [
+        "crypto",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V11.2.3",
+      "chapter": "V11",
+      "summary": "Use cryptographic primitives with at least 128 bits of security.",
+      "level": 2,
+      "surfaces": [
+        "crypto",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V11.2.5",
+      "chapter": "V11",
+      "summary": "Handle cryptographic failures securely without creating padding or other error oracles.",
+      "level": 3,
+      "surfaces": [
+        "crypto",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025",
+        "A10:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V11.3.1",
+      "chapter": "V11",
+      "summary": "Do not use weak block modes or padding schemes.",
+      "level": 1,
+      "surfaces": [
+        "crypto",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V11.3.3",
+      "chapter": "V11",
+      "summary": "Authenticate encrypted data to prevent unauthorized modification.",
+      "level": 2,
+      "surfaces": [
+        "crypto",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V11.3.4",
+      "chapter": "V11",
+      "summary": "Never reuse a nonce or IV for distinct data encrypted under the same key; generate it as the algorithm requires.",
+      "level": 3,
+      "surfaces": [
+        "crypto",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V11.4.2",
+      "chapter": "V11",
+      "summary": "Store passwords using an approved costly password KDF with current security parameters.",
+      "level": 2,
+      "surfaces": [
+        "crypto",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V11.5.1",
+      "chapter": "V11",
+      "summary": "Generate unguessable values with a CSPRNG and at least 128 bits of entropy.",
+      "level": 2,
+      "surfaces": [
+        "crypto",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V12.1.1",
+      "chapter": "V12",
+      "summary": "Enable only recommended TLS versions and prefer the newest supported version.",
+      "level": 1,
+      "surfaces": [
+        "outbound-http",
+        "web-route",
+        "api"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V12.1.2",
+      "chapter": "V12",
+      "summary": "Enable recommended cipher suites, preferring the strongest; level 3 requires forward secrecy.",
+      "level": 2,
+      "surfaces": [
+        "outbound-http",
+        "web-route",
+        "api"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V12.1.3",
+      "chapter": "V12",
+      "summary": "Validate trust in mTLS client certificates before using their identities.",
+      "level": 2,
+      "surfaces": [
+        "outbound-http",
+        "web-route",
+        "api"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V12.1.4",
+      "chapter": "V12",
+      "summary": "Configure certificate revocation checks such as OCSP stapling.",
+      "level": 3,
+      "surfaces": [
+        "outbound-http",
+        "web-route",
+        "api"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V12.1.5",
+      "chapter": "V12",
+      "summary": "Enable Encrypted Client Hello to protect handshake metadata.",
+      "level": 3,
+      "surfaces": [
+        "outbound-http",
+        "web-route",
+        "api"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V12.2.1",
+      "chapter": "V12",
+      "summary": "Require TLS for external HTTP services without plaintext fallback.",
+      "level": 1,
+      "surfaces": [
+        "outbound-http",
+        "web-route",
+        "api"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V13.1.1",
+      "chapter": "V13",
+      "summary": "Document required communications and user-influenced outbound destinations.",
+      "level": 2,
+      "surfaces": [
+        "config",
+        "iac",
+        "ci"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V13.1.2",
+      "chapter": "V13",
+      "summary": "Document connection limits and safe behavior when pools are exhausted.",
+      "level": 3,
+      "surfaces": [
+        "config",
+        "iac",
+        "ci"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V13.1.3",
+      "chapter": "V13",
+      "summary": "Document resource release, timeouts, bounded retries, backoff, and failure handling for external services.",
+      "level": 3,
+      "surfaces": [
+        "config",
+        "iac",
+        "ci"
+      ],
+      "owasp": [
+        "A02:2025",
+        "A10:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V13.1.4",
+      "chapter": "V13",
+      "summary": "Document security-critical secrets and their rotation schedules.",
+      "level": 3,
+      "surfaces": [
+        "config",
+        "iac",
+        "ci"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V13.2.1",
+      "chapter": "V13",
+      "summary": "Authenticate backend component communications using individual accounts, short-lived tokens, or certificates.",
+      "level": 2,
+      "surfaces": [
+        "config",
+        "iac",
+        "ci"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V13.2.2",
+      "chapter": "V13",
+      "summary": "Use least-privilege accounts for backend component and operating-system communications.",
+      "level": 2,
+      "surfaces": [
+        "config",
+        "iac",
+        "ci"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V14.1.1",
+      "chapter": "V14",
+      "summary": "Inventory sensitive data and assign protection levels, including easily decoded token payloads.",
+      "level": 2,
+      "surfaces": [
+        "data-store",
+        "logging",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V14.1.2",
+      "chapter": "V14",
+      "summary": "Document protection, integrity, retention, logging, privacy, and access requirements for each data class.",
+      "level": 2,
+      "surfaces": [
+        "data-store",
+        "logging",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V14.2.1",
+      "chapter": "V14",
+      "summary": "Keep secrets and other sensitive values out of URLs and query strings.",
+      "level": 1,
+      "surfaces": [
+        "data-store",
+        "logging",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V14.2.2",
+      "chapter": "V14",
+      "summary": "Prevent sensitive server-side caching or securely purge cached data after use.",
+      "level": 2,
+      "surfaces": [
+        "data-store",
+        "logging",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V14.2.3",
+      "chapter": "V14",
+      "summary": "Do not send designated sensitive data to untrusted third parties.",
+      "level": 2,
+      "surfaces": [
+        "data-store",
+        "logging",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V14.2.4",
+      "chapter": "V14",
+      "summary": "Apply documented encryption, integrity, retention, logging, and privacy controls to sensitive data.",
+      "level": 2,
+      "surfaces": [
+        "data-store",
+        "logging",
+        "secrets"
+      ],
+      "owasp": [
+        "A04:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V15.1.1",
+      "chapter": "V15",
+      "summary": "Document risk-based deadlines for component updates and vulnerability remediation.",
+      "level": 1,
+      "surfaces": [
+        "dependencies",
+        "ci",
+        "config"
+      ],
+      "owasp": [
+        "A03:2025",
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V15.1.2",
+      "chapter": "V15",
+      "summary": "Maintain a third-party component inventory and verify trusted, maintained package sources.",
+      "level": 2,
+      "surfaces": [
+        "dependencies",
+        "ci",
+        "config"
+      ],
+      "owasp": [
+        "A03:2025",
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V15.1.3",
+      "chapter": "V15",
+      "summary": "Document expensive functions and defenses against resource exhaustion and consumer timeouts.",
+      "level": 2,
+      "surfaces": [
+        "dependencies",
+        "ci",
+        "config"
+      ],
+      "owasp": [
+        "A03:2025",
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V15.1.4",
+      "chapter": "V15",
+      "summary": "Identify risky third-party libraries in the application documentation.",
+      "level": 3,
+      "surfaces": [
+        "dependencies",
+        "ci",
+        "config"
+      ],
+      "owasp": [
+        "A03:2025",
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V15.1.5",
+      "chapter": "V15",
+      "summary": "Document where dangerous functionality is used.",
+      "level": 3,
+      "surfaces": [
+        "dependencies",
+        "ci",
+        "config"
+      ],
+      "owasp": [
+        "A03:2025",
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V15.2.1",
+      "chapter": "V15",
+      "summary": "Keep deployed component versions within documented update and remediation deadlines.",
+      "level": 1,
+      "surfaces": [
+        "dependencies",
+        "ci",
+        "config"
+      ],
+      "owasp": [
+        "A03:2025",
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V15.2.2",
+      "chapter": "V15",
+      "summary": "Implement documented availability defenses for expensive functions.",
+      "level": 2,
+      "surfaces": [
+        "dependencies",
+        "ci",
+        "config"
+      ],
+      "owasp": [
+        "A03:2025",
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V15.2.4",
+      "chapter": "V15",
+      "summary": "Resolve direct and transitive dependencies from intended repositories to prevent dependency confusion.",
+      "level": 3,
+      "surfaces": [
+        "dependencies",
+        "ci",
+        "config"
+      ],
+      "owasp": [
+        "A03:2025",
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V15.3.3",
+      "chapter": "V15",
+      "summary": "Allowlist writable fields per controller and action to prevent mass assignment.",
+      "level": 2,
+      "surfaces": [
+        "dependencies",
+        "ci",
+        "config"
+      ],
+      "owasp": [
+        "A03:2025",
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V15.4.1",
+      "chapter": "V15",
+      "summary": "Protect shared mutable resources with thread-safe operations and synchronization.",
+      "level": 3,
+      "surfaces": [
+        "dependencies",
+        "ci",
+        "config"
+      ],
+      "owasp": [
+        "A03:2025",
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V15.4.2",
+      "chapter": "V15",
+      "summary": "Make resource checks and dependent actions atomic to prevent check/use races.",
+      "level": 3,
+      "surfaces": [
+        "dependencies",
+        "ci",
+        "config"
+      ],
+      "owasp": [
+        "A03:2025",
+        "A06:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V16.1.1",
+      "chapter": "V16",
+      "summary": "Inventory logged events, formats, locations, uses, access rules, and retention at every stack layer.",
+      "level": 2,
+      "surfaces": [
+        "logging"
+      ],
+      "owasp": [
+        "A09:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V16.2.1",
+      "chapter": "V16",
+      "summary": "Include enough who, what, where, and when metadata to investigate events.",
+      "level": 2,
+      "surfaces": [
+        "logging"
+      ],
+      "owasp": [
+        "A09:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V16.2.2",
+      "chapter": "V16",
+      "summary": "Synchronize logging clocks and use UTC or explicit timezone offsets.",
+      "level": 2,
+      "surfaces": [
+        "logging"
+      ],
+      "owasp": [
+        "A09:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V16.2.3",
+      "chapter": "V16",
+      "summary": "Send logs only to destinations documented in the logging inventory.",
+      "level": 2,
+      "surfaces": [
+        "logging"
+      ],
+      "owasp": [
+        "A09:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V16.2.4",
+      "chapter": "V16",
+      "summary": "Use log formats that the deployed processor can read and correlate.",
+      "level": 2,
+      "surfaces": [
+        "logging"
+      ],
+      "owasp": [
+        "A09:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V16.2.5",
+      "chapter": "V16",
+      "summary": "Respect data protection levels when logging; omit, mask, or hash sensitive values as required.",
+      "level": 2,
+      "surfaces": [
+        "logging"
+      ],
+      "owasp": [
+        "A09:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V16.3.1",
+      "chapter": "V16",
+      "summary": "Log successful and failed authentication operations and the factors involved.",
+      "level": 2,
+      "surfaces": [
+        "logging"
+      ],
+      "owasp": [
+        "A09:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V16.3.2",
+      "chapter": "V16",
+      "summary": "Log authorization failures; level 3 also records sensitive access and other authorization decisions.",
+      "level": 2,
+      "surfaces": [
+        "logging"
+      ],
+      "owasp": [
+        "A09:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V16.3.3",
+      "chapter": "V16",
+      "summary": "Log documented security events and attempts to bypass security controls.",
+      "level": 2,
+      "surfaces": [
+        "logging"
+      ],
+      "owasp": [
+        "A09:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V16.3.4",
+      "chapter": "V16",
+      "summary": "Log unexpected errors and failed security controls.",
+      "level": 2,
+      "surfaces": [
+        "logging"
+      ],
+      "owasp": [
+        "A09:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V16.4.1",
+      "chapter": "V16",
+      "summary": "Encode untrusted log data to prevent log injection.",
+      "level": 2,
+      "surfaces": [
+        "logging"
+      ],
+      "owasp": [
+        "A09:2025",
+        "A05:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V16.4.2",
+      "chapter": "V16",
+      "summary": "Protect logs against unauthorized reading and modification.",
+      "level": 2,
+      "surfaces": [
+        "logging"
+      ],
+      "owasp": [
+        "A09:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V16.4.3",
+      "chapter": "V16",
+      "summary": "Send logs securely to a separate system for analysis, alerting, and escalation.",
+      "level": 2,
+      "surfaces": [
+        "logging"
+      ],
+      "owasp": [
+        "A09:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V16.5.1",
+      "chapter": "V16",
+      "summary": "Return generic sensitive-error responses without stack traces, queries, keys, or tokens.",
+      "level": 2,
+      "surfaces": [
+        "logging",
+        "config",
+        "web-route"
+      ],
+      "owasp": [
+        "A10:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V16.5.2",
+      "chapter": "V16",
+      "summary": "Remain secure when external resources fail, including during degradation or circuit breaking.",
+      "level": 2,
+      "surfaces": [
+        "logging",
+        "config",
+        "web-route"
+      ],
+      "owasp": [
+        "A10:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V16.5.3",
+      "chapter": "V16",
+      "summary": "Fail securely and gracefully on exceptions; never continue a transaction after failed security validation.",
+      "level": 2,
+      "surfaces": [
+        "logging",
+        "config",
+        "web-route"
+      ],
+      "owasp": [
+        "A10:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V16.5.4",
+      "chapter": "V16",
+      "summary": "Provide a final exception handler that preserves error details and prevents whole-process failure.",
+      "level": 3,
+      "surfaces": [
+        "logging",
+        "config",
+        "web-route"
+      ],
+      "owasp": [
+        "A10:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V17.1.1",
+      "chapter": "V17",
+      "summary": "Restrict TURN relay destinations to non-special-purpose addresses for both IPv4 and IPv6.",
+      "level": 2,
+      "surfaces": [
+        "websocket",
+        "client-web",
+        "mobile"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V17.1.2",
+      "chapter": "V17",
+      "summary": "Prevent legitimate TURN users from exhausting resources through excessive port allocations.",
+      "level": 3,
+      "surfaces": [
+        "websocket",
+        "client-web",
+        "mobile"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "documented-policy",
+        "enforcement-trace"
+      ]
+    },
+    {
+      "id": "V17.2.1",
+      "chapter": "V17",
+      "summary": "Protect DTLS certificate keys according to the documented key-management policy.",
+      "level": 2,
+      "surfaces": [
+        "websocket",
+        "client-web",
+        "mobile"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V17.2.2",
+      "chapter": "V17",
+      "summary": "Configure approved DTLS ciphers and a secure DTLS-SRTP protection profile.",
+      "level": 2,
+      "surfaces": [
+        "websocket",
+        "client-web",
+        "mobile"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V17.2.3",
+      "chapter": "V17",
+      "summary": "Authenticate SRTP traffic at the media server to prevent injected media and denial of service.",
+      "level": 2,
+      "surfaces": [
+        "websocket",
+        "client-web",
+        "mobile"
+      ],
+      "owasp": [
+        "A02:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    },
+    {
+      "id": "V17.2.4",
+      "chapter": "V17",
+      "summary": "Continue processing media safely when malformed SRTP packets arrive.",
+      "level": 2,
+      "surfaces": [
+        "websocket",
+        "client-web",
+        "mobile"
+      ],
+      "owasp": [
+        "A02:2025",
+        "A10:2025"
+      ],
+      "evidenceTypes": [
+        "source-to-control-trace",
+        "counterevidence",
+        "negative-case"
+      ]
+    }
+  ]
+}

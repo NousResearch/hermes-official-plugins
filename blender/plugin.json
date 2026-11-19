@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "blender",
-  "version": "0.2.0",
-  "description": "Connect Hermes to the official Blender Lab MCP server and load a Blender workflow skill. Blender 5.1+ must be installed (the install is refused without it); its MCP add-on must be configured separately.",
+  "version": "0.4.1",
+  "description": "Connect Hermes to the official Blender Lab MCP server and load a Blender workflow skill. The skill opens Blender when a task needs it, and installs Blender 5.1+ and its MCP add-on after the user agrees.",
   "author": {
     "name": "Nous Research"
   },
@@ -13,66 +13,5 @@
     "mcp",
     "3d",
     "local"
-  ],
-  "extensions": {
-    "com.nousresearch.hermes": {
-      "servers": {
-        "blender": {
-          "app": {
-            "win32": {
-              "presence": "executable",
-              "location": [
-                {
-                  "kind": "uninstall_registry",
-                  "display_name_prefix": "Blender",
-                  "file": "blender.exe"
-                },
-                "%ProgramFiles%/Blender Foundation/Blender */blender.exe"
-              ],
-              "version": {
-                "kind": "pe_resource"
-              }
-            },
-            "darwin": {
-              "presence": "bundle",
-              "location": [
-                {
-                  "kind": "app_bundle",
-                  "name": "Blender.app"
-                },
-                "~/Library/Application Support/Steam/steamapps/common/Blender/Blender.app"
-              ],
-              "version": {
-                "kind": "plist"
-              }
-            },
-            "linux": {
-              "presence": "executable",
-              "location": [
-                {
-                  "kind": "command",
-                  "name": "blender"
-                },
-                {
-                  "kind": "flatpak",
-                  "app_id": "org.blender.Blender"
-                },
-                {
-                  "kind": "snap",
-                  "name": "blender"
-                },
-                "~/.steam/steam/steamapps/common/Blender/blender",
-                "~/.local/share/Steam/steamapps/common/Blender/blender",
-                "~/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/Blender/blender"
-              ]
-            }
-          },
-          "requires": {
-            "app": true,
-            "min_version": "5.1"
-          }
-        }
-      }
-    }
-  }
+  ]
 }

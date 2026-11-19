@@ -1,0 +1,689 @@
+{
+ "runs": [
+  {
+   "runId": "dev-run-1",
+   "provider": "openai-codex",
+   "model": "gpt-6-astra",
+   "records": [
+    {
+     "caseId": "iac-vulnerable",
+     "status": "ok",
+     "bundle": "run-1/w01/scans/scan_4e5052ff43004ab1a9406f6b"
+    },
+    {
+     "caseId": "crypto-vulnerable",
+     "status": "ok",
+     "bundle": "run-1/w01/scans/scan_316aa134966efe98917b8bdd"
+    },
+    {
+     "caseId": "injection-fixed",
+     "status": "ok",
+     "bundle": "run-1/w02/scans/scan_e490d6e47557d56f135d9423"
+    },
+    {
+     "caseId": "deserialization-vulnerable",
+     "status": "ok",
+     "bundle": "run-1/w02/scans/scan_568f880add24e215b1aeeefe"
+    },
+    {
+     "caseId": "secrets-vulnerable",
+     "status": "ok",
+     "bundle": "run-1/w03/scans/scan_7abad781b2e22ee770d3644d"
+    },
+    {
+     "caseId": "access-control-fixed",
+     "status": "ok",
+     "bundle": "run-1/w03/scans/scan_ea90a741fec4cfe422310500"
+    },
+    {
+     "caseId": "secrets-fixed",
+     "status": "ok",
+     "bundle": "run-1/w04/scans/scan_6473da8a3507f0313a416c2c"
+    },
+    {
+     "caseId": "crypto-fixed",
+     "status": "ok",
+     "bundle": "run-1/w04/scans/scan_b4f1e4d2d953bed18b5826cc"
+    },
+    {
+     "caseId": "iac-fixed",
+     "status": "ok",
+     "bundle": "run-1/w05/scans/scan_34dc1c351c97e57f01e385de"
+    },
+    {
+     "caseId": "ssrf-vulnerable",
+     "status": "ok",
+     "bundle": "run-1/w05/scans/scan_3499bd7fa299bb91f67b2486"
+    },
+    {
+     "caseId": "ssrf-fixed",
+     "status": "ok",
+     "bundle": "run-1/w06/scans/scan_a7e0a1d9497467ea01d8c143"
+    },
+    {
+     "caseId": "upload-fixed",
+     "status": "ok",
+     "bundle": "run-1/w06/scans/scan_d985c7709c3905868d817c41"
+    },
+    {
+     "caseId": "ci-supply-chain-fixed",
+     "status": "ok",
+     "bundle": "run-1/w07/scans/scan_4ed9a173579d55b17156953b"
+    },
+    {
+     "caseId": "sca-fixed",
+     "status": "ok",
+     "bundle": "run-1/w07/scans/scan_bf514c6261905cb0b43ecfb3"
+    },
+    {
+     "caseId": "deserialization-fixed",
+     "status": "ok",
+     "bundle": "run-1/w08/scans/scan_dd52764264d7e8c5309ff038"
+    },
+    {
+     "caseId": "sca-vulnerable",
+     "status": "ok",
+     "bundle": "run-1/w08/scans/scan_ce307e5740310e88826b8769"
+    },
+    {
+     "caseId": "business-logic-vulnerable",
+     "status": "ok",
+     "bundle": "run-1/w09/scans/scan_b8a0c63563774b7b57b6110c"
+    },
+    {
+     "caseId": "access-control-vulnerable",
+     "status": "ok",
+     "bundle": "run-1/w09/scans/scan_08b2a7e0eedc5fc8228b4a86"
+    },
+    {
+     "caseId": "exceptional-conditions-vulnerable",
+     "status": "ok",
+     "bundle": "run-1/w10/scans/scan_4d788005562fb9460c922f19"
+    },
+    {
+     "caseId": "ci-supply-chain-vulnerable",
+     "status": "ok",
+     "bundle": "run-1/w10/scans/scan_2d45e82e65aeca7476de0c34"
+    },
+    {
+     "caseId": "business-logic-fixed",
+     "status": "ok",
+     "bundle": "run-1/w11/scans/scan_e0c2c4a1fe5c7ceafe0dd175"
+    },
+    {
+     "caseId": "injection-vulnerable",
+     "status": "ok",
+     "bundle": "run-1/w11/scans/scan_8fce6688a5dc9f44278f5d1c"
+    },
+    {
+     "caseId": "upload-vulnerable",
+     "status": "ok",
+     "bundle": "run-1/w12/scans/scan_bf2e9196a56401c6c14c2af0"
+    },
+    {
+     "caseId": "traversal-fixed",
+     "status": "ok",
+     "bundle": "run-1/w12/scans/scan_f4c1ee9b00a98c35fcf6e28b"
+    },
+    {
+     "caseId": "exceptional-conditions-fixed",
+     "status": "ok",
+     "bundle": "run-1/w13/scans/scan_7fd1eac45e3a5ee2da16e874"
+    },
+    {
+     "caseId": "traversal-vulnerable",
+     "status": "ok",
+     "bundle": "run-1/w13/scans/scan_c71a7cf5cd6e9306363d4106"
+    }
+   ]
+  },
+  {
+   "runId": "dev-run-2",
+   "provider": "openai-codex",
+   "model": "gpt-6-astra",
+   "records": [
+    {
+     "caseId": "iac-vulnerable",
+     "status": "ok",
+     "bundle": "run-2/w04/scans/scan_cbe5a742d20440882cc9cdf0"
+    },
+    {
+     "caseId": "crypto-vulnerable",
+     "status": "ok",
+     "bundle": "run-2/w01/scans/scan_1fa411cb05169a4f15e63f61"
+    },
+    {
+     "caseId": "injection-fixed",
+     "status": "ok",
+     "bundle": "run-2/w05/scans/scan_8f71e358e86a6ce441bf804c"
+    },
+    {
+     "caseId": "deserialization-vulnerable",
+     "status": "ok",
+     "bundle": "run-2/w04/scans/scan_e3e5b99df26ac72c8cc6fd0c"
+    },
+    {
+     "caseId": "secrets-vulnerable",
+     "status": "ok",
+     "bundle": "run-2/w06/scans/scan_2f6d9fb910e4712972da097c"
+    },
+    {
+     "caseId": "access-control-fixed",
+     "status": "ok",
+     "bundle": "run-2/w01/scans/scan_2cd9c1b9521a9cd75d62bcff"
+    },
+    {
+     "caseId": "secrets-fixed",
+     "status": "ok",
+     "bundle": "run-2/w03/scans/scan_4811ca42b61ddc6d47e39c2a"
+    },
+    {
+     "caseId": "crypto-fixed",
+     "status": "ok",
+     "bundle": "run-2/w06/scans/scan_954522ec6286b9df0891f995"
+    },
+    {
+     "caseId": "iac-fixed",
+     "status": "ok",
+     "bundle": "run-2/w05/scans/scan_22ca22cb437960c20c2e132e"
+    },
+    {
+     "caseId": "ssrf-vulnerable",
+     "status": "ok",
+     "bundle": "run-2/w02/scans/scan_55f2a8ac208f440e91ffa4af"
+    },
+    {
+     "caseId": "ssrf-fixed",
+     "status": "ok",
+     "bundle": "run-2/w03/scans/scan_9443747a79f8a23ef12bd368"
+    },
+    {
+     "caseId": "upload-fixed",
+     "status": "ok",
+     "bundle": "run-2/w01/scans/scan_8f6738dfec146bf1e5933a9d"
+    },
+    {
+     "caseId": "ci-supply-chain-fixed",
+     "status": "ok",
+     "bundle": "run-2/w03/scans/scan_a267599d4d3ac4079174bc42"
+    },
+    {
+     "caseId": "sca-fixed",
+     "status": "ok",
+     "bundle": "run-2/w06/scans/scan_0c316bae3728cd0ea1d0ae37"
+    },
+    {
+     "caseId": "deserialization-fixed",
+     "status": "ok",
+     "bundle": "run-2/w01/scans/scan_3d47e3eb7132cb913dcbab5f"
+    },
+    {
+     "caseId": "sca-vulnerable",
+     "status": "ok",
+     "bundle": "run-2/w05/scans/scan_da7a6c2834c3d77595946cc6"
+    },
+    {
+     "caseId": "business-logic-vulnerable",
+     "status": "ok",
+     "bundle": "run-2/w07/scans/scan_d4a9f46e74a6814816ddcdb8"
+    },
+    {
+     "caseId": "access-control-vulnerable",
+     "status": "ok",
+     "bundle": "run-2/w02/scans/scan_1752441db3a926199a9c8e3e"
+    },
+    {
+     "caseId": "exceptional-conditions-vulnerable",
+     "status": "ok",
+     "bundle": "run-2/w03/scans/scan_236eed838dd77886b6d921ae"
+    },
+    {
+     "caseId": "ci-supply-chain-vulnerable",
+     "status": "ok",
+     "bundle": "run-2/w07/scans/scan_4314c296f68a41e40285f22e"
+    },
+    {
+     "caseId": "business-logic-fixed",
+     "status": "ok",
+     "bundle": "run-2/w05/scans/scan_2dcc0a58b52b712b7548f825"
+    },
+    {
+     "caseId": "injection-vulnerable",
+     "status": "ok",
+     "bundle": "run-2/w06/scans/scan_fecf69c508ba6fcefb891037"
+    },
+    {
+     "caseId": "upload-vulnerable",
+     "status": "ok",
+     "bundle": "run-2/w02/scans/scan_5e48db52e74926bea48934d3"
+    },
+    {
+     "caseId": "traversal-fixed",
+     "status": "ok",
+     "bundle": "run-2/w04/scans/scan_e47ca18e90cd17b32226ffe1"
+    },
+    {
+     "caseId": "exceptional-conditions-fixed",
+     "status": "ok",
+     "bundle": "run-2/w04/scans/scan_37eb8cc3d6d16dddf647251f"
+    },
+    {
+     "caseId": "traversal-vulnerable",
+     "status": "ok",
+     "bundle": "run-2/w02/scans/scan_bf3cc413f8de5984fee6487e"
+    }
+   ]
+  },
+  {
+   "runId": "dev-run-3",
+   "provider": "openai-codex",
+   "model": "gpt-6-astra",
+   "records": [
+    {
+     "caseId": "iac-vulnerable",
+     "status": "ok",
+     "bundle": "run-3/w05/scans/scan_05fc07d42f6c52324afba3f2"
+    },
+    {
+     "caseId": "crypto-vulnerable",
+     "status": "ok",
+     "bundle": "run-3/w04/scans/scan_f79a0e1970480899e3e2c9fd"
+    },
+    {
+     "caseId": "injection-fixed",
+     "status": "ok",
+     "bundle": "run-3/w01/scans/scan_601384f72375c70d6f3ee721"
+    },
+    {
+     "caseId": "deserialization-vulnerable",
+     "status": "ok",
+     "bundle": "run-3/w01/scans/scan_4a765d8b9a871ad4e76fc989"
+    },
+    {
+     "caseId": "secrets-vulnerable",
+     "status": "ok",
+     "bundle": "run-3/w03/scans/scan_4dbb7235ccc7cd8ce0360fab"
+    },
+    {
+     "caseId": "access-control-fixed",
+     "status": "ok",
+     "bundle": "run-3/w02/scans/scan_f87cf5004b51a1f0323f6222"
+    },
+    {
+     "caseId": "secrets-fixed",
+     "status": "ok",
+     "bundle": "run-3/w02/scans/scan_3a6f3108dd18a8385c016400"
+    },
+    {
+     "caseId": "crypto-fixed",
+     "status": "ok",
+     "bundle": "run-3/w06/scans/scan_5d33601214f41561cf344e0a"
+    },
+    {
+     "caseId": "iac-fixed",
+     "status": "ok",
+     "bundle": "run-3/w04/scans/scan_c112277d117e1bd32e257c6e"
+    },
+    {
+     "caseId": "ssrf-vulnerable",
+     "status": "ok",
+     "bundle": "run-3/w01/scans/scan_63695474bbc139f325417d92"
+    },
+    {
+     "caseId": "ssrf-fixed",
+     "status": "ok",
+     "bundle": "run-3/w04/scans/scan_7abc6982805d1fa74a4e65af"
+    },
+    {
+     "caseId": "upload-fixed",
+     "status": "ok",
+     "bundle": "run-3/w06/scans/scan_d53eed3bbc1edbf5fe7e28a3"
+    },
+    {
+     "caseId": "ci-supply-chain-fixed",
+     "status": "ok",
+     "bundle": "run-3/w05/scans/scan_485d91cdcda5b36925f5dc32"
+    },
+    {
+     "caseId": "sca-fixed",
+     "status": "ok",
+     "bundle": "run-3/w03/scans/scan_eaa6035cc6bf49042fa64cad"
+    },
+    {
+     "caseId": "deserialization-fixed",
+     "status": "ok",
+     "bundle": "run-3/w06/scans/scan_d4299052b2cdfa4913080d62"
+    },
+    {
+     "caseId": "sca-vulnerable",
+     "status": "ok",
+     "bundle": "run-3/w07/scans/scan_4feb638e401571fba92a1905"
+    },
+    {
+     "caseId": "business-logic-vulnerable",
+     "status": "ok",
+     "bundle": "run-3/w02/scans/scan_03e26145f4155ab943c22daf"
+    },
+    {
+     "caseId": "access-control-vulnerable",
+     "status": "ok",
+     "bundle": "run-3/w07/scans/scan_37cc58d76a9155d40274758a"
+    },
+    {
+     "caseId": "exceptional-conditions-vulnerable",
+     "status": "ok",
+     "bundle": "run-3/w03/scans/scan_263c04868927dedf3b2690a8"
+    },
+    {
+     "caseId": "ci-supply-chain-vulnerable",
+     "status": "ok",
+     "bundle": "run-3/w03/scans/scan_7cbb2d8c9deeb258bba87396"
+    },
+    {
+     "caseId": "business-logic-fixed",
+     "status": "ok",
+     "bundle": "run-3/w05/scans/scan_55276299639f7b94722ed1d4"
+    },
+    {
+     "caseId": "injection-vulnerable",
+     "status": "ok",
+     "bundle": "run-3/w06/scans/scan_9212bde79ef7021258f8b6f0"
+    },
+    {
+     "caseId": "upload-vulnerable",
+     "status": "ok",
+     "bundle": "run-3/w04/scans/scan_c39b1323c3c044a2b13a691c"
+    },
+    {
+     "caseId": "traversal-fixed",
+     "status": "ok",
+     "bundle": "run-3/w01/scans/scan_02dc6bce2894539d5fa96310"
+    },
+    {
+     "caseId": "exceptional-conditions-fixed",
+     "status": "ok",
+     "bundle": "run-3/w05/scans/scan_5d1c7f4c8dded586c9bc2943"
+    },
+    {
+     "caseId": "traversal-vulnerable",
+     "status": "ok",
+     "bundle": "run-3/w02/scans/scan_ba636054aa7e8594a977c614"
+    }
+   ]
+  },
+  {
+   "runId": "dev-run-4",
+   "provider": "openai-codex",
+   "model": "gpt-6-astra",
+   "records": [
+    {
+     "caseId": "iac-vulnerable",
+     "status": "ok",
+     "bundle": "run-4/w02/scans/scan_967caad1c361015c5d39ad7f"
+    },
+    {
+     "caseId": "crypto-vulnerable",
+     "status": "ok",
+     "bundle": "run-4/w05/scans/scan_a6d2ea893af6300f37147e06"
+    },
+    {
+     "caseId": "injection-fixed",
+     "status": "ok",
+     "bundle": "run-4/w03/scans/scan_188a8d16fcf733ba7d1e215c"
+    },
+    {
+     "caseId": "deserialization-vulnerable",
+     "status": "ok",
+     "bundle": "run-4/w07/scans/scan_a70f3180e58af792e3b56cfe"
+    },
+    {
+     "caseId": "secrets-vulnerable",
+     "status": "ok",
+     "bundle": "run-4/w04/scans/scan_24256801c09edcb110272b63"
+    },
+    {
+     "caseId": "access-control-fixed",
+     "status": "ok",
+     "bundle": "run-4/w04/scans/scan_8e107b7938dd93aaa158b60f"
+    },
+    {
+     "caseId": "secrets-fixed",
+     "status": "ok",
+     "bundle": "run-4/w05/scans/scan_a294195dfba192a7e47b8da4"
+    },
+    {
+     "caseId": "crypto-fixed",
+     "status": "ok",
+     "bundle": "run-4/w01/scans/scan_d6c9a3104f767cd7fa338cdb"
+    },
+    {
+     "caseId": "iac-fixed",
+     "status": "ok",
+     "bundle": "run-4/w03/scans/scan_21f443136aecea5dc16bc852"
+    },
+    {
+     "caseId": "ssrf-vulnerable",
+     "status": "ok",
+     "bundle": "run-4/w04/scans/scan_a068f78b95b4e285bfcf7cbf"
+    },
+    {
+     "caseId": "ssrf-fixed",
+     "status": "ok",
+     "bundle": "run-4/w05/scans/scan_ba205d80eeb8e0002d42375e"
+    },
+    {
+     "caseId": "upload-fixed",
+     "status": "ok",
+     "bundle": "run-4/w02/scans/scan_ea1279913e8ec93799d8e6be"
+    },
+    {
+     "caseId": "ci-supply-chain-fixed",
+     "status": "ok",
+     "bundle": "run-4/w02/scans/scan_1c7769891040289d940e47e7"
+    },
+    {
+     "caseId": "sca-fixed",
+     "status": "ok",
+     "bundle": "run-4/w07/scans/scan_093847555092930e626fdcb9"
+    },
+    {
+     "caseId": "deserialization-fixed",
+     "status": "ok",
+     "bundle": "run-4/w01/scans/scan_01ad573b92bd823193d0d97e"
+    },
+    {
+     "caseId": "sca-vulnerable",
+     "status": "ok",
+     "bundle": "run-4/w01/scans/scan_8190dc2323c913ae26b5b192"
+    },
+    {
+     "caseId": "business-logic-vulnerable",
+     "status": "ok",
+     "bundle": "run-4/w06/scans/scan_279a0fbc48dedd0ee819f715"
+    },
+    {
+     "caseId": "access-control-vulnerable",
+     "status": "ok",
+     "bundle": "run-4/w06/scans/scan_09c5595e0724b0f0020ab0ec"
+    },
+    {
+     "caseId": "exceptional-conditions-vulnerable",
+     "status": "ok",
+     "bundle": "run-4/w01/scans/scan_d7b91df08359a58e3386677c"
+    },
+    {
+     "caseId": "ci-supply-chain-vulnerable",
+     "status": "ok",
+     "bundle": "run-4/w06/scans/scan_2e9b762b4b2b4b2be7f3b13a"
+    },
+    {
+     "caseId": "business-logic-fixed",
+     "status": "ok",
+     "bundle": "run-4/w03/scans/scan_0783a93e564187c3448955a4"
+    },
+    {
+     "caseId": "injection-vulnerable",
+     "status": "ok",
+     "bundle": "run-4/w02/scans/scan_699c76e1d9ef029f261d4e96"
+    },
+    {
+     "caseId": "upload-vulnerable",
+     "status": "ok",
+     "bundle": "run-4/w05/scans/scan_fac18b86aa055af8e599d99c"
+    },
+    {
+     "caseId": "traversal-fixed",
+     "status": "ok",
+     "bundle": "run-4/w06/scans/scan_2ab1c3ad5bf43613e49e606d"
+    },
+    {
+     "caseId": "exceptional-conditions-fixed",
+     "status": "ok",
+     "bundle": "run-4/w03/scans/scan_e62611f6a741571997b0a167"
+    },
+    {
+     "caseId": "traversal-vulnerable",
+     "status": "ok",
+     "bundle": "run-4/w04/scans/scan_46f94f7a848621fa69159410"
+    }
+   ]
+  },
+  {
+   "runId": "dev-run-5",
+   "provider": "openai-codex",
+   "model": "gpt-6-astra",
+   "records": [
+    {
+     "caseId": "iac-vulnerable",
+     "status": "ok",
+     "bundle": "run-5/w03/scans/scan_2324c9b5b552b7ad319a0a38"
+    },
+    {
+     "caseId": "crypto-vulnerable",
+     "status": "ok",
+     "bundle": "run-5/w04/scans/scan_9372ac43bea4afb1c73cef2c"
+    },
+    {
+     "caseId": "injection-fixed",
+     "status": "ok",
+     "bundle": "run-5/w02/scans/scan_dc4484031417e87b05be9722"
+    },
+    {
+     "caseId": "deserialization-vulnerable",
+     "status": "ok",
+     "bundle": "run-5/w03/scans/scan_e35d59e151e99772644dc031"
+    },
+    {
+     "caseId": "secrets-vulnerable",
+     "status": "ok",
+     "bundle": "run-5/w03/scans/scan_8fc8a600ad5a9b784089bbe5"
+    },
+    {
+     "caseId": "access-control-fixed",
+     "status": "ok",
+     "bundle": "run-5/w05/scans/scan_8e809ee0041d76fbbdbaa7db"
+    },
+    {
+     "caseId": "secrets-fixed",
+     "status": "ok",
+     "bundle": "run-5/w02/scans/scan_6841cd4eb1ac87930f865d71"
+    },
+    {
+     "caseId": "crypto-fixed",
+     "status": "ok",
+     "bundle": "run-5/w01/scans/scan_22d5a6a4d3d255d9fcc049d8"
+    },
+    {
+     "caseId": "iac-fixed",
+     "status": "ok",
+     "bundle": "run-5/w02/scans/scan_5c5d9afab6fd8331b2796eab"
+    },
+    {
+     "caseId": "ssrf-vulnerable",
+     "status": "ok",
+     "bundle": "run-5/w05/scans/scan_0540f671d5bb72d3b50b36de"
+    },
+    {
+     "caseId": "ssrf-fixed",
+     "status": "ok",
+     "bundle": "run-5/w01/scans/scan_908048154577f29f779ddd19"
+    },
+    {
+     "caseId": "upload-fixed",
+     "status": "ok",
+     "bundle": "run-5/w05/scans/scan_6e3068d93f99230385ac0ed1"
+    },
+    {
+     "caseId": "ci-supply-chain-fixed",
+     "status": "ok",
+     "bundle": "run-5/w07/scans/scan_0616a7fcd50332c5691dd9ec"
+    },
+    {
+     "caseId": "sca-fixed",
+     "status": "ok",
+     "bundle": "run-5/w06/scans/scan_82c065eaeb7b8792e6881ed6"
+    },
+    {
+     "caseId": "deserialization-fixed",
+     "status": "ok",
+     "bundle": "run-5/w01/scans/scan_8411e97baacb13206bb25eac"
+    },
+    {
+     "caseId": "sca-vulnerable",
+     "status": "ok",
+     "bundle": "run-5/w07/scans/scan_bec4cc0c84fadb78a84c7fad"
+    },
+    {
+     "caseId": "business-logic-vulnerable",
+     "status": "ok",
+     "bundle": "run-5/w04/scans/scan_0e7757b9d4c3cb4c67010ac9"
+    },
+    {
+     "caseId": "access-control-vulnerable",
+     "status": "ok",
+     "bundle": "run-5/w06/scans/scan_f8b2cf95c2e84f006f532f25"
+    },
+    {
+     "caseId": "exceptional-conditions-vulnerable",
+     "status": "ok",
+     "bundle": "run-5/w06/scans/scan_3f81ce12876be2f235f2d2d9"
+    },
+    {
+     "caseId": "ci-supply-chain-vulnerable",
+     "status": "ok",
+     "bundle": "run-5/w04/scans/scan_09f098d7ab66d4b663967e20"
+    },
+    {
+     "caseId": "business-logic-fixed",
+     "status": "ok",
+     "bundle": "run-5/w06/scans/scan_23de8aca28b8a00880d0a493"
+    },
+    {
+     "caseId": "injection-vulnerable",
+     "status": "ok",
+     "bundle": "run-5/w01/scans/scan_f9e5cbd69b72fc386fca1774"
+    },
+    {
+     "caseId": "upload-vulnerable",
+     "status": "ok",
+     "bundle": "run-5/w02/scans/scan_4fe282aa9d34fdbebeff4e77"
+    },
+    {
+     "caseId": "traversal-fixed",
+     "status": "ok",
+     "bundle": "run-5/w05/scans/scan_0cd9b03d73e8bef9e07aaa24"
+    },
+    {
+     "caseId": "exceptional-conditions-fixed",
+     "status": "ok",
+     "bundle": "run-5/w03/scans/scan_f598f859faee92b709fda93b"
+    },
+    {
+     "caseId": "traversal-vulnerable",
+     "status": "ok",
+     "bundle": "run-5/w04/scans/scan_2949a2f7c1563b60c96451b2"
+    }
+   ]
+  }
+ ]
+}

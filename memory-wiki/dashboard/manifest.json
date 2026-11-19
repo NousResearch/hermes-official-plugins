@@ -3,7 +3,7 @@
   "label": "Memory Wiki",
   "description": "Browsable session-history wiki (subjects + daily logs derived from state.db) with a read-only Persistent Memory audit panel",
   "icon": "Database",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "tab": {
     "path": "/memory-wiki",
     "position": "after:sessions"

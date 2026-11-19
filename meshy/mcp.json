@@ -6,7 +6,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "@meshy-ai/meshy-mcp-server@0.6.4"
+        "@meshy-ai/meshy-mcp-server@0.6.5"
       ],
       "cwd": "${PLUGIN_DATA}",
       "env": {

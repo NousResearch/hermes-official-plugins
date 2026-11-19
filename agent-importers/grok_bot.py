@@ -30,8 +30,8 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .importer import (AgentImporter, atomic_write_text, extract_markdown_entries, is_secret_key,
-                       read_text)
+from .importer import (AgentImporter, ConfigReadError, atomic_write_text, extract_markdown_entries,
+                       is_secret_key, load_config_file, read_text)
 
 AGENT = "grok-bot"
 EXPORT_FORMAT = "grok-bot-export"
@@ -549,6 +549,7 @@ class GrokBotImporter(AgentImporter):
                 if zone_note := _zone_note(routine, kwargs):  # imported rows print only where they went
                     details["timezone_note"] = zone_note
                     where = f"{where} ({zone_note})"
+                where = f"{where} (delivers to {deliver or 'local'})"  # the preview row says where (#264)
 
                 def create(job_name=job_name, instruction=instruction, schedule=schedule,
                            job_skills=job_skills, kwargs=kwargs, details=details) -> None:
@@ -559,8 +560,7 @@ class GrokBotImporter(AgentImporter):
 
                 details["job_name"] = job_name  # the import record names jobs by this (#266)
                 self.apply("routine", f"{source} / {label}", where,
-                           f"Would create a {'paused ' if paused else ''}cron job ({schedule}, "
-                           f"delivers to {deliver or 'local'})",
+                           f"Would create a {'paused ' if paused else ''}cron job ({schedule})",
                            create, details)
         if unscheduled or needs_schedule:
             self._note_event_routines(source, bot_name, unscheduled, needs_schedule)
@@ -651,16 +651,23 @@ def _routine_schedule(routine: dict[str, Any], parse_schedule) -> Optional[str]:
     return None
 
 
-_HOME_CHANNEL_PLATFORMS = ("TELEGRAM", "DISCORD", "SLACK", "WHATSAPP", "SIGNAL",
-                           "MATRIX", "QQBOT", "QQ", "FEISHU", "DINGTALK", "MATTERMOST")
+# Platform ids as cron's ``deliver`` spells them (``gateway.config.Platform`` values).
+_HOME_CHANNEL_PLATFORMS = ("telegram", "discord", "slack", "whatsapp", "signal", "matrix",
+                           "qqbot", "feishu", "dingtalk", "mattermost")
 
 
 def _delivery_target(target_root: Path) -> Optional[str]:
     """First delivery target the target profile can actually receive on: a platform whose home
-    channel is configured (``<PLATFORM>_HOME_CHANNEL`` in the process env or the profile's
-    ``.env``, or a ``home_channel`` in its config), else None — the job then stays ``local``
-    and the summary must say where its output lands instead of staying silent (#264)."""
+    channel is configured (``<PLATFORM>_HOME_CHANNEL`` in the profile's ``.env``, or a
+    ``home_channel`` in its config), else None — the job then stays ``local`` and the summary
+    must say where its output lands instead of staying silent (#264). The process env counts
+    only when the target IS the running profile: it holds the launch profile's channels, and a
+    job in another profile cannot deliver through them."""
+    from hermes_constants import get_hermes_home
+
     env: dict[str, str] = {}
+    if target_root.resolve() == get_hermes_home().resolve():
+        env.update(os.environ)
 
     dotenv = target_root / ".env"
     if dotenv.is_file():
@@ -670,22 +677,18 @@ def _delivery_target(target_root: Path) -> Optional[str]:
                 env[key.strip()] = value.strip().strip("'\"")
 
     for name in _HOME_CHANNEL_PLATFORMS:
-        if str(env.get(f"{name}_HOME_CHANNEL") or os.environ.get(f"{name}_HOME_CHANNEL") or "").strip():
-            return name.lower()
+        if str(env.get(f"{name.upper()}_HOME_CHANNEL") or "").strip():
+            return name
 
-    config = target_root / "config.yaml"
-    if config.is_file():
-        try:
-            import yaml
-
-            data = yaml.safe_load(read_text(config)) or {}
-            platforms = data.get("platforms") if isinstance(data, dict) else None
-            if isinstance(platforms, dict):
-                for name, section in platforms.items():
-                    if isinstance(section, dict) and str(section.get("home_channel") or "").strip():
-                        return str(name).strip().lower()
-        except Exception:
-            pass
+    try:
+        data = load_config_file(target_root / "config.yaml")
+    except ConfigReadError:
+        return None  # an unreadable config names no channel; the job stays local
+    platforms = data.get("platforms")
+    if isinstance(platforms, dict):
+        for name, section in platforms.items():
+            if isinstance(section, dict) and section.get("home_channel"):
+                return str(name).strip().lower()
     return None
 
 

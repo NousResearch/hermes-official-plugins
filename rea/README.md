@@ -94,9 +94,10 @@ server.
 Every REA call runs under the 1000-second deadline this package declares for its
 own server (`extensions.com.nousresearch.hermes.servers.rea.timeout` in
 `plugin.json`), so a large Ghidra import is not cut short while it analyzes. The
-plugin also sets Ghidra's internal startup deadline to 900 seconds. A Hermes
-release that predates per-server deadlines ignores the declaration and keeps its
-own MCP tool default.
+plugin also sets Ghidra's internal startup deadline to 900 seconds. The
+declaration needs Hermes v0.22.3 or newer: v0.22.0 and v0.22.2 refuse the
+whole package (`server declaration 'rea' has unknown keys ['timeout']`), so
+the catalog entry requires `>=0.22.3`.
 
 `open_binary` validates a target, but the first Ghidra-backed query imports and
 analyzes it. Large executables can take several minutes. Subsequent queries
@@ -105,8 +106,7 @@ Cancellation remains available, and a completed open is not a progress signal.
 
 In a binary-first test on WinSCP 6.7, the console launcher imported in about
 30 seconds. The GUI executable exceeded the upstream 330-second default and
-completed in 663 seconds with a 1000-second Hermes budget, which needs
-Hermes v0.23.0 or newer. A subsequent real Hermes
+completed in 663 seconds with a 1000-second Hermes budget. A subsequent real Hermes
 chat using the same native target completed its first query in 580 seconds,
 then made successful follow-up decompilation and caller queries. Both runs
 recovered 28,701 procedures. The Windows executable was analyzed statically,

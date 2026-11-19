@@ -36,7 +36,8 @@ hermes config set MESHY_API_KEY msy_...        # writes the profile's .env
 # or put MESHY_API_KEY=msy_... in ~/.hermes/.env (~/.hermes/profiles/<name>/.env)
 ```
 
-Create the key at meshy.ai → Settings → API. API keys need a Pro plan or above. Then ask, for example, "Make a low-poly treasure chest for Godot" or "Turn
+Create the key at [meshy.ai/developers/keys](https://www.meshy.ai/developers/keys); any paid Meshy
+plan can create one. Then ask, for example, "Make a low-poly treasure chest for Godot" or "Turn
 ~/photos/mug.jpg into a 3D model and get it ready to print at 10 cm".
 
 Requirements: Node.js 18+ with `npx` on PATH. The first start downloads the pinned package
@@ -46,30 +47,79 @@ into npm's cache.
 
 Most Meshy tools spend credits (5–62 per call; the skill's `references/tools.md` lists the
 prices). The plugin marks the server `trust: untrusted`, so Hermes asks before every
-write-capable call (creates, downloads, cancels) with Allow once / Allow for this session /
-Deny. Read-only tools (balance, usage, task status and lists, the animation library, slicer
-detection) run without a prompt. The skill also tells the agent to state the cost and get your
-yes before any paid call. Unattended runs (cron, `hermes chat -q`, a gateway with no approver)
-cannot approve, so paid calls are refused there.
+write-capable call (creates, downloads, cancels). Read-only tools (balance, usage, task status and
+lists, the animation library, slicer detection) run without a prompt. The skill also tells the agent
+to state the cost and get your yes before any paid call. Unattended runs (cron, `hermes chat -q`, a
+gateway with no approver) cannot approve, so with the default settings paid calls are refused there.
+The settings under [Full creative control](#full-creative-control-no-prompts) change that.
 
-To skip the prompts, override the server in `config.yaml` with the same name. A config entry
-replaces the plugin's, trust included, so keep the pinned command:
+What the prompt's answers cover depends on your Hermes build:
 
-```yaml
-mcp_servers:
-  meshy:
-    command: npx
-    args: ["-y", "@meshy-ai/meshy-mcp-server@0.6.5"]
-    env:
-      MESHY_API_KEY: ${MESHY_API_KEY}
-```
+| Answer | Hermes builds after v0.22.5 | v0.22.5 and older |
+|---|---|---|
+| Allow once | this call | this call |
+| Allow for this session | that tool, for the rest of this chat | this call only |
+| Always | that tool, in every chat of this profile (saved to `command_allowlist` as `mcp:meshy/<tool>`, e.g. `mcp:meshy/meshy_text_to_3d`; delete the line to revoke it) | this call only |
 
-On Hermes builds with MCP tool costs, the plugin also declares what each Meshy tool costs (Meshy's
-API price list; ranges where the model or texture size changes the price) and a 200-credit spend
-limit per chat. The approval prompt then reads "Costs about 5–25 credits" plus what the chat has
-spent, and once a chat would pass the limit Hermes asks again even with the prompts skipped as above
-(your override keeps the plugin's costs unless it sets `tool_costs` / `spend_limit` itself;
-`spend_limit: 0` turns the limit off). Older Hermes builds ignore the declaration.
+Each answer covers one tool: allowing `meshy_text_to_3d` does not allow `meshy_rig`.
+
+The plugin also declares what each Meshy tool costs (Meshy's API price list; ranges where the model
+or texture size changes the price) and a 200-credit spend limit per chat. The prompt then reads
+"Costs about 5–25 credits" plus what the chat has spent. A call that would take the chat past the
+limit always asks, even for a tool you allowed for the session or always, and that prompt offers
+only Once or Deny: each further paid call in that chat asks again. Hermes builds without MCP tool
+costs ignore the declaration.
+
+### Full creative control (no prompts)
+
+1. **Skip the trust prompt.** On Hermes builds after v0.22.5, YOLO mode skips it: `/yolo` for the
+   current chat, `hermes --yolo` for that process, or `approvals.mode: off` in `config.yaml` for the
+   whole profile (`HERMES_YOLO_MODE=1` works too). Or answer **Always** once per tool you want to run
+   freely. On any build, the override in step 2 also drops it, unless it keeps `trust: untrusted`.
+2. **Raise or remove the spend limit.** YOLO and Always do not lift it. Override the server in
+   `config.yaml` under the same name. A config entry replaces the plugin's whole entry: its
+   `trust: untrusted` (an entry without `trust` is fully trusted, so no trust prompt), its working
+   folder and its 1,500 s call timeout. Only the plugin's declared costs and its 200-credit limit
+   carry over, unless the entry sets them. So repeat what you want to keep:
+
+   ```yaml
+   mcp_servers:
+     meshy:
+       command: npx
+       args: ["-y", "@meshy-ai/meshy-mcp-server@0.6.5"]
+       env:
+         MESHY_API_KEY: ${MESHY_API_KEY}
+       timeout: 1500        # Creative Lab and status waits outlast Hermes' 300 s default
+       spend_limit: 0       # 0 = no per-chat limit; or a number of credits, e.g. 1000
+       trust: untrusted     # keeps the per-call prompt; delete this line for no prompts at all
+   ```
+
+   `${PLUGIN_DATA}` is not expanded in `config.yaml`, so the override cannot keep the plugin's own
+   working folder. Without `cwd`, a download the agent makes without `save_to` lands in
+   `meshy_output/` in the folder the server was started in: the session's terminal folder at the
+   moment Hermes started the server, else the folder Hermes was started in. It is not re-read per
+   chat. The skill always passes an absolute `save_to`, and you can name a folder in your request. To pin one folder, set `cwd: ${userHome}/Meshy` (create it first).
+
+These settings apply to unattended runs too (cron jobs, `hermes chat -q`, a gateway with no
+approver), not only to chats you watch. With `approvals.mode: off`, a process started with `--yolo`,
+or an **Always** answer, such a run makes paid calls without asking until the chat reaches its spend
+limit (200 credits by default). With `spend_limit: 0` there is no limit left: anything that skips the
+trust prompt (no `trust` line, YOLO, or Always) then lets an unattended run spend without any cap.
+
+Prompts come back after `/yolo` is turned off, or after you delete the override and the
+`command_allowlist` lines.
+
+## Long jobs and chat apps
+
+A Meshy job takes minutes: `meshy_get_task_status` waits up to 300 s per call and Creative Lab waits
+through two stages of up to 600 s each. The plugin declares a 1,500 s call timeout for its server
+(`timeout` in `plugin.json`), so Hermes does not cut those waits off at its 300 s MCP default.
+
+In Telegram, Discord, Slack and other chat apps the skill has the agent reply "started, about N
+min" and end its turn, with a background timer that brings it back to check and deliver, so the chat
+is not blocked meanwhile. Results arrive as attachments (`MEDIA:` lines): the thumbnail as a photo,
+the model file as a document, and for rigged or animated models a short preview video rendered
+locally.
 
 ## Where files go
 
@@ -86,13 +136,18 @@ same values:
 
 | Setting | Default | CLI |
 |---|---|---|
-| Meshy API key | — | `hermes config set MESHY_API_KEY msy_...` (stored in `.env`, never `config.yaml`) |
-| Credit balance in the status bar | on | `hermes config set plugins.entries.meshy.settings.show_credits false` |
-| Inline 3D cards in chat | on | `… .settings.inline_viewer false` (directive lines then show as text) |
-| Auto-rotate in the gallery | on | `… .settings.auto_rotate false` |
-| Recent generations shown | 24 | `… .settings.gallery_limit 10` (1–60) |
+| Meshy API key (`api_key`) | — | `hermes config set MESHY_API_KEY msy_...` (stored in `.env`, never `config.yaml`) |
+| Credit balance in the status bar (`show_credits`) | on | `hermes config set plugins.entries.meshy.settings.show_credits false` |
+| Inline 3D cards in chat (`inline_viewer`) | on | `hermes config set plugins.entries.meshy.settings.inline_viewer false` (directive lines then show as text) |
+| Auto-rotate in the gallery (`auto_rotate`) | on | `hermes config set plugins.entries.meshy.settings.auto_rotate false` |
+| Recent generations shown (`gallery_limit`) | 24 | `hermes config set plugins.entries.meshy.settings.gallery_limit 10` (1–60) |
+| Blender optimized copy (`blender_handoff`) | ask | `hermes config set plugins.entries.meshy.settings.blender_handoff always` (`ask`, `always` or `never`) |
+| Default detail level (`default_detail`) | ask | `hermes config set plugins.entries.meshy.settings.default_detail game` (`ask`, `game`, `mobile` or `detailed`) |
+| Blender executable (`blender_path`) | empty (PATH and the usual install folders) | `hermes config set plugins.entries.meshy.settings.blender_path /path/to/blender` |
 
-Desktop applies a saved change immediately; nothing needs a restart.
+Desktop applies a saved change immediately; nothing needs a restart. The agent reads
+`blender_handoff`, `default_detail` and `blender_path` when it needs them, so a change counts from
+the next Meshy job.
 
 ## Hermes Desktop
 
@@ -111,11 +166,18 @@ you get, rendered with stock three.js:
   time. A tick marks formats already on disk.
 - **Meshy 3D gallery** (status-bar chip or ⌘K → "Meshy: open 3D gallery"): your recent
   generations and the models on this machine next to a full viewer, with the same Download menu
-  for any model whose Meshy task is known. "Meshy: view a .glb file…" opens any model on disk.
-  "On this machine" lists the plugin's `meshy_output/` plus every model the viewer has opened or
+  for any model whose Meshy task is known. "Meshy: view a 3D model file…" opens a GLB, glTF, FBX,
+  OBJ (with its .mtl and texture beside it), STL, USDZ or 3MF; against a remote Hermes it sends the
+  file you pick to that machine (stored in the plugin's `uploads/` folder) instead of a local path.
+  The saved-files list ("On this machine", or "On <connection>" for a remote Hermes) shows every
+  format Meshy saved, BLEND included (listed without a 3D preview), and lists the plugin's
+  `meshy_output/` plus every model the viewer has opened or
   saved elsewhere (a project folder): a small per-profile index, `asset-index.json` in the plugin's
   data folder, holds path, size, sha256 and task id only (no URLs, no keys; 500 entries, vanished
   files drop out). Nothing scans your home folder.
+  A product Meshy refuses to list for your plan, or whose route is down, gets a one-line notice
+  naming it and the reason, and every other product still lists; only a rejected key (or Meshy
+  being down for every product) replaces the list with an error.
   Every row is labelled with the prompt that made it, and the search box filters by prompt.
   Selecting a model shows **Made from**: the prompt (copy it, or put it back in the chat box), the
   texture or style prompt, the source image for image models, settings, seed, credits, the chain of
@@ -125,6 +187,9 @@ you get, rendered with stock three.js:
   `provenance.json` in its data folder (prompt, settings, parent task, the image path or the image
   URL without its query string; 2,000 entries). Models made before this or from another machine
   show what Meshy and the download folder still know.
+  On a remote Hermes, "Show in folder" cannot open that machine's folders: Desktop shows where the
+  file is and copies the path instead. Binary USDZ (USDC) does not preview yet (three.js's reader is
+  a stub); open the GLB.
 - **Credit chip** in the status bar, refreshed after every Meshy tool call.
 
 ### Images and saved assets

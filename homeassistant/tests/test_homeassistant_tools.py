@@ -9,6 +9,7 @@ Moved from hermes-agent core ``tests/tools/test_homeassistant_tool.py``.
 import asyncio
 import json
 import logging
+from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 import aiohttp
@@ -195,6 +196,100 @@ class TestCallServiceVerification:
         assert result["success"] is True
         assert "already in state" in result["note"]
         assert "error" not in result
+
+    # -- devices that confirm after the call returns (#213) ------------------------------------
+    # A Zigbee/Wi-Fi plug or bulb flips its state only when the device confirms, ~150-300 ms
+    # after POST /api/services returns [], so the first state read still shows the old state.
+
+    def _call_with_states(self, states, domain, service, entity):
+        """POST returns []; successive GET /api/states reads return *states* in order (the last repeats)."""
+        reads = []
+
+        async def fake_api_json(method, path, timeout, payload=None):
+            if method == "POST":
+                return []
+            if method == "GET" and path == f"/api/states/{entity}":
+                reads.append(path)
+                return {"entity_id": entity, "state": states[min(len(reads), len(states)) - 1]}
+            raise AssertionError(f"unexpected request {method} {path}")
+
+        sleeps = []
+
+        async def fake_sleep(seconds):
+            sleeps.append(seconds)
+
+        with patch.object(ha_tool, "_api_json", side_effect=fake_api_json), \
+                patch.object(ha_tool.asyncio, "sleep", side_effect=fake_sleep):
+            result = asyncio.run(_async_call_service(domain, service, entity, None))
+        return result, len(reads), sleeps
+
+    def test_turn_off_on_a_device_that_confirms_late_reports_the_new_state(self):
+        result, reads, _ = self._call_with_states(["on", "on", "off"], "switch", "turn_off", "switch.plug")
+        assert result["success"] is True and "error" not in result
+        assert "already" not in result["note"]
+        assert "now 'off'" in result["note"]
+        assert result["affected_entities"] == [{"entity_id": "switch.plug", "state": "off"}]
+        assert reads == 3
+
+    def test_turn_on_that_never_confirms_is_an_actionable_error_not_a_noop(self):
+        result, reads, sleeps = self._call_with_states(["off"], "light", "turn_on", "light.bulb")
+        assert result["success"] is False
+        assert "already" not in result["error"]
+        assert "still 'off'" in result["error"] and "ha_get_state" in result["error"]
+        assert reads == 1 + len(ha_tool._STATE_CONFIRM_DELAYS)
+        assert sum(sleeps) <= 2.0  # the wait for a confirmation stays short
+
+    def test_a_true_noop_answers_from_one_read_without_waiting(self):
+        result, reads, sleeps = self._call_with_states(["on"], "switch", "turn_on", "switch.plug")
+        assert result["success"] is True and "already in state 'on'" in result["note"]
+        assert reads == 1 and sleeps == []
+
+    def test_turn_on_is_reached_by_any_on_like_state(self):
+        # media_player / climate report playing, idle, heat ... once on, never the literal "on".
+        result, reads, _ = self._call_with_states(["idle"], "media_player", "turn_on", "media_player.tv")
+        assert result["success"] is True and "already in state 'idle'" in result["note"]
+        assert reads == 1
+
+    def test_toggle_is_never_already_satisfied(self):
+        result, _, _ = self._call_with_states(["on", "off"], "light", "toggle", "light.bulb")
+        assert result["success"] is True and "already" not in result["note"]
+        assert result["affected_entities"] == [{"entity_id": "light.bulb", "state": "off"}]
+
+    def test_a_lock_moving_through_locking_counts_as_confirmed(self):
+        result, _, _ = self._call_with_states(["unlocked", "locking"], "lock", "lock", "lock.door")
+        assert result["success"] is True and "now 'locking'" in result["note"]
+
+    def test_a_service_without_a_target_state_does_not_claim_it_was_already_satisfied(self):
+        # set_cover_position names no state; an unchanged state proves nothing either way.
+        result, reads, sleeps = self._call_with_states(["open"], "cover", "set_cover_position", "cover.blind")
+        assert result["success"] is True and "error" not in result
+        assert "already" not in result["note"] and "'open'" in result["note"]
+        assert reads == 1 and sleeps == []
+
+    def test_a_device_dropping_to_unavailable_is_not_reported_as_confirmed(self):
+        result, _, _ = self._call_with_states(["on", "unavailable"], "switch", "turn_off", "switch.plug")
+        assert result["success"] is False
+        assert "'unavailable'" in result["error"] and "still" not in result["error"]
+
+    def test_a_failed_recheck_while_waiting_is_reported_not_raised(self):
+        reads = []
+
+        async def fake_api_json(method, path, timeout, payload=None):
+            if method == "POST":
+                return []
+            reads.append(path)
+            if len(reads) == 1:
+                return {"entity_id": "switch.plug", "state": "on"}
+            raise asyncio.TimeoutError()
+
+        async def no_sleep(_seconds):
+            return None
+
+        with patch.object(ha_tool, "_api_json", side_effect=fake_api_json), \
+                patch.object(ha_tool.asyncio, "sleep", side_effect=no_sleep):
+            result = asyncio.run(_async_call_service("switch", "turn_off", "switch.plug", None))
+        assert result["success"] is False
+        assert "still 'on'" in result["error"] and "already" not in result["error"]
 
     def test_verification_failure_other_than_404_is_not_reported_as_missing(self):
         # A 401/500/timeout on the verification GET says nothing about whether the entity exists.
@@ -474,6 +569,46 @@ class TestStringData:
         result = json.loads(_handle_call_service({
             "domain": "light", "service": "turn_on", "data": "{not json"}))
         assert "Invalid JSON string" in result["error"]
+
+
+class TestObjectData:
+    """`data` accepts a plain object, which is what models emit natively.
+
+    The handler always knew how to take one; only the advertised schema said
+    ``type: string``, so argument validation rejected a dict before dispatch and
+    every play_media / volume_set call paid a failed tool call plus a full model
+    round trip to retry with a JSON string.
+    """
+
+    @patch("homeassistant_plugin.tools._async_call_service", new_callable=AsyncMock)
+    def test_object_data_reaches_the_service_layer(self, mock_call_service):
+        mock_call_service.return_value = {"success": True}
+        result = json.loads(_handle_call_service({
+            "domain": "media_player", "service": "play_media",
+            "entity_id": "media_player.kitchen",
+            "data": {"media_content_id": "radar weekly", "media_content_type": "playlist"},
+        }))
+        assert "error" not in result
+        mock_call_service.assert_awaited_once_with(
+            "media_player", "play_media", "media_player.kitchen",
+            {"media_content_id": "radar weekly", "media_content_type": "playlist"})
+
+    @pytest.mark.parametrize("data", [
+        {"volume_level": 0.3},          # native object, the normal shape
+        '{"volume_level": 0.3}',        # JSON string, XML tool-calling mode
+    ])
+    def test_advertised_schema_accepts_object_and_json_string(self, data):
+        # Core only validates deferred-tool arguments when jsonschema is importable; CI's
+        # plain core install does not pull it in.
+        validator_for = pytest.importorskip("jsonschema.validators").validator_for
+
+        params = ha_tool.HA_CALL_SERVICE_SCHEMA["parameters"]
+        validator = validator_for(params)(params)
+        args = {
+            "domain": "media_player", "service": "volume_set",
+            "entity_id": "media_player.kitchen", "data": data,
+        }
+        assert list(validator.iter_errors(args)) == []
 
 
 class TestUrlWithoutScheme:
@@ -1128,3 +1263,182 @@ class TestRegistryHardening:
         assert pull.await_count == 0
         json.loads(ha_tool._handle_list_entities({"area": "kitchen"}))
         assert pull.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Local-time twins for the timestamps HA answers in UTC (#155)
+# ---------------------------------------------------------------------------
+
+
+UTC_STAMP = "2026-10-22T01:42:27.349875+00:00"
+
+
+def _state_payload(**overrides):
+    payload = {
+        "entity_id": "sensor.front_door",
+        "state": "off",
+        "attributes": {"friendly_name": "Front Door"},
+        "last_changed": UTC_STAMP,
+        "last_updated": UTC_STAMP,
+    }
+    payload.update(overrides)
+    return payload
+
+
+class TestLocalTimestampTwins:
+    """HA answers in UTC; the response also carries the local time, so the agent never converts."""
+
+    def _read(self, monkeypatch, state, config=None, calls=None):
+        async def fake_api_json(method, path, timeout, payload=None):
+            if calls is not None:
+                calls.append(path)
+            if path == "/api/config":
+                return config if config is not None else {"time_zone": "Europe/Berlin"}
+            if path.startswith("/api/states/"):
+                return state
+            raise AssertionError(f"unexpected request {method} {path}")
+
+        monkeypatch.setattr(ha_tool, "_api_json", fake_api_json)
+        monkeypatch.setattr(ha_tool, "_HASS_TIMEZONE", "")
+        monkeypatch.setattr(ha_tool, "_TZ_CACHE", {"ts": 0.0, "name": ""})
+        return asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+
+    def test_the_local_twin_is_the_instance_timezone(self, monkeypatch):
+        result = self._read(monkeypatch, _state_payload())
+        # 01:42 UTC in Berlin (UTC+2 in October) is 03:42 local.
+        assert result["last_changed_local"] == "2026-10-22T03:42:27.349875+02:00"
+        assert result["last_updated_local"] == "2026-10-22T03:42:27.349875+02:00"
+
+    def test_the_utc_value_is_kept_as_it_is(self, monkeypatch):
+        result = self._read(monkeypatch, _state_payload())
+        assert result["last_changed"] == UTC_STAMP
+        assert result["last_updated"] == UTC_STAMP
+
+    def test_an_automation_trigger_gets_its_local_twin(self, monkeypatch):
+        payload = _state_payload(attributes={
+            "friendly_name": "Front Door",
+            "last_triggered": UTC_STAMP,
+        })
+        result = self._read(monkeypatch, payload)
+        assert result["attributes"]["last_triggered_local"] == "2026-10-22T03:42:27.349875+02:00"
+        assert result["attributes"]["last_triggered"] == UTC_STAMP
+
+    def test_the_operator_override_wins(self, monkeypatch):
+        async def fake_api_json(method, path, timeout, payload=None):
+            if path == "/api/config":
+                return {"time_zone": "Europe/Berlin"}
+            if path.startswith("/api/states/"):
+                return _state_payload()
+            raise AssertionError(f"unexpected request {method} {path}")
+
+        monkeypatch.setattr(ha_tool, "_api_json", fake_api_json)
+        monkeypatch.setattr(ha_tool, "_HASS_TIMEZONE", "America/Los_Angeles")
+        monkeypatch.setattr(ha_tool, "_TZ_CACHE", {"ts": 0.0, "name": ""})
+        result = asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        assert result["last_changed_local"] == "2026-10-21T18:42:27.349875-07:00"
+
+    def test_the_override_comes_from_the_profile_config(self, monkeypatch, tmp_path):
+        """A behaviour setting: read from config.yaml (platforms.homeassistant.extra.timezone), not .env."""
+        (tmp_path / "config.yaml").write_text(
+            "platforms:\n  homeassistant:\n    extra:\n      timezone: America/Los_Angeles\n")
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("HASS_TIMEZONE", "Asia/Tokyo")  # an env var is no longer a setting
+
+        async def fake_api_json(method, path, timeout, payload=None):
+            if path.startswith("/api/states/"):
+                return _state_payload()
+            raise AssertionError(f"the override must win without asking the instance: {path}")
+
+        monkeypatch.setattr(ha_tool, "_api_json", fake_api_json)
+        monkeypatch.setattr(ha_tool, "_HASS_TIMEZONE", "")
+        monkeypatch.setattr(ha_tool, "_TZ_CACHE", {"ts": 0.0, "name": ""})
+        result = asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        assert result["last_changed_local"] == "2026-10-21T18:42:27.349875-07:00"
+
+    def test_an_unreadable_timestamp_is_left_alone(self, monkeypatch):
+        result = self._read(monkeypatch, _state_payload(last_changed="not a timestamp"))
+        assert result["last_changed"] == "not a timestamp"
+        assert "last_changed_local" not in result
+        assert result["last_updated_local"] == "2026-10-22T03:42:27.349875+02:00"
+
+    def test_the_instance_zone_is_read_once(self, monkeypatch):
+        calls = []
+
+        async def fake_api_json(method, path, timeout, payload=None):
+            calls.append(path)
+            if path == "/api/config":
+                return {"time_zone": "Europe/Berlin"}
+            if path.startswith("/api/states/"):
+                return _state_payload()
+            raise AssertionError(f"unexpected request {method} {path}")
+
+        monkeypatch.setattr(ha_tool, "_api_json", fake_api_json)
+        monkeypatch.setattr(ha_tool, "_HASS_TIMEZONE", "")
+        monkeypatch.setattr(ha_tool, "_TZ_CACHE", {"ts": 0.0, "name": ""})
+        asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        assert calls.count("/api/config") == 1  # cached for an hour
+
+    def test_an_instance_without_a_zone_falls_back_to_the_machine(self, monkeypatch):
+        result = self._read(monkeypatch, _state_payload(), config={"version": "2026.9.2"})
+        # The machine's own zone: the twin is exactly that rendering of the same instant (which is
+        # the UTC value on a UTC machine - the field stays correct, it is just not a different one).
+        local = result["last_changed_local"]
+        assert local
+        assert local == datetime.fromisoformat(UTC_STAMP).astimezone().isoformat()
+
+    def test_the_zone_is_not_shared_between_instances(self, monkeypatch):
+        """Two profiles pointing at different Home Assistants must not see each other's zone."""
+        zones = {"http://ha-one.local:8123": "Europe/Berlin", "http://ha-two.local:8123": "America/Los_Angeles"}
+        current = {"url": "http://ha-one.local:8123"}
+
+        async def fake_api_json(method, path, timeout, payload=None):
+            if path == "/api/config":
+                return {"time_zone": zones[current["url"]]}
+            if path.startswith("/api/states/"):
+                return _state_payload()
+            raise AssertionError(f"unexpected request {method} {path}")
+
+        monkeypatch.setattr(ha_tool, "_api_json", fake_api_json)
+        monkeypatch.setattr(ha_tool, "_HASS_TIMEZONE", "")
+        monkeypatch.setattr(ha_tool, "_TZ_CACHE", {"ts": 0.0, "name": "", "url": ""})
+        monkeypatch.setattr(ha_tool, "_get_config", lambda: (current["url"], "tok"))
+
+        first = asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        assert first["last_changed_local"] == "2026-10-22T03:42:27.349875+02:00"
+
+        # The other instance: its own zone, not the one cached for the first.
+        current["url"] = "http://ha-two.local:8123"
+        second = asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        assert second["last_changed_local"] == "2026-10-21T18:42:27.349875-07:00"
+
+    def test_an_unresolvable_zone_still_gives_a_local_time(self, monkeypatch):
+        """A zone this Python cannot resolve (no IANA database) must not lose the local twin."""
+        monkeypatch.setattr(ha_tool, "_HASS_TIMEZONE", "Not/AZone")
+        monkeypatch.setattr(ha_tool, "_TZ_CACHE", {"ts": 0.0, "name": ""})
+
+        async def fake_api_json(method, path, timeout, payload=None):
+            if path.startswith("/api/states/"):
+                return _state_payload()
+            raise AssertionError(f"unexpected request {method} {path}")
+
+        monkeypatch.setattr(ha_tool, "_api_json", fake_api_json)
+        result = asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        local = result["last_changed_local"]
+        assert local
+        assert local == datetime.fromisoformat(UTC_STAMP).astimezone().isoformat()
+
+    def test_a_failing_config_read_does_not_fail_the_state_read(self, monkeypatch):
+        async def fake_api_json(method, path, timeout, payload=None):
+            if path == "/api/config":
+                raise RuntimeError("boom")
+            if path.startswith("/api/states/"):
+                return _state_payload()
+            raise AssertionError(f"unexpected request {method} {path}")
+
+        monkeypatch.setattr(ha_tool, "_api_json", fake_api_json)
+        monkeypatch.setattr(ha_tool, "_HASS_TIMEZONE", "")
+        monkeypatch.setattr(ha_tool, "_TZ_CACHE", {"ts": 0.0, "name": ""})
+        result = asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        assert result["entity_id"] == "sensor.front_door"
+        assert result["last_changed"] == UTC_STAMP

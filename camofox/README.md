@@ -193,12 +193,16 @@ plugin seam yet. Each is imported at its point of use:
 | `agent.redact.redact_sensitive_text`, `agent.redact._PREFIX_RE` | secret redaction in tool output; refusing URLs that embed a secret |
 | `tools.credential_files.to_agent_visible_cache_path` | the stored-snapshot path as the agent's file tools see it (Docker/SSH terminals) |
 
-Vault fill (`browser_vault` filling a login form) does not reach the Camofox tab: core's vault tool
-would need a seam to evaluate its fill script through the active browser backend. Until then, type
-credentials with `browser_type`. Snapshots mask values that look like secrets (API keys, tokens), but
-Camoufox prints every filled field's value, a password field's included, and its snapshot does not
-mark which field is a password: a plain password typed into the page (by the agent, or by you over
-VNC) shows up in `browser_snapshot` and the navigate result.
+Vault fill (`browser_vault` filling a login form) reaches the Camofox tab on Hermes cores that have
+the browser page backend seam (`ctx.register_browser_page_backend`): the vault reads the tab's origin,
+inspects the form and writes the password through Camofox's `/tabs/<id>/evaluate`, with the same
+exact-origin checks as on a CDP browser. It only fills a tab `browser_navigate` already opened (it
+never opens one), and sends the password only when `CAMOFOX_URL` is loopback or HTTPS. A value the
+vault filled shows as `«redacted-vault-secret»` in `browser_snapshot`. On older cores, type
+credentials with `browser_type`. Snapshots also mask values that look like secrets (API keys,
+tokens), but Camoufox prints every other filled field's value and does not mark which field is a
+password: a plain password typed into the page (by the agent, or by you over VNC) shows up in
+`browser_snapshot` and the navigate result.
 
 ## License
 

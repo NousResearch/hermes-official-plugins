@@ -14,6 +14,8 @@ from bubblewrap_plugin import home as bubblewrap_home
 from bubblewrap_plugin.home import (
     ALLOWED_HOME_ENTRIES,
     DENIED_HOME_PATHS,
+    DENY_ALL,
+    DENY_DOT,
     allow_unit,
     denied_home_names,
     denied_home_paths,
@@ -88,10 +90,10 @@ class TestDenylist:
         assert bubblewrap_home.DENIED_HOME_PATHS is DENIED_HOME_PATHS
 
 
-def _allowlist(home, path_env="", allow_items=()):
+def _allowlist(home, path_env="", allow_items=(), **kwargs):
     return resolve_allowlist(
         home, path_env, allow_items,
-        denied_names=denied_home_names(home), denied_paths=denied_home_paths(home),
+        denied_names=denied_home_names(home), denied_paths=denied_home_paths(home), **kwargs,
     )
 
 
@@ -410,3 +412,31 @@ class TestLayout:
             mounts = _mounts(_layout(home, binds=((flag, local, local),)))
             sealed = [dest for f, dest in mounts if f == "--remount-ro"]
             assert sealed == [home], (flag, sealed)
+
+
+class TestDefaultDenyAll:
+    @pytest.mark.parametrize("rel, under_all", [
+        ("server/x/y", "server"), (".zz-tool/bin", ".zz-tool"),
+        (".config", None), ("/usr/bin", None),
+    ])
+    def test_allow_unit_adds_the_top_level_entry_only_under_all(self, home, rel, under_all):
+        path = os.path.join(home, rel)
+        assert allow_unit(home, path) == allow_unit(home, path, DENY_DOT)
+        assert allow_unit(home, path, DENY_ALL) == under_all
+
+    def test_allowlist_takes_top_level_names_under_all(self, home, caplog):
+        path_env = os.path.join(home, "work", "proj", ".venv", "bin")
+        items = ("server", "~/hermes", " bin ", ".zz-extra", "server/sub", ".ssh")
+        allowed = _allowlist(home, path_env, items, default_deny=DENY_ALL)
+        assert set(allowed) == {*ALLOWED_HOME_ENTRIES, "work", "server", "hermes", "bin", ".zz-extra"}
+        assert "server/sub" in caplog.text and "home_default_deny" not in caplog.text
+
+    def test_layout_under_all_binds_only_allowlisted_entries(self, home):
+        os.makedirs(os.path.join(home, "Documents"))
+        os.makedirs(os.path.join(home, "server"))
+        for name in ("notes.txt", ".gitconfig", ".zz-unlisted"):
+            _touch(home, name)
+        allowlist = _allowlist(home, allow_items=("server",), default_deny=DENY_ALL)
+        dests = {dest for _flag, dest in _mounts(_layout(home, allowlist, default_deny=DENY_ALL))}
+        assert {os.path.join(home, name) for name in ("server", ".gitconfig")} <= dests
+        assert not dests & {os.path.join(home, name) for name in ("Documents", "notes.txt", ".zz-unlisted")}

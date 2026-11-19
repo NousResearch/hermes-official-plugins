@@ -1,0 +1,91 @@
+{
+  "scanId": "scan_eval",
+  "snapshotDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "findings": [
+    {
+      "findingId": "hsf_a",
+      "scanId": "scan_eval",
+      "snapshotDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "severity": {
+        "level": "medium"
+      },
+      "evidenceState": "source_supported",
+      "capabilities": {
+        "effects": [
+          {
+            "kind": "data-write",
+            "actor": "anonymous",
+            "tenant": "same",
+            "deployment": "prod",
+            "detail": ""
+          }
+        ],
+        "preconditions": []
+      },
+      "codeEvidence": [
+        {
+          "id": "ev-1"
+        }
+      ],
+      "counterEvidence": [],
+      "attackPath": {
+        "controls": [],
+        "assumptions": []
+      },
+      "taxonomy": {
+        "cwe": [
+          "CWE-918"
+        ]
+      }
+    },
+    {
+      "findingId": "hsf_b",
+      "scanId": "scan_eval",
+      "snapshotDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "severity": {
+        "level": "medium"
+      },
+      "evidenceState": "source_supported",
+      "capabilities": {
+        "effects": [
+          {
+            "kind": "code-exec",
+            "actor": "anonymous",
+            "tenant": "same",
+            "deployment": "prod",
+            "detail": ""
+          }
+        ],
+        "preconditions": [
+          {
+            "kind": "internal-network",
+            "actor": "anonymous",
+            "tenant": "same",
+            "deployment": "prod",
+            "detail": ""
+          }
+        ]
+      },
+      "codeEvidence": [
+        {
+          "id": "ev-1"
+        }
+      ],
+      "counterEvidence": [],
+      "attackPath": {
+        "controls": [],
+        "assumptions": []
+      },
+      "taxonomy": {
+        "cwe": [
+          "CWE-918"
+        ]
+      }
+    }
+  ],
+  "expected": {
+    "chains": [],
+    "broken": [],
+    "allowedEdges": []
+  }
+}

@@ -1,0 +1,5 @@
+[
+  {"reader": "developer", "good": "A project member can download another tenant's invoices", "bad": "Potential authorization weakness"},
+  {"reader": "security-engineer", "good": "An anonymous caller can overwrite files outside the upload directory", "bad": "Issue in upload handler"},
+  {"reader": "non-security", "good": "Anyone with a shared link can read private customer messages", "bad": "Potential access control weakness"}
+]

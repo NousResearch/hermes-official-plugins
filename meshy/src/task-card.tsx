@@ -5,9 +5,12 @@
  */
 
 import { Button, Codicon } from '@hermes/plugin-sdk'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
+import type { ChatSender } from './chat.ts'
 import { stageWord } from './progress.tsx'
+import { openFormat } from './formats.ts'
+import { createTaskPoller, type PollState } from './task-poll.ts'
 import { ActionMenu, errorText, type FilePayload, FormatMenu, ModelViewer, type Os, type Rest, type Source, V } from './views.tsx'
 
 interface TaskInfo {
@@ -20,43 +23,33 @@ interface TaskInfo {
   thumbnail: null | string
   credits: null | number
   has_model: boolean
+  /** Best format the viewer can open (backend 0.5+); a Convert task may carry FBX/STL and no GLB. */
+  view_format?: null | string
+  /** Any downloadable file, viewable or not (a Convert-to-BLEND task); older backends omit it. */
+  has_files?: boolean
   error: null | string
 }
 
-const RUNNING = new Set(['PENDING', 'IN_PROGRESS'])
-const POLL_MS = 3000
-
-function useTask(rest: Rest, task: string): { info: TaskInfo | null; error: null | string } {
-  const [info, setInfo] = useState<TaskInfo | null>(null)
-  const [error, setError] = useState<null | string>(null)
+/** Polls the backend's `/task` under task-poll.ts's policy: stops on a finished task, on a permanent refusal, and on a
+ *  404 once the early window after mount has passed; `retry` is the card's manual Retry. */
+function useTask(rest: Rest, task: string): PollState<TaskInfo> & { retry: () => void } {
+  const [state, setState] = useState<PollState<TaskInfo>>({ info: null, error: null, stopped: false })
+  const poller = useRef<null | { retry: () => void }>(null)
   useEffect(() => {
-    let live = true
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const tick = () =>
-      rest<TaskInfo>(`task?task=${encodeURIComponent(task)}`, { timeoutMs: 20_000 })
-        .then(r => {
-          if (!live) {
-            return
-          }
-          setInfo(r)
-          setError(null)
-          if (RUNNING.has(r.status)) {
-            timer = setTimeout(tick, POLL_MS)
-          }
-        })
-        .catch((e: unknown) => {
-          if (live) {
-            setError(errorText(e))
-            timer = setTimeout(tick, POLL_MS * 4) // a just-created task can 404 for a moment
-          }
-        })
-    void tick()
+    setState({ info: null, error: null, stopped: false })
+    const p = createTaskPoller<TaskInfo>(
+      () => rest<TaskInfo>(`task?task=${encodeURIComponent(task)}`, { timeoutMs: 20_000 }),
+      setState,
+      errorText
+    )
+    poller.current = p
     return () => {
-      live = false
-      clearTimeout(timer)
+      p.dispose()
+      if (poller.current === p) poller.current = null
     }
   }, [rest, task])
-  return { info, error }
+  const retry = useCallback(() => poller.current?.retry(), [])
+  return { ...state, retry }
 }
 
 function useThumbnail(rest: Rest, url: null | string | undefined): null | string {
@@ -81,6 +74,7 @@ export function TaskCard({
   task,
   title,
   streaming,
+  chat,
   openInWorkspace
 }: {
   rest: Rest
@@ -88,9 +82,11 @@ export function TaskCard({
   task: string
   title?: string
   streaming: boolean
+  /** Sends Next/Convert requests to the chat this card is in (chat.ts::cardChat). */
+  chat: ChatSender
   openInWorkspace: (source: Source, title: string) => void
 }) {
-  const { info, error } = useTask(rest, task)
+  const { info, error, stopped, retry } = useTask(rest, task)
   const thumb = useThumbnail(rest, info?.thumbnail)
   const [source, setSource] = useState<null | Source>(null)
   // Busy and failure are separate: a failed download shows its reason but leaves View/Open clickable to retry.
@@ -113,7 +109,7 @@ export function TaskCard({
     setOpening(true)
     setOpenError(null)
     try {
-      const r = await rest<{ path: string }>('save', { method: 'POST', body: { task, format: 'glb' }, timeoutMs: 180_000 })
+      const r = await rest<{ path: string }>('save', { method: 'POST', body: { task, format: openFormat(info) }, timeoutMs: 180_000 })
       const s: Source = { kind: 'file', path: r.path, task }
       setSource(s)
       then(s)
@@ -126,7 +122,17 @@ export function TaskCard({
   }
 
   let body
-  if (!info) {
+  if (stopped && error) {
+    // A permanent refusal (or a 404 past the early window): polling has stopped; the user can ask again.
+    body = (
+      <div data-meshy-task-stopped style={{ ...V.taskLine, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ ...V.error, flex: 1 }}>Meshy: {error}</span>
+        <Button data-meshy-task-retry onClick={retry} size="sm" variant="outline">
+          <Codicon name="refresh" /> Retry
+        </Button>
+      </div>
+    )
+  } else if (!info) {
     body = <div style={V.taskLine}>{error ? `Meshy: ${error}` : 'Checking the Meshy task…'}</div>
   } else if (info.error) {
     body = <div style={{ ...V.taskLine, ...V.error }}>Meshy task {info.status.toLowerCase()}: {info.error}</div>
@@ -167,14 +173,14 @@ export function TaskCard({
   }
 
   return (
-    <div data-meshy-card data-meshy-task-card={info?.status ?? 'loading'} style={V.card}>
+    <div data-meshy-card data-meshy-task-card={stopped ? 'stopped' : (info?.status ?? 'loading')} style={V.card}>
       <div style={V.cardHead}>
         <Codicon name="symbol-misc" />
         <span style={V.cardTitle}>{name}</span>
         {done && typeof info?.credits === 'number' && <span style={V.itemSub}>{info.credits} cr</span>}
         <span style={V.spacer} />
-        {done && !streaming && <ActionMenu rest={rest} task={task} />}
-        {done && info?.has_model && !streaming && <FormatMenu os={os} rest={rest} task={task} />}
+        {done && !streaming && <ActionMenu chat={chat} rest={rest} task={task} />}
+        {done && (info?.has_files ?? info?.has_model) && !streaming && <FormatMenu chat={chat} os={os} rest={rest} task={task} />}
         {done && info?.has_model && (
           <Button disabled={opening} onClick={() => void open(s => openInWorkspace(s, name))} size="sm" variant="ghost">
             <Codicon name="link-external" /> Open

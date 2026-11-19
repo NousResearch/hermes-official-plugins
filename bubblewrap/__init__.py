@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 BACKEND_NAME = "bubblewrap"
 PROMPT_SECTION_ID = "bubblewrap-sandbox"
-SETTING_KEYS = ("profile", "binds", "memory_mb", "cpu_seconds", "max_procs", "home_allow")
+SETTING_KEYS = ("profile", "binds", "memory_mb", "cpu_seconds", "max_procs", "home_allow", "hide", "home_default_deny")
 
 _PROFILE_CHOICES = (
     ("restricted", "restricted - read-only working directory, no network"),
@@ -161,7 +161,7 @@ class BubblewrapProvider(TerminalEnvironmentProvider):
         root = sandbox.writable_root_for(_terminal_env("TERMINAL_CWD", ""))
         start, replaced = sandbox.start_cwd_for(cwd, root)
         return sandbox.BubblewrapEnvironment(cwd=start, timeout=timeout, config=self.load_config(),
-                                             replaced_cwd=replaced, root=root)
+                                             replaced_cwd=replaced, root=root, session_key=task_id)
 
     # -- the model's view --
     def prompt_note(self, _session_info: Any = None) -> str:
@@ -184,21 +184,28 @@ class BubblewrapProvider(TerminalEnvironmentProvider):
             if config.home_mode in sandbox.PROFILE_HOME_MODES:
                 extra.append("the profile home ($HOME)")
         if profile.writable_cwd:
-            writable = ", ".join(["the working directory", "the scratch directory", *extra])
+            writable = ", ".join(["the working directory", "the scratch directory ($TMPDIR)", *extra])
         elif extra:
             writable = ", ".join(extra) + " (the working directory is read-only under this profile)"
         else:
             writable = "nothing (the working directory is read-only under this profile)"
         network = "the host network" if profile.share_net else "no network (loopback only)"
+        dot_only = config is None or config.home_default_deny == sandbox.bubblewrap_home.DENY_DOT
+        entries = "dot entries" if dot_only else "entries"
+        file_tools = (
+            "`read_file`, `write_file`, `patch` and `search_files` run through this sandbox too, so the same paths "
+            "are hidden and read-only for them, and they share the commands' scratch directory ($TMPDIR)."
+        )
         return (
             f"Terminal sandbox: bubblewrap, profile `{profile.name}`. Every `terminal` and `execute_code` call runs "
             f"in its own bwrap sandbox on this host with the same paths: the filesystem is read-only except {writable}; "
-            "dot entries of the home directory that are not on the allowlist do not exist, the Hermes home is hidden, "
-            "and credential paths below a visible entry appear empty; /tmp and /proc are private to "
+            f"{entries} of the home directory that are not on the allowlist do not exist, the Hermes home is hidden, "
+            "and credential paths below a visible entry appear empty; the Hermes scratch directory ($TMPDIR) is this "
+            "sandbox's own and shows none of the files other sessions keep there; /tmp and /proc are private to "
             f"each command; it has {network}. A `Read-only file system` error, a missing or empty credential path or a "
             "refused connection is that boundary, not a broken host: report it instead of working around it. "
             "Background processes are not available on this backend: each command's sandbox ends with it. "
-            "`read_file`, `write_file`, `patch` and `search_files` run on the host itself and are not confined."
+            f"{file_tools}"
         )
 
 

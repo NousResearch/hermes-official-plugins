@@ -1,5 +1,7 @@
 import { host } from '@hermes/plugin-sdk'
 
+import { type EventOrigin, taskIdFrom } from './active.ts'
+
 /**
  * Provenance: which tool call made which Meshy task. Meshy's own task record keeps a text prompt but not
  * an image task's input image, nor the task a remesh / retexture / rig / animation came from, so the
@@ -19,27 +21,6 @@ export interface Creation {
 }
 
 const bare = (name: unknown) => String(name ?? '').replace(/^(mcp__meshy__|mcp_meshy_)/, '')
-
-/** The task id a create call returned: structuredContent.task_id, else the "**Task ID**: …" line. */
-export function taskIdFrom(result: unknown): null | string {
-  let value: unknown = result
-  for (let i = 0; i < 3 && typeof value === 'string'; i++) {
-    try {
-      value = JSON.parse(value)
-    } catch {
-      break
-    }
-  }
-  if (value && typeof value === 'object') {
-    const v = value as { structuredContent?: { task_id?: unknown }; result?: unknown }
-    if (typeof v.structuredContent?.task_id === 'string') {
-      return v.structuredContent.task_id
-    }
-    value = v.result ?? JSON.stringify(value)
-  }
-  const m = /\*\*Task ID\*\*:\s*([0-9a-f][0-9a-f-]{15,63})/.exec(String(value ?? ''))
-  return m ? m[1] : null
-}
 
 /** Every Meshy task this tool call created: a direct call, or each call a `tool_call` bridge made
  *  (its result carries one entry per call, in order). */
@@ -83,13 +64,17 @@ export interface ProvenanceRecord extends Creation {
   session_id?: string
 }
 
-/** Where Desktop says the event came from (renderer tags on GatewayEvent; absent on the primary path). */
-export interface EventOrigin {
-  profile?: string
-  connectionId?: string
-}
-
 const profileKey = (p: unknown) => String(p ?? '').trim() || 'default'
+
+/** True when an event is tagged with another profile/connection than the one ctx.rest reaches now. */
+export function isForeignOrigin(origin?: EventOrigin): boolean {
+  const activeProfile = host.state?.profile?.get()
+  const activeConnection = host.state?.connectionId?.get()
+  return Boolean(
+    (origin?.profile && activeProfile !== undefined && profileKey(origin.profile) !== profileKey(activeProfile)) ||
+      (origin?.connectionId && activeConnection && origin.connectionId !== activeConnection)
+  )
+}
 
 /**
  * ctx.rest reaches whichever profile/connection is in front, and a background completion can belong to another
@@ -115,14 +100,7 @@ export function createProvenanceWriter(post: (body: unknown) => Promise<unknown>
   let flushAgain = false
   let disposed = false
 
-  const foreign = (origin?: EventOrigin) => {
-    const activeProfile = host.state?.profile?.get()
-    const activeConnection = host.state?.connectionId?.get()
-    return Boolean(
-      (origin?.profile && activeProfile !== undefined && profileKey(origin.profile) !== profileKey(activeProfile)) ||
-        (origin?.connectionId && activeConnection && origin.connectionId !== activeConnection)
-    )
-  }
+  const foreign = isForeignOrigin
 
   const send = async (body: ProvenanceRecord): Promise<boolean> => {
     const at = scope

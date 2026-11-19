@@ -67,7 +67,7 @@ def native(messages, layout):
     sent.insert(1, {'role': 'system', 'content': 'Primary working directory: /tmp/claude-directsdk-cwd'})
     if assistant_mark and len(sent) > 3:
         sent[-2]['content'][-1]['cache_control'] = MARKER
-    sent.append({'role': 'system', 'content': [{'type': 'text', 'text': "Today's date is 2026-10-10.",
+    sent.append({'role': 'system', 'content': [{'type': 'text', 'text': "<system-reminder>\nToday's date is 2026-10-10.\n</system-reminder>",
                                                 'cache_control': MARKER}]})
     return {'model': 'claude-opus-5-5', 'tools': copy.deepcopy(tools), 'system': copy.deepcopy(system),
             'messages': sent}
@@ -294,7 +294,7 @@ def test_relay_forwards_the_turn_mark_with_the_steer_frame_restored():
         peer.server_close()
     sent = received[0]
     # The relay returns native's trailing date message to its env message, so the steer frame is last.
-    assert sent['messages'][-1]['role'] == 'user' and sent['messages'][1]['content'].endswith("Today's date is 2026-10-10.")
+    assert sent['messages'][-1]['role'] == 'user' and sent['messages'][1]['content'].endswith("Today's date is 2026-10-10.\n</system-reminder>")
     assert plain(sent['messages'][-1]['content']) == messages[end - 1]['content']
     assert message_marks(sent) == [(0, 0), (len(sent['messages']) - 1, 1)]
     assert mark_count(sent) == 4

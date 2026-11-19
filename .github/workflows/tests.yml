@@ -65,6 +65,11 @@ jobs:
           python -m uv pip install --python "$pyexe" --override "$RUNNER_TEMP/core-overrides.txt" -e ./hermes-agent pytest pytest-asyncio
           deps=$(python -c 'import pathlib,sys,tomllib; p=pathlib.Path(sys.argv[1]); print("\n".join(tomllib.loads(p.read_text())["project"].get("dependencies", [])) if p.is_file() else "")' "pantheon/${{ matrix.plugin }}/pyproject.toml")
           if [ -n "$deps" ]; then printf '%s\n' "$deps" > "$RUNNER_TEMP/plugin-reqs.txt"; python -m uv pip install --python "$pyexe" --override "$RUNNER_TEMP/core-overrides.txt" -r "$RUNNER_TEMP/plugin-reqs.txt"; fi
+      # bubblewrap's integration tests run only where its namespace probe passes: the ubuntu-26.04 image does,
+      # 24.04 skips them. Its ripgrep cases need rg inside the sandbox, and the 26.04 image doesn't ship rg.
+      - name: Install ripgrep for the bubblewrap integration tests
+        if: runner.os == 'Linux' && matrix.plugin == 'bubblewrap'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ripgrep && rg --version
       - name: Validate the manifest against core
         shell: bash
         run: python -m hermes_cli.main plugins validate "pantheon/${{ matrix.plugin }}"

@@ -16,12 +16,18 @@ import {
   DropdownMenuTrigger,
   host
 } from '@hermes/plugin-sdk'
-import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react'
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { cardChat, type ChatSender, recordedChat } from './chat.ts'
+import { canRender, formatOf, mtlLibOf, mtlTextures, siblingPath } from './formats.ts'
+import type { Locality } from './scope.ts'
 import { createStage, dataUrlToBuffer, type ModelStats, type Stage } from './stage.ts'
 import { TaskCard } from './task-card.tsx'
 import {
+  bestLocalForTask,
   imageNextActions,
+  listFailureNotices,
+  localHeading,
   matchesKind,
   reconcileSelection,
   sourceForAsset,
@@ -41,23 +47,8 @@ export interface FilePayload {
   dataUrl: string
 }
 
-export interface MeshySettings {
-  show_credits: boolean
-  inline_viewer: boolean
-  auto_rotate: boolean
-  gallery_limit: number
-}
-
-/** Mirrors plugin.json's config_schema defaults until the backend answers. */
-export const DEFAULT_SETTINGS: MeshySettings = { show_credits: true, inline_viewer: true, auto_rotate: true, gallery_limit: 24 }
-
-export interface Balance {
-  configured: boolean
-  balance?: number
-  key_env?: string
-  error?: string
-  settings?: Partial<MeshySettings>
-}
+import { type Balance, balanceLabel } from './status.ts'
+export { type Balance, DEFAULT_SETTINGS, type MeshySettings } from './status.ts'
 
 // Inline styles with theme variables: no injected <style> tag (nothing global to leak or clean up),
 // and every surface reskins with the active theme.
@@ -173,9 +164,21 @@ function ImageViewer({ rest, source, imageIndex, onImageIndexChange }: { rest: R
 }
 
 function AssetViewer(props: Parameters<typeof ModelViewer>[0] & { imageIndex?: number; onImageIndexChange?: (index: number) => void }) {
-  const { source, rest } = props
+  const { source, rest, os } = props
   if (source.kind === 'remote' && source.expired) {
     return <div role="status" style={V.empty}>This asset’s download link has expired. Open a locally saved copy if you have one.</div>
+  }
+  if (source.kind === 'file' && source.media !== 'image' && !canRender(source.path)) {
+    // Listed so it is findable (and downloadable in other formats), but three.js has no loader for it.
+    return (
+      <div data-meshy-no-preview role="status" style={V.empty}>
+        <Codicon name="file-binary" size={32} />
+        <span>No 3D preview for .{formatOf(source.path) || 'unknown'} files. Open it in the app it was made for.</span>
+        <Button onClick={() => void os.revealPath(source.path)} size="sm" variant="outline">
+          <Codicon name="folder-opened" /> Show in folder
+        </Button>
+      </div>
+    )
   }
   return source.media === 'image'
     ? <ImageViewer key={source.kind === 'file' ? source.path : source.url} rest={rest} source={source} imageIndex={props.imageIndex} onImageIndexChange={props.onImageIndexChange} />
@@ -190,12 +193,12 @@ function AssetThumbnail({ asset }: { asset: RemoteAsset }) {
     : <Codicon name={asset.kind === 'image' ? 'file-media' : 'symbol-misc'} />
 }
 
-function ImageNext({ task, source, imageIndex }: { task: string; source: Source; imageIndex: number }) {
+function ImageNext({ chat, task, source, imageIndex }: { chat: ChatSender; task: string; source: Source; imageIndex: number }) {
   return <DropdownMenu>
     <DropdownMenuTrigger asChild><Button data-meshy-image-next size="sm" variant="ghost"><Codicon name="sparkle" /> Next <Codicon name="chevron-down" size={12} /></Button></DropdownMenuTrigger>
     <DropdownMenuContent align="end" style={{ minWidth: 250 }}>
       {imageNextActions(task, source, imageIndex).map(row => <DropdownMenuItem key={row.id} onSelect={() => {
-        if (!host.composer?.submit(null, row.message)) host.notify({ kind: 'warning', message: 'Open a chat to work with this image' })
+        void chat.submit(row.message).then(ok => ok || host.notify({ kind: 'warning', message: 'Open a chat to work with this image' }))
       }}>{row.label}</DropdownMenuItem>)}
       <DropdownMenuSeparator /><DropdownMenuItem disabled>Choose options and approve credits in chat</DropdownMenuItem>
     </DropdownMenuContent>
@@ -238,6 +241,30 @@ function ImageDownload({ rest, os, task, source, onSaved }: { rest: Rest; os: Os
   </Button>
 }
 
+/** An OBJ's .mtl (named by its `mtllib` line) and the textures that .mtl names, fetched from beside it
+ *  through the same guarded /file route. Missing companions are fine: the OBJ then renders untextured. */
+async function objCompanions(rest: Rest, path: string, bytes: ArrayBuffer): Promise<Record<string, string>> {
+  const lib = mtlLibOf(new TextDecoder().decode(new Uint8Array(bytes, 0, Math.min(bytes.byteLength, 65_536))))
+  const mtlPath = lib ? siblingPath(path, lib) : null
+  if (!lib || !mtlPath) {
+    return {}
+  }
+  const get = (p: string) => rest<FilePayload>(`file?path=${encodeURIComponent(p)}`, { timeoutMs: 60_000 })
+  const out: Record<string, string> = {}
+  try {
+    out[lib] = (await get(mtlPath)).dataUrl
+  } catch {
+    return {}
+  }
+  for (const tex of mtlTextures(new TextDecoder().decode(dataUrlToBuffer(out[lib])))) {
+    const texPath = siblingPath(path, tex)
+    if (texPath) {
+      await get(texPath).then(r => (out[tex] = r.dataUrl), () => undefined)
+    }
+  }
+  return out
+}
+
 /** One live viewport. Mounting creates a WebGL context; unmounting frees it. */
 export function ModelViewer({
   rest,
@@ -274,7 +301,14 @@ export function ModelViewer({
       return
     }
     const bg = getComputedStyle(el).getPropertyValue('--meshy-stage-bg').trim() || '#1b1d22'
-    const stage = createStage(el, bg)
+    let stage: Stage
+    try {
+      stage = createStage(el, bg)
+    } catch {
+      // No WebGL in this window (GPU blocklisted or disabled): say so here instead of failing the whole card.
+      setState({ phase: 'error', message: 'This window has no WebGL, so the 3D preview cannot run. Download or open the file instead.' })
+      return
+    }
     stageRef.current = stage
     // A new model gets a new stage: carry the toolbar's current view settings over to it.
     stage.setAutoRotate(spin)
@@ -290,7 +324,12 @@ export function ModelViewer({
           return
         }
         setFile({ name: payload.name, bytes: payload.bytes })
-        const s = await stage.load(dataUrlToBuffer(payload.dataUrl))
+        const bytes = dataUrlToBuffer(payload.dataUrl)
+        const siblings = source.kind === 'file' && formatOf(source.path) === 'obj' ? await objCompanions(rest, source.path, bytes) : {}
+        if (!live) {
+          return
+        }
+        const s = await stage.load(bytes, { name: payload.name || (source.kind === 'file' ? source.path : source.url), siblings })
         if (live) {
           setStats(s)
           setState({ phase: 'ready' })
@@ -461,7 +500,7 @@ export function ModelViewer({
 const FORMAT_LABEL: Record<string, string> = {
   glb: 'GLB · web, Blender, three.js',
   fbx: 'FBX · Unity, Unreal, Maya',
-  obj: 'OBJ · with .mtl + texture',
+  obj: 'OBJ · Blender, Maya, most 3D tools',
   stl: 'STL · 3D printing',
   usdz: 'USDZ · Apple AR Quick Look',
   '3mf': '3MF · 3D printing',
@@ -481,7 +520,22 @@ interface FormatRow {
 
 /** "Download ▾": one row per file type Meshy produced for this task. Picking one saves it beside the
  *  model on screen (no credits: Meshy made every listed format at generation time) and reveals it. */
-export function FormatMenu({ rest, os, task, beside, onSaved }: { rest: Rest; os: Os; task: string; beside?: string; onSaved?: () => void }) {
+export function FormatMenu({
+  rest,
+  os,
+  task,
+  beside,
+  onSaved,
+  chat
+}: {
+  rest: Rest
+  os: Os
+  task: string
+  beside?: string
+  onSaved?: () => void
+  /** Where a Convert row's chat request goes (cardChat / recordedChat, chat.ts). */
+  chat: ChatSender
+}) {
   const [rows, setRows] = useState<FormatRow[] | null>(null)
   const [conversions, setConversions] = useState<{ format: string; cost: number; message: string }[]>([])
   const [isPreview, setIsPreview] = useState(false)
@@ -555,7 +609,7 @@ export function FormatMenu({ rest, os, task, beside, onSaved }: { rest: Rest; os
         {rows !== null && !error && conversions.length > 0 && <>
           <DropdownMenuSeparator />
           {conversions.map(row => <DropdownMenuItem key={`convert:${row.format}`} disabled={busy !== null} onSelect={() => {
-            if (!host.composer?.submit(null, row.message)) host.notify({ kind: 'warning', message: 'Open a chat to convert this model' })
+            void chat.submit(row.message).then(ok => ok || host.notify({ kind: 'warning', message: 'Open a chat to convert this model' }))
           }}><span style={{ flex: 1 }}>Convert to {row.format.toUpperCase()}</span><span style={V.cost}>{row.cost} cr</span></DropdownMenuItem>)}
           <DropdownMenuItem disabled>Conversion creates a new task · sends a chat request</DropdownMenuItem>
         </>}
@@ -592,7 +646,7 @@ const ACTION_ICONS: Record<string, string> = {
 
 /** "Next ▾": the follow-ups Meshy supports for this task, each labelled with its real credit cost. A pick
  *  SENDS a chat message: the agent runs the tool behind Hermes' approval card, so nothing here spends. */
-export function ActionMenu({ rest, task }: { rest: Rest; task: string }) {
+export function ActionMenu({ rest, task, chat }: { rest: Rest; task: string; chat: ChatSender }) {
   const [data, setData] = useState<ActionsPayload | null>(null)
   const [error, setError] = useState<null | string>(null)
 
@@ -604,9 +658,11 @@ export function ActionMenu({ rest, task }: { rest: Rest; task: string }) {
   }, [rest, task])
 
   const run = (row: ActionRow) => {
-    if (!host.composer?.submit(null, row.message)) {
-      host.notify({ kind: 'warning', message: `Open a chat to ${row.label.toLowerCase()} this model` })
-    }
+    void chat.submit(row.message).then(ok => {
+      if (!ok) {
+        host.notify({ kind: 'warning', message: `Open a chat to ${row.label.toLowerCase()} this model` })
+      }
+    })
   }
 
   return (
@@ -665,15 +721,20 @@ export function TranscriptCard({
   os,
   attrs,
   streaming,
+  sessionId,
   openInWorkspace
 }: {
   rest: Rest
   os: Os
   attrs: Readonly<Record<string, string>>
   streaming: boolean
+  /** The chat showing this card (directive render prop); undefined on Desktops that do not pass it. */
+  sessionId?: null | string
   openInWorkspace: (source: Source, title: string) => void
 }) {
   const [live, setLive] = useState(false)
+  // Captured at render: a button's message goes to THIS card's chat, even after async work (chat.ts).
+  const chat = useMemo(() => cardChat(host, sessionId), [sessionId])
   const path = (attrs.path || attrs.file || '').trim()
   const url = (attrs.url || '').trim()
   const title = attrs.title || (path ? path.split(/[\\/]/).pop() : 'Meshy model') || 'Meshy model'
@@ -685,7 +746,7 @@ export function TranscriptCard({
       : null
 
   if (!source && task) {
-    return <TaskCard openInWorkspace={openInWorkspace} os={os} rest={rest} streaming={streaming} task={task} title={attrs.title} />
+    return <TaskCard chat={chat} openInWorkspace={openInWorkspace} os={os} rest={rest} streaming={streaming} task={task} title={attrs.title} />
   }
   if (!source) {
     return <div style={{ ...V.card, ...V.error }}>Meshy model: give a task="...", path="..." or url="..."</div>
@@ -697,8 +758,8 @@ export function TranscriptCard({
         <Codicon name="symbol-misc" />
         <span style={V.cardTitle}>{title}</span>
         <span style={V.spacer} />
-        {task && !streaming && <ActionMenu rest={rest} task={task} />}
-        {task && !streaming && <FormatMenu beside={path || undefined} os={os} rest={rest} task={task} />}
+        {task && !streaming && <ActionMenu chat={chat} rest={rest} task={task} />}
+        {task && !streaming && <FormatMenu beside={path || undefined} chat={chat} os={os} rest={rest} task={task} />}
         <Button onClick={() => openInWorkspace(source, title)} size="sm" variant="ghost">
           <Codicon name="link-external" /> Open
         </Button>
@@ -738,6 +799,8 @@ interface Details {
   children: Array<{ task_id: string; tool: null | string }>
   session_id: null | string
   recorded: boolean
+  /** Why Meshy's own record is missing (outage, plan-gated route): the recorded fields still show. */
+  remote_error?: null | string
 }
 
 const STEP: Record<string, string> = {
@@ -748,7 +811,20 @@ const STEP: Record<string, string> = {
 const shortId = (id: string) => id.slice(0, 8)
 
 /** "Made from": the prompt, style, source image, settings and lineage behind the selected model. */
-export function MadeFrom({ rest, task, onPick }: { rest: Rest; task: string; onPick: (task: string) => void }) {
+export function MadeFrom({
+  rest,
+  task,
+  onPick,
+  chat,
+  onDetails
+}: {
+  rest: Rest
+  task: string
+  onPick: (task: string) => void
+  chat: ChatSender
+  /** Reports the chat recorded for this model, so the gallery's buttons can send there. */
+  onDetails?: (task: string, sessionId: null | string) => void
+}) {
   const [d, setD] = useState<Details | null>(null)
   const [img, setImg] = useState<null | string>(null)
   const [error, setError] = useState<null | string>(null)
@@ -764,6 +840,7 @@ export function MadeFrom({ rest, task, onPick }: { rest: Rest; task: string; onP
           return
         }
         setD(r)
+        onDetails?.(task, r.session_id ?? null)
         if (r.image && r.image_viewable) {
           rest<FilePayload>(`file?path=${encodeURIComponent(r.image)}`, { timeoutMs: 30_000 })
             .then(f => live && setImg(f.dataUrl))
@@ -789,7 +866,7 @@ export function MadeFrom({ rest, task, onPick }: { rest: Rest; task: string; onP
     )
   }
   const reuse = (text: string) => {
-    void host.composer?.insertText?.(null, text, { mode: 'block' }).then(ok => {
+    void chat.insert(text).then(ok => {
       if (!ok) {
         host.notify({ kind: 'warning', message: 'Open a chat to reuse this prompt' })
       }
@@ -815,6 +892,11 @@ export function MadeFrom({ rest, task, onPick }: { rest: Rest; task: string; onP
           </Button>
         )}
       </div>
+      {d.remote_error && (
+        <div data-meshy-details-notice style={V.itemSub}>
+          Meshy's record isn't available ({d.remote_error}); showing what this Desktop recorded.
+        </div>
+      )}
       {main ? (
         <div style={V.promptRow}>
           <div data-meshy-prompt style={V.prompt}>
@@ -883,12 +965,15 @@ export function Gallery({
   initial,
   autoRotate,
   onOpenSettings,
+  locality
 }: {
   rest: Rest
   os: Os
   initial: null | Source
   autoRotate: boolean
   onOpenSettings: () => void
+  /** Where the backend runs. Its files are on THAT machine: the list heading names it. */
+  locality?: Locality
 }) {
   const [selected, setSelected] = useState<null | Source>(initial)
   const explicitSelection = useRef(Boolean(initial))
@@ -901,6 +986,7 @@ export function Gallery({
   const [local, setLocal] = useState<LocalFile[] | null>(null)
   const [storage, setStorage] = useState<StorageStatus | null>(null)
   const [error, setError] = useState<null | string>(null)
+  const [listFailures, setListFailures] = useState<string[]>([])
   const [configured, setConfigured] = useState(true)
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<'all' | 'image' | 'model'>('all')
@@ -909,10 +995,12 @@ export function Gallery({
 
   const refresh = useCallback(() => {
     setError(null)
-    rest<{ configured: boolean; models: RemoteAsset[] }>('models', { timeoutMs: 60_000 })
+    setListFailures([])
+    rest<{ configured: boolean; models: RemoteAsset[]; failed?: unknown }>('models', { timeoutMs: 60_000 })
       .then(r => {
         setConfigured(r.configured)
         setRemote(r.models)
+        setListFailures(listFailureNotices(r.failed))
       })
       .catch((e: unknown) => setError(errorText(e)))
     rest<StorageStatus>('storage').then(setStorage).catch(() => setStorage(null))
@@ -947,8 +1035,25 @@ export function Gallery({
     if (!next) setSelTask(null)
   }, [remote, local, selTask, initial])
 
+  // Gallery buttons talk to the chat that made the selected model ("Made from" names it), opening it when needed.
+  const madeIn = useRef(new Map<string, null | string>())
+  const noteDetails = useCallback((task: string, sessionId: null | string) => void madeIn.current.set(task, sessionId), [])
+  const selectedTask = selTask?.task ?? null
+  const chat = useMemo(
+    () =>
+      recordedChat(host, async () => {
+        if (!selectedTask) return null
+        if (!madeIn.current.has(selectedTask)) {
+          const d = await rest<Details>(`details?task=${encodeURIComponent(selectedTask)}`, { timeoutMs: 30_000 })
+          madeIn.current.set(selectedTask, d.session_id ?? null)
+        }
+        return madeIn.current.get(selectedTask) ?? null
+      }),
+    [rest, selectedTask]
+  )
+
   const pickTask = (task: string) => {
-    const f = local?.find(x => x.task === task)
+    const f = local ? bestLocalForTask(local, task) : undefined
     if (f) {
       explicitSelection.current = false
       setSelected(sourceForLocalFile(f))
@@ -1009,7 +1114,12 @@ export function Gallery({
             </div>
           )}
           {error && <div style={{ ...V.hint, ...V.error }}>{error}</div>}
-          {local && local.some(f => matchesKind(filter, f.kind || 'model')) && <div style={V.section}>On this machine</div>}
+          {listFailures.map(line => (
+            <div data-meshy-list-failed key={line} style={V.hint}>
+              {line}
+            </div>
+          ))}
+          {local && local.some(f => matchesKind(filter, f.kind || 'model')) && <div data-meshy-local-heading style={V.section}>{localHeading(locality)}</div>}
           {local?.filter(f => matchesKind(filter, f.kind || 'model') && matches(f.prompt, f.name, f.project)).map(f => {
             const s = sourceForLocalFile(f)
             const pickLocal = () => {
@@ -1017,14 +1127,16 @@ export function Gallery({
               setSelected(s)
               setSelTask(f.task ? { task: f.task, title: f.name } : null)
             }
+            const viewable = f.kind === 'image' || (f.viewable ?? canRender(f.path))
             return (
-              <button data-meshy-item style={isSel(s) ? { ...V.item, ...V.itemOn } : V.item} key={f.path} onClick={pickLocal} title={f.path} type="button">
-                <Codicon name="file-binary" />
+              <button data-meshy-item data-meshy-format={f.kind === 'image' ? 'image' : formatOf(f.path)} style={isSel(s) ? { ...V.item, ...V.itemOn } : V.item} key={f.path} onClick={pickLocal} title={f.path} type="button">
+                <Codicon name={f.kind === 'image' ? 'file-media' : viewable ? 'symbol-misc' : 'file-binary'} />
                 <span style={V.itemText}>
                   <span style={V.ellipsis}>{f.prompt || f.name}</span>
                   <small style={{ ...V.itemSub, ...V.ellipsis }}>
                     {f.prompt ? `${f.name} · ` : ''}
                     {f.project} · {fmtBytes(f.bytes)}
+                    {viewable ? '' : ' · no 3D preview'}
                   </small>
                 </span>
               </button>
@@ -1054,7 +1166,7 @@ export function Gallery({
                   <span style={V.ellipsis}>{m.prompt || m.task_type}</span>
                   <small style={V.itemSub}>
                     {m.task_type}
-                    {typeof m.credits === 'number' ? ` · ${m.credits} credits` : ''} · {new Date(m.created_at).toLocaleDateString()}
+                    {typeof m.credits === 'number' ? ` · ${m.credits} ${m.credits === 1 ? 'credit' : 'credits'}` : ''} · {new Date(m.created_at).toLocaleDateString()}
                     {m.expired ? m.local_path ? ' · Local copy' : ' · Expired' : ''}
                   </small>
                 </span>
@@ -1075,13 +1187,14 @@ export function Gallery({
           <div data-meshy-gallery-head style={V.mainHead}>
             <span style={V.cardTitle}>{selected.kind === 'file' ? selected.path.split(/[\\/]/).pop() : selected.label}</span>
             <span style={V.spacer} />
-            {selTask && selected.media === 'image' && <ImageNext task={selTask.task} source={selected} imageIndex={imageIndex} />}
+            {selTask && selected.media === 'image' && <ImageNext chat={chat} task={selTask.task} source={selected} imageIndex={imageIndex} />}
             {selTask && selected.media === 'image' && <ImageDownload key={`images:${selTask.task}`} rest={rest} os={os} task={selTask.task} source={selected} onSaved={refresh} />}
-            {selTask && !(selected.media === 'image' || (selected.kind === 'remote' && selected.expired)) && <ActionMenu key={`a:${selTask.task}`} rest={rest} task={selTask.task} />}
+            {selTask && !(selected.media === 'image' || (selected.kind === 'remote' && selected.expired)) && <ActionMenu chat={chat} key={`a:${selTask.task}`} rest={rest} task={selTask.task} />}
             {selTask && !(selected.media === 'image' || (selected.kind === 'remote' && selected.expired)) && (
               <FormatMenu
+                chat={chat}
                 onSaved={refresh}
-                beside={selected.kind === 'file' ? selected.path : undefined}
+                beside={selected.kind === 'file' && canRender(selected.path) ? selected.path : undefined}
                 key={`${selTask.task}:${selected.kind === 'file' ? selected.path : ''}`}
                 os={os}
                 rest={rest}
@@ -1099,7 +1212,7 @@ export function Gallery({
             <AssetViewer imageIndex={imageIndex} onImageIndexChange={setImageIndex} autoRotate={autoRotate} height="100%" key={String(autoRotate)} os={os} rest={rest} source={selected} />
           </div>
         ) : null}
-        {selected && selTask && <MadeFrom key={`m:${selTask.task}`} onPick={pickTask} rest={rest} task={selTask.task} />}
+        {selected && selTask && <MadeFrom chat={chat} key={`m:${selTask.task}`} onDetails={noteDetails} onPick={pickTask} rest={rest} task={selTask.task} />}
         {selected ? null : (
           <div style={V.empty}>
             <Codicon name="symbol-misc" size={32} />
@@ -1116,13 +1229,7 @@ export function BalanceChip({ balance, onOpen }: { balance: Balance | null; onOp
   if (!balance) {
     return null
   }
-  const label = !balance.configured
-    ? 'no key'
-    : balance.error
-      ? /rejected/i.test(balance.error)
-        ? 'key rejected'
-        : 'offline'
-      : `${(balance.balance ?? 0).toLocaleString()} cr`
+  const label = balanceLabel(balance)
   return (
     <button
       data-meshy-chip

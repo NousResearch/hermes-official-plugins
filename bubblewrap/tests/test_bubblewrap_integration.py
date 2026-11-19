@@ -69,6 +69,10 @@ def isolated_tool(tmp_path, work_dir, monkeypatch, bwrap_provider):
                     pass
             tt._active_environments.clear()
             tt._last_activity.clear()
+        # Core's own cleanup drops the file tools' cached ShellFileOperations with the environment;
+        # clearing the dict above does not, and a shell-path file op would reuse a dead sandbox.
+        from tools.file_tools import clear_file_ops_cache
+        clear_file_ops_cache()
 
     _clear()
     yield tt
@@ -77,10 +81,38 @@ def isolated_tool(tmp_path, work_dir, monkeypatch, bwrap_provider):
 
 def _no_spawn(monkeypatch):
     monkeypatch.setattr(bubblewrap, "_probed_bwrap_path", shutil.which("bwrap") or "/usr/bin/bwrap")
+    monkeypatch.setattr(bubblewrap, "_process_limit_scoped", True)
     return patch.object(LocalEnvironment, "init_session", autospec=True, return_value=None)
 
 
 class TestFactory:
+    def test_file_tools_resolve_ripgrep_in_the_command_namespace(self, work_dir, monkeypatch):
+        from tools import file_operations_search
+        from tools.file_operations import ShellFileOperations
+        from tools.file_operations_common import ExecuteResult
+
+        def host_ripgrep():
+            raise AssertionError("the bundled host ripgrep may be hidden inside bwrap")
+
+        monkeypatch.setattr(file_operations_search, "_bundled_rg", host_ripgrep)
+        monkeypatch.delenv("HERMES_NATIVE_FILE_READ", raising=False)
+        with _no_spawn(monkeypatch):
+            env = BubblewrapEnvironment(cwd=str(work_dir), timeout=10)
+        try:
+            ops = ShellFileOperations(env)
+            commands = []
+
+            def probe(command, **kwargs):
+                commands.append(command)
+                return ExecuteResult(stdout="/usr/bin/rg\n", exit_code=0)
+
+            monkeypatch.setattr(ops, "_exec", probe)
+            assert ops._resolve_command("rg") == "/usr/bin/rg"
+            assert commands == ["command -v rg 2>/dev/null"]
+            assert ops._native_read_enabled() is False
+        finally:
+            env.cleanup()
+
     def test_factory_returns_bubblewrap_environment_with_cwd_timeout_and_config(self, isolated_tool, work_dir,
                                                                                  monkeypatch, bwrap_provider):
         _provider, settings = bwrap_provider
@@ -149,7 +181,7 @@ class TestFactory:
 
 @needs_bwrap
 class TestToolIntegration:
-    def test_terminal_creates_a_file_and_read_file_returns_it_via_the_host_path(self, isolated_tool, work_dir):
+    def test_terminal_creates_a_file_and_read_file_returns_it_via_the_sandbox(self, isolated_tool, work_dir):
         from tools.file_tools import read_file_tool
 
         task_id = "host-path"
@@ -165,6 +197,83 @@ class TestToolIntegration:
         assert host_file.read_text() == "hello"
         assert "hello" in read_file_tool(str(host_file), task_id=task_id)
 
+    def test_write_file_outside_the_writable_set_is_refused_by_default(self, isolated_tool, tmp_path, monkeypatch):
+        """No HERMES_NATIVE_FILE_READ set: write_file goes through the sandbox and gets its refusal."""
+        from tools.file_tools import write_file_tool
+
+        monkeypatch.delenv("HERMES_NATIVE_FILE_READ", raising=False)
+        outside = tmp_path / "outside-default"
+        outside.mkdir()
+        target = outside / "f.txt"
+        task_id = "outside-default"
+        r = json.loads(isolated_tool.terminal_tool("true", task_id=task_id))
+        assert r["exit_code"] == 0, r
+        w = json.loads(write_file_tool(str(target), "FILE-TOOL\n", task_id=task_id))
+        assert "Read-only file system" in w.get("error", ""), w
+        assert not target.exists()
+
+    @pytest.mark.parametrize("native", ["1", "0"])
+    def test_file_tools_use_the_sandbox_view_even_with_native_io_enabled(self, isolated_tool, work_dir, tmp_path,
+                                                                       monkeypatch, native):
+        from tools.file_tools import patch_tool, read_file_tool, write_file_tool
+
+        monkeypatch.setenv("HERMES_NATIVE_FILE_READ", native)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        target = outside / "note.txt"
+        task_id = f"file-tools-{native}"
+        r = json.loads(isolated_tool.terminal_tool(f"printf cmd > {target}", task_id=task_id))
+        assert r["exit_code"] != 0 and "Read-only file system" in r["output"], r
+        w = json.loads(write_file_tool(str(target), "FILE-TOOL\n", task_id=task_id))
+        assert "Read-only file system" in w.get("error", ""), w
+        assert not target.exists()
+        project_file = work_dir / "roundtrip.txt"
+        written = json.loads(write_file_tool(str(project_file), "before\n", task_id=task_id))
+        assert not written.get("error"), written
+        assert "before" in read_file_tool(str(project_file), task_id=task_id)
+        patched = json.loads(patch_tool(path=str(project_file), old_string="before", new_string="after",
+                                       task_id=task_id))
+        assert not patched.get("error"), patched
+        assert project_file.read_text() == "after\n"
+
+    @pytest.mark.parametrize("native", ["1", "0"])
+    @pytest.mark.parametrize("target,pattern", [("content", "needle"), ("files", "*.txt")])
+    @pytest.mark.parametrize("has_rg", [True, False], ids=["ripgrep", "find-grep-fallback"])
+    def test_search_ignores_the_hidden_host_ripgrep(self, isolated_tool, work_dir, tmp_path, monkeypatch,
+                                                 native, target, pattern, has_rg):
+        from tools import file_operations_search
+        from tools.file_tools import search_tool
+
+        monkeypatch.setenv("HERMES_NATIVE_FILE_READ", native)
+        (work_dir / "match.txt").write_text("needle\n")
+        pinned = tmp_path / ".hermes" / "managed" / "rg"
+        pinned.parent.mkdir(parents=True)
+        pinned.write_text("#!/bin/sh\necho wrong-host-ripgrep >&2\nexit 126\n")
+        pinned.chmod(0o755)
+        monkeypatch.setattr(file_operations_search, "_bundled_rg", lambda: str(pinned))
+        task_id = f"search-{native}-{target}-{has_rg}"
+        r = json.loads(isolated_tool.terminal_tool("true", task_id=task_id))
+        assert r["exit_code"] == 0, r
+        env = get_active_env(task_id)
+        assert env.execute(f"test -x {pinned}")["returncode"] != 0
+        if has_rg:
+            assert env.execute("command -v rg")["returncode"] == 0, "this case requires sandbox-visible rg"
+        else:
+            execute = env.execute
+
+            def without_rg(command, **kwargs):
+                if command == "command -v rg 2>/dev/null":
+                    return {"output": "", "returncode": 1}
+                return execute(command, **kwargs)
+
+            monkeypatch.setattr(env, "execute", without_rg)
+        found = json.loads(search_tool(pattern, target=target, path=str(work_dir), task_id=task_id))
+        assert not found.get("error"), found
+        if target == "content":
+            assert [m["path"] for m in found.get("matches", [])] == [str(work_dir / "match.txt")], found
+        else:
+            assert found.get("files") == [str(work_dir / "match.txt")], found
+
     def test_ca_bundle_under_hermes_home_is_readable_inside_the_sandbox(self, isolated_tool, tmp_path, monkeypatch):
         """SSL_CERT_FILE pointing into the hidden HERMES_HOME (where hermes puts certifi's bundle) must
         still be readable, or every TLS client in the sandbox fails; the rest of HERMES_HOME stays hidden."""
@@ -174,6 +283,9 @@ class TestToolIntegration:
         bundle.write_text("TRUST-ANCHORS\n")
         (hermes_home / "config.yaml").write_text("secret: yes\n")
         monkeypatch.setenv("SSL_CERT_FILE", str(bundle))
+        # The venv stands in for the Python environment Hermes runs from, the one part of
+        # a Hermes home a trust anchor may be bound back from.
+        monkeypatch.setattr(bubblewrap, "python_env_roots", lambda: (str(hermes_home / "venv"),))
         r = json.loads(isolated_tool.terminal_tool(
             'cat "$SSL_CERT_FILE"; ls -A "$(dirname "$SSL_CERT_FILE")/../.."', task_id="ca-bundle",
         ))
@@ -181,14 +293,13 @@ class TestToolIntegration:
         assert "TRUST-ANCHORS" in r["output"]
         assert "config.yaml" not in r["output"]
 
-    def test_background_never_runs_on_the_host_and_ends_with_its_sandbox(self, isolated_tool, work_dir, monkeypatch):
-        """Hermes core has no "no background processes" flag for plugin backends, so a background job is
-        launched through env.execute like on any non-local backend. It must run inside the sandbox
-        (never spawn_local on the host) and go down with it: bwrap tears the pid namespace down
-        when the launching shell exits, so the job never writes its marker. The system prompt
-        note tells the model background processes are unavailable here."""
-        import time
-
+    def test_background_launch_is_refused_with_a_clear_error(self, isolated_tool, work_dir, monkeypatch):
+        """terminal(background=true) used to report "Background process started" with a pollable
+        session id while the job died with the launching command's sandbox (#236): a model that
+        trusts tool results waited on a process that no longer existed. Hermes core has no
+        "no background processes" flag for plugin backends, so the environment refuses core's
+        launch wrapper in execute(); the tool result is the refusal, not a live process. The job
+        runs nowhere: never spawn_local on the host, and no marker is ever written."""
         from tools.process_registry import process_registry
 
         def forbidden(*args, **kwargs):
@@ -196,16 +307,9 @@ class TestToolIntegration:
 
         monkeypatch.setattr(process_registry, "spawn_local", forbidden)
         r = json.loads(isolated_tool.terminal_tool("sleep 2; touch bg-marker", background=True, task_id="background"))
-        session_id = r.get("session_id")
-        deadline = time.monotonic() + 15
-        status = {}
-        while time.monotonic() < deadline:
-            status = process_registry.poll(session_id) if session_id else {"status": "exited"}
-            if status.get("status") != "running":
-                break
-            time.sleep(0.5)
-        assert status.get("status") != "running", status
-        time.sleep(3)
+        assert r.get("output") != "Background process started", r
+        assert not r.get("session_id"), r
+        assert "background processes are not supported by this backend" in r.get("error", ""), r
         assert not (work_dir / "bg-marker").exists()
 
 @needs_bwrap
@@ -275,7 +379,10 @@ class TestExecuteCodeDispatch:
             result = cet.execute_code("print(1)", task_id="dispatch", enabled_tools=["terminal"])
 
         assert result == sentinel
-        remote.assert_called_once_with("print(1)", "dispatch", ["terminal"], reset=False)
+        # Only the dispatch is pinned; core may forward more context (session/turn ids) as kwargs.
+        remote.assert_called_once()
+        assert remote.call_args.args == ("print(1)", "dispatch", ["terminal"])
+        assert remote.call_args.kwargs["reset"] is False
         local_tmp.mkdtemp.assert_not_called()
 
 

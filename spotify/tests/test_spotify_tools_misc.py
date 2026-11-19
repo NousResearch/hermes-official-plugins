@@ -16,6 +16,8 @@ class _FakeClient:
         self.response: dict = {"ok": True}
 
     def request(self, method, path, *, params=None, json_body=None, **kw):
+        if path == "/me/player/devices":  # the active-device guard's lookup, not under test here
+            return {"devices": [{"id": "dev", "is_active": True}]}
         self.calls.append((method, path, params, json_body))
         return self.response
 

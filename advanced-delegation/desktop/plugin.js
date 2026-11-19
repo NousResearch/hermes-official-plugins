@@ -135,9 +135,11 @@ export function toForm(decider) {
 }
 
 export function toPayload(form) {
-  const num = (value, fallback) => {
-    const n = Number.parseFloat(value)
-    return Number.isFinite(n) ? n : fallback
+  // A decimal comma is a decimal point. Text that is not a number goes out as typed, so the backend refuses it
+  // with a reason instead of the page saving a value nobody chose; a blank field asks for the default.
+  const num = value => {
+    const text = String(value ?? '').trim().replace(',', '.')
+    return text !== '' && Number.isFinite(Number(text)) ? Number(text) : text
   }
   return {
     ...form,
@@ -145,9 +147,9 @@ export function toPayload(form) {
     model: form.model.trim(),
     fallback_url: form.fallback_url.trim(),
     fallback_model: form.fallback_model.trim(),
-    specialist_threshold: num(form.specialist_threshold, 0.7),
-    confidence_threshold: num(form.confidence_threshold, 0.6),
-    timeout: num(form.timeout, 18)
+    specialist_threshold: num(form.specialist_threshold),
+    confidence_threshold: num(form.confidence_threshold),
+    timeout: num(form.timeout)
   }
 }
 

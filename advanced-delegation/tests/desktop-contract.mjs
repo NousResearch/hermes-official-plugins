@@ -152,6 +152,16 @@ if (scenario === 'settings-only') {
   const rem = label => Number.parseFloat(findAll(tree, n => n.props?.['aria-label'] === label)[0]?.props.style?.width)
   for (const label of ['Endpoint', 'Fallback endpoint']) assert.ok(rem(label) >= 16, `${label} field has room for a URL`)
   assert.ok(rem('Timeout') < rem('Endpoint'), 'number fields are compact')
+} else if (scenario === 'number-fields') {
+  const form = { ...mod.namespace.toForm(data.decider), specialist_threshold: '0,75', confidence_threshold: ' 0.6 ', timeout: '18,5' }
+  const sent = mod.namespace.toPayload(form)
+  assert.equal(sent.specialist_threshold, 0.75, 'a decimal comma is a decimal point')
+  assert.equal(sent.confidence_threshold, 0.6)
+  assert.equal(sent.timeout, 18.5)
+  // Text that is not a number is sent as typed, so the backend refuses it with a reason instead of the page
+  // saving a value the user never chose. A blank field asks for the default.
+  assert.equal(mod.namespace.toPayload({ ...form, timeout: '18s' }).timeout, '18s')
+  assert.equal(mod.namespace.toPayload({ ...form, timeout: ' ' }).timeout, '')
 } else if (scenario === 'paths') {
   assert.throws(() => mod.namespace.assertBackendPath('/mode'), /Unsupported/, 'mode switching belongs to core Settings')
   assert.equal(mod.namespace.assertBackendPath('/state?limit=30'), '/state?limit=30')

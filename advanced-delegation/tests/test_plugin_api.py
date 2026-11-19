@@ -220,6 +220,16 @@ def test_a_decider_save_leaves_other_plugin_settings_alone(api_client, home):
     assert plugins["entries"]["advanced-delegation"]["settings"]["decider"]["enabled"] is True
 
 
+def test_a_number_that_is_not_one_is_refused_and_a_blank_one_means_the_default(api_client):
+    client, _ = api_client
+    url = "/api/plugins/advanced-delegation/decider"
+    refused = client.put(url, json={"timeout": "18s"})
+    assert refused.status_code == 400
+    assert "timeout must be a number" in refused.json()["detail"]
+    assert client.put(url, json={"specialist_threshold": 0.9}).json()["decider"]["specialist_threshold"] == 0.9
+    assert client.put(url, json={"specialist_threshold": ""}).json()["decider"]["specialist_threshold"] == 0.7
+
+
 def test_state_never_returns_a_route_credential(api_client, home):
     """The settings page shows a route's name, description and summary; a stored api_key stays in the backend."""
     client, _ = api_client

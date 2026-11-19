@@ -1,7 +1,7 @@
 """``hermes mcp-serve --tools``: a curated slice of Hermes' own tool surface over MCP.
 
 Off by default. With ``--tools`` an MCP client (Claude Code, Codex, Cursor, a custom harness) can
-call Hermes' configured web, browser, vision, image, skills and TTS tools, under this profile's
+call Hermes' configured web, vision, image, skills and TTS tools, under this profile's
 credentials, next to the messaging bridge. Ported from hermes-agent PR #83364.
 
 What is never exposed, whatever the profile enables:
@@ -34,6 +34,8 @@ logger = logging.getLogger("hermes.mcp_serve.tools")
 
 # Each name must be a registered Hermes tool ``model_tools.handle_function_call`` can dispatch.
 EXPOSED_TOOLS: tuple[str, ...] = (
+    # No browser tool on purpose: ``browser_exec`` runs model-written Python on this host, the same
+    # reason terminal and the file tools stay out (the pre-0.23 ``browser_*`` tools left core).
     "web_search", "web_extract",
     "vision_analyze", "image_generate", "skill_view", "skills_list", "text_to_speech",
 )

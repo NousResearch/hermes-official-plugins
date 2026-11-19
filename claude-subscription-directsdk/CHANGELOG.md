@@ -36,7 +36,8 @@
   the previous one is. Before, that request went upstream with native's own tool-result shape in the replayed rows. A
   fresh process's first request, the replay itself, still forwards as native built it.
 - Session mode: a `cancel()` or `close()` that lands while a finished step's process becomes the kept session ends that
-  process, and the step raises the cancellation error. Ownership moves from the request to the client under both
+  process. A `cancel()` also fails the step with the cancellation error; a `close()` leaves the step's answer standing,
+  as it leaves every call in flight (#378). Ownership moves from the request to the client under both
   locks, so a stop finds one owner or the other; before, it could find neither and the process stayed kept.
 - Session mode: writing a parked call's result to Claude Code is bounded by the request timeout, as sending a frame
   is. A Claude Code that stops reading its input no longer holds a large tool result's write until someone cancels:

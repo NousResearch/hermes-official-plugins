@@ -1372,7 +1372,7 @@ class Client:
         return True
 
     def _keep(self, native, frames, expect, request):
-        """Make ``native`` this client's kept session; False when cancel() or close() got there first.
+        """Make ``native`` this client's kept session; False when cancel() got there first, None when close() did.
 
         Ownership moves from the request to the client in one step, under both locks: a stop lands wholly before
         (it kills through the request, and the step ends cancelled) or wholly after (it finds the session)."""
@@ -1398,8 +1398,10 @@ class Client:
         native.idle.daemon = True
         native.idle_since, native.end = (time.monotonic(), end) if expect == 'user' else (None, None)
         with self._lock, request.lock:
-            if request.close_epoch != self._close_epoch or request.cancelled.is_set():
+            if request.cancelled.is_set():
                 return False
+            if request.close_epoch != self._close_epoch:
+                return None  # close() landed: the step's answer stands (#378) and its process is kept by no one
             self._session, self._stepping, self._kept['native'] = native, False, native
             native.serving = False
             request.process = request.admission = None
@@ -1970,11 +1972,13 @@ class Client:
             _hand_off(native)
         if clean:
             reply = {k: v for k, v in copy.deepcopy(assistants[0]).items() if k != 'usage'}
-            if not self._keep(native, frames + [{'type': 'assistant', 'message': reply}],
-                              frozenset(c['id'] for c in calls) if parked else 'user', request):
-                # The stop still held this step's process: it ends as any cancelled step does, native with it.
+            kept = self._keep(native, frames + [{'type': 'assistant', 'message': reply}],
+                              frozenset(c['id'] for c in calls) if parked else 'user', request)
+            if not kept:
+                # The stop still held this step's process: it ends with the step (the finally below), native with it.
                 state['outcome'] = 'done'
-                raise RuntimeError('Claude request cancelled')
+                if kept is False:
+                    raise RuntimeError('Claude request cancelled')
         native.forget_launch()
         yield chunk
     @staticmethod

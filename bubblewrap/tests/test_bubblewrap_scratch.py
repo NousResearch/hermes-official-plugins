@@ -173,19 +173,35 @@ def test_a_sandbox_sees_only_its_own_state_under_the_sandbox_dir(scratch, host_d
     a = _env(home)
     b = _env(home)
     try:
-        assert a.execute("export A_SESSION_SECRET=DUMMY-A-ENV")["returncode"] == 0
+        assert a.execute("export A_SESSION_MARK=DUMMY-A-ENV")["returncode"] == 0
         a_state, b_state = Path(a.get_temp_dir()), Path(b.get_temp_dir())
         on_host = "".join(p.read_text(errors="replace") for p in a_state.iterdir() if p.is_file())
         listing = b.execute(f"ls -A {sbx}")["output"].split()
-        seen = b.execute(f"cat {a_state}/* 2>&1; grep -rh A_SESSION_SECRET {sbx} 2>&1")["output"]
+        seen = b.execute(f"cat {a_state}/* 2>&1; grep -rh A_SESSION_MARK {sbx} 2>&1")["output"]
         own = b.execute(f"echo kept > {b_state}/probe && cat {b_state}/probe")["output"]
         made = b.execute(f"touch {sbx}/planted")["returncode"]
     finally:
         a.cleanup()
         b.cleanup()
+    # A plain export: core keeps secret-named ones off the snapshot file altogether.
     assert "DUMMY-A-ENV" in on_host
     assert listing == [b_state.name]
     assert "DUMMY-A-ENV" not in seen
     assert "kept" in own
     assert made != 0
     assert not (sbx / "planted").exists()
+
+
+def test_a_secret_export_reaches_the_next_command_but_never_the_snapshot_file(scratch):
+    """Core hands secret exports to the next command through pipe fds; they must cross prlimit and bwrap."""
+    home, _shared = scratch
+    env = _env(home)
+    try:
+        assert env.execute("export A_SESSION_SECRET=DUMMY-SECRET-ENV")["returncode"] == 0
+        result = env.execute('printf %s "$A_SESSION_SECRET"')
+        on_host = "".join(p.read_text(errors="replace") for p in Path(env.get_temp_dir()).iterdir() if p.is_file())
+    finally:
+        env.cleanup()
+    assert result["returncode"] == 0, result["output"]
+    assert result["output"].strip() == "DUMMY-SECRET-ENV"
+    assert "DUMMY-SECRET-ENV" not in on_host

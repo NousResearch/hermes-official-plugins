@@ -1,7 +1,7 @@
 name: spotify
 label: Spotify
 kind: standalone
-version: 2.1.0
+version: 2.1.1
 author: NousResearch
 homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/spotify
 description: >

@@ -475,3 +475,22 @@ def test_concurrent_waiters_and_cancel_reap_only_after_group_cleanup(cli):
         waiter.join(2)
     assert not errors and len(results) == 2 and all(r == -signal.SIGKILL for r in results)
     assert not any(t.is_alive() for t in waiters)
+
+
+def test_a_stopped_stdin_watchdog_holds_no_request():
+    """The watchdog thread can run on for a moment after stop(). Holding the request meanwhile held its client, so a
+    client Hermes dropped right after a step was not collected and its kept process outlived it."""
+    import weakref
+
+    class Request:
+        def cancel(self):
+            pass
+    request = Request()
+    watch = ds._StdinWatch(60, request.cancel)
+    watch.request = request
+    with watch:
+        pass
+    gone = weakref.ref(request)
+    watch.stop()
+    del request
+    assert gone() is None, 'the stopped watchdog still holds its request'

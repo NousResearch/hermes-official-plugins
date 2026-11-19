@@ -916,11 +916,11 @@ class Native:
                 self._answer(tool_id)
 
     def send(self, request, data, timeout):
-        if data is None and self.process.stdin.closed:
-            return
         """Write one frame (None: end of input). A child that stops reading stdin blocks a plain write past the
         timeout: kill it then. One watchdog thread guards every write of a step (#419): a Timer per write was a
         thread per replayed frame."""
+        if data is None and self.process.stdin.closed:
+            return
         watch = self.watch
         if watch is None or watch.request is not request:
             self.stop_watch()
@@ -1133,7 +1133,7 @@ class _StdinWatch:
     """
 
     def __init__(self, timeout, on_stall):
-        self.timeout, self.on_stall = timeout, on_stall
+        self.timeout, self.on_stall, self.request = timeout, on_stall, None
         self.stalled = threading.Event()
         self._began = None
         self._done = threading.Event()
@@ -1155,11 +1155,16 @@ class _StdinWatch:
             began = self._began
             wait = self.timeout if began is None else began + self.timeout - time.monotonic()
             if wait <= 0:
-                self.stalled.set()
-                self.on_stall()
+                on_stall = self.on_stall
+                if on_stall is not None:
+                    self.stalled.set()
+                    on_stall()
                 return
 
     def stop(self):
+        # The thread can run on for a moment after this. It must not hold the request meanwhile: through it the
+        # client, which a caller that drops it expects collected, and its kept process ended, at once.
+        self.on_stall = self.request = None
         self._done.set()
 
 

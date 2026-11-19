@@ -76,7 +76,7 @@ def _domain_of(entity_id: str) -> str:
     return entity_id.split(".")[0] if "." in entity_id else ""
 
 
-def _gateway_silence_markers() -> tuple:
+def _gateway_silence_markers() -> Optional[tuple]:
     """Markers the gateway suppresses from delivery, longest first.
 
     Read from the gateway's own set so the two can never drift; a local literal
@@ -86,18 +86,29 @@ def _gateway_silence_markers() -> tuple:
         from gateway.response_filters import LIVE_GATEWAY_SILENT_MARKERS
         return tuple(sorted(LIVE_GATEWAY_SILENT_MARKERS, key=len, reverse=True))
     except Exception as e:
-        # Fail visible, not silent: without the gateway's list an entity value carrying a
-        # silence marker is no longer stripped from the injected payload, which would let an
-        # entity suppress its own alert. Keep delivering (an unmarked event is still worth
-        # shipping) but say so once, at import, where the operator can act on it.
+        # ``None`` means UNKNOWN, not "no markers exist": an entity value carrying a marker
+        # would survive into the injected payload and could suppress its own alert once the
+        # model echoes it. Say so at import, and let the injection path degrade to broadcast
+        # (which never routes the text through the model) instead of shipping it unsanitized.
         logger.warning(
-            "[homeassistant] Could not read the gateway's silence markers (%s); injected "
-            "payloads will be delivered without marker stripping", e,
+            "[homeassistant] Could not read the gateway's silence markers (%s); session-mode "
+            "injection will degrade to broadcast until the import works", e,
         )
-        return ()
+        return None
 
 
 _GATEWAY_SILENCE_MARKERS = _gateway_silence_markers()
+
+# Caller-supplied thread routing wins over the home channel's thread. Core keeps the same list
+# (gateway/delivery.py:_THREAD_ROUTING_KEYS) and only adds its default when NONE of these keys is
+# present: checking "thread_id" alone would shadow a caller's message_thread_id / DM topic id and
+# silently divert an alert that was explicitly routed.
+_THREAD_ROUTING_KEYS = (
+    "thread_id",
+    "message_thread_id",
+    "direct_messages_topic_id",
+    "telegram_direct_messages_topic_id",
+)
 
 
 def _auth_headers(token: str) -> Dict[str, str]:
@@ -667,7 +678,8 @@ class HomeAssistantAdapter(BasePlatformAdapter):
                 # it delivers the alert to the root chat instead of the configured topic.
                 send_metadata = dict(metadata or {})
                 home_thread = getattr(home, "thread_id", None)
-                if home_thread and "thread_id" not in send_metadata:
+                if home_thread and not any(
+                        key in send_metadata for key in _THREAD_ROUTING_KEYS):
                     send_metadata["thread_id"] = home_thread
                 result = await adapter.send(
                     home.chat_id, content, metadata=send_metadata or None)
@@ -709,6 +721,12 @@ class HomeAssistantAdapter(BasePlatformAdapter):
         established path, not drop the event.
         """
         try:
+            if _GATEWAY_SILENCE_MARKERS is None:
+                logger.warning(
+                    "[%s] Gateway silence markers unavailable; delivering '%s' via the source "
+                    "session instead of injecting unsanitized text", self.name, entity_id,
+                )
+                return False
             if not getattr(self, "gateway_runner", None):
                 logger.warning(
                     "[%s] No gateway runner; delivering '%s' via the source session",

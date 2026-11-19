@@ -1,6 +1,6 @@
 [project]
 name = "hermes-mcp-serve"
-version = "1.0.0"
+version = "1.0.1"
 description = "Run Hermes Agent as an MCP server: messaging bridge plus optional Hermes tools (official plugin)"
 readme = "README.md"
 license = { text = "MIT" }

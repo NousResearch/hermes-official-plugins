@@ -59,6 +59,14 @@ config_schema:
     description: >-
       An ISO 8601 time. In ask mode, requests drawing extra usage are sent until then. The refusal message
       prints the exact command with the current window's reset time.
+  extra_usage_reserve_percent:
+    type: string
+    default: ""
+    label: Stop extra usage early at this plan percent (ask and stop modes)
+    description: >-
+      Optional, for example 97. In ask and stop, a request is refused once the session or weekly plan window
+      reaches this percent and extra usage is on, so the request that would first be billed is never sent.
+      Empty, invalid, 0 or above 100 means 100 (refuse only once extra usage has started).
   upstream_url:
     type: string
     default: ""

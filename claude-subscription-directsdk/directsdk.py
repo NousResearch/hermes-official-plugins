@@ -680,6 +680,12 @@ def _rate_limit_summary(event) -> "dict | None":
         value = info.get(source)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             summary[key] = value
+    # The fuller account-wide plan window (0..1 fractions in unifiedWindows), for an extra_usage reserve (#398).
+    windows = info.get('unifiedWindows') if isinstance(info.get('unifiedWindows'), dict) else {}
+    used = [w.get('utilization') for name, w in windows.items() if name in ('five_hour', 'seven_day') and isinstance(w, dict)]
+    used = [u for u in used if isinstance(u, (int, float)) and not isinstance(u, bool)]
+    if used:
+        summary['utilization'] = max(used)
     return summary
 
 

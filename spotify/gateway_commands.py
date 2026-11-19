@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 
 from . import spotify_tools as _tools
+from .spotify_client import SpotifyAuthRequiredError
 
 NOT_CONFIGURED = "Spotify not configured — run `hermes spotify login`"
 PREMIUM_REQUIRED = "Spotify Premium required for playback control"
@@ -22,7 +23,10 @@ NOT_PLAYING = "Nothing is playing"
 
 
 def _call(handler, **args) -> dict:
-    return json.loads(handler({k: v for k, v in args.items() if v is not None}))
+    try:
+        return json.loads(handler({k: v for k, v in args.items() if v is not None}))
+    except SpotifyAuthRequiredError:  # raised by the client constructor, outside the tool's error boundary
+        return {"error": "Spotify not configured"}
 
 
 def _failure(out: dict) -> str | None:

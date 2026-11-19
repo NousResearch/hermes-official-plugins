@@ -109,3 +109,14 @@ def test_errors_map_to_one_line_messages(client, monkeypatch, message, expected)
 
     monkeypatch.setattr(client, "get_currently_playing", boom)
     assert cmds.nowplaying() == expected
+
+
+def test_a_missing_login_answers_not_configured_instead_of_raising(monkeypatch):
+    from spotify_plugin.spotify_client import SpotifyAuthRequiredError
+
+    def no_login():
+        raise SpotifyAuthRequiredError("Spotify is not authenticated. Run `hermes spotify login` first.")
+
+    monkeypatch.setattr(spotify_tools, "SpotifyClient", no_login)
+    assert cmds.nowplaying() == cmds.NOT_CONFIGURED
+    assert cmds.pause() == cmds.NOT_CONFIGURED

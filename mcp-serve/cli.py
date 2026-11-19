@@ -12,7 +12,7 @@ def setup_cli(parser) -> None:
              "kanban tools)")
     parser.add_argument(
         "--tools-only", action="store_true",
-        help="Expose ONLY Hermes' own tool face (web, browser, vision, image generation, skills and TTS) "
+        help="Expose ONLY Hermes' own tool face (web, vision, image generation, skills and TTS) "
              "and none of the messaging, conversation or approval bridge tools. Implies --tools.")
     parser.add_argument(
         "--accept-hooks", action="store_true",

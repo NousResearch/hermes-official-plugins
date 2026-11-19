@@ -1,7 +1,7 @@
 {
   "name": "hermes-memory-wiki",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Build and test tooling for Memory Wiki dashboard and native Desktop UI. Runtime React and SDK components are supplied by the host.",
   "scripts": {
     "build": "esbuild dashboard/src/index.jsx --bundle --format=iife --target=es2020 --jsx-factory=React.createElement --jsx-fragment=React.Fragment --banner:js=\"/* hermes-memory-wiki dashboard bundle — built from dashboard/src/index.jsx with esbuild; edit the source, run npm run build. MIT, (c) 2026 Nous Research; original by @Araja119 (hermes-agent #31244). */\" --outfile=dashboard/dist/index.js",

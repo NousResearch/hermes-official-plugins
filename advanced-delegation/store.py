@@ -3,8 +3,9 @@
 
 Reads use the effective config (``load_config_readonly``); writes go through core's
 ``atomic_config_write`` on the profile's own ``config.yaml`` (comment-preserving, and it refuses a
-write that would drop existing settings). Only ``delegation.backend`` and
-``delegation.backends.<mode>`` are ever written.
+write that would drop existing settings). Only ``delegation.backend``, ``delegation.backends.<mode>``
+and the plugin's own System-1 Decider settings (``plugins.entries.advanced-delegation.settings.decider``)
+are ever written.
 """
 
 from __future__ import annotations
@@ -70,44 +71,51 @@ def profile_default(section: Mapping[str, Any]) -> str:
 
 
 def has_decider(section: Mapping[str, Any]) -> bool:
-    """Whether ``delegation.backends.model_map`` has explicit System-1 Decider configuration."""
+    """Whether the System-1 Decider has explicit configuration: settings this plugin saved, or a ``decider``
+    block in ``delegation.backends.model_map``."""
+    from .decider_router import saved_decider
     block = _block(section, "model_map")
-    return isinstance(block.get("decider"), Mapping) or "decider_routing_enabled" in block
+    return bool(saved_decider()) or isinstance(block.get("decider"), Mapping) or "decider_routing_enabled" in block
 
 
 def decider_settings(section: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalized System-1 Decider settings from ``delegation.backends.model_map``."""
+    """Effective System-1 Decider settings (``decider_router.decider_config``)."""
     from .decider_router import decider_config
     return decider_config(_block(section, "model_map"))
 
 
 # --- writes -----------------------------------------------------------------------------------
 
-def _write(mutate: Callable[[dict[str, Any]], None]) -> None:
-    """Raises RuntimeError (with the user-facing reason) when the config must not be written: a
-    package-manager-managed install, or an unreadable / would-lose-settings file."""
+def _write_config(mutate: Callable[[dict[str, Any]], None]) -> None:
+    """Apply ``mutate`` to the profile's config and save it. Raises RuntimeError (with the user-facing reason)
+    when the config must not be written: a package-manager-managed install, or an unreadable /
+    would-lose-settings file."""
     from hermes_cli.config import (atomic_config_write, format_managed_message, get_config_path, is_managed,
                                    require_readable_config_before_write)
     if is_managed():
         raise RuntimeError(format_managed_message("change delegation settings"))
     path = get_config_path()
     data = require_readable_config_before_write(path)
-    section = data.get("delegation")
-    if not isinstance(section, dict):
-        section = data["delegation"] = {}
-    mutate(section)
+    mutate(data)
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_config_write(path, data)
 
 
+def _child(parent: dict[str, Any], key: str) -> dict[str, Any]:
+    """``parent[key]`` as a dict, created when it is missing or not a mapping."""
+    child = parent.get(key)
+    if not isinstance(child, dict):
+        child = parent[key] = {}
+    return child
+
+
+def _write(mutate: Callable[[dict[str, Any]], None]) -> None:
+    """:func:`_write_config` for the ``delegation`` section."""
+    _write_config(lambda config: mutate(_child(config, "delegation")))
+
+
 def _backend_block(section: dict[str, Any], mode: str) -> dict[str, Any]:
-    backends = section.get("backends")
-    if not isinstance(backends, dict):
-        backends = section["backends"] = {}
-    block = backends.get(mode)
-    if not isinstance(block, dict):
-        block = backends[mode] = {}
-    return block
+    return _child(_child(section, "backends"), mode)
 
 
 def set_mode(mode: str) -> None:
@@ -136,19 +144,19 @@ def save_profiles(entries: list[dict[str, Any]], default: str = "") -> None:
 
 
 def save_decider(settings: Mapping[str, Any]) -> None:
-    """Persist ``delegation.backends.model_map.decider`` while keeping existing routes and default."""
-    from .decider_router import decider_config
-    normalized = decider_config({"decider": dict(settings)})
+    """Save the System-1 Decider settings as this plugin's own settings
+    (``plugins.entries.advanced-delegation.settings.decider``). They stay out of
+    ``delegation.backends.model_map``: core's route editor rewrites that block from its routes and default
+    alone, which would drop them."""
+    from .decider_router import PLUGIN_ID, normalize_decider
+    normalized = normalize_decider({"decider": dict(settings)})
 
-    def mutate(section: dict[str, Any]) -> None:
-        block = _backend_block(section, "model_map")
-        existing = block.get("decider")
-        target = existing if isinstance(existing, dict) else {}
-        for key, value in normalized.items():
-            target[key] = value
-        block["decider"] = target
+    def mutate(config: dict[str, Any]) -> None:
+        own = _child(_child(_child(_child(config, "plugins"), "entries"), PLUGIN_ID), "settings")
+        # Updated in place: atomic_config_write refuses a write that drops a key the file already has.
+        _child(own, "decider").update(normalized)
 
-    _write(mutate)
+    _write_config(mutate)
 
 
 def validate_decider(settings: Mapping[str, Any]) -> list[str]:

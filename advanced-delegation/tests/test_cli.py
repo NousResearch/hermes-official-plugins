@@ -363,7 +363,10 @@ def test_model_routes_decider_tui_toggles_and_edits_endpoint(terminal, capsys, h
     terminal.menu(QUIT)                        # leave Decider menu
     terminal.menu(QUIT)                        # leave Model routes menu
     _run("config")
-    dec = _config(home)["delegation"]["backends"]["model_map"]["decider"]
+    config = _config(home)
+    # Saved as the plugin's own settings: core's route editor rewrites the model_map block from its routes alone.
+    assert "decider" not in config["delegation"]["backends"]["model_map"]
+    dec = config["plugins"]["entries"]["advanced-delegation"]["settings"]["decider"]
     assert dec["enabled"] is True
     assert dec["url"] == "http://192.168.0.150:11434/v1/systemone"
     assert dec["model"] == "pplx-decider:27b-nvfp4"

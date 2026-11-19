@@ -186,7 +186,7 @@ YAML there and edit those routes outside Desktop.
 account): a tier the route does not offer refuses the spawn with a tool error instead of silently
 running at another tier. An unknown `reasoning_effort` is refused the same way.
 
-### Optional: System-1 Decider auto-router (`model_map.decider`)
+### Optional: System-1 Decider auto-router
 
 When `delegation.backend` is `model_map`, you can optionally enable a **System-1 Decider**
 (`/v1/systemone` endpoint — local Ollama `pplx-decider:27b-nvfp4` or TypeSafe Cloud `jev-latest`)
@@ -204,6 +204,10 @@ upgraded to that route; otherwise it stays on `default` (or inherits the parent 
 advisor-only routes listed in `excluded_options` are never chosen automatically, remaining
 available only when the caller explicitly passes `option`.
 
+The Decider's settings are the plugin's own, saved under `plugins.entries.advanced-delegation.settings`
+by every surface below. They are kept out of `delegation.backends.model_map` on purpose: saving a route
+in **Settings → Model → Subagents** rewrites that block from its routes and default alone.
+
 ```yaml
 delegation:
   backend: model_map
@@ -211,23 +215,30 @@ delegation:
     model_map:
       options: [...]
       default: FastSub
-      decider:
-        enabled: true
-        url: http://192.168.0.150:11434/v1/systemone
-        model: pplx-decider:27b-nvfp4
-        allow_fallback: true
-        fallback_url: https://api.typesafe.ai/v1/systemone
-        fallback_model: jev-latest
-        specialist_threshold: 0.70
-        confidence_threshold: 0.60
-        timeout: 18.0
-        excluded_options:
-          - UltraFastPaid
-          - AbsoluteSOTAGoogle
-          - AbsoluteSOTAOpenAI
-          - AbsoluteSOTAAnthropic
-          - AbsoluteSOTAXAI
+plugins:
+  entries:
+    advanced-delegation:
+      settings:
+        decider:
+          enabled: true
+          url: http://192.168.0.150:11434/v1/systemone
+          model: pplx-decider:27b-nvfp4
+          allow_fallback: true
+          fallback_url: https://api.typesafe.ai/v1/systemone
+          fallback_model: jev-latest
+          specialist_threshold: 0.70
+          confidence_threshold: 0.60
+          timeout: 18.0
+          excluded_options:
+            - UltraFastPaid
+            - AbsoluteSOTAGoogle
+            - AbsoluteSOTAOpenAI
+            - AbsoluteSOTAAnthropic
+            - AbsoluteSOTAXAI
 ```
+
+A `decider` block written by hand under `delegation.backends.model_map` is read as long as nothing was
+saved through the plugin; saved settings win.
 
 Configure, inspect, or test the System-1 Decider from any surface:
 
@@ -247,7 +258,7 @@ Configure, inspect, or test the System-1 Decider from any surface:
   /delegation decider test Design a multi-file database migration
   /delegation decider history
   ```
-- **Hermes Desktop**: **Settings → Plugins → Advanced Delegation** (also **Advanced Delegation settings** in the Command Palette). One settings page: turn the auto-router on or off, set the primary and fallback endpoints and the thresholds, choose which routes it may pick, test a goal live, and read recent decisions. The delegation mode and the routes themselves stay in **Settings → Model → Subagents**; the page links there and says so when the mode is not Model routes. After updating the unified package, use **Capabilities → Plugins → Rescan** to refresh its Desktop half; no app or gateway restart is needed.
+- **Hermes Desktop**: **Settings → Plugins → Advanced Delegation** (also **Advanced Delegation settings** in the Command Palette). One settings page: turn the auto-router on or off, set the primary and fallback endpoints and the thresholds, choose which routes it may pick, test a goal live, and read recent decisions. The delegation mode and the routes themselves stay in **Settings → Model → Subagents**; the page links there and says so when the mode is not Model routes. After updating the unified package, use **Capabilities → Plugins → Rescan** to refresh its Desktop half.
 
 ### Profile routes (`profile_routes`)
 

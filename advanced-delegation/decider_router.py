@@ -1,8 +1,9 @@
 """System-1 Decider auto-router for ``model_map`` subagent delegation.
 
-When ``delegation.backend`` is ``model_map`` and ``delegation.backends.model_map.decider.enabled``
-is true, tasks handed to ``delegate_task`` without an explicit ``option`` are evaluated in a single
-batched ``/v1/systemone`` call (local Ollama ``pplx-decider`` or TypeSafe Cloud ``jev-latest``).
+When ``delegation.backend`` is ``model_map`` and the Decider is enabled (the plugin's own settings,
+``plugins.entries.advanced-delegation.settings.decider``), tasks handed to ``delegate_task`` without an
+explicit ``option`` are evaluated in a single batched ``/v1/systemone`` call (local Ollama
+``pplx-decider`` or TypeSafe Cloud ``jev-latest``).
 
 For each unassigned task, the Decider answers two structured questions in one forward pass:
 1. ``t{i}_needs_specialist`` (``noul``): does this task genuinely require a specialist/frontier
@@ -30,6 +31,7 @@ import urllib.request
 
 logger = logging.getLogger(__name__)
 
+PLUGIN_ID = "advanced-delegation"
 DEFAULT_DECIDER_URL = "http://localhost:11434/v1/systemone"
 DEFAULT_DECIDER_MODEL = "pplx-decider:27b-nvfp4"
 DEFAULT_FALLBACK_URL = "https://api.typesafe.ai/v1/systemone"
@@ -121,8 +123,30 @@ def _typesafe_api_key() -> str:
     return ""
 
 
+def saved_decider() -> Mapping[str, Any]:
+    """The Decider settings this plugin saved: ``plugins.entries.advanced-delegation.settings.decider`` in the
+    active profile's config. They are the plugin's own settings, not part of ``delegation.backends.model_map``,
+    because core's route editor rewrites that block from its routes and default alone."""
+    from hermes_cli.config import load_config_readonly
+    node: Any = load_config_readonly() or {}
+    for key in ("plugins", "entries", PLUGIN_ID, "settings", "decider"):
+        node = node.get(key) if isinstance(node, Mapping) else None
+    return node if isinstance(node, Mapping) else {}
+
+
 def decider_config(settings: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Return normalized System-1 Decider settings from the ``model_map`` backend block."""
+    """Effective System-1 Decider settings: the saved ones (:func:`saved_decider`) over a ``decider`` block in
+    the ``model_map`` backend block ``settings``, over the defaults."""
+    block = settings if isinstance(settings, Mapping) else {}
+    saved = saved_decider()
+    if saved:
+        nested = block.get("decider")
+        block = {**block, "decider": {**(nested if isinstance(nested, Mapping) else {}), **saved}}
+    return normalize_decider(block)
+
+
+def normalize_decider(settings: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Complete, range-checked Decider settings from a mapping that holds them under ``decider``."""
     block = settings if isinstance(settings, Mapping) else {}
     nested = block.get("decider")
     sub = nested if isinstance(nested, Mapping) else {}

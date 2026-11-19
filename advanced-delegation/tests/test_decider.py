@@ -129,10 +129,11 @@ def test_batch_pre_tool_call_routes_multiple_tasks_and_returns_modify_directive(
                         "model_map": {
                             "options": ROUTES,
                             "default": "FastSub",
-                            "decider": {"enabled": True},
                         }
                     },
-                }
+                },
+                # Where the plugin saves the Decider's settings (never inside the model_map block).
+                "plugins": {"entries": {"advanced-delegation": {"settings": {"decider": {"enabled": True}}}}},
             }
         ),
         encoding="utf-8",
@@ -254,3 +255,5 @@ def test_cli_and_slash_decider_commands(monkeypatch, capsys, home):
     off_txt = slash.handle("decider off")
     assert "OFF" in off_txt
     assert store.decider_settings(store.delegation_section())["enabled"] is False
+    # A configured Decider stays listed in `hermes delegation config --show` while it is off.
+    assert "System-1 Decider auto-router: off" in store.describe(store.delegation_section())

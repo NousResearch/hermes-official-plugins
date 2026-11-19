@@ -6,7 +6,7 @@ is enabled. Loads its sibling package by path without mutating ``sys.path`` or r
 Routes:
     GET    /state       Current delegation mode, routes, profiles, Decider config, and recent decisions
     POST   /mode        Switch delegation.backend (default | model_map | profile_routes)
-    PUT    /decider     Validate and save delegation.backends.model_map.decider settings
+    PUT    /decider     Validate and save the Decider settings (plugins.entries.advanced-delegation.settings.decider)
     POST   /probe       Run a live /v1/systemone routing probe for a sample subagent goal
     DELETE /decisions   Clear cached System-1 Decider routing history
 """

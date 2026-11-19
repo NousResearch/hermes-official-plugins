@@ -128,6 +128,114 @@ def test_plugin_api_probe_and_clear_decisions(api_client, monkeypatch):
     assert cleared.json()["ok"] is True
 
 
+def test_decider_settings_survive_a_route_save_in_the_core_editor(api_client):
+    """Core's Settings > Model > Subagents editor rewrites ``delegation.backends.model_map`` from its routes and
+    default alone, so the Decider's settings must not live in that block."""
+    core = pytest.importorskip(
+        "hermes_cli.web_routers.delegation", reason="Hermes core without the delegation settings API")
+    client, _ = api_client
+    saved = client.put("/api/plugins/advanced-delegation/decider", json={
+        "enabled": True, "url": "http://192.168.0.150:11434/v1/systemone", "excluded_options": ["VisualProwess"]})
+    assert saved.status_code == 200
+
+    editor = FastAPI()
+    editor.include_router(core.router)
+    routes = [
+        {"name": "FastSub", "description": "Edited in the route editor.", "provider": "openrouter", "model": "m-fast"},
+        {"name": "VisualProwess", "description": "Visual specialist.", "provider": "openrouter", "model": "m-vis"},
+    ]
+    resp = TestClient(editor).put("/api/delegation/backends/model_map", json={"options": routes, "default": "FastSub"})
+    assert resp.status_code == 200
+
+    state = client.get("/api/plugins/advanced-delegation/state").json()
+    assert state["routes"][0]["description"] == "Edited in the route editor."  # the editor's save landed
+    assert state["decider"]["enabled"] is True
+    assert state["decider"]["url"] == "http://192.168.0.150:11434/v1/systemone"
+    assert state["decider"]["excluded_options"] == ["VisualProwess"]
+
+
+def test_a_save_wins_over_a_decider_block_left_in_the_route_block(api_client, home):
+    """A ``decider`` block inside ``delegation.backends.model_map`` is read until the plugin saves its own
+    settings; from then on the saved ones apply."""
+    client, _ = api_client
+    path = home / "config.yaml"
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+    config["delegation"]["backends"]["model_map"]["decider"] = {
+        "enabled": True, "url": "http://old-host:11434/v1/systemone"}
+    path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+    before = client.get("/api/plugins/advanced-delegation/state").json()["decider"]
+    assert (before["enabled"], before["url"]) == (True, "http://old-host:11434/v1/systemone")
+
+    after = client.put("/api/plugins/advanced-delegation/decider", json={"enabled": False}).json()["decider"]
+    assert (after["enabled"], after["url"]) == (False, "http://old-host:11434/v1/systemone")
+    on_disk = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert "plugins" in on_disk
+    assert on_disk["plugins"]["entries"]["advanced-delegation"]["settings"]["decider"]["enabled"] is False
+
+
+def test_a_decider_save_is_refused_with_a_reason_when_the_config_cannot_be_parsed(api_client, home):
+    client, _ = api_client
+    path = home / "config.yaml"
+    broken = "delegation: [unclosed\n"
+    path.write_text(broken, encoding="utf-8")
+    resp = client.put("/api/plugins/advanced-delegation/decider", json={"enabled": True})
+    assert resp.status_code == 409
+    assert "was not saved" in resp.json()["detail"]
+    assert path.read_text(encoding="utf-8") == broken
+
+
+def test_a_decider_save_is_refused_with_a_reason_in_a_managed_install(api_client, home, monkeypatch):
+    client, _ = api_client
+    assert client.get("/api/plugins/advanced-delegation/state").status_code == 200  # creates the home layout
+    before = (home / "config.yaml").read_text(encoding="utf-8")
+    monkeypatch.setattr("hermes_cli.config.is_managed", lambda: True)
+    monkeypatch.setattr("hermes_cli.config.get_managed_system", lambda: "nix")
+    resp = client.put("/api/plugins/advanced-delegation/decider", json={"enabled": True})
+    assert resp.status_code == 409
+    assert "nix" in resp.json()["detail"].lower()
+    assert (home / "config.yaml").read_text(encoding="utf-8") == before
+
+
+def test_a_decider_save_leaves_other_plugin_settings_alone(api_client, home):
+    client, _ = api_client
+    path = home / "config.yaml"
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+    others = {
+        "enabled": ["advanced-delegation", "other-plugin"],
+        "entries": {
+            "other-plugin": {"settings": {"endpoint": "http://other", "retry": {"policy": "twice"}},
+                             "allow_gateway_injection": True},
+            "advanced-delegation": {"allow_platform_actions": False},
+        },
+    }
+    config["plugins"] = others
+    path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+    assert client.put("/api/plugins/advanced-delegation/decider", json={"enabled": True}).status_code == 200
+
+    plugins = yaml.safe_load(path.read_text(encoding="utf-8"))["plugins"]
+    assert plugins["enabled"] == others["enabled"]
+    assert plugins["entries"]["other-plugin"] == others["entries"]["other-plugin"]
+    assert plugins["entries"]["advanced-delegation"]["allow_platform_actions"] is False
+    assert plugins["entries"]["advanced-delegation"]["settings"]["decider"]["enabled"] is True
+
+
+def test_making_a_route_eligible_again_is_saved(api_client):
+    client, _ = api_client
+    url = "/api/plugins/advanced-delegation/decider"
+    assert client.put(url, json={"excluded_options": ["FastSub", "VisualProwess"]}).status_code == 200
+    again = client.put(url, json={"excluded_options": ["FastSub"]})
+    assert again.status_code == 200
+    assert again.json()["decider"]["excluded_options"] == ["FastSub"]
+    assert [r["name"] for r in again.json()["routes"] if r["decider_eligible"]] == ["VisualProwess"]
+    # Every route eligible is a choice too: an empty list must not fall back to the default exclusions.
+    everything = client.put(url, json={"excluded_options": []})
+    assert everything.status_code == 200
+    assert everything.json()["decider"]["excluded_options"] == []
+    assert all(r["decider_eligible"] for r in client.get("/api/plugins/advanced-delegation/state").json()["routes"])
+
+
 def test_desktop_plugin_js_passes_hermes_static_surface_lint():
     from hermes_cli.plugin_validate_desktop import (
         desktop_review_findings,

@@ -63,6 +63,10 @@ def test_a_negative_heartbeat_turns_the_ping_off():
 class _FakeSession:
     def __init__(self):
         self.heartbeat = "unset"
+        self.closed = False
+
+    async def close(self):
+        self.closed = True
 
     async def ws_connect(self, url, **kwargs):
         self.heartbeat = kwargs.get("heartbeat")

@@ -407,7 +407,8 @@ class Contract(unittest.TestCase):
             hanging.close()
             unstarted = self.client(tmp)
             stream = unstarted.create(**self.request(), stream=True)
-            unstarted.close()
+            # Client.close() leaves requests alone (#378); an unstarted stream is finalized by its own close().
+            stream.close()
             self.assertEqual(len(unstarted._requests), 0)
 
 

@@ -11,7 +11,7 @@ class _ReadOnlyDB:
         self.sessions = sessions
         self.messages = messages or {}
 
-    def list_sessions_rich(self, *, limit, include_children, order_by_last_active):
+    def list_sessions_rich(self, *, limit, include_children, order_by_last_active, **_filters):
         assert not include_children and order_by_last_active
         return self.sessions[:limit]
 

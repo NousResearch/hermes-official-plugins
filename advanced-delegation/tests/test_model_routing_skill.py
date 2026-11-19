@@ -44,9 +44,8 @@ def rl():
 
 @pytest.fixture
 def ledger(tmp_path, monkeypatch):
-    path = tmp_path / "data" / "routing-ledger.jsonl"
-    monkeypatch.setenv("ADVANCED_DELEGATION_LEDGER", str(path))
-    return path
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    return tmp_path / "home" / "plugin-data" / "advanced-delegation" / "routing-ledger.jsonl"
 
 
 def _ladder(rl, names, models=None):
@@ -161,13 +160,10 @@ def test_script_is_portable_stdlib():
 # --- locations ----------------------------------------------------------------------------------
 
 def test_ledger_lives_in_the_plugin_data_folder(rl, tmp_path, monkeypatch):
-    monkeypatch.delenv("ADVANCED_DELEGATION_LEDGER", raising=False)
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "profile"))
     data = tmp_path / "profile" / "plugin-data" / "advanced-delegation"
     assert rl.ledger_path() == data / "routing-ledger.jsonl"
     assert rl.routes_path() == data / "routes.json"
-    monkeypatch.setenv("ADVANCED_DELEGATION_LEDGER", str(tmp_path / "x" / "l.jsonl"))
-    assert rl.routes_path() == tmp_path / "x" / "routes.json"
 
 
 def test_default_home_mirrors_hermes(rl, tmp_path):

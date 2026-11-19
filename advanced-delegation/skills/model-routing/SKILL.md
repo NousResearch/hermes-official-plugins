@@ -59,7 +59,7 @@ route saves. Subagents start blank and re-read files.
   ```
 
 - Python 3.8+ for `scripts/route_ledger.py` (stdlib only). Any interpreter works.
-- Optional env: `ADVANCED_DELEGATION_LEDGER` (ledger file path); `HERMES_HOME` (profile home).
+- The ledger follows the active profile (`HERMES_HOME`).
 
 ## How to Run
 
@@ -92,8 +92,8 @@ python "${HERMES_SKILL_DIR}/scripts/route_ledger.py" stats [--class <class>]
 ```
 
 Causes (required for a failure): `model`, `spec`, `context`, `env`, `flaky`.
-Files: ledger `<HERMES_HOME>/plugin-data/advanced-delegation/routing-ledger.jsonl` (or
-`ADVANCED_DELEGATION_LEDGER`), ladder `routes.json` in the same folder.
+Files: ledger `<HERMES_HOME>/plugin-data/advanced-delegation/routing-ledger.jsonl`,
+ladder `routes.json` in the same folder.
 
 ## Procedure
 

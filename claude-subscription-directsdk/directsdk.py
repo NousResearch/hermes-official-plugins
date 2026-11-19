@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import contextvars
 import copy
 from collections import OrderedDict, deque
 from contextlib import suppress
@@ -731,8 +732,10 @@ class Native:
         self.watch = None  # the step's stdin watchdog (one thread a step, #419)
         self.rate_limit = None  # the plan window as this process last reported it (rate_limit_event)
         # A kept native may write rate_limit_event after its step has ended (and settled() would drop it): its reader
-        # feeds the extra-usage policy as the event arrives, before the next step's check (#398).
-        self.observe = (lambda summary: observe_rate_limit(env, summary)) if tools is not None else None
+        # feeds the extra-usage policy as the event arrives, before the next step's check (#398). It reads the serving
+        # profile's settings, which a gateway binds per context: the reader thread runs in a copy of this step's.
+        context = contextvars.copy_context()
+        self.observe = (lambda summary: context.copy().run(observe_rate_limit, env, summary)) if tools is not None else None
         self.parked, self.results = {}, {}
         # A kept session: what it was launched with, the frames it holds, and what the next step must bring.
         self.ident = self.frames = self.expect = self.idle = self.on_exit = None

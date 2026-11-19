@@ -16,6 +16,8 @@ class _FakeClient:
         self.response: dict = {}
 
     def request(self, method, path, *, params=None, json_body=None, **kw):
+        if path == "/me/player/devices":  # an active device, for the tools' device guard / default device
+            return {"devices": [{"id": "dev", "name": "Kitchen Sonos", "is_active": True}]}
         self.calls.append((method, path, params, json_body))
         return self.response
 
@@ -43,6 +45,8 @@ def test_play_searches_then_plays_the_first_track(client):
     calls = []
 
     def request(method, path, *, params=None, json_body=None, **_kw):
+        if path == "/me/player/devices":
+            return {"devices": [{"id": "dev", "is_active": True}]}
         calls.append((method, path, params, json_body))
         return responses.pop(0)
 
@@ -85,6 +89,8 @@ def test_queue_adds_the_first_match(client):
     calls = []
 
     def request(method, path, *, params=None, json_body=None, **_kw):
+        if path == "/me/player/devices":
+            return {"devices": [{"id": "dev", "is_active": True}]}
         calls.append((method, path, params, json_body))
         return responses.pop(0)
 

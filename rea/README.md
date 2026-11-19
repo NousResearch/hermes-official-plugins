@@ -78,7 +78,8 @@ through an environment variable are forwarded for you: `mcp.json` passes
 environment — set them in `~/.hermes/.env` (a value exported only in your
 shell does not reach the gateway that spawns the server, so restart Hermes
 after adding them). An unset variable is dropped, so an install that does not
-use the engine is unaffected. The same-name `mcp_servers.rea` override from
+use the engine is unaffected; that drop needs Hermes v0.22.3 or newer (older
+releases pass the literal `${GHIDRA_INSTALL_DIR}`, and REA refuses to start). The same-name `mcp_servers.rea` override from
 the [recovery guide](skills/reverse-engineer-anything/references/connection-and-recovery.md)
 remains available to pin a value per machine — note that it **replaces** the
 plugin's pinned server, so keep the launch command current when this plugin

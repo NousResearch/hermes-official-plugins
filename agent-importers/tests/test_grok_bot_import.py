@@ -263,6 +263,36 @@ def test_a_bot_profile_gets_its_role_even_when_this_profile_has_its_own_soul(tmp
         assert "Grok Bot" not in (memory.read_text(encoding="utf-8") if memory.is_file() else "")
 
 
+def test_a_bot_profile_that_cannot_be_created_stops_the_import(tmp_path, monkeypatch):
+    """Accepted one-profile-per-Bot but `hermes profile create` fails: exit 1 and import nothing,
+    never fall back to merging every Bot into this profile (the merge the user declined)."""
+    import subprocess
+    import sys
+
+    import pytest
+
+    home = tmp_path / ".hermes"
+    export = {"format": "grok-bot-export", "version": 1, "bots": [
+        {"name": "Ava", "instructions": "You are Ava.",
+         "routines": [{"name": "Morning", "instruction": "Say hi.", "trigger": "schedule",
+                       "schedule_cron": "0 7 * * *"}]},
+        {"name": "Scout", "instructions": "You are Scout."}]}
+    path = tmp_path / "grok-bot-export.json"
+    path.write_text(json.dumps(export), encoding="utf-8")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("hermes_cli.cli_output.prompt_yes_no", lambda *a, **k: True)
+    monkeypatch.setattr("agent_importers_plugin.cli._profile_cli", lambda *a: subprocess.CompletedProcess(
+        a, 1, stdout="", stderr="Error: disk full"))
+
+    with pytest.raises(SystemExit) as exc:
+        _run(["grok-bot", "--source", str(path)])
+
+    assert exc.value.code == 1
+    assert not _jobs(home)
+    memory = home / "memories" / "MEMORY.md"
+    assert "You are Ava" not in (memory.read_text(encoding="utf-8") if memory.is_file() else "")
+
+
 def test_several_bots_without_a_prompt_are_imported_into_this_profile(tmp_path, capsys):
     """Nobody to answer (-y): no profile is created behind the user's back, and the import says what
     the Bots lose so the choice can be made deliberately."""

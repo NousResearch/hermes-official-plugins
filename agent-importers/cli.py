@@ -146,6 +146,7 @@ def _create_bot_profile(profile: str) -> Optional[tuple[str, Path]]:
 
 def _plan_per_bot_profiles(make_importer, args) -> list[_BotTarget]:
     """One profile per Bot, when the export holds several Bots and the user takes the offer (#265).
+    Exits 1 when a profile cannot be created: the import stops instead of merging the Bots.
 
     Imported together into one profile, only the first Bot can become SOUL.md — every later role is
     demoted to a memory entry of the same agent, which is the bug itself. Costs nothing when the
@@ -186,8 +187,9 @@ def _plan_per_bot_profiles(make_importer, args) -> list[_BotTarget]:
     for bot, profile in planned:
         made = _create_bot_profile(profile)
         if made is None:
+            # Never fall back to one shared profile: that is the merge the user just declined.
             print_info("Nothing was imported; re-run once the profiles above can be created.")
-            return []
+            raise SystemExit(1)
         created, home = made
         targets.append(_BotTarget(bot=bot, profile=created, home=home))
     print_info("Created: " + ", ".join(f"'{t.profile}'" for t in targets))

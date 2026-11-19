@@ -76,8 +76,9 @@ def test_a_dropped_client_ends_its_kept_process(home, upstream, monkeypatch):
 @pytest.mark.parametrize('stop', ['close', 'cancel'])
 def test_a_stop_while_a_process_becomes_the_kept_session_ends_it(home, upstream, monkeypatch, stop):
     """close() or cancel() lands after the step has its answer and before its process is the kept session. The stop
-    must still find an owner: the process ends and the step raises the cancellation error. Before, the request had
-    already let go of the process and the client did not hold it yet, so the stop found neither and it stayed kept."""
+    must still find an owner: the process ends. A cancel() also fails the step; a close() leaves its answer standing,
+    as it leaves every call in flight (#378). Before, the request had already let go of the process and the client did
+    not hold it yet, so the stop found neither and it stayed kept."""
     c = client(home, upstream, monkeypatch, session=True)
     reached, proceed, natives, errors = threading.Event(), threading.Event(), [], []
     keep = directsdk.Client._keep
@@ -103,7 +104,7 @@ def test_a_stop_while_a_process_becomes_the_kept_session_ends_it(home, upstream,
         proceed.set()
         worker.join(30)
         assert not worker.is_alive()
-        assert errors == ['RuntimeError: Claude request cancelled']
+        assert errors == ([] if stop == 'close' else ['RuntimeError: Claude request cancelled'])
         assert not session_pids(c), 'the stopped step left a kept session'
         assert gone(pid), 'the process outlived the stop'
         with directsdk._live_lock:

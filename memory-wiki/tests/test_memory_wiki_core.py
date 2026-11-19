@@ -378,7 +378,8 @@ def test_build_single_day_session_unchanged(memory_wiki_core, tmp_path):
     db = SessionDB(db_path=tmp_path / "state.db")
     try:
         started = _dated_session(db, tmp_path / "state.db", "normal", [(0, "Update normal/file.py")])
-        session, messages = memory_wiki_core._load_memory_sessions(db, limit=100)[0]
+        session = memory_wiki_core._recent_sessions(db, limit=100)[0]
+        messages = db.get_messages(session["id"])
         candidates = memory_wiki_core.extract_subject_candidates(session, messages)
         subjects = [{"slug": c.slug, "name": c.name, "count": 1} for c in candidates]
         subjects.sort(key=lambda subject: (-subject["count"], subject["name"].lower()))

@@ -173,11 +173,12 @@ def test_a_sandbox_sees_only_its_own_state_under_the_sandbox_dir(scratch, host_d
     a = _env(home)
     b = _env(home)
     try:
-        assert a.execute("export A_SESSION_SECRET=DUMMY-A-ENV")["returncode"] == 0
+        # Not secret-shaped: later cores keep secret exports out of the snapshot file entirely.
+        assert a.execute("export A_SESSION_MARK=DUMMY-A-ENV")["returncode"] == 0
         a_state, b_state = Path(a.get_temp_dir()), Path(b.get_temp_dir())
         on_host = "".join(p.read_text(errors="replace") for p in a_state.iterdir() if p.is_file())
         listing = b.execute(f"ls -A {sbx}")["output"].split()
-        seen = b.execute(f"cat {a_state}/* 2>&1; grep -rh A_SESSION_SECRET {sbx} 2>&1")["output"]
+        seen = b.execute(f"cat {a_state}/* 2>&1; grep -rh A_SESSION_MARK {sbx} 2>&1")["output"]
         own = b.execute(f"echo kept > {b_state}/probe && cat {b_state}/probe")["output"]
         made = b.execute(f"touch {sbx}/planted")["returncode"]
     finally:

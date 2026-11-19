@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import contextvars
 import copy
 from collections import OrderedDict, deque
 from contextlib import suppress
@@ -51,6 +52,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+
 # Hermes picks retry vs fallback from an error's status_code (main loop and auxiliary ladder alike).
 class ClaudeCodeMissing(RuntimeError):
     """The official Claude Code CLI this transport drives is not installed (or not on PATH)."""
@@ -65,13 +67,44 @@ def _request_id(value):
 class ClaudeAPIError(RuntimeError):
     """A failed upstream or native-answered request; status_code is None when there is no HTTP equivalent."""
 
-    def __init__(self, message, status_code=None, *, request_id=None):
+    def __init__(self, message, status_code=None, *, request_id=None, resets_at=None):
         request_id = _request_id(request_id)
         if request_id:
             message += f' (request_id={request_id})'
         super().__init__(message)
         self.status_code = status_code
         self.request_id = request_id
+        # Core reads a limit's reopening (epoch seconds) from body['resets_at']; native's own text names a
+        # clock time (`resets 3:45pm`) that core cannot parse.
+        self.body = {'resets_at': resets_at} if resets_at else None
+
+
+# The relay records a transport failure as an exception class name (``UpstreamIdle``,
+# ``ConnectionResetError``). Core's classifier reads the message, not this plugin's types, so a
+# status-less wrapper used to reach it as an unclassifiable error: no same-provider retry, no
+# fallback, and no compression network-failure guard (#396). Name the failure with wording core
+# already matches, keeping the original label for reports. Mid-stream failures use core's
+# premature-close wording, never its server-disconnect wording: on a large session with a
+# non-reasoning model core reads a disconnect as a probable context overflow and compresses.
+_TRANSPORT_PHRASES = {
+    "UpstreamIdle": "response ended prematurely",
+    "ConnectionResetError": "connection reset",
+    "ConnectionAbortedError": "connection reset",
+    "BrokenPipeError": "connection reset",
+    "RemoteProtocolError": "response ended prematurely",
+    "LocalProtocolError": "response ended prematurely",
+    "IncompleteRead": "response ended prematurely",
+    "ConnectionRefusedError": "connection refused",
+    "TimeoutError": "timed out",
+    "socket.timeout": "timed out",
+}
+
+
+def transport_phrase(failure):
+    """Canonical transport wording for a relay failure label, or "" when it names no transport."""
+    if not isinstance(failure, str) or not failure:
+        return ""
+    return _TRANSPORT_PHRASES.get(failure.rsplit(".", 1)[-1], "")
 
 
 class RequestRejected(ValueError):
@@ -307,7 +340,7 @@ def native_format_schema(node):
 def request_body(kwargs):
     allowed = {'model', 'messages', 'tools', 'stream', 'stream_options', 'max_tokens', 'max_completion_tokens',
                'temperature', 'top_p', 'stop', 'extra_body', 'extra_headers', 'timeout', 'tool_choice', 'parallel_tool_calls', 'n', 'response_format',
-               'hermes_auxiliary'}
+               'hermes_auxiliary', 'hermes_cache_ttl'}
     unknown = set(kwargs) - allowed
     if unknown:
         raise RequestRejected('Unsupported request parameters: ' + ', '.join(sorted(unknown)))
@@ -699,6 +732,13 @@ class Native:
         self.admission, self.launch_dir, self.tools, self.binary = admission, launch_dir, tools, binary
         self.events, self.stderr = queue.Queue(), deque(maxlen=40)
         self.lock, self.writing = threading.Lock(), threading.Lock()
+        self.watch = None  # the step's stdin watchdog (one thread a step, #419)
+        self.rate_limit = None  # the plan window as this process last reported it (rate_limit_event)
+        # A kept native may write rate_limit_event after its step has ended (and settled() would drop it): its reader
+        # feeds the extra-usage policy as the event arrives, before the next step's check (#398). It reads the serving
+        # profile's settings, which a gateway binds per context: the reader thread runs in a copy of this step's.
+        context = contextvars.copy_context()
+        self.observe = (lambda summary: context.copy().run(observe_rate_limit, env, summary)) if tools is not None else None
         self.parked, self.results = {}, {}
         # A kept session: what it was launched with, the frames it holds, and what the next step must bring.
         self.ident = self.frames = self.expect = self.idle = self.on_exit = None
@@ -747,6 +787,8 @@ class Native:
                             self._doubt('version')
                         if self.tools is not None and self.admission.init_ok is not None:
                             self.admission.init_ok.set()
+                    if self.observe is not None and event.get('type') == 'rate_limit_event':
+                        self._observe(event)
                     self.events.put(event)
         except Exception as error:
             if self.tools is not None and not isinstance(error, TimeoutError):
@@ -766,6 +808,15 @@ class Native:
             # A kept native that exits while idle gives its relay and its place back now, not at its next use.
             if self.on_exit is not None:
                 self.on_exit()
+
+    def _observe(self, event):
+        summary = _rate_limit_summary(event)
+        if summary:
+            self.rate_limit = summary
+            try:
+                self.observe(summary)
+            except Exception:  # The policy's bookkeeping must not end the reader, and with it the process.
+                logger.exception('claude-subscription-directsdk: rate_limit_event not recorded')
 
     def _write(self, row):
         """One control row to native, bounded by the step's timeout as send() is: a native that stops reading stdin
@@ -871,15 +922,18 @@ class Native:
                 self._answer(tool_id)
 
     def send(self, request, data, timeout):
+        """Write one frame (None: end of input). A child that stops reading stdin blocks a plain write past the
+        timeout: kill it then. One watchdog thread guards every write of a step (#419): a Timer per write was a
+        thread per replayed frame."""
         if data is None and self.process.stdin.closed:
             return
-        """Write one frame (None: end of input). A child that stops reading stdin blocks a plain write past the
-        timeout: kill it then."""
-        stalled = threading.Event()
-        timer = threading.Timer(timeout, lambda: (stalled.set(), request.cancel()))
-        timer.start()
+        watch = self.watch
+        if watch is None or watch.request is not request:
+            self.stop_watch()
+            watch = self.watch = _StdinWatch(timeout, request.cancel)
+            watch.request = request
         try:
-            with self.writing:
+            with self.writing, watch:
                 if data is None:
                     self.process.stdin.close()
                 else:
@@ -888,9 +942,7 @@ class Native:
         except OSError:
             if not request.cancelled.is_set():
                 raise
-        finally:
-            timer.cancel()
-        if stalled.is_set():
+        if watch.stalled.is_set():
             raise TimeoutError('Claude request timed out')
         if request.cancelled.is_set():
             raise RuntimeError('Claude request cancelled')
@@ -967,8 +1019,15 @@ class Native:
     def forget_launch(self):
         shutil.rmtree(self.launch_dir, ignore_errors=True)
 
+    def stop_watch(self):
+        """End the step's stdin watchdog (the next step's first write starts its own)."""
+        watch, self.watch = self.watch, None
+        if watch is not None:
+            watch.stop()
+
     def kill(self):
         """Signal native's group and stop its relay; safe from any thread."""
+        self.stop_watch()
         if self.idle is not None:
             self.idle.cancel()
         self.admission.abort()
@@ -976,6 +1035,7 @@ class Native:
 
     def release(self):
         """Owner-thread teardown after kill() or exit: relay, pipes, launch files, the cap slot."""
+        self.stop_watch()
         with _live_lock:
             _live.discard(self)
         self.admission.close()
@@ -1052,6 +1112,12 @@ def _rate_limit_summary(event) -> "dict | None":
         value = info.get(source)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             summary[key] = value
+    # The fuller account-wide plan window (0..1 fractions in unifiedWindows), for an extra_usage reserve (#398).
+    windows = info.get('unifiedWindows') if isinstance(info.get('unifiedWindows'), dict) else {}
+    used = [w.get('utilization') for name, w in windows.items() if name in ('five_hour', 'seven_day') and isinstance(w, dict)]
+    used = [u for u in used if isinstance(u, (int, float)) and not isinstance(u, bool)]
+    if used:
+        summary['utilization'] = max(used)
     return summary
 
 
@@ -1061,6 +1127,51 @@ def _stderr_tail(native_stderr):
     learn the stream was empty."""
     text = ' '.join(line.strip() for line in native_stderr if line.strip())
     return f' (native stderr: {text[:400]})' if text else ''
+
+
+class _StdinWatch:
+    """One watchdog thread for every stdin write of a request.
+
+    A child that stops reading stdin blocks a plain write past the timeout; ``on_stall`` kills it then. A
+    ``threading.Timer`` per write was one thread started per replayed frame (602 for a 300-round history).
+    Here a write only records when it began. The thread never sleeps past ``timeout``, so it always wakes before
+    the deadline of a write that began while it slept, and then sleeps until exactly that deadline.
+    """
+
+    def __init__(self, timeout, on_stall):
+        self.timeout, self.on_stall, self.request = timeout, on_stall, None
+        self.stalled = threading.Event()
+        self._began = None
+        self._done = threading.Event()
+        self._thread = None
+
+    def __enter__(self):
+        self._began = time.monotonic()
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._run, daemon=True, name='claude-directsdk-stdin-watch')
+            self._thread.start()
+        return self
+
+    def __exit__(self, *_):
+        self._began = None
+
+    def _run(self):
+        wait = self.timeout
+        while not self._done.wait(wait):
+            began = self._began
+            wait = self.timeout if began is None else began + self.timeout - time.monotonic()
+            if wait <= 0:
+                on_stall = self.on_stall
+                if on_stall is not None:
+                    self.stalled.set()
+                    on_stall()
+                return
+
+    def stop(self):
+        # The thread can run on for a moment after this. It must not hold the request meanwhile: through it the
+        # client, which a caller that drops it expects collected, and its kept process ended, at once.
+        self.on_stall = self.request = None
+        self._done.set()
 
 
 class Stream:
@@ -1244,7 +1355,8 @@ class Client:
         command = command or source_env.get('CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND') or 'claude'
         self.command = ([command] if isinstance(command, str) else list(command)) + list(args or [])
         self.timeout = timeout if isinstance(timeout, (int, float)) else 180
-        self._lock, self._requests, self._closed = threading.Lock(), set(), False
+        # close() ends the kept process, never another call (#378); a step serving when it lands keeps no process.
+        self._lock, self._requests, self._close_epoch = threading.Lock(), set(), 0
         # The one native kept alive for this client (Hermes keeps a client per agent), and whether a step uses it.
         self._session, self._stepping = None, False
         # A client Hermes drops without close() must not keep its process for the idle hour: the finalizer ends
@@ -1264,15 +1376,13 @@ class Client:
             self._end_session()  # the kept process ends however the requests' cancels went
 
     def close(self):
+        # Calls in flight are left alone by design (#378): Hermes' auxiliary cache closes a client bound to a
+        # different live event loop, and cancelling its requests here killed parallel tool calls still running on
+        # that loop; each request owns and reaps its own native, and Stream.close()/cancel() stay the per-request
+        # stop. Later calls are not refused. The kept process is the client's own, between steps: it ends now, and a
+        # step that is serving when close() lands hands its process to no one.
         with self._lock:
-            self._closed = True
-            requests = tuple(self._requests)
-        for request in requests:
-            stream = request.stream() if request.stream else None
-            if stream is not None:
-                stream.close()
-            else:
-                request.cancel()
+            self._close_epoch += 1
         self._end_session()
 
     def _end_session(self, native=None, idle=False, gen=None):
@@ -1288,11 +1398,13 @@ class Client:
         return True
 
     def _keep(self, native, frames, expect, request):
-        """Make ``native`` this client's kept session; False when cancel() or close() got there first.
+        """Make ``native`` this client's kept session; False when cancel() got there first, None when close() did.
 
         Ownership moves from the request to the client in one step, under both locks: a stop lands wholly before
         (it kills through the request, and the step ends cancelled) or wholly after (it finds the session)."""
         native.frames, native.expect = frames, expect
+        # Its step's stdin watchdog holds that step's request, and through it this client: it ends with the step.
+        native.stop_watch()
         # The timer holds no reference to this client: a bound method would keep a dropped client, and with it the
         # process, alive for the whole idle hour. Once the client is gone the timer ends the process itself.
         end = weakref.WeakMethod(self._end_session)
@@ -1312,8 +1424,10 @@ class Client:
         native.idle.daemon = True
         native.idle_since, native.end = (time.monotonic(), end) if expect == 'user' else (None, None)
         with self._lock, request.lock:
-            if self._closed or request.cancelled.is_set():
+            if request.cancelled.is_set():
                 return False
+            if request.close_epoch != self._close_epoch:
+                return None  # close() landed: the step's answer stands (#378) and its process is kept by no one
             self._session, self._stepping, self._kept['native'] = native, False, native
             native.serving = False
             request.process = request.admission = None
@@ -1393,8 +1507,7 @@ class Client:
     def _register(self):
         request = Request(self)
         with self._lock:
-            if self._closed:
-                raise RuntimeError('Claude client is closed')
+            request.close_epoch = self._close_epoch
             self._requests.add(request)
         return request
 
@@ -1462,6 +1575,10 @@ class Client:
             env.update(ENABLE_TOOL_SEARCH='false', CLAUDE_CODE_MAX_RETRIES='0', DISABLE_AUTO_COMPACT='1', DISABLE_COMPACT='1')
             # Telemetry and feature flags follow the user's claude_code_telemetry setting, read per spawn.
             apply_traffic_policy(env)
+            # Hermes asked for a 5m cache on this request (a delegated child). A `-p` turn is native's main
+            # conversation bucket, so its own variable is the one that applies; a tier the user exported wins.
+            if kwargs.get('hermes_cache_ttl') == '5m':
+                env.setdefault('CLAUDE_CODE_PROMPT_CACHE_TTL', '5m')
             egress_env(env, upstream)
             # Hermes owns budgets; native's replayed reminder invalidates cached history.
             env['CLAUDE_CODE_TOTAL_TOKENS_REMINDER'] = 'off'
@@ -1603,6 +1720,8 @@ class Client:
         finally:
             outcome = state.get('outcome')
             try:
+                if native is not None:
+                    native.stop_watch()  # a kept process between steps holds no watchdog thread
                 request.cancel()
                 if native is not None and outcome not in ('kept', 'handed_off'):
                     native.kill()
@@ -1735,7 +1854,8 @@ class Client:
                 summary = _rate_limit_summary(event)
                 if summary:
                     rate_limit = summary
-                    observe_rate_limit(env, summary)
+                    if native.observe is None:  # a kept native's reader has fed it already
+                        observe_rate_limit(env, summary)
             elif kind == 'stream_event':
                 event = event['event']
                 if event['type'] == 'message_stop':
@@ -1778,6 +1898,12 @@ class Client:
         # A kept native refused by the relay, or gone before this step reached it: replay into a new one.
         if admission.diverged or (native.frames is not None and not admission.used and not assistants and not results):
             return 'diverged'
+        if session and rate_limit is None and admission.used and native.rate_limit:
+            # Native reports the plan window only when it changes: a kept one says nothing on a step that found the
+            # window as its last report did, where a new process (per-call) reports that state again. The reserve
+            # (#398) must see every step, so this one feeds the state the process last reported.
+            rate_limit = native.rate_limit
+            observe_rate_limit(env, rate_limit)
         if admission.used:
             if admission.status != 200 or not admission.capture.complete:
                 # Native's last error is the admission denial; name the first attempt's outcome so reports are diagnosable.
@@ -1786,8 +1912,12 @@ class Client:
                     first += ', upstream said: ' + admission.error_text()[:500]
                 # The first attempt's real HTTP status; a 200 cut short or a relay failure has none.
                 status = admission.status if isinstance(admission.status, int) and admission.status >= 400 else None
-                raise ClaudeAPIError(f'Incomplete upstream response ({first})' + (': ' + native_error if native_error else ''),
-                                     status, request_id=admission.request_id)
+                message = f'Incomplete upstream response ({first})' + (': ' + native_error if native_error else '')
+                phrase = transport_phrase(admission.failure)
+                if phrase and phrase not in message.lower():
+                    # Keep the transport class visible to core's message-based classifier.
+                    message += f' [{phrase}]'
+                raise ClaudeAPIError(message, status, request_id=admission.request_id, resets_at=admission.reset_at)
             assistants = [admission.capture.message]
             stopped = True
         native_failure_handled = admission.denied or (admission.used and assistants[0].get('stop_reason') == 'refusal')
@@ -1899,11 +2029,13 @@ class Client:
             _hand_off(native)
         if clean:
             reply = {k: v for k, v in copy.deepcopy(assistants[0]).items() if k != 'usage'}
-            if not self._keep(native, frames + [{'type': 'assistant', 'message': reply}],
-                              frozenset(c['id'] for c in calls) if parked else 'user', request):
-                # The stop still held this step's process: it ends as any cancelled step does, native with it.
+            kept = self._keep(native, frames + [{'type': 'assistant', 'message': reply}],
+                              frozenset(c['id'] for c in calls) if parked else 'user', request)
+            if not kept:
+                # The stop still held this step's process: it ends with the step (the finally below), native with it.
                 state['outcome'] = 'done'
-                raise RuntimeError('Claude request cancelled')
+                if kept is False:
+                    raise RuntimeError('Claude request cancelled')
         native.forget_launch()
         yield chunk
     @staticmethod

@@ -168,6 +168,7 @@ ephemeral identity they last only while the same Camofox session lives.
 | `browser.command_timeout` | `30` | Per-request timeout in seconds (floor 5; navigation allows 60). |
 | `browser.snapshot_threshold` | `15000` | Snapshots longer than this are cut at a line boundary; the full tree is saved under `cache/web` and the cut says how to page it with `read_file`. |
 | `browser.restrict_evaluate` | `false` | Refuse `browser_console(expression=...)` that names sensitive primitives (cookies, storage, network calls). `browser.allow_unsafe_evaluate: true` overrides it. |
+| `browser.camofox.allow_insecure_transport` | `false` | Let `browser_vault` send a password over plain HTTP to a non-loopback `CAMOFOX_URL`. Only `true` (a YAML boolean) enables it. |
 | `browser.camofox.cookies_dir` | `~/.camofox/cookies` | Where `browser_import_cookies` reads cookie files. |
 | `auxiliary.camofox_vision.*` | inherits `auxiliary.vision` | Model used by `browser_vision`. |
 
@@ -195,7 +196,7 @@ plugin seam yet. Each is imported at its point of use:
 
 Vault fill (`browser_vault`) fills login forms on Camofox tabs via `/tabs/<id>/evaluate` using exact-origin checks. It only fills tabs previously opened by `browser_navigate` and, by default, only sends credentials over HTTPS or loopback HTTP.
 
-To allow plain HTTP to other hosts (e.g., over a container network), enable `CAMOFOX_ALLOW_INSECURE_TRANSPORT=true` (or `browser.camofox.allow_insecure_transport: true` in `config.yaml`).
+To allow plain HTTP to other hosts (e.g., over a container network), set `browser.camofox.allow_insecure_transport: true` in `config.yaml`. The password then crosses that network unencrypted.
 
 Values filled by the vault appear as `«redacted-vault-secret»` in `browser_snapshot`. On older cores, use `browser_type` instead. Note that plain credentials typed manually or via `browser_type` are not masked and will appear in snapshots.
 

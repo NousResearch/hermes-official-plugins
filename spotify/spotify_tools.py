@@ -273,10 +273,11 @@ _handle_spotify_devices = _dispatcher("spotify_devices", "list", {
 
 
 def _queue_add(client: SpotifyClient, args: dict, action: str) -> str:
+    # Validate the input before the device lookup, so a bad URI never costs an API call.
+    uri = _coerce_queueable_spotify_uri(str(args.get("uri") or ""))
     guard = _pb_device_guard(client, args)
     if guard:
         return tool_error(guard)
-    uri = _coerce_queueable_spotify_uri(str(args.get("uri") or ""))
     return _ok(action, client.request("POST", "/me/player/queue", params={"uri": uri, "device_id": args.get("device_id")}), uri=uri)
 
 

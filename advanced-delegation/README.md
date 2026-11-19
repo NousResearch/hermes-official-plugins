@@ -231,8 +231,8 @@ warning and the delegation modes still load.
   (`skills/model-routing/scripts/route_ledger.py`, stdlib Python) reads them in config order with
   `sync-routes` and maps task difficulty 1-5 onto however many routes you have.
 - **A local ledger learns from results.** Each recorded outcome (with its test evidence) goes to
-  `<HERMES_HOME>/plugin-data/advanced-delegation/routing-ledger.jsonl` (override with
-  `ADVANCED_DELEGATION_LEDGER`), next to `routes.json`, the synced route names, descriptions and
+  `<HERMES_HOME>/plugin-data/advanced-delegation/routing-ledger.jsonl`, next to
+  `routes.json`, the synced route names, descriptions and
   `provider:model@effort`, never keys or URL credentials. Nothing else is written and nothing
   leaves the machine.
 - **No tools, hooks or dependencies.** The skill adds none; it drives `delegate_task`.

@@ -252,7 +252,6 @@ def jail(request, monkeypatch):
     return request.param
 
 
-@posix
 def first_relay_seconds():
     """How long a fresh process takes to start its first relay here. On a host whose resolver stalls on 127.0.0.1's
     name (35 s on our macOS host) the self-test's child spends that long before it starts the binary: the plugin's
@@ -265,6 +264,7 @@ def first_relay_seconds():
     return float(out.stdout.strip().splitlines()[-1])
 
 
+@posix
 def test_a_test_that_hangs_is_killed_with_everything_it_started(tmp_path, jail):
     seconds = marker()
     script = stand_in(tmp_path, f'touch {tmp_path}/started\nsleep {seconds} &\nexec sleep {seconds}\n')

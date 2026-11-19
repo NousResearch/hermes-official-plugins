@@ -13,7 +13,7 @@ hermes plugins install blender
 hermes plugins enable blender
 ```
 
-Choose the destination profile with the global `hermes -p <profile>` option. Catalog installation by the short name `blender` becomes available only after its catalog entry is merged and published.
+Choose the destination profile with the global `hermes -p <profile>` option.
 
 ## Prerequisites
 

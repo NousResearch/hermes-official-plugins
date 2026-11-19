@@ -13,7 +13,7 @@ order, which this skill treats as cheapest -> strongest.
         --attempt 1 --task "form validation" --evidence "pytest: 42 passed" [--cause CAUSE]
   route_ledger.py stats [--class code-feature]
 
-Files: the ledger (JSON Lines) is ADVANCED_DELEGATION_LEDGER if set, else
+Files: the ledger (JSON Lines) is
 <HERMES_HOME>/plugin-data/advanced-delegation/routing-ledger.jsonl; the synced ladder is routes.json
 beside it. sync-routes runs `hermes` for at most SYNC_BUDGET seconds in total.
 """
@@ -55,7 +55,6 @@ CAUSES = ["model", "spec", "context", "env", "flaky"]
 WINDOW = 10        # recent records per (class, difficulty) that count
 DEMOTE_STREAK = 3  # straight first-try passes before a trial one route down
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")  # same rule as advanced-delegation's store
-LEDGER_ENV = "ADVANCED_DELEGATION_LEDGER"
 SYNC_BUDGET = 200  # seconds for all `hermes` calls of one sync-routes; SKILL.md's terminal timeout is above it
 
 
@@ -94,9 +93,6 @@ def hermes_home() -> Path:
 
 
 def ledger_path() -> Path:
-    env = os.environ.get(LEDGER_ENV, "").strip()
-    if env:
-        return Path(os.path.expanduser(os.path.expandvars(env)))
     return hermes_home() / "plugin-data" / "advanced-delegation" / "routing-ledger.jsonl"
 
 

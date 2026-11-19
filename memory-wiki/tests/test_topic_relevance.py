@@ -227,3 +227,12 @@ def test_subject_topic_rejects_unrelated_assistant(memory_wiki_core, hermes_home
         }
     finally:
         db.close()
+
+
+def test_prose_abbreviations_are_not_identifiers(memory_wiki_core):
+    candidates = memory_wiki_core.extract_subject_candidates({}, [
+        {"role": "user", "content": "Use a cache, e.g. redis, i.e. fast. Fix it.Then check tools.lookup and search_files"},
+    ])
+    names = {c.name for c in candidates}
+    assert {"tools.lookup", "search_files"} <= names
+    assert not names & {"e.g", "i.e", "it.Then"}

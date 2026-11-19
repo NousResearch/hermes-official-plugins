@@ -341,11 +341,12 @@ def _print_routine_next_steps(report: dict[str, Any], product: str) -> None:
                 print_info(f"  {item.get('destination')}: results are delivered to {deliver}.")
         local = [i for i in jobs if str(i.get("deliver") or "local") == "local"]
         if local:
-            # No delivery target: name where the output actually lands, per job (#264).
-            from hermes_constants import get_hermes_home
+            # No delivery target: name where the output actually lands, per job (#264) — in the
+            # profile the jobs were imported into, which need not be the one running the import.
+            output = Path(report.get("target") or ".") / "cron" / "output"
             for item in local:
                 print_info(f"  {item.get('destination')}: results land in "
-                           f"{get_hermes_home() / 'cron' / 'output' / str(item.get('job_id') or '<id>')}/ — "
+                           f"{output / str(item.get('job_id') or '<id>')}/ — "
                            f"to have them sent somewhere: hermes cron edit {item.get('job_id')} "
                            f"--deliver <platform>")
 

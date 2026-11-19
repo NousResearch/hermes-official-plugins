@@ -74,6 +74,32 @@ class ClaudeAPIError(RuntimeError):
         self.request_id = request_id
 
 
+# The relay records a transport failure as an exception class name (``UpstreamIdle``,
+# ``ConnectionResetError``). Core's classifier reads the message, not this plugin's types, so a
+# status-less wrapper used to reach it as an unclassifiable error: no same-provider retry, no
+# fallback, and no compression network-failure guard (#396). Name the failure with the canonical
+# wording core already matches, keeping the original label for reports.
+_TRANSPORT_PHRASES = {
+    "UpstreamIdle": "server disconnected",
+    "ConnectionResetError": "connection reset by peer",
+    "ConnectionAbortedError": "connection reset by peer",
+    "ConnectionRefusedError": "connection refused",
+    "BrokenPipeError": "connection reset by peer",
+    "RemoteProtocolError": "response ended prematurely",
+    "LocalProtocolError": "response ended prematurely",
+    "IncompleteRead": "incomplete chunked read",
+    "TimeoutError": "timed out",
+    "socket.timeout": "timed out",
+}
+
+
+def transport_phrase(failure):
+    """Canonical transport wording for a relay failure label, or "" when it names no transport."""
+    if not isinstance(failure, str) or not failure:
+        return ""
+    return _TRANSPORT_PHRASES.get(failure.rsplit(".", 1)[-1], "")
+
+
 class RequestRejected(ValueError):
     """A request this transport cannot serve, refused before Claude Code starts: the same input fails every time."""
 
@@ -1151,8 +1177,12 @@ class Client:
                             first += ', upstream said: ' + admission.error_text()[:500]
                         # The first attempt's real HTTP status; a 200 cut short or a relay failure has none.
                         status = admission.status if isinstance(admission.status, int) and admission.status >= 400 else None
-                        raise ClaudeAPIError(f'Incomplete upstream response ({first})' + (': ' + native_error if native_error else ''),
-                                             status, request_id=admission.request_id)
+                        message = f'Incomplete upstream response ({first})' + (': ' + native_error if native_error else '')
+                        phrase = transport_phrase(admission.failure)
+                        if phrase and phrase not in message.lower():
+                            # Keep the transport class visible to core's message-based classifier.
+                            message += f' [{phrase}]'
+                        raise ClaudeAPIError(message, status, request_id=admission.request_id)
                     assistants = [admission.capture.message]
                     stopped = True
                 native_failure_handled = admission.denied or (admission.used and assistants[0].get('stop_reason') == 'refusal')

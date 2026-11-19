@@ -1715,6 +1715,27 @@ async def test_broadcast_without_home_thread_passes_metadata_through():
 
 
 @pytest.mark.asyncio
+async def test_caller_thread_alias_wins_over_home_thread():
+    """A caller-supplied routing alias must survive the home-thread default.
+
+    Core treats ``message_thread_id`` (and the DM-topic ids) as thread routing and
+    only adds its own default when none of them is present; adding ``thread_id``
+    next to a caller alias shadows it and diverts an explicitly routed alert.
+    """
+    adapter = _make_deliver_adapter(watch_entities=["sensor.s"], deliver="telegram")
+    target = _RecordingAdapter()
+    runner = _Runner(target, _Store([]), home_chat_id="12345", home_chat_type="group",
+                     home_thread_id="777")
+    adapter.gateway_runner = runner
+    adapter._target_home_channel = MagicMock(return_value=runner.home())
+
+    await adapter.send("ha_events:telegram", "fixture alert",
+                       metadata={"message_thread_id": "888"})
+
+    assert target.sent[0][2] == {"message_thread_id": "888"}
+
+
+@pytest.mark.asyncio
 async def test_broadcast_transport_refusal_falls_back_to_ha(caplog):
     """An adapter that reports SendResult(success=False) must degrade to the HA notification.
 
@@ -1791,5 +1812,34 @@ def test_marker_import_failure_warns_instead_of_degrading_silently(caplog, monke
     with caplog.at_level(logging.WARNING):
         markers = adapter_mod._gateway_silence_markers()
 
-    assert markers == ()
+    assert markers is None, "unknown markers must not look like an empty marker set"
     assert any("silence markers" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_session_mode_degrades_to_broadcast_when_markers_unknown(monkeypatch):
+    """Unknown markers must not ship unsanitized text through the model.
+
+    Without the marker list an entity value can carry a marker the gateway treats
+    as silence, so an entity could suppress its own alert once the model echoes it.
+    The event still belongs to the source session.
+    """
+    import homeassistant_plugin.adapter as adapter_mod
+
+    adapter = _make_session_mode_adapter(
+        watch_entities=["sensor.s"], deliver="whatsapp", deliver_mode="session")
+    target = _RecordingAdapter()
+    runner = _Runner(target, _home_store(), home_chat_id="G", home_chat_type="group")
+    _wire_session_mode(adapter, runner, runner.home())
+    adapter.handle_message = AsyncMock()
+    # Reproduce the real failure (the import breaking), then recompute the module cache:
+    # an empty tuple here means "no markers exist" and the injection would proceed with the
+    # entity's own marker intact — exactly the state this guard forbids.
+    monkeypatch.setitem(sys.modules, "gateway.response_filters", None)
+    monkeypatch.setattr(adapter_mod, "_GATEWAY_SILENCE_MARKERS",
+                        adapter_mod._gateway_silence_markers())
+
+    await adapter._handle_ha_event(_make_event("sensor.s", "0", "1"))
+
+    assert not target.handled, "no injection while the sanitizer is unknown"
+    assert adapter.handle_message.await_count == 1, "event must reach the source session"

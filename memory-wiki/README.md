@@ -123,8 +123,8 @@ every session's messages (#49). Units persist to an atomic sidecar JSON under
 `HERMES_HOME/cache/memory-wiki/session_units-v1.json` — profile-scoped, bounded
 by unit count and serialized size, evicting least-recently-active sessions
 first — so warm state survives gateway restarts. The plugin stays read-only
-with respect to `state.db`; the sidecar is the only file it writes. Set
-`MEMORY_WIKI_CACHE=off` to fall back to the always-recompute path.
+with respect to `state.db`; the sidecar (owner-only, `0600`; safe to delete, it is
+rebuilt on the next request) is the only file it writes.
 
 ```bash
 npm ci                      # build/test dependencies only; runtime React comes from Desktop

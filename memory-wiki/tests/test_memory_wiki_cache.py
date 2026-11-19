@@ -242,10 +242,9 @@ def test_one_oversized_unit_pins_the_store(tmp_path, memory_wiki_cache):
     assert cache.stats()["units"] == 1, "eviction never empties the store"
 
 
-def test_default_cache_honors_off_switch_and_profile_scoping(tmp_path, memory_wiki_cache, monkeypatch):
+def test_default_cache_is_profile_scoped(tmp_path, memory_wiki_cache, monkeypatch):
     mwc = memory_wiki_cache
 
-    monkeypatch.delenv("MEMORY_WIKI_CACHE", raising=False)
     monkeypatch.setattr(mwc, "_default_caches", {})
 
     first = mwc.default_cache(tmp_path / "home-a" / "cache" / "memory-wiki")
@@ -254,6 +253,3 @@ def test_default_cache_honors_off_switch_and_profile_scoping(tmp_path, memory_wi
 
     second = mwc.default_cache(tmp_path / "home-b" / "cache" / "memory-wiki")
     assert second is not first, "a different HERMES_HOME must not share units"
-
-    monkeypatch.setenv("MEMORY_WIKI_CACHE", "off")
-    assert mwc.default_cache(tmp_path / "home-a" / "cache" / "memory-wiki") is None

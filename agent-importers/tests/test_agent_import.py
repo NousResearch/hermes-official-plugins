@@ -591,53 +591,41 @@ class TestExistingMemoryStorePreserved:
 # ---------------------------------------------------------------------------
 
 class TestLiveMemoryCharLimit:
-    """Regression for issue #148472: the merge budget is the one the memory tool
-    enforces (``memory.memory_char_limit``, default 2200), not a hardcoded
-    20_000. A store imported against a larger budget is oversized on arrival —
-    MemoryStore then refuses to write to it and the memory tool goes read-only
-    for the imported home."""
+    """Regression for issue #148472: the merge budget is the one the memory tool enforces in the
+    TARGET profile (``memory.memory_char_limit`` default 2200, ``memory.user_char_limit`` default
+    1375), not a hardcoded 20_000. A store imported against a larger budget is oversized on
+    arrival and the memory tool then refuses every write to it."""
 
-    def test_entries_past_the_configured_limit_overflow_and_are_not_written(
-            self, claude_tree, hermes_home, monkeypatch):
-        """Entries that do not fit the budget are counted as ``overflowed_entries``
-        and left OUT of the written store, which stays within the limit."""
+    def test_entries_past_the_target_profiles_limit_overflow_and_are_reported(
+            self, claude_tree, hermes_home):
         entries = extract_markdown_entries(CLAUDE_MD)
         assert len(entries) >= 3
         # Room for exactly the first two entries (delimiters included); the rest overflows.
         limit = len(entries[0]) + len(ENTRY_DELIMITER) + len(entries[1])
-        monkeypatch.setattr("agent_importers_plugin.importer._memory_char_limit",
-                            lambda: limit)
+        (hermes_home / "config.yaml").write_text(
+            f"memory:\n  memory_char_limit: {limit}\n", encoding="utf-8")
 
         report = run_import("claude-code", claude_tree, hermes_home, execute=True)
 
-        item = next(i for i in report["items"] if i["kind"] == "claude-md")
-        assert item["status"] == "imported"
+        item = next(i for i in report["items"] if i["kind"] == "claude-md" and i["status"] == "imported")
         assert item["added_entries"] == 2
         assert item["overflowed_entries"] == len(entries) - 2
+        assert any(i["kind"] == "claude-md" and i["status"] == "skipped" and "did not fit" in i["reason"]
+                   for i in report["items"])
         memory = (hermes_home / "memories" / "MEMORY.md").read_text(encoding="utf-8")
-        # The store on disk stays within budget (trailing newline aside) ...
         assert len(memory.rstrip("\n")) <= limit
-        # ... holds the entries that fit ...
         assert entries[0] in memory and entries[1] in memory
-        # ... and NOT the overflowed ones.
         for overflowed in entries[2:]:
             assert overflowed not in memory
 
-    def test_resolver_reads_the_live_config_and_falls_back_to_2200(self, monkeypatch):
-        """``_memory_char_limit`` takes ``memory.memory_char_limit`` from the live
-        config and falls back to the store's own default (2200) — not 20_000 —
-        when the config or core is unavailable."""
-        import sys
-        import types
-        from agent_importers_plugin import importer
-
-        fake = types.ModuleType("tools.memory_tool")
-        fake.get_builtin_memory_config = lambda config=None: {"memory_char_limit": 1234}
-        monkeypatch.setitem(sys.modules, "tools.memory_tool", fake)
-        assert importer._memory_char_limit() == 1234
-
-        monkeypatch.setitem(sys.modules, "tools.memory_tool", None)  # import fails
-        assert importer._memory_char_limit() == 2200
+    def test_each_store_defaults_to_the_memory_tools_own_budget(self, tmp_path):
+        from agent_importers_plugin.importer import memory_char_limit
+        assert memory_char_limit(tmp_path, "MEMORY.md") == 2200
+        assert memory_char_limit(tmp_path, "USER.md") == 1375
+        (tmp_path / "config.yaml").write_text("memory:\n  user_char_limit: 900\n", encoding="utf-8")
+        assert memory_char_limit(tmp_path, "USER.md") == 900
+        (tmp_path / "config.yaml").write_text("memory: [unclosed\n", encoding="utf-8")
+        assert memory_char_limit(tmp_path, "MEMORY.md") == 2200
 
 
 # ---------------------------------------------------------------------------

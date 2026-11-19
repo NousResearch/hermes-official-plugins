@@ -1255,3 +1255,25 @@ async def test_the_roster_does_not_grow_on_repeat_keychanges(monkeypatch):
     await adapter._poll_conversation("111-999")
     await adapter._poll_conversation("111-999")
     assert [k["public_key_version"] for k in crypto.signing_keys] == ["4"]
+
+
+@pytest.mark.asyncio
+async def test_a_binary_keychange_from_the_accounts_other_device_refreshes_its_roster(monkeypatch):
+    """Real KeyChange blobs are Thrift, not JSON: the refresh must not depend on parsing the signer
+    out of the blob. The account's phone registers v2 and rotates the self-chat key (#173)."""
+    adapter = _make_adapter(monkeypatch)
+    api, crypto = _wire(adapter)
+    adapter._cursors["999-999"] = "e1"
+    api.public_keys["999"] = [
+        {"public_key_version": "1", "signing_public_key": "SPK1", "public_key": "IPK1",
+         "identity_public_key_signature": "SIG1"}
+    ]
+    await adapter._register_signing_keys([])
+    api.public_keys["999"].append(
+        {"public_key_version": "2", "signing_public_key": "SPK2", "public_key": "IPK2",
+         "identity_public_key_signature": "SIG2"}
+    )
+    thrift_like = base64.b64encode(b"\x0c\x00\x03\x0b\x00\x01\x00\x00\x00\r1795089016792").decode()
+    api.events_pages["999-999"] = {"data": [], "meta": {"conversation_key_events": [thrift_like]}}
+    await adapter._poll_conversation("999-999")
+    assert {k["public_key_version"] for k in crypto.signing_keys} == {"1", "2"}

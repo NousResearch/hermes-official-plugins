@@ -30,7 +30,6 @@ conversation key.
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
 import os
@@ -224,17 +223,17 @@ def _compile_mention_patterns(raw: Any) -> List[re.Pattern]:
     return compiled or [re.compile(p, re.IGNORECASE) for p in _DEFAULT_MENTION_PATTERNS]
 
 
-def _key_event_senders(events_b64: List[str]) -> set:
-    """Sender ids named by encrypted KeyChange blobs (unparsable blobs are skipped)."""
-    senders = set()
-    for blob in events_b64:
-        try:
-            sender = json.loads(base64.b64decode(blob)).get("sender_id")
-        except Exception:
-            continue
-        if sender:
-            senders.add(str(sender))
-    return senders
+def _key_change_participants(conv_id: str, events: List[Dict[str, Any]], account_id: str) -> set:
+    """Whose public keys a KeyChange in *conv_id* may be signed with.
+
+    KeyChange blobs are Thrift-encoded, so the signer is not readable before verification. A 1:1
+    id (``A-B``) names both participants; for a group, the page's message senders stand in. The
+    account itself is always included: its own other device is the #173 case.
+    """
+    key = _conv_key(conv_id)
+    named = set() if key.startswith("g") else {p for p in key.split("-") if p}
+    senders = {str(e.get("sender_id")) for e in events if e.get("sender_id")}
+    return named | senders | ({account_id} if account_id else set())
 
 
 class XChatAdapter(BasePlatformAdapter):
@@ -341,6 +340,9 @@ class XChatAdapter(BasePlatformAdapter):
         # Signing-key roster (accumulated; the SDK store is replaced wholesale)
         self._signing_keys: List[Dict[str, str]] = []
         self._known_senders: Set[str] = set()
+        # KeyChange blobs already seen: the events meta repeats them, and only a new one
+        # warrants re-fetching the participants' public keys.
+        self._seen_key_events: Set[str] = set()
 
         logger.info(
             "[xchat] adapter initialized: user_id=%s poll=%.0fs pinned=%d refresh=%s",
@@ -565,7 +567,12 @@ class XChatAdapter(BasePlatformAdapter):
         # A KeyChange is the signal that the participant roster itself moved: refresh the senders'
         # keys even when they were already seen, or the new version's signing key never reaches the
         # SDK and every rotated key stays unverifiable (#173).
-        await self._register_signing_keys(collected, refresh=_key_event_senders(key_events_b64))
+        new_key_events = [k for k in key_events_b64 if k not in self._seen_key_events]
+        self._seen_key_events.update(new_key_events)
+        refresh = (
+            _key_change_participants(conv_id, collected, self._bot_user_id) if new_key_events else set()
+        )
+        await self._register_signing_keys(collected, refresh=refresh)
 
         # Verify + cache any conversation-key changes FIRST (after signing
         # keys are registered — an unverifiable KeyChange is dropped by the

@@ -64,7 +64,8 @@ def test_tools_only_mode_serves_the_face_without_the_bridge(real_tools):
     """--tools-only: the curated Hermes tools, none of the ten messaging/approval bridge tools."""
     server = bridge.create_mcp_server(tools_only=True)
     listed = _listed(server)
-    assert set(listed) == {"web_search", "skills_list", "browser_navigate", "vision_analyze", "text_to_speech"}
+    with_bridge = _listed(bridge.create_mcp_server(event_bridge=bridge.EventBridge(), include_tools=True))
+    assert listed and set(listed) == set(with_bridge) - _BRIDGE_TOOLS
     assert not set(listed) & _BRIDGE_TOOLS
     assert "terminal" not in listed and "kanban_create" not in listed
 

@@ -155,9 +155,19 @@ def extract_subject_candidates(session: dict, messages: list[dict]) -> list[Subj
     ))
 
 
+def _is_identifier(match: str) -> bool:
+    # Prose also matches the dotted pattern: abbreviations ("e.g", "i.e") have one-letter parts and a
+    # missing space after a full stop ("it.Then") puts a capital after the dot.
+    if "_" in match:
+        return True
+    parts = match.split(".")
+    return all(len(part) >= 2 for part in parts) and not any(part[0].isupper() for part in parts[1:])
+
+
 def _extract_from_text(text: str, add, *, base_score: int) -> None:
     for match in _TOOL_NAME_RE.findall(text):
-        add(match, score=base_score + 1, source="identifier")
+        if _is_identifier(match):
+            add(match, score=base_score + 1, source="identifier")
     for match in _PATH_RE.findall(text):
         add(match, score=base_score + 3, source="path")
     for match in _QUOTED_PHRASE_RE.findall(text):

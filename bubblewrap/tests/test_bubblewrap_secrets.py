@@ -70,9 +70,10 @@ MOUNT_FLAGS = {
     "--bind": 2, "--ro-bind": 2, "--bind-try": 2, "--ro-bind-try": 2, "--tmpfs": 1, "--dev": 1, "--proc": 1,
     "--symlink": 2, "--remount-ro": 1,
 }
-# What a sandbox lists at the top of HERMES_HOME: the state dir parent and
-# the scratch dir parent. The staged data roots stay hidden.
-HERMES_VISIBLE = ["cache", "sandboxes"]
+# What a sandbox lists at the top of HERMES_HOME: the directories chat
+# input is staged in (read-only), the scratch dir parent and the state dir
+# parent. The documents cached from messaging platforms stay hidden.
+HERMES_VISIBLE = ["attachments", "cache", "composer-pastes", "images", "sandboxes"]
 # Sensitive entries that sit below an entry the default allowlist shows.
 # The top-level entries are hidden by the HOME layout and get no mount.
 BELOW_VISIBLE = (
@@ -508,7 +509,7 @@ class TestHermesHomeIntegration:
             assert state_dir.parent == hermes_home / "sandboxes"
             out = env.execute(f"cat {hermes_home}/config.yaml {hermes_home}/.env; ls -A {hermes_home}")["output"]
             assert MARKER not in out
-            assert env.execute(f"ls -A {hermes_home}")["output"].split() == ["cache", "sandboxes"]
+            assert env.execute(f"ls -A {hermes_home}")["output"].split() == HERMES_VISIBLE
             assert env.execute(f"ls -A {hermes_home}/sandboxes")["output"].split() == [state_dir.name]
             # The scratch dir shows this environment's own scratch dir, writable;
             # nothing else under cache does.

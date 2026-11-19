@@ -189,3 +189,48 @@ def test_a_sandbox_sees_only_its_own_state_under_the_sandbox_dir(scratch, host_d
     assert "kept" in own
     assert made != 0
     assert not (sbx / "planted").exists()
+
+
+def test_a_chat_attachment_staged_in_the_hermes_home_is_readable_not_writable(scratch):
+    """file.attach stages into HERMES_HOME/attachments and the prompt names that host path (#430)."""
+    from hermes_constants import get_hermes_home
+    from tools.file_operations import ShellFileOperations
+
+    home, _shared = scratch
+    hermes_home = get_hermes_home()
+    (hermes_home / ".env").write_text(f"{SECRET}\n")
+    env = _env(home)
+    try:
+        # Staged after the sandbox was built, as an upload in a later turn is.
+        staged = hermes_home / "attachments" / "report.csv"
+        staged.write_text("a,b\n1,2\n")
+        seen = env.execute(f"cat {staged}")
+        planted = env.execute(f"echo x > {staged.parent}/planted.csv")["returncode"]
+        env_file = env.execute(f"cat {hermes_home}/.env 2>&1")["output"]
+        read = ShellFileOperations(env).read_file(str(staged))
+    finally:
+        env.cleanup()
+    assert seen["returncode"] == 0, seen
+    assert "1,2" in seen["output"]
+    assert "1,2" in read.content
+    assert planted != 0
+    assert not (staged.parent / "planted.csv").exists()
+    assert SECRET not in env_file
+
+
+def test_a_staging_dir_linked_into_the_rest_of_the_hermes_home_is_not_bound(scratch):
+    """A link from HERMES_HOME/attachments to another hidden part of the home must not show that part."""
+    from hermes_constants import get_hermes_home
+
+    home, _shared = scratch
+    hermes_home = get_hermes_home()
+    sessions = hermes_home / "sessions"
+    sessions.mkdir()
+    (sessions / "transcript.json").write_text(f"{SECRET}\n")
+    (hermes_home / "attachments").symlink_to(sessions)
+    env = _env(home)
+    try:
+        seen = env.execute(f"cat {hermes_home}/attachments/transcript.json {sessions}/transcript.json 2>&1")["output"]
+    finally:
+        env.cleanup()
+    assert SECRET not in seen

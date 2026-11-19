@@ -14,7 +14,9 @@ def reasoning_off_body(model, reasoning):
 def test_reasoning_off_asks_for_the_lowest_effort_where_thinking_cannot_be_disabled():
     # These routes 400 on the disable, so "off" is impossible; with no effort native thinks at its
     # default (measured: 600-1200 reasoning tokens on a short structured answer, ~2x the latency).
-    for route in ('haiku', 'claude-haiku-5-5[1m]', 'sonnet', 'claude-sonnet-5-5', 'opus', 'claude-opus-5-5', 'fable'):
+    for route in ('haiku', 'claude-haiku-5-5[1m]', 'sonnet', 'claude-sonnet-5-5', 'opus', 'claude-opus-5-5', 'fable',
+                  'claude-fable-5-2', 'claude-fable-5-2[1m]', 'claude-mythos-5-2', 'claude-mythos-5-2[1m]',
+                  'claude-mythos-5-1', 'claude-mythos-5-1[1m]', 'claude-mythos-5'):
         for reasoning in ({'enabled': False}, {'effort': 'none'}):
             body = reasoning_off_body(route, reasoning)
             assert 'thinking' not in body, route
@@ -39,5 +41,5 @@ def test_reasoning_off_effort_coexists_with_a_structured_output_format():
 
 def test_reasoning_enabled_effort_is_unchanged():
     body = reasoning_off_body('haiku', {'enabled': True, 'effort': 'high'})
-    assert body['thinking'] == {'type': 'adaptive'}
+    assert body['thinking'] == {'type': 'adaptive', 'display': 'summarized'}
     assert body['output_config'] == {'effort': 'high'}

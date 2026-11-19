@@ -1,0 +1,347 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hermes-security.local/schemas/scan-manifest.schema.json",
+  "$comment": "Modified from Apache-2.0 source schemas/scan-manifest.schema.json (see NOTICE).",
+  "type": "object",
+  "properties": {
+    "documentType": {
+      "const": "hermes-security.scan-manifest"
+    },
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "scanId": {
+      "type": "string",
+      "maxLength": 20000,
+      "minLength": 1,
+      "pattern": "^scan_[a-f0-9]{24}$(?![\\s\\S])"
+    },
+    "producer": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "const": "hermes-security"
+        },
+        "version": {
+          "type": "string",
+          "maxLength": 20000,
+          "minLength": 1
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "methodologyVersion": {
+      "const": "hermes-security/method-1"
+    },
+    "mode": {
+      "enum": [
+        "standard",
+        "deep",
+        "diff",
+        "validate"
+      ]
+    },
+    "safetyLevel": {
+      "enum": [
+        "static",
+        "local-safe",
+        "active-authorized"
+      ]
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "partial",
+        "canceled",
+        "failed"
+      ]
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "repoKey": {
+          "type": "string",
+          "maxLength": 20000,
+          "minLength": 1,
+          "pattern": "^[a-f0-9]{24}$(?![\\s\\S])"
+        },
+        "kind": {
+          "enum": [
+            "git",
+            "directory"
+          ]
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 20000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "snapshotDigest": {
+          "type": "string",
+          "maxLength": 20000,
+          "minLength": 1,
+          "pattern": "^sha256:[a-f0-9]{64}$(?![\\s\\S])"
+        },
+        "scope": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 20000
+          }
+        },
+        "base": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 20000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "head": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 20000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fileCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "root",
+        "repoKey",
+        "kind",
+        "revision",
+        "dirty",
+        "snapshotDigest",
+        "scope",
+        "base",
+        "head",
+        "fileCount"
+      ],
+      "additionalProperties": false
+    },
+    "runtime": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 20000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 20000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "profile": {
+          "type": "string",
+          "maxLength": 20000,
+          "minLength": 1
+        },
+        "fallbacks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 20000
+          }
+        }
+      },
+      "required": [
+        "provider",
+        "model",
+        "profile",
+        "fallbacks"
+      ],
+      "additionalProperties": false
+    },
+    "startedAt": {
+      "type": "string",
+      "maxLength": 20000,
+      "minLength": 1,
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$(?![\\s\\S])"
+    },
+    "finishedAt": {
+      "type": "string",
+      "maxLength": 20000,
+      "minLength": 1,
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$(?![\\s\\S])"
+    },
+    "counts": {
+      "type": "object",
+      "properties": {
+        "critical": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "high": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "medium": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "low": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "informational": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "retained": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "chains": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "informational",
+        "retained",
+        "chains"
+      ],
+      "additionalProperties": false
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 20000,
+        "minLength": 1,
+        "pattern": "^sha256:[a-f0-9]{64}$(?![\\s\\S])"
+      }
+    },
+    "supersedes": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 20000,
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "seal": {
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "const": "sha256-canonical"
+        },
+        "digest": {
+          "type": "string",
+          "maxLength": 20000,
+          "minLength": 1,
+          "pattern": "^sha256:[a-f0-9]{64}$(?![\\s\\S])"
+        },
+        "sealedAt": {
+          "type": "string",
+          "maxLength": 20000,
+          "minLength": 1,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$(?![\\s\\S])"
+        }
+      },
+      "required": [
+        "algorithm",
+        "digest",
+        "sealedAt"
+      ],
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "upstream": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "upstream"
+      ],
+      "additionalProperties": false
+    },
+    "dependencyCheck": {
+      "type": "object",
+      "description": "Receipt of the pre-review dependency check (OSV advisories and runtime end of life).",
+      "properties": {
+        "status": {
+          "enum": [
+            "ok",
+            "no_sources",
+            "not_run",
+            "disabled"
+          ]
+        }
+      },
+      "required": [
+        "status"
+      ]
+    }
+  },
+  "required": [
+    "documentType",
+    "schemaVersion",
+    "scanId",
+    "producer",
+    "methodologyVersion",
+    "mode",
+    "safetyLevel",
+    "status",
+    "target",
+    "runtime",
+    "startedAt",
+    "finishedAt",
+    "counts",
+    "artifacts",
+    "supersedes",
+    "seal"
+  ],
+  "additionalProperties": false
+}

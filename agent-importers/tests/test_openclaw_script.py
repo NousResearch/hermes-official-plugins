@@ -318,9 +318,53 @@ def test_migrator_optionally_imports_supported_secrets_and_messaging_settings(tm
     migrator.migrate()
 
     env_text = (target / ".env").read_text(encoding="utf-8")
-    assert "MESSAGING_CWD=/tmp/openclaw-workspace" in env_text
+    # Hermes dropped MESSAGING_CWD: OpenClaw's workspace becomes terminal.cwd in config.yaml.
+    assert "MESSAGING_CWD" not in env_text
+    assert mod.load_yaml_file(target / "config.yaml")["terminal"]["cwd"] == "/tmp/openclaw-workspace"
     assert "TELEGRAM_ALLOWED_USERS=111,222" in env_text
     assert "TELEGRAM_BOT_TOKEN=123:abc" in env_text
+
+
+def test_a_workspace_inside_the_openclaw_dir_is_not_made_the_working_directory(tmp_path: Path, monkeypatch):
+    """``~/.openclaw/workspace`` (OpenClaw's default, spelled with ``~``) stays OpenClaw's: Hermes would
+    otherwise run in the old workspace and pick up its AGENTS.md / MEMORY.md."""
+    mod = load_module()
+    monkeypatch.setenv("HOME", str(tmp_path))  # what ``~`` expands to (POSIX)
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # ... and on Windows
+    source, target = tmp_path / ".openclaw", tmp_path / "hermes-target"
+    source.mkdir()
+    target.mkdir()
+    (source / "openclaw.json").write_text(
+        json.dumps({"agents": {"defaults": {"workspace": "~/.openclaw/workspace"}}}), encoding="utf-8")
+
+    report = mod.Migrator(source_root=source, target_root=target, execute=True, workspace_target=None,
+                          overwrite=False, migrate_secrets=False, output_dir=target / "report",
+                          selected_options={"messaging-settings"}).migrate()
+
+    assert "terminal" not in mod.load_yaml_file(target / "config.yaml")
+    assert not (target / ".env").exists() or "MESSAGING_CWD" not in (target / ".env").read_text(encoding="utf-8")
+    assert [i["status"] for i in report["items"] if i["kind"] == "working-directory"] == ["skipped"]
+
+
+def test_apply_reports_every_item_the_preview_listed(tmp_path: Path):
+    """The skills category DESCRIPTION.md is written on apply, so it is reported there too."""
+    mod = load_module()
+    source, target = tmp_path / ".openclaw", tmp_path / "hermes-target"
+    (source / "workspace" / "skills" / "deploy").mkdir(parents=True)
+    (source / "workspace" / "skills" / "deploy" / "SKILL.md").write_text(
+        "---\nname: deploy\ndescription: Deploy.\n---\nRun it.\n", encoding="utf-8")
+    target.mkdir()
+
+    def run(execute):
+        report = mod.Migrator(source_root=source, target_root=target, execute=execute, workspace_target=None,
+                              overwrite=False, migrate_secrets=False, output_dir=target / "report",
+                              selected_options={"skills"}).migrate()
+        return sorted(i["kind"] for i in report["items"] if i["status"] == "migrated")
+
+    preview = run(False)
+    assert "skill-category" in preview
+    assert run(True) == preview
+    assert (target / "skills" / "openclaw-imports" / "DESCRIPTION.md").is_file()
 
 
 

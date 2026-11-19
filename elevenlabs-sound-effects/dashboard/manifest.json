@@ -1,0 +1,13 @@
+{
+  "name": "elevenlabs-sound-effects",
+  "label": "ElevenLabs Sound Effects",
+  "description": "Backend for the ElevenLabs Sound Effects Desktop card and sound library: streams the profile's generated sounds.",
+  "icon": "Puzzle",
+  "version": "1.2.0",
+  "tab": {
+    "path": "/elevenlabs-sound-effects",
+    "hidden": true
+  },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}

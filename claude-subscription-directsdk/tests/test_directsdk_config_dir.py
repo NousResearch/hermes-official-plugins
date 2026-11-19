@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from conftest import PLUGIN_NAME
+from conftest import PLUGIN_NAME, popen_from_run
 from test_directsdk import FAKE
 from test_directsdk_setup import PINNED_PICKER, PRO
 
@@ -81,7 +81,7 @@ def test_unreadable_config_means_not_set(profile, tmp_path, monkeypatch):
     monkeypatch.setattr(hermes_cli.config, "load_config_readonly", unreadable)
     fallback = str(tmp_path / "fallback")
     assert directsdk_setup.apply_config_dir({OVERRIDE: fallback}) == {NATIVE_DIR: fallback}
-    assert directsdk_setup.telemetry_enabled() is True
+    assert directsdk_setup.telemetry_enabled() is False
 
 
 def test_a_multi_profile_gateway_reads_each_profiles_own_setting(profile, tmp_path):
@@ -152,6 +152,7 @@ def test_setup_probes_pass_the_profile_directory(profile, tmp_path, monkeypatch,
                 "models": PINNED_PICKER, "account": PRO["account"]}}}
         return SimpleNamespace(stdout=json.dumps(output), returncode=0)
     monkeypatch.setattr(directsdk_setup.subprocess, "run", run)
+    monkeypatch.setattr(directsdk_setup.subprocess, "Popen", popen_from_run(run))
     env = {"PATH": os.defpath, "HOME": str(tmp_path), OVERRIDE: str(tmp_path / "override")}
     result = getattr(directsdk_setup, probe)(command=[sys.executable], env=env)
     assert result["logged_in"] if probe == "setup_status" else result

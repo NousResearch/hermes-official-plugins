@@ -124,3 +124,44 @@ def test_real_web_server_discovers_enables_and_mounts_the_plugin(hermes_home, mo
     ok = client.get("/api/plugins/memory-wiki/overview", headers={"X-Hermes-Session-Token": "test-token"})
     assert ok.status_code == 200
     assert any(subject["slug"] == "memory-wiki" for subject in ok.json()["subjects"])
+
+
+@pytest.mark.parametrize("path", ["/overview", "/subjects", "/subjects/wiki", "/days", "/days/2026-11-03"])
+def test_a_slow_scan_leaves_the_host_event_loop_responsive(plugin_api, monkeypatch, path):
+    """The scan runs off the loop: another request is served while it is still running (#216)."""
+    import asyncio
+    import threading
+    from types import SimpleNamespace
+
+    import httpx
+    from fastapi import FastAPI
+
+    started, release = threading.Event(), threading.Event()
+
+    def slow(*_args, **_kwargs):
+        started.set()
+        if not release.wait(2):
+            raise RuntimeError("the scan blocked the event loop")
+        return [{"slug": "wiki"}]
+
+    fake_core = SimpleNamespace(build_memory_overview=slow, build_memory_subjects=slow, get_memory_subject=slow,
+                                build_daily_logs=slow, get_daily_log=slow, build_memory_notes=lambda: {})
+    monkeypatch.setattr(plugin_api, "_core", lambda: fake_core)
+    monkeypatch.setattr(plugin_api, "_open_db", lambda: SimpleNamespace(close=lambda: None))
+    app = FastAPI()
+    app.include_router(plugin_api.router)
+
+    @app.get("/ping")
+    async def ping():
+        release.set()
+        return {"ok": True}
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            scan = asyncio.create_task(client.get(path))
+            while not started.is_set() and not scan.done():
+                await asyncio.sleep(0.01)
+            assert (await asyncio.wait_for(client.get("/ping"), 1)).status_code == 200
+            return await scan
+
+    assert asyncio.run(run()).status_code == 200

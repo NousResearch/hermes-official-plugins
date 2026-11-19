@@ -161,8 +161,8 @@ Catalog entries come in two tiers:
 <a href="agent-importers/"><img src="assets/agent-importers.jpg" alt="Agent Importers plugin"></a>
 <h3><a href="agent-importers/">Agent Importers</a></h3>
 <code>hermes plugins install agent-importers</code>
-<p><code>hermes import-agent</code> brings an OpenClaw, Claude Code, Codex CLI or Cursor setup into Hermes in one command: instructions, Cursor rules and memories become memory entries, Bash permission rules become allow/deny lists, MCP servers land in <code>config.yaml</code> and skills are copied. Always previews first and never imports API keys (OpenClaw's allowlisted secrets only with <code>--migrate-secrets</code>); <code>--sync</code> re-imports sources that changed. The old <code>hermes claw migrate</code> / <code>hermes claw cleanup</code> spelling and the openclaw-migration skill come along. Formerly built into Hermes core.</p>
-<p>CLI command · <code>hermes import-agent [openclaw|claude-code|codex|cursor]</code></p>
+<p><code>hermes import-agent</code> brings an OpenClaw, Claude Code, Codex CLI, Cursor, Grok Bot or OpenBot setup into Hermes in one command (Grok Bot and OpenBot routines become Hermes cron jobs): instructions, Cursor rules and memories become memory entries, Bash permission rules become allow/deny lists, MCP servers land in <code>config.yaml</code> and skills are copied. Always previews first and never imports API keys (OpenClaw's allowlisted secrets only with <code>--migrate-secrets</code>); <code>--sync</code> re-imports sources that changed. The old <code>hermes claw migrate</code> / <code>hermes claw cleanup</code> spelling and the openclaw-migration skill come along. Formerly built into Hermes core.</p>
+<p>CLI command · <code>hermes import-agent [openclaw|claude-code|codex|cursor|grok-bot|openbot]</code></p>
 </td>
 <td width="50%" valign="top">
 <a href="mcp-serve/"><img src="assets/mcp-serve.jpg" alt="MCP Serve plugin"></a>
@@ -177,7 +177,7 @@ Catalog entries come in two tiers:
 <a href="bubblewrap/"><img src="assets/bubblewrap.jpg" alt="Bubblewrap plugin"></a>
 <h3><a href="bubblewrap/">Bubblewrap</a></h3>
 <code>hermes plugins install bubblewrap</code>
-<p>A terminal backend that runs every <code>terminal</code> and <code>execute_code</code> command in its own bwrap sandbox on this machine, at the same paths: read-only root, writable working directory, SSH keys, cloud credentials and the Hermes home hidden, private <code>/tmp</code> and <code>/proc</code>, agent sockets masked, memory, CPU and process limits. No image, no daemon. File tools stay on the host.</p>
+<p>A terminal backend that runs every <code>terminal</code> and <code>execute_code</code> command in its own bwrap sandbox on this machine, at the same paths: read-only root, writable working directory, SSH keys, cloud credentials and the Hermes home hidden, private <code>/tmp</code> and <code>/proc</code>, agent sockets masked, memory, CPU and process limits. No image, no daemon. The file tools (<code>read_file</code>, <code>write_file</code>, <code>patch</code>, <code>search_files</code>) run in the sandbox too.</p>
 <p>Terminal backend <code>terminal.backend: bubblewrap</code> · Linux</p>
 </td>
 <td width="50%" valign="top">
@@ -190,6 +190,45 @@ Catalog entries come in two tiers:
 </tr>
 <tr>
 <td width="50%" valign="top">
+<a href="advanced-delegation/"><img src="assets/advanced-delegation.jpg" alt="Advanced Delegation plugin"></a>
+<h3><a href="advanced-delegation/">Advanced Delegation</a></h3>
+<code>hermes plugins install advanced-delegation</code>
+<p>Two more ways for <code>delegate_task</code> to route subagents. <b>Model routes</b>: the agent picks a named model route per subagent (fast, deep, local...) from a list you write. <b>Profile routes</b>: it runs a subagent as one of your Hermes profiles, with that profile's model, skills and credentials. Only the names and your one-line descriptions reach the model.</p>
+<p><code>hermes delegation config</code> · <code>/delegation</code> to switch modes in a chat · Hermes 0.22.5+</p>
+</td>
+<td width="50%" valign="top">
+<a href="camofox/"><img src="assets/camofox.jpg" alt="Camofox plugin"></a>
+<h3><a href="camofox/">Camofox</a></h3>
+<code>hermes plugins install camofox</code>
+<p>Browse with <a href="https://github.com/jo-inc/camofox-browser">Camofox</a>, a self-hosted anti-detection Firefox (Camoufox) behind a local REST server: navigate, accessibility snapshots with clickable refs, click, type, scroll, keys, screenshots analysed by your vision model, read-only JavaScript, and cookie import. Optional persistent profiles keep logins across restarts. Your existing <code>CAMOFOX_URL</code> and <code>browser.camofox</code> settings carry over. Formerly built into Hermes core.</p>
+<p>11 browser tools · toolset <code>camofox</code> · needs a running camofox-browser server</p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<a href="elevenlabs-sound-effects/"><img src="assets/elevenlabs-sound-effects.jpg" alt="ElevenLabs Sound Effects plugin"></a>
+<h3><a href="elevenlabs-sound-effects/">ElevenLabs Sound Effects</a></h3>
+<code>hermes plugins install elevenlabs-sound-effects</code>
+<p>Sound effects on demand from <a href="https://elevenlabs.io/docs/capabilities/sound-effects">ElevenLabs</a>: describe a sound ("glass shattering on a tile floor", "90s hip-hop drum loop, 90 BPM") and Hermes generates it, up to 30 seconds and optionally a seamless loop, and sends you the audio file. Uses the same <code>ELEVENLABS_API_KEY</code> as Hermes's ElevenLabs voice; model, format and endpoint are plugin settings.</p>
+<p><code>elevenlabs_sound_effect</code> · billed to your ElevenLabs account</p>
+</td>
+<td width="50%" valign="top">
+<a href="elevenlabs-music/"><img src="assets/elevenlabs-music.jpg" alt="ElevenLabs Music plugin"></a>
+<h3><a href="elevenlabs-music/">ElevenLabs Music</a></h3>
+<code>hermes plugins install elevenlabs-music</code>
+<p>Songs and instrumentals from <a href="https://elevenlabs.io/docs/overview/capabilities/music">ElevenLabs Music</a>: describe a track or paste your lyrics and Hermes writes, generates and sends it, 3 seconds to 10 minutes. It can redo one section, extend or loop a song, split it into vocal, drum and bass stems, and score a video. Long songs finish in the background and arrive in the chat. In Hermes Desktop each track gets a music card with synced lyrics and a library tab.</p>
+<p><code>elevenlabs_music_compose</code> and 7 more · billed to your ElevenLabs account</p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<a href="hermes-security/"><img src="assets/hermes-security.jpg" alt="Security plugin"></a>
+<h3><a href="hermes-security/">Security</a></h3>
+<code>hermes plugins install hermes-security</code>
+<p>Security review for a local repository. Parallel subagents read the code in chunks, check each candidate against the code, and trace whether an attacker can reach it. Optional tests confirm findings in a temporary copy, and an optional grant lets the agent test your running app for an hour. Reports keep evidence, coverage gaps and rejected candidates, export to Markdown, JSON, CSV and SARIF, and get a Security page in Hermes Desktop.</p>
+<p><code>security_scan_start</code> and 8 more · <code>/security</code> · <code>hermes security-review</code></p>
+</td>
+<td width="50%" valign="top">
 <h3>More on the way</h3>
 <p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
 </td>
@@ -199,9 +238,9 @@ Catalog entries come in two tiers:
 
 ### Already used one of these?
 
-Most plugins here used to live somewhere else: Home Assistant and Spotify were built into Hermes core and then briefly had their own repos, Langfuse shipped bundled with core as `observability/langfuse`, the Singularity/Apptainer terminal backend was built into core, MCP Serve was core's `hermes mcp serve`, and the rest each had a standalone `NousResearch/hermes-*` repo. **Except for MCP Serve, you don't need to do anything.**
+Most plugins here used to live somewhere else: Home Assistant and Spotify were built into Hermes core and then briefly had their own repos, Langfuse shipped bundled with core as `observability/langfuse`, the Singularity/Apptainer terminal backend and the Camofox browser backend were built into core, MCP Serve was core's `hermes mcp serve`, and the rest each had a standalone `NousResearch/hermes-*` repo. **Except for MCP Serve, you don't need to do anything.**
 
-- **You used the built-in Home Assistant, Spotify, Langfuse or Singularity backend:** `hermes update`, or the first start after updating, installs the plugin from the catalog with your existing config, env vars and login.
+- **You used the built-in Home Assistant, Spotify, Langfuse, Singularity or Camofox backend:** `hermes update`, or the first start after updating, installs the plugin from the catalog with your existing config, env vars and login.
 - **You installed it from the catalog:** the catalog now points here, so `hermes plugins update <name>` moves your install to this repo and keeps your files.
 - **You used the built-in `hermes import-agent`:** profiles that registered an import for `--sync` get the `agent-importers` plugin on update; anywhere else, running `hermes import-agent` prints the one-line install (`hermes plugins install agent-importers`).
 - **You used `hermes claw migrate` (OpenClaw):** it now comes with the same plugin. After `hermes plugins install agent-importers`, both `hermes import-agent openclaw` and the old `hermes claw migrate` / `hermes claw cleanup` work with the same flags.

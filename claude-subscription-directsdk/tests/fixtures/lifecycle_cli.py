@@ -22,6 +22,10 @@ if mode in ('launcher_exit', 'launcher_live'):
     subprocess.Popen([sys.executable, '-I', __file__, '--descendant'],
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, env=dict(os.environ))
+    # Exit only once the descendant exists, so cleanup always has a live descendant to find.
+    until = time.monotonic() + 10
+    while len(Path(os.environ['REVIEW_PIDS']).read_text().splitlines()) < 2 and time.monotonic() < until:
+        time.sleep(.01)
     if mode == 'launcher_live':
         time.sleep(20)
     sys.exit(0)

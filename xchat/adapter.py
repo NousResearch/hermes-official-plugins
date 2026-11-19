@@ -1376,7 +1376,19 @@ async def _initiate_conversation(
         records = await api.get_public_keys(uid)
         if not records:
             raise ValueError(f"user {uid} has no registered X Chat public keys")
-        rec = records[0]
+        # An account keeps every identity it has ever registered, and the API
+        # returns them oldest first. X refuses a conversation key built on any
+        # version but the newest ("one or more participant keys do not use the
+        # latest public key version"), so take the maximum: versions are
+        # millisecond timestamps and must be compared numerically, not as
+        # strings, because their length varies.
+        def _key_version(record: Dict[str, Any]) -> int:
+            try:
+                return int(str(record.get("public_key_version") or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        rec = max(records, key=_key_version)
         if not crypto.verify_key_binding(
             str(rec.get("public_key") or ""),
             str(rec.get("signing_public_key") or ""),

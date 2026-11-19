@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.env
+*.db
+*.db-shm
+*.db-wal
+# Durable model-eval bundles (local only, never scratch); re-scored with scripts/run-evals.py --score-bundles
+evals/bundles/

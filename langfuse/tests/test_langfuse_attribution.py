@@ -66,6 +66,8 @@ def traced(tmp_path, monkeypatch):
     from hermes_cli.plugins import PluginContext, PluginManager, PluginManifest
     mod.register(PluginContext(PluginManifest(name="langfuse"), PluginManager()))
     mod._TRACE_STATE.clear()
+    mod._SENDER_BY_TURN.clear()
+    mod._USER_BY_CHILD_SESSION.clear()
     return mod, roots, propagated, home
 
 
@@ -130,6 +132,166 @@ def test_cron_run_is_tagged_with_its_stable_job_id(traced):
     finally:
         exit_cron_execution(token)
     assert propagated[0]["tags"] == ["hermes", "langfuse", "platform:cron", "trigger:cron", "cron-job:test-job"]
+
+
+# End-user attribution: Langfuse userId is the messaging sender (hermes-agent#44639), only after the
+# profile opts in through plugins.entries.langfuse.settings.end_user_attribution.
+
+def _announce_turn(mod, session="s1", sender="@alice:example.org"):
+    """The turn-scoped pre_llm_call: no API messages, but it is the hook that names the sender."""
+    mod.on_pre_llm_call(session_id=session, task_id=session, turn_id=f"{session}:t1", platform="matrix",
+                        user_message="hi", conversation_history=[], sender_id=sender)
+
+
+def _set_attribution(home, value):
+    (home / "config.yaml").write_text(
+        f"plugins:\n  entries:\n    langfuse:\n      settings:\n        end_user_attribution: {value}\n",
+        encoding="utf-8")
+
+
+@pytest.fixture
+def opted_in(traced):
+    _set_attribution(traced[3], "true")
+    return traced
+
+
+def test_sender_is_not_exported_without_the_opt_in(traced):
+    mod, _, propagated, _ = traced
+    _announce_turn(mod)
+    _open_turn(mod, platform="matrix")
+    assert "user_id" not in propagated[0]
+    assert mod._SENDER_BY_TURN == {}  # dropped at the hook, not just left off the trace
+
+
+def test_explicit_opt_out_exports_no_sender(traced):
+    mod, _, propagated, home = traced
+    _set_attribution(home, "false")
+    _announce_turn(mod)
+    _open_turn(mod, platform="matrix")
+    assert "user_id" not in propagated[0]
+
+
+def test_malformed_setting_warns_once_and_exports_no_sender(traced, caplog):
+    mod, _, propagated, home = traced
+    _set_attribution(home, '"yes please"')
+    for session in ("s1", "s2"):
+        _announce_turn(mod, session=session)
+        _open_turn(mod, session=session, platform="matrix")
+    assert all("user_id" not in p for p in propagated)
+    warnings = [r for r in caplog.records if "end_user_attribution" in r.getMessage()]
+    assert len(warnings) == 1 and "hermes config set" in warnings[0].getMessage()
+
+
+def test_routed_turn_follows_the_served_profiles_opt_in(traced):
+    """Under multiplexing each profile decides for itself (A, then B, then A again): the launch
+    profile's opt-in must not export the sender of a turn served for a profile that never opted in,
+    and serving that profile must not switch attribution off for the launch profile's next turn."""
+    mod, _, propagated, home = traced
+    _set_attribution(home, "true")
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    _announce_turn(mod, session="s1")
+    _open_turn(mod, session="s1", platform="matrix")
+    token = set_hermes_home_override(str(home / "profiles" / "arkana"))
+    try:
+        _announce_turn(mod, session="s2")
+        _open_turn(mod, session="s2", platform="matrix")
+    finally:
+        reset_hermes_home_override(token)
+    _announce_turn(mod, session="s3")
+    _open_turn(mod, session="s3", platform="matrix")
+    users = {p["session_id"]: p.get("user_id") for p in propagated}
+    assert users == {"s1": "@alice:example.org", "s2": None, "s3": "@alice:example.org"}
+
+
+@pytest.mark.parametrize("settings, expected", [
+    ("\n  entries:\n    langfuse:\n      settings:\n        end_user_attribution: true", "@alice:example.org"),
+    ("", None),
+], ids=["opted-in", "default"])
+def test_installed_plugin_reads_its_own_setting(tmp_path, monkeypatch, settings, expected):
+    """Loaded the way Hermes loads it (copied into the profile's plugins/ dir, enabled in config.yaml),
+    the plugin finds the setting under its installed id, and the real hooks carry the sender."""
+    import shutil
+    from pathlib import Path
+
+    from hermes_cli import plugins as plugins_mod
+
+    home = tmp_path / "hermes"
+    shutil.copytree(Path(__file__).resolve().parents[1], home / "plugins" / "langfuse",
+                    ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    (home / "config.yaml").write_text(f"plugins:\n  enabled: [langfuse]{settings}\n", encoding="utf-8")
+    manager = plugins_mod.PluginManager()
+    manager.discover_and_load()
+    loaded = manager._plugins["langfuse"]
+    assert loaded.enabled, loaded.error
+    mod = loaded.module
+    roots: list = []
+    propagated: list = []
+
+    @contextlib.contextmanager
+    def _propagate(**kw):
+        propagated.append(kw)
+        yield
+
+    monkeypatch.setattr(mod, "_get_langfuse", lambda: _Client(roots))
+    monkeypatch.setattr(mod, "propagate_attributes", _propagate)
+    manager.invoke_hook("pre_llm_call", session_id="s1", task_id="s1", turn_id="s1:t1", platform="matrix",
+                        user_message="hi", conversation_history=[], sender_id="@alice:example.org")
+    manager.invoke_hook("pre_api_request", task_id="s1", session_id="s1", platform="matrix", model="m",
+                        provider="p", api_mode="chat", api_call_count=1, turn_id="s1:t1",
+                        api_request_id="s1:t1:api:1", request_messages=[{"role": "user", "content": "hi"}])
+    assert len(roots) == 1
+    assert propagated[0].get("user_id") == expected
+
+
+def test_gateway_turn_is_attributed_to_its_sender(opted_in):
+    mod, roots, propagated, _ = opted_in
+    _announce_turn(mod)
+    assert roots == []  # the turn-scoped hook must still not open an orphan root
+    _open_turn(mod, platform="matrix")
+    assert propagated[0]["user_id"] == "@alice:example.org"
+    assert propagated[0]["metadata"] == {"profile": "default"}
+
+
+def test_senderless_turn_leaves_user_unset(opted_in):
+    mod, _, propagated, _ = opted_in
+    _announce_turn(mod, sender="")
+    _open_turn(mod)
+    assert "user_id" not in propagated[0]
+
+
+def test_sender_does_not_leak_into_the_next_turn(opted_in):
+    mod, _, propagated, _ = opted_in
+    _announce_turn(mod)
+    _open_turn(mod)
+    mod._finish_trace(mod._trace_key("s1", "s1", turn_id="s1:t1"))
+    assert mod._SENDER_BY_TURN == {}
+    mod.on_pre_llm_request(task_id="s1", session_id="s1", model="m", provider="p", api_mode="chat", api_call_count=1,
+                           request_messages=[{"role": "user", "content": "hi"}],
+                           turn_id="s1:t2", api_request_id="s1:t2:api:1")
+    assert "user_id" not in propagated[-1]
+
+
+def test_subagent_traces_inherit_the_spawning_user(opted_in):
+    mod, _, propagated, _ = opted_in
+    _announce_turn(mod)
+    _open_turn(mod, platform="matrix")
+    mod.on_subagent_start(parent_turn_id="s1:t1", child_session_id="child-1", child_role="leaf", child_goal="go")
+    mod.on_pre_llm_request(task_id="child-1", session_id="child-1", platform="subagent", model="m", provider="p",
+                           api_mode="chat", api_call_count=1, request_messages=[{"role": "user", "content": "go"}],
+                           turn_id="child-1:t1", api_request_id="child-1:t1:api:1")
+    assert propagated[-1]["session_id"] == "child-1" and propagated[-1]["user_id"] == "@alice:example.org"
+    mod.on_subagent_stop(parent_turn_id="s1:t1", child_session_id="child-1", child_role="leaf")
+    assert mod._USER_BY_CHILD_SESSION == {}
+
+
+def test_sender_stash_is_bounded(opted_in, monkeypatch):
+    mod, _, _, _ = opted_in
+    monkeypatch.setattr(mod, "_MAX_TRACE_STATE", 4)
+    mod._SENDER_BY_TURN.clear()
+    for i in range(10):
+        mod.on_pre_llm_call(session_id="s", turn_id=f"s:t{i}", sender_id=f"u{i}")
+    assert list(mod._SENDER_BY_TURN) == ["s:t6", "s:t7", "s:t8", "s:t9"]
 
 
 # Responses API tool items in generation input (hermes-agent#84186).

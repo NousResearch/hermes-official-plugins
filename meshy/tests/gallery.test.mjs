@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { imageNextActions, matchesKind, reconcileSelection, sourceForAsset } from '../src/gallery.ts'
+import { imageNextActions, listFailureNotices, matchesKind, reconcileSelection, sourceForAsset } from '../src/gallery.ts'
 
 const model = {
   task_id: 'task', task_type: 'image-to-3d', prompt: 'Mech', kind: 'model',
@@ -96,3 +96,13 @@ for (const [name, selected, explicit, remote, saved, expected] of [
     assert.deepEqual(reconcileSelection(selected, selected.task, explicit, remote, saved), expected)
   })
 }
+
+test('a product the gallery could not list gets one notice per reason, and a malformed list none', () => {
+  const plan = 'Meshy refused the request: Your plan does not include Creative Lab'
+  assert.deepEqual(listFailureNotices([
+    { task_type: 'creative-lab-lamp-build', error: plan },
+    { task_type: 'remesh', error: 'Meshy API error 503' },
+    { task_type: 'creative-lab-keycap-build', error: plan }
+  ]), [`Couldn't list creative-lab-lamp-build, creative-lab-keycap-build: ${plan}`, "Couldn't list remesh: Meshy API error 503"])
+  for (const failed of [undefined, null, [], {}, [null, 7, { task_type: 'x' }]]) assert.deepEqual(listFailureNotices(failed), [])
+})

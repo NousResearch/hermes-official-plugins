@@ -1,0 +1,706 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hermes-security.local/schemas/chains.schema.json",
+  "$comment": "Original to hermes-security (no upstream counterpart).",
+  "type": "object",
+  "properties": {
+    "documentType": {
+      "const": "hermes-security.chains"
+    },
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "scanId": {
+      "type": "string",
+      "maxLength": 20000,
+      "minLength": 1,
+      "pattern": "^scan_[a-f0-9]{24}$(?![\\s\\S])"
+    },
+    "vocabularyVersion": {
+      "const": "hermes-security/capabilities-1"
+    },
+    "chains": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "chainId": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1,
+            "pattern": "^chn_[a-f0-9]{24}$(?![\\s\\S])"
+          },
+          "findingIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 20000,
+              "minLength": 1,
+              "pattern": "^hsf_[a-f0-9]{24}$(?![\\s\\S])"
+            },
+            "minItems": 2
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "maxLength": 20000,
+                  "minLength": 1,
+                  "pattern": "^hsf_[a-f0-9]{24}$(?![\\s\\S])"
+                },
+                "to": {
+                  "type": "string",
+                  "maxLength": 20000,
+                  "minLength": 1,
+                  "pattern": "^hsf_[a-f0-9]{24}$(?![\\s\\S])"
+                },
+                "effect": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "data-read",
+                        "data-write",
+                        "credential-acquire",
+                        "identity-change",
+                        "privilege-gain",
+                        "internal-network-reach",
+                        "file-write",
+                        "code-exec",
+                        "integrity-impact",
+                        "availability-impact"
+                      ]
+                    },
+                    "actor": {
+                      "enum": [
+                        "anonymous",
+                        "authenticated",
+                        "same-tenant",
+                        "cross-tenant",
+                        "admin",
+                        "local-user",
+                        "internal-network",
+                        "any"
+                      ]
+                    },
+                    "tenant": {
+                      "enum": [
+                        "same",
+                        "cross",
+                        "any"
+                      ]
+                    },
+                    "deployment": {
+                      "type": "string",
+                      "maxLength": 20000,
+                      "minLength": 1
+                    },
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 20000
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "summary": {
+                              "type": "string",
+                              "maxLength": 20000
+                            },
+                            "yieldsCredential": {
+                              "type": "boolean"
+                            },
+                            "yieldsActor": {
+                              "enum": [
+                                "anonymous",
+                                "authenticated",
+                                "same-tenant",
+                                "cross-tenant",
+                                "admin",
+                                "local-user",
+                                "internal-network",
+                                "any"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "yieldsCredential"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "yieldsCredential": {
+                      "type": "boolean"
+                    },
+                    "yieldsActor": {
+                      "enum": [
+                        "anonymous",
+                        "authenticated",
+                        "same-tenant",
+                        "cross-tenant",
+                        "admin",
+                        "local-user",
+                        "internal-network",
+                        "any"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "actor",
+                    "tenant",
+                    "deployment",
+                    "detail"
+                  ],
+                  "additionalProperties": false
+                },
+                "precondition": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "network-access",
+                        "authenticated-session",
+                        "role",
+                        "tenant-membership",
+                        "user-interaction",
+                        "config-enabled",
+                        "component-reachable",
+                        "credential",
+                        "file-write",
+                        "internal-network"
+                      ]
+                    },
+                    "actor": {
+                      "enum": [
+                        "anonymous",
+                        "authenticated",
+                        "same-tenant",
+                        "cross-tenant",
+                        "admin",
+                        "local-user",
+                        "internal-network",
+                        "any"
+                      ]
+                    },
+                    "tenant": {
+                      "enum": [
+                        "same",
+                        "cross",
+                        "any"
+                      ]
+                    },
+                    "deployment": {
+                      "type": "string",
+                      "maxLength": 20000,
+                      "minLength": 1
+                    },
+                    "detail": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 20000
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "summary": {
+                              "type": "string",
+                              "maxLength": 20000
+                            },
+                            "yieldsCredential": {
+                              "type": "boolean"
+                            },
+                            "yieldsActor": {
+                              "enum": [
+                                "anonymous",
+                                "authenticated",
+                                "same-tenant",
+                                "cross-tenant",
+                                "admin",
+                                "local-user",
+                                "internal-network",
+                                "any"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "yieldsCredential"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "yieldsCredential": {
+                      "type": "boolean"
+                    },
+                    "yieldsActor": {
+                      "enum": [
+                        "anonymous",
+                        "authenticated",
+                        "same-tenant",
+                        "cross-tenant",
+                        "admin",
+                        "local-user",
+                        "internal-network",
+                        "any"
+                      ]
+                    },
+                    "defeatedBy": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 20000
+                      }
+                    },
+                    "brokenBy": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 20000
+                      }
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "actor",
+                    "tenant",
+                    "deployment",
+                    "detail"
+                  ],
+                  "additionalProperties": false
+                },
+                "evidenceRefs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 20000,
+                    "minLength": 1,
+                    "pattern": "^hsf_[a-f0-9]{24}#.+$(?![\\s\\S])"
+                  }
+                },
+                "counterEvidence": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 20000
+                  }
+                },
+                "assumptions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 20000
+                  }
+                },
+                "state": {
+                  "enum": [
+                    "supported",
+                    "speculative",
+                    "broken"
+                  ]
+                }
+              },
+              "required": [
+                "from",
+                "to",
+                "effect",
+                "precondition",
+                "evidenceRefs",
+                "counterEvidence",
+                "assumptions",
+                "state"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1
+          },
+          "disposition": {
+            "enum": [
+              "candidate_chain",
+              "source_supported_chain",
+              "runtime_confirmed_chain",
+              "broken_chain"
+            ]
+          },
+          "conditional": {
+            "type": "boolean"
+          },
+          "severity": {
+            "type": "object",
+            "properties": {
+              "level": {
+                "enum": [
+                  "critical",
+                  "high",
+                  "medium",
+                  "low",
+                  "informational"
+                ]
+              },
+              "rationale": {
+                "type": "string",
+                "maxLength": 20000,
+                "minLength": 1
+              }
+            },
+            "required": [
+              "level",
+              "rationale"
+            ],
+            "additionalProperties": false
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1
+          }
+        },
+        "required": [
+          "chainId",
+          "findingIds",
+          "edges",
+          "disposition",
+          "conditional",
+          "severity",
+          "title",
+          "summary"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "broken": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "findingIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 20000,
+              "minLength": 1,
+              "pattern": "^hsf_[a-f0-9]{24}$(?![\\s\\S])"
+            }
+          },
+          "edge": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "maxLength": 20000,
+                "minLength": 1,
+                "pattern": "^hsf_[a-f0-9]{24}$(?![\\s\\S])"
+              },
+              "to": {
+                "type": "string",
+                "maxLength": 20000,
+                "minLength": 1,
+                "pattern": "^hsf_[a-f0-9]{24}$(?![\\s\\S])"
+              },
+              "effect": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "data-read",
+                      "data-write",
+                      "credential-acquire",
+                      "identity-change",
+                      "privilege-gain",
+                      "internal-network-reach",
+                      "file-write",
+                      "code-exec",
+                      "integrity-impact",
+                      "availability-impact"
+                    ]
+                  },
+                  "actor": {
+                    "enum": [
+                      "anonymous",
+                      "authenticated",
+                      "same-tenant",
+                      "cross-tenant",
+                      "admin",
+                      "local-user",
+                      "internal-network",
+                      "any"
+                    ]
+                  },
+                  "tenant": {
+                    "enum": [
+                      "same",
+                      "cross",
+                      "any"
+                    ]
+                  },
+                  "deployment": {
+                    "type": "string",
+                    "maxLength": 20000,
+                    "minLength": 1
+                  },
+                  "detail": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 20000
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "summary": {
+                            "type": "string",
+                            "maxLength": 20000
+                          },
+                          "yieldsCredential": {
+                            "type": "boolean"
+                          },
+                          "yieldsActor": {
+                            "enum": [
+                              "anonymous",
+                              "authenticated",
+                              "same-tenant",
+                              "cross-tenant",
+                              "admin",
+                              "local-user",
+                              "internal-network",
+                              "any"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "yieldsCredential"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "yieldsCredential": {
+                    "type": "boolean"
+                  },
+                  "yieldsActor": {
+                    "enum": [
+                      "anonymous",
+                      "authenticated",
+                      "same-tenant",
+                      "cross-tenant",
+                      "admin",
+                      "local-user",
+                      "internal-network",
+                      "any"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "actor",
+                  "tenant",
+                  "deployment",
+                  "detail"
+                ],
+                "additionalProperties": false
+              },
+              "precondition": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "network-access",
+                      "authenticated-session",
+                      "role",
+                      "tenant-membership",
+                      "user-interaction",
+                      "config-enabled",
+                      "component-reachable",
+                      "credential",
+                      "file-write",
+                      "internal-network"
+                    ]
+                  },
+                  "actor": {
+                    "enum": [
+                      "anonymous",
+                      "authenticated",
+                      "same-tenant",
+                      "cross-tenant",
+                      "admin",
+                      "local-user",
+                      "internal-network",
+                      "any"
+                    ]
+                  },
+                  "tenant": {
+                    "enum": [
+                      "same",
+                      "cross",
+                      "any"
+                    ]
+                  },
+                  "deployment": {
+                    "type": "string",
+                    "maxLength": 20000,
+                    "minLength": 1
+                  },
+                  "detail": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 20000
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "summary": {
+                            "type": "string",
+                            "maxLength": 20000
+                          },
+                          "yieldsCredential": {
+                            "type": "boolean"
+                          },
+                          "yieldsActor": {
+                            "enum": [
+                              "anonymous",
+                              "authenticated",
+                              "same-tenant",
+                              "cross-tenant",
+                              "admin",
+                              "local-user",
+                              "internal-network",
+                              "any"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "yieldsCredential"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "yieldsCredential": {
+                    "type": "boolean"
+                  },
+                  "yieldsActor": {
+                    "enum": [
+                      "anonymous",
+                      "authenticated",
+                      "same-tenant",
+                      "cross-tenant",
+                      "admin",
+                      "local-user",
+                      "internal-network",
+                      "any"
+                    ]
+                  },
+                  "defeatedBy": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 20000
+                    }
+                  },
+                  "brokenBy": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 20000
+                    }
+                  }
+                },
+                "required": [
+                  "kind",
+                  "actor",
+                  "tenant",
+                  "deployment",
+                  "detail"
+                ],
+                "additionalProperties": false
+              },
+              "evidenceRefs": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 20000,
+                  "minLength": 1,
+                  "pattern": "^hsf_[a-f0-9]{24}#.+$(?![\\s\\S])"
+                }
+              },
+              "counterEvidence": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 20000
+                }
+              },
+              "assumptions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 20000
+                }
+              },
+              "state": {
+                "enum": [
+                  "supported",
+                  "speculative",
+                  "broken"
+                ]
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "effect",
+              "precondition",
+              "evidenceRefs",
+              "counterEvidence",
+              "assumptions",
+              "state"
+            ],
+            "additionalProperties": false
+          },
+          "defeatedBy": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1
+          }
+        },
+        "required": [
+          "findingIds",
+          "edge",
+          "defeatedBy"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ignoredExplanations": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": [
+    "documentType",
+    "schemaVersion",
+    "scanId",
+    "vocabularyVersion",
+    "chains",
+    "broken"
+  ],
+  "additionalProperties": false
+}

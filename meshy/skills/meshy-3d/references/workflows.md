@@ -77,7 +77,7 @@ Suggested flow:
 Engine notes:
 - Unreal works in centimetres and Meshy exports metres: keep "Convert Scene Unit" on at FBX import (or scale ×100), else the model arrives 100× too small.
 - Roblox: a MeshPart takes at most 20,000 triangles. Set `target_polycount` at or under that (Smart Topology) or remesh first; export FBX or OBJ.
-- Locomotion clips: Meshy has no in-place option, so a walk or run can move the root. If the game moves the character itself, lock root motion on import (Unity: Root Transform Position (XZ) → Bake Into Pose; Unreal: Force Root Lock in the animation asset). Check by playing the clip and watching whether the character leaves its spot.
+- Locomotion clips: some library clips travel (root motion; a sprint moves about a metre per cycle), while the rig's free walk/run stay in place. When the game moves the character itself, use the in-place variants: `meshy_list_animations` with `search: "inplace"` lists them (`Casual_Walk_inplace`, `Lean_Forward_Sprint_inplace`, jumps, flips; about 90). If only a travelling clip fits, lock root motion on import (Unity: Root Transform Position (XZ) → Bake Into Pose; Unreal: Force Root Lock in the animation asset). Check by playing the clip and watching whether the character leaves its spot.
 - Godot 4: drop the `.glb` into the project; clips become an AnimationPlayer.
 
 ## Scenario D: Character Animation
@@ -87,7 +87,7 @@ Suggested flow:
 2. Textures (rigging needs a textured humanoid): image-to-3d / multi-image output is already textured (unless should_texture:false); a text-to-3d preview needs meshy_text_to_3d_refine
 3. Rig the model (meshy_rig, ≤300K faces; if over, remesh to reduce polycount first)
 4. Download — rigging includes walking+running free, as separate files. For other actions use meshy_animate:
-   - preset actions: look up action ids with meshy_list_animations (free) — never guess ids. action_ids puts up to 10 clips in one file (include the walk/run ids to bundle them too)
+   - preset actions: look up action ids with meshy_list_animations (free) — never guess ids. Ask whether the game moves the character; if so pick the `_inplace` variants (`search: "inplace"`), since some library clips travel. action_ids puts up to 10 clips in one file (include the walk/run ids to bundle them too)
    - a described motion ("a backflip into a crouch"): meshy_text_to_motion, then meshy_animate with motion_task_id (biped rigs only)
 
 ## Scenario E: AR / Apple

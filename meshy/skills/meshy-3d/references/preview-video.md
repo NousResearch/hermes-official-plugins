@@ -24,7 +24,8 @@ the animation lives in its own GLB (`basic_animations.walking_glb_url`,
 node <skill_dir>/scripts/render_preview.mjs /abs/path/model.glb --label "Knight"
 ```
 
-`<skill_dir>` is the directory of this skill (the folder holding SKILL.md). Options:
+`<skill_dir>` is the `skill_dir` value skill_view returned for this skill, verbatim (never guess
+`~/.hermes/plugins/...`: another profile or install may hold an older copy). Options:
 `--clip NAME` (default: first clip; substring match), `--list-clips`, `--seconds N`
 (default: 6 s turntable; animations loop whole cycles to at least 4 s, at most 8 s),
 `--fps N` (default 30, 10 to 60), `--size N` (square, default 720), `--max-mb N` (default 8),
@@ -60,11 +61,12 @@ MEDIA:/home/me/.hermes/cache/videos/meshy/knight_walking-clip1-walking_man.mp4
 
 The gateway strips the `MEDIA:` line and uploads the file natively (`.mp4` goes to the
 platform's video send). Use the exact `out` path from the JSON; never invent one. Put the
-path ONLY on the `MEDIA:` line: the gateway also uploads any bare absolute file path it finds
-in a reply, so repeating it ("The file is at /...mp4") sends the video twice.
+path ONLY on the `MEDIA:` line: a bare path is not an attachment in a streamed reply, and where
+the reply is not streamed the gateway uploads a bare `.mp4` path too, so repeating it ("The file
+is at /...mp4") can send the video twice.
 
-Upload limits: Discord 10 MB without Nitro (the 8 MB default leaves headroom), Telegram
-bots 50 MB, Slack 1 GB, WhatsApp 16 MB, Signal 100 MB. For long clips or `--size 1080`, keep
+Upload limits: Discord 20 MB (more on boosted servers; the 8 MB default leaves headroom),
+Telegram bots 50 MB, Slack 1 GB, WhatsApp 16 MB, Signal 100 MB. For long clips or `--size 1080`, keep
 `--max-mb 8` unless the platform allows more.
 
 ## If rendering is unavailable

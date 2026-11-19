@@ -161,11 +161,16 @@ function Section({ title, aside, children }) {
   ] })
 }
 
-function TextRow({ title, description, value, onChange, ...props }) {
+// A settings row sizes its control to the control's own content, which leaves a bare text field too narrow
+// for an endpoint URL. Fields get a width (core's row controls are 18rem) and still fill a stacked, narrow row.
+const FIELD = { width: '18rem', flexGrow: 1, maxWidth: '100%' }
+const NUMBER_FIELD = { width: '5rem' }
+
+function TextRow({ title, description, value, onChange, style = FIELD, ...props }) {
   return jsx(ListRow, {
     title,
     description,
-    action: jsx(Input, { 'aria-label': title, value, onChange: e => onChange(e.currentTarget.value), ...props })
+    action: jsx(Input, { 'aria-label': title, value, style, onChange: e => onChange(e.currentTarget.value), ...props })
   })
 }
 
@@ -200,10 +205,13 @@ export function DeciderSettings() {
   })
 
   if (state.error) {
-    return jsx(EmptyState, {
-      title: 'Advanced Delegation backend is not reachable',
-      description: `${errorText(state.error)}. Turn the plugin on for this profile in Capabilities ▸ Plugins.`
-    })
+    return jsxs('div', { role: 'alert', style: { padding: '24px 0' }, children: [
+      jsx('div', { style: S.heading, children: 'Advanced Delegation backend is not reachable' }),
+      jsx('div', { style: S.error, children: errorText(state.error) }),
+      jsx('div', { style: { ...S.caption, paddingTop: 4 }, children: 'Turn the plugin on for this profile in Capabilities ▸ Plugins.' }),
+      jsx('div', { style: { ...S.actions, paddingTop: 8 }, children:
+        jsx(Button, { size: 'sm', variant: 'outline', disabled: state.isFetching, onClick: () => state.refetch(), children: 'Retry' }) })
+    ] })
   }
   if (state.isLoading || !state.data) {
     return jsx(Skeleton, { style: { height: 160 } })
@@ -264,6 +272,7 @@ export function DeciderSettings() {
           title: 'Specialist threshold',
           description: '0–1: how sure the Decider must be that the task needs a specialist route.',
           inputMode: 'decimal',
+          style: NUMBER_FIELD,
           value: form.specialist_threshold,
           onChange: specialist_threshold => edit({ specialist_threshold })
         }),
@@ -271,6 +280,7 @@ export function DeciderSettings() {
           title: 'Route confidence',
           description: '0–1: how sure it must be about which specialist route.',
           inputMode: 'decimal',
+          style: NUMBER_FIELD,
           value: form.confidence_threshold,
           onChange: confidence_threshold => edit({ confidence_threshold })
         }),
@@ -278,6 +288,7 @@ export function DeciderSettings() {
           title: 'Timeout',
           description: 'Seconds before the fallback (or the default route) takes over.',
           inputMode: 'decimal',
+          style: NUMBER_FIELD,
           value: form.timeout,
           onChange: timeout => edit({ timeout })
         }),

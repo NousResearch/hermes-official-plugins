@@ -133,13 +133,25 @@ if (scenario === 'settings-only') {
   assert.equal(typeof call.opts.body, 'object')
   assert.equal(call.opts.body.goal, 'Inspect screenshot')
 } else if (scenario === 'error') {
-  query = { isLoading: false, error: new Error('503: {"detail": "backend unavailable"}') }
-  const text = textOf(render())
-  assert.match(text, /backend unavailable/i)
+  let refetched = 0
+  query = { isLoading: false, error: new Error('503: {"detail": "backend unavailable"}'), refetch: () => { refetched += 1 } }
+  const tree = render()
+  assert.match(textOf(tree), /backend unavailable/i)
+  assert.equal(findAll(tree, n => n.props?.role === 'alert').length, 1, 'a failed load is announced as an error')
+  const retry = findAll(tree, n => typeof n.type === 'function' && n.props?.onClick && /Retry/.test(textOf(n.props.children)))
+  assert.equal(retry.length, 1, 'a failed load can be retried')
+  retry[0].props.onClick()
+  assert.equal(refetched, 1)
 } else if (scenario === 'mutation-error') {
   render()
   assert.ok(mutations.length >= 3)
   for (const opts of mutations) assert.equal(typeof opts.onError, 'function', 'mutations must report REST failures')
+} else if (scenario === 'field-width') {
+  // An input left to size itself in a settings row is too narrow for an endpoint URL.
+  const tree = render()
+  const rem = label => Number.parseFloat(findAll(tree, n => n.props?.['aria-label'] === label)[0]?.props.style?.width)
+  for (const label of ['Endpoint', 'Fallback endpoint']) assert.ok(rem(label) >= 16, `${label} field has room for a URL`)
+  assert.ok(rem('Timeout') < rem('Endpoint'), 'number fields are compact')
 } else if (scenario === 'paths') {
   assert.throws(() => mod.namespace.assertBackendPath('/mode'), /Unsupported/, 'mode switching belongs to core Settings')
   assert.equal(mod.namespace.assertBackendPath('/state?limit=30'), '/state?limit=30')

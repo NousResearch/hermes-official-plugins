@@ -11,7 +11,7 @@ NODE = shutil.which("node")
 
 SCENARIOS = [
     "settings-only", "old-host", "no-mode-picker", "mode-hint", "toggle-saves",
-    "route-eligibility", "probe-body", "error", "mutation-error", "paths",
+    "route-eligibility", "probe-body", "error", "mutation-error", "paths", "field-width",
 ]
 
 

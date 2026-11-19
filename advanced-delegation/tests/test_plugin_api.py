@@ -64,7 +64,7 @@ def api_client(home):
     return TestClient(app), mod
 
 
-def test_plugin_api_get_state_and_update_decider_and_mode(api_client, home):
+def test_plugin_api_get_state_and_update_decider(api_client, home):
     client, _ = api_client
     resp = client.get("/api/plugins/advanced-delegation/state")
     assert resp.status_code == 200
@@ -93,10 +93,9 @@ def test_plugin_api_get_state_and_update_decider_and_mode(api_client, home):
     bad_resp = client.put("/api/plugins/advanced-delegation/decider", json={"url": "ftp://bad"})
     assert bad_resp.status_code == 400
 
-    # Switch mode via POST /mode
-    mode_resp = client.post("/api/plugins/advanced-delegation/mode", json={"mode": "default"})
-    assert mode_resp.status_code == 200
-    assert mode_resp.json()["mode"] == "default"
+    # The delegation mode is switched in core's Settings, not through this plugin's API.
+    assert client.post("/api/plugins/advanced-delegation/mode", json={"mode": "default"}).status_code == 404
+    assert client.get("/api/plugins/advanced-delegation/state").json()["mode"] == "model_map"
 
 
 def test_plugin_api_probe_and_clear_decisions(api_client, monkeypatch):
@@ -221,6 +220,23 @@ def test_a_decider_save_leaves_other_plugin_settings_alone(api_client, home):
     assert plugins["entries"]["advanced-delegation"]["settings"]["decider"]["enabled"] is True
 
 
+def test_state_never_returns_a_route_credential(api_client, home):
+    """The settings page shows a route's name, description and summary; a stored api_key stays in the backend."""
+    client, _ = api_client
+    path = home / "config.yaml"
+    config = yaml.safe_load(path.read_text(encoding="utf-8"))
+    config["delegation"]["backends"]["model_map"]["options"][0]["api_key"] = "route-credential-not-a-real-key"
+    path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+    state = client.get("/api/plugins/advanced-delegation/state")
+    assert state.status_code == 200
+    assert [r["name"] for r in state.json()["routes"]] == ["FastSub", "VisualProwess"]
+    assert "route-credential-not-a-real-key" not in state.text
+    saved = client.put("/api/plugins/advanced-delegation/decider", json={"enabled": True})
+    assert saved.status_code == 200
+    assert "route-credential-not-a-real-key" not in saved.text
+
+
 def test_making_a_route_eligible_again_is_saved(api_client):
     client, _ = api_client
     url = "/api/plugins/advanced-delegation/decider"
@@ -234,6 +250,13 @@ def test_making_a_route_eligible_again_is_saved(api_client):
     assert everything.status_code == 200
     assert everything.json()["decider"]["excluded_options"] == []
     assert all(r["decider_eligible"] for r in client.get("/api/plugins/advanced-delegation/state").json()["routes"])
+
+
+def test_dashboard_manifest_version_matches_the_plugin():
+    import json
+    manifest = json.loads((PLUGIN_ROOT / "dashboard" / "manifest.json").read_text(encoding="utf-8"))
+    plugin = yaml.safe_load((PLUGIN_ROOT / "plugin.yaml").read_text(encoding="utf-8"))
+    assert manifest["version"] == plugin["version"]
 
 
 def test_desktop_plugin_js_passes_hermes_static_surface_lint():

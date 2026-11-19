@@ -4,8 +4,7 @@ Mounted by the Hermes web server at ``/api/plugins/advanced-delegation/`` when `
 is enabled. Loads its sibling package by path without mutating ``sys.path`` or relying on ``cwd``.
 
 Routes:
-    GET    /state       Current delegation mode, routes, profiles, Decider config, and recent decisions
-    POST   /mode        Switch delegation.backend (default | model_map | profile_routes)
+    GET    /state       Current delegation mode, the model routes, Decider settings and recent decisions
     PUT    /decider     Validate and save the Decider settings (plugins.entries.advanced-delegation.settings.decider)
     POST   /probe       Run a live /v1/systemone routing probe for a sample subagent goal
     DELETE /decisions   Clear cached System-1 Decider routing history
@@ -79,30 +78,23 @@ def _build_state(decision_limit: int = 25) -> dict[str, Any]:
     dr = _decider_router()
     section = store.delegation_section()
     mode = store.current_mode(section)
-    options = store.routes(section)
     decider = store.decider_settings(section)
     excluded = set(decider.get("excluded_options") or [])
-    route_items = []
-    for opt in options:
+    # Only what the settings page shows: a stored route also carries its provider endpoint and credential.
+    routes = []
+    for opt in store.routes(section):
         name = str(opt.get("name") or "").strip()
-        route_items.append(
-            {
-                **opt,
-                "summary": store.route_summary(opt),
-                "decider_eligible": bool(name and name not in excluded),
-            }
-        )
+        routes.append({
+            "name": name,
+            "description": str(opt.get("description") or ""),
+            "summary": store.route_summary(opt),
+            "decider_eligible": bool(name and name not in excluded),
+        })
     return {
         "mode": mode,
         "mode_label": store.mode_label(mode),
-        "modes": [
-            {"id": m, "label": label, "blurb": store.MODE_BLURBS.get(m, "")}
-            for m, label in store.MODES.items()
-        ],
-        "routes": route_items,
+        "routes": routes,
         "route_default": store.route_default(section),
-        "profiles": store.listed_profiles(section),
-        "profile_default": store.profile_default(section),
         "decider": decider,
         "decisions": dr.read_decision_log(limit=decision_limit),
     }
@@ -112,28 +104,6 @@ def _build_state(decision_limit: int = 25) -> dict[str, Any]:
 async def get_state(limit: int = 25):
     safe_limit = max(1, min(int(limit), 100))
     return await asyncio.to_thread(_build_state, safe_limit)
-
-
-@router.post("/mode")
-async def update_mode(payload: dict[str, Any] = Body(...)):
-    mode = str((payload or {}).get("mode") or "").strip().lower()
-
-    def _run():
-        store = _store()
-        if mode not in store.MODES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown delegation mode {mode!r}; use one of: {', '.join(store.MODES)}.",
-            )
-        try:
-            store.set_mode(mode)
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
-        state = _build_state()
-        _broadcast("updated", {"mode": mode})
-        return state
-
-    return await asyncio.to_thread(_run)
 
 
 @router.put("/decider")

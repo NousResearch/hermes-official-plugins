@@ -323,7 +323,10 @@ class HomeAssistantAdapter(BasePlatformAdapter):
             user_id="homeassistant", user_name="Home Assistant")
         await self.handle_message(MessageEvent(
             text=message, message_type=MessageType.TEXT, source=source,
-            message_id=f"ha_{entity_id}_{event['time_fired']}", timestamp=datetime.now()))
+            # time_fired (microsecond ISO) keeps two changes within one second distinct (#300);
+            # an event without it falls back to the receive time rather than crashing the listener.
+            message_id=f"ha_{entity_id}_{event.get('time_fired') or f'{now:.6f}'}",
+            timestamp=datetime.now()))
 
     @staticmethod
     def _format_state_change(entity_id: str, old_state: Dict[str, Any], new_state: Dict[str, Any]) -> Optional[str]:

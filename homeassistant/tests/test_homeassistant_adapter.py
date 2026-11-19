@@ -228,6 +228,14 @@ class TestMessageId:
         ids = [call.args[0].message_id for call in adapter.handle_message.call_args_list]
         assert len(ids) == 2 and ids[0] != ids[1]
 
+    @pytest.mark.asyncio
+    async def test_event_without_time_fired_is_still_delivered(self):
+        adapter = _make_adapter(watch_all=True, cooldown_seconds=0)
+        event = _make_event("lock.back_door", "locked", "unlocked")
+        del event["time_fired"]
+        await adapter._handle_ha_event(event)
+        assert adapter.handle_message.call_count == 1
+
 
 # ---------------------------------------------------------------------------
 # Env enablement (replaces core's HASS_TOKEN/HASS_URL env row)

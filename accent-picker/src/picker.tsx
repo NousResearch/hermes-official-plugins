@@ -14,7 +14,7 @@
 //
 // It drives `$accentOverride`, which the theme context feeds through
 // `retintTheme`, so the whole app repaints against the REAL derivation on every
-// pointer move. Nothing persists: reload and you're back on the authored theme.
+// pointer move. The plugin saves the pick in its own storage (see plugin.tsx).
 //
 // Sizing note: the statusbar is `h-5` (20px). The TRIGGER must live inside that
 // band or it clips to a sliver; the panel is a popover and can be any size.
@@ -30,11 +30,10 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-  setAccentOverride,
   useTheme,
   useValue
 } from '@hermes/plugin-sdk'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 // Named reference points, with their OKLCH hue — the ones worth comparing while
 // judging an accent. The hue spread across the blues is the whole reason this
@@ -198,7 +197,7 @@ function HueRail({ lch, onPick }: { lch: Oklch; onPick: (h: number) => void }) {
   )
 }
 
-function AccentPicker({ ctx }: { ctx: any }) {
+function AccentPicker({ persist }: { persist: (hex: null | string) => void }) {
   const { theme, renderedMode } = useTheme()
   const override = useValue($accentOverride)
   const painted = theme.colors.primary
@@ -208,39 +207,6 @@ function AccentPicker({ ctx }: { ctx: any }) {
   // Follow the painted accent when it changes from outside this control — but
   // never mid-drag, which would fight the user's own pointer.
   const dragging = useRef(false)
-  const persist = (val: string | null) => {
-    try { if (ctx && ctx.storage) ctx.storage.set('hermes-accent-picker', val) } catch (e) {}
-    try { if (ctx && ctx.files) void ctx.files.writeText('data', 'accent.txt', val === null ? '' : String(val)) } catch (e) {}
-  }
-
-  // Restore persisted accent on mount. Prefer ctx.files (real disk, survives restarts)
-  // over ctx.storage (localStorage, which the Electron webview may not persist).
-  useEffect(() => {
-    let cancelled = false
-    const apply = (val: any) => { if (!cancelled && val) $accentOverride.set(val) }
-    try {
-      const saved = ctx && ctx.storage && ctx.storage.get('hermes-accent-picker', null)
-      if (saved) apply(saved)
-    } catch (e) {}
-    if (ctx && ctx.files) {
-      ctx.files.readText('data', 'accent.txt').then((r: any) => {
-        if (r && r.ok && r.text) {
-          const v = r.text.trim()
-          if (v) apply(v)
-        }
-      }).catch(() => {})
-    }
-    return () => { cancelled = true }
-  }, [])
-
-  // Persist accent on every change.
-  useEffect(() => {
-    try {
-      if (ctx && override) { ctx.storage.set('hermes-accent-picker', override) }
-      else if (ctx && override === null) { ctx.storage.set('hermes-accent-picker', null) }
-    } catch (e) {}
-  }, [override])
-
   useEffect(() => {
     if (!dragging.current) {
       setLch(hexToOklch(painted) ?? { l: 0.5, c: 0.15, h: 260 })
@@ -253,7 +219,6 @@ function AccentPicker({ ctx }: { ctx: any }) {
     setLch(next)
     const hex = oklchToHex(next)
     setText(hex)
-    $accentOverride.set(hex)
     persist(hex)
     requestAnimationFrame(() => {
       dragging.current = false
@@ -274,7 +239,6 @@ function AccentPicker({ ctx }: { ctx: any }) {
           className="min-w-0 flex-1 rounded-sm border border-(--dt-border) bg-transparent px-1.5 py-0.5 font-mono text-[11px] uppercase"
           onChange={event => {
             setText(event.target.value)
-            $accentOverride.set(event.target.value)
             persist(event.target.value)
           }}
           spellCheck={false}
@@ -282,7 +246,7 @@ function AccentPicker({ ctx }: { ctx: any }) {
         />
         <button
           className="shrink-0 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px]"
-          onClick={() => { $accentOverride.set(null); persist(null) } }
+          onClick={() => persist(null)}
           type="button"
         >
           reset
@@ -294,7 +258,7 @@ function AccentPicker({ ctx }: { ctx: any }) {
           <button
             className="size-5 rounded-sm border border-(--dt-border)"
             key={swatch.hex}
-            onClick={() => { $accentOverride.set(swatch.hex); persist(swatch.hex) } }
+            onClick={() => persist(swatch.hex)}
             style={{ background: swatch.hex }}
             title={`${swatch.name} · ${swatch.hex}`}
             type="button"
@@ -328,7 +292,7 @@ function AccentPicker({ ctx }: { ctx: any }) {
   )
 }
 
-export function AccentPickerTrigger({ ctx }: { ctx: any }) {
+export function AccentPickerTrigger({ persist }: { persist: (hex: null | string) => void }) {
   const { theme } = useTheme()
 
   return (
@@ -352,7 +316,7 @@ export function AccentPickerTrigger({ ctx }: { ctx: any }) {
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-auto p-0" side="top">
-        <AccentPicker ctx={ctx} />
+        <AccentPicker persist={persist} />
       </PopoverContent>
     </Popover>
   )

@@ -5,9 +5,10 @@
 > Part of [Hermes Official Plugins](../README.md), Nous Research's official plugins for Hermes Agent. Formerly [`NousResearch/hermes-desktop-accent-picker`](https://github.com/NousResearch/hermes-desktop-accent-picker), which is archived; this directory carries its full history.
 
 An OKLCH colour wheel in the Hermes Desktop status bar. Drag it and the whole
-theme retints live; the palette re-derives from the one colour you pick. It is
-an **authoring tool** for theme designers — the colour is scratch state and is
-never persisted. Two palette commands come with it: *Accent: reset to the theme
+theme retints live; the palette re-derives from the one colour you pick. The
+pick is saved in the plugin's own storage (and a copy in its data folder) and
+restored on the next launch; *reset* returns to the theme's own accent, and
+disabling the plugin paints the authored theme again. Two palette commands come with it: *Accent: reset to the theme
 default* and *Accent: copy the current color*.
 
 It used to ship bundled with the app (off by default). It now lives here as a

@@ -253,13 +253,26 @@ def jail(request, monkeypatch):
 
 
 @posix
+def first_relay_seconds():
+    """How long a fresh process takes to start its first relay here. On a host whose resolver stalls on 127.0.0.1's
+    name (35 s on our macOS host) the self-test's child spends that long before it starts the binary: the plugin's
+    relay asks for that name until #412."""
+    import subprocess
+    code = ("import sys, time; sys.path.insert(0, '.'); t = time.monotonic(); from admission import Admission; "
+            "Admission('https://api.anthropic.com', 30).close(); print(time.monotonic() - t)")
+    out = subprocess.run([sys.executable, '-c', code], cwd=Path(selftest.__file__).parent, capture_output=True,
+                         text=True, timeout=300)
+    return float(out.stdout.strip().splitlines()[-1])
+
+
 def test_a_test_that_hangs_is_killed_with_everything_it_started(tmp_path, jail):
     seconds = marker()
     script = stand_in(tmp_path, f'touch {tmp_path}/started\nsleep {seconds} &\nexec sleep {seconds}\n')
+    limit = 15 + 2 * first_relay_seconds()  # time for the stand-in to start, then to hang
     started = time.monotonic()
-    passed, reason, _ = selftest.run_child([script], UNLISTED, time_limit=15)
+    passed, reason, _ = selftest.run_child([script], UNLISTED, time_limit=limit)
     assert not passed and 'did not finish' in reason
-    assert time.monotonic() - started < 45
+    assert time.monotonic() - started < limit + 30
     assert (tmp_path / 'started').exists(), 'the stand-in never ran: the test proves nothing'
     assert not gone(seconds)
 

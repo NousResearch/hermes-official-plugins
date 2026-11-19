@@ -270,10 +270,11 @@ def user_params(session: dict[str, Any]) -> dict[str, str]:
     return {"userId": session["user_id"]}
 
 
-def _adopt_existing_tab(session: dict[str, Any]) -> dict[str, Any]:
+def _adopt_existing_tab(session: dict[str, Any], *, task_scoped: bool = False) -> dict[str, Any]:
     """Rehydrate ``tab_id`` from an already-open tab with this session's key: a restart empties the
-    in-memory map while Camofox still holds the integration-owned tab."""
-    if session.get("tab_id") or not session.get("adopt_existing_tab") or not get_camofox_url():
+    in-memory map while Camofox still holds the integration-owned tab. ``task_scoped``: the session
+    entry was just rebuilt for a per-task userId, whose tabs are only ever this task's."""
+    if session.get("tab_id") or not (task_scoped or session.get("adopt_existing_tab")) or not get_camofox_url():
         return session
     try:
         tabs = get("/tabs", params=user_params(session), timeout=5).get("tabs", [])
@@ -304,6 +305,7 @@ def get_session(task_id: Optional[str]) -> dict[str, Any]:
         if key in _sessions:
             return _sessions[key]
         camofox_cfg = get_camofox_config()
+        task_scoped = False
         identity = _camofox_identity_override(key[1], camofox_cfg)
         if identity is None and _managed_persistence_enabled(camofox_cfg):
             identity = get_camofox_identity(key[1])
@@ -315,15 +317,17 @@ def get_session(task_id: Optional[str]) -> dict[str, Any]:
             digest = (uuid.uuid5(uuid.NAMESPACE_URL, f"camofox-task:{get_camofox_state_dir()}:{task_id}").hex[:10]
                       if task_id else uuid.uuid4().hex[:10])
             identity = {"user_id": f"hermes_{digest}", "session_key": f"task_{key[1][:16]}"}
-            # Adoption only makes sense for a reproducible identity.
+            # Adoption only makes sense for a reproducible identity. Its tabs are only ever this
+            # task's, so the rebuilt entry always picks up the tab an earlier call opened (#215).
             managed, adopt = False, bool(task_id) and _flag(
                 "CAMOFOX_ADOPT_EXISTING_TAB", camofox_cfg, "adopt_existing_tab")
+            task_scoped = bool(task_id)
         else:
             managed, adopt = True, _flag("CAMOFOX_ADOPT_EXISTING_TAB", camofox_cfg, "adopt_existing_tab")
         session = {"user_id": identity["user_id"], "tab_id": None, "session_key": identity["session_key"],
                    "managed": managed, "adopt_existing_tab": adopt}
         _sessions[key] = session
-    return _adopt_existing_tab(session)
+    return _adopt_existing_tab(session, task_scoped=task_scoped)
 
 
 def resync_tab(session: dict[str, Any]) -> bool:

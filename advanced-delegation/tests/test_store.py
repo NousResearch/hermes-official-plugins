@@ -145,3 +145,37 @@ def test_a_package_manager_managed_install_refuses_the_write(home, monkeypatch):
     with pytest.raises(RuntimeError, match="(?i)nix"):
         store.set_mode("model_map")
     assert not (home / "config.yaml").exists()
+
+
+
+DAYBREAK = {"name": "daybreak", "description": "Sol, reduced guardrails.", "provider": "openai-codex",
+            "model": "gpt-6-sol", "daybreak": True}
+
+
+@pytest.fixture
+def catalog(monkeypatch):
+    listed = {"gpt-6-sol", "gpt-6-luna"}
+    monkeypatch.setattr("agent.codex_service_tiers.daybreak_offered",
+                        lambda model, *, provider=None, base_url=None, access_token=None:
+                        provider == "openai-codex" and model in listed)
+    return listed
+
+
+def test_validate_route_accepts_daybreak_on_a_model_the_catalog_lists(catalog):
+    assert store.validate_route(DAYBREAK, others=[]) == []
+    assert store.validate_route({**DAYBREAK, "model": "gpt-6-luna"}, others=[]) == []
+
+
+@pytest.mark.parametrize("change, problem", [
+    ({"model": "gpt-6.1-sol"}, "not listed for gpt-6.1-sol"),
+    ({"provider": "openrouter", "model": "openai/gpt-6-sol"}, "needs provider openai-codex"),
+    ({"daybreak": "on"}, "true or false"),
+])
+def test_validate_route_names_each_daybreak_problem(catalog, change, problem):
+    problems = store.validate_route({**DAYBREAK, **change}, others=[])
+    assert any(problem in p for p in problems), problems
+
+
+def test_route_summary_marks_daybreak():
+    assert store.route_summary(DAYBREAK) == "openai-codex · gpt-6-sol · daybreak"
+    assert "daybreak" not in store.route_summary({**DAYBREAK, "daybreak": False})

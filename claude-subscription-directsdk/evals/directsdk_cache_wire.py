@@ -189,6 +189,19 @@ def run(binary, model):
                 else:
                     followups.append(f"Public followup {round_number}")
                     history.append({"role": "user", "content": followups[-1]})
+            # A fresh conversation: native's environment message must read the same on its opening request and on
+            # every later one; the opening request carries the date there, so later ones must too (#38).
+            fresh, environments = [{"role": "system", "content": "PUBLIC FRESH SYSTEM"},
+                                   {"role": "user", "content": "Run the public probe."}], []
+            for tools in (True, True, False):
+                peer.tools = tools
+                assistant = client.create(model=model, messages=fresh, tools=TOOLS).choices[0].message.model_dump()
+                environment = peer.wires[-1]["messages"][1]["content"]
+                environments.append(environment if isinstance(environment, str) else
+                                    "".join(block.get("text", "") for block in environment))
+                fresh.append(assistant)
+                fresh.extend({"role": "tool", "tool_call_id": call["id"], "content": "ok"} for call in assistant["tool_calls"] or ())
+            assert len(set(environments)) == 1, "native environment message changed after the opening request"
             # A Hermes auxiliary one-shot (a summary: system plus one user turn, no tools) keeps native's system
             # marks but carries no message mark: nothing replays its turn, so a mark would buy a never-read write.
             peer.tools = False

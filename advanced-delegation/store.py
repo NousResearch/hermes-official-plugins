@@ -21,7 +21,7 @@ MODE_BLURBS: dict[str, str] = {
 }
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 #: Route keys the editor writes, in the order they are saved.
-ROUTE_KEYS = ("name", "description", "provider", "base_url", "model", "reasoning_effort", "service_tier")
+ROUTE_KEYS = ("name", "description", "provider", "base_url", "model", "reasoning_effort", "service_tier", "daybreak")
 
 
 def delegation_section(config: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
@@ -158,6 +158,34 @@ def offered_tier(route: Mapping[str, Any], tier: str) -> bool:
         base_url=_text(route.get("base_url")) or None, tier=tier))
 
 
+def offered_daybreak(route: Mapping[str, Any]) -> bool:
+    """Whether Daybreak (OpenAI's ``daybreak_blue`` trusted-access program) is offered for the route's model:
+    the ``openai-codex`` route and this account's Codex catalog listing it, by the same check as the Desktop
+    switch. False on a Hermes without Daybreak support or when the catalog cannot be read."""
+    try:
+        from agent.codex_service_tiers import daybreak_offered
+    except ImportError:
+        return False
+    return daybreak_offered(_text(route.get("model")) or None, provider=_text(route.get("provider")) or None,
+                            base_url=_text(route.get("base_url")) or None)
+
+
+def _daybreak_problem(route: Mapping[str, Any]) -> str:
+    daybreak = route.get("daybreak")
+    if daybreak in (None, False):
+        return ""
+    if daybreak is not True:
+        return f"daybreak must be true or false, not {daybreak!r}."
+    provider = _text(route.get("provider"))
+    from hermes_cli.models import normalize_provider
+    if not provider or normalize_provider(provider) != "openai-codex":
+        return "Daybreak needs provider openai-codex (the ChatGPT/Codex subscription)."
+    if not offered_daybreak(route):
+        return (f"Daybreak is not listed for {route.get('model')} in this account's Codex catalog (or it could not "
+                f"be read); use the base model (e.g. gpt-6-sol), not a *-daybreak-* alias.")
+    return ""
+
+
 def validate_route(route: Mapping[str, Any], others: Sequence[Mapping[str, Any]]) -> list[str]:
     """Problems that would make core skip or refuse this route (empty list = savable). ``others`` are
     the other routes, for the unique-name check."""
@@ -186,6 +214,9 @@ def validate_route(route: Mapping[str, Any], others: Sequence[Mapping[str, Any]]
     tier = _tier_problem(route) if not problems else ""
     if tier:
         problems.append(tier)
+    daybreak = _daybreak_problem(route) if not problems else ""
+    if daybreak:
+        problems.append(daybreak)
     return problems
 
 
@@ -199,6 +230,8 @@ def route_summary(route: Mapping[str, Any]) -> str:
         parts.append(f"reasoning {_text(route.get('reasoning_effort'))}")
     if _text(route.get("service_tier")) and _text(route.get("service_tier")) != "normal":
         parts.append(_text(route.get("service_tier")))
+    if route.get("daybreak") is True:
+        parts.append("daybreak")
     return " · ".join(p for p in parts if p)
 
 

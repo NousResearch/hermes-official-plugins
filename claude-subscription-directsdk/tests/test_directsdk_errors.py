@@ -10,6 +10,25 @@ from test_directsdk import FAKE
 REQUEST = dict(model='sonnet', messages=[{'role': 'user', 'content': 'fixture'}])
 
 
+@pytest.mark.parametrize('request_id, expected', [
+    ('req_01Valid-id', 'req_01Valid-id'),
+    ('req_' + 'a' * 124, 'req_' + 'a' * 124),
+    (None, None),
+    ('', None),
+    (123, None),
+    ('req_', None),
+    ('Bearer fixture-private-token', None),
+    ('req_valid\r\nAuthorization: fixture-private-token', None),
+    ('req_' + 'a' * 125, None),
+    ('req_nonascii_\u00e9', None),
+])
+def test_error_request_id_is_bounded_and_safe(request_id, expected):
+    error = directsdk.ClaudeAPIError('fixture error', 529, request_id=request_id)
+    assert error.request_id == expected
+    assert error.status_code == 529
+    assert str(error) == 'fixture error' + (f' (request_id={expected})' if expected else '')
+
+
 def _native(tmp_path, native_error, create_client=directsdk.Client):
     native = tmp_path / 'native.py'
     native.write_text(FAKE)
@@ -76,3 +95,22 @@ def test_watchdog_kill_classifies_like_a_timeout(profile):
     for other in (RuntimeError('Native request failed: error_during_execution'), InterruptedError('Agent interrupted during API call'),
                   TimeoutError('Claude request timed out'), ValueError('model is required')):
         assert profile.classify_api_error(other) is None
+
+
+def test_request_refused_before_spawn_is_not_retried_but_may_fall_back(profile):
+    from agent.error_classifier import classify_api_error
+
+    with pytest.raises(directsdk.RequestRejected) as raised:
+        directsdk.Client(command='claude', env={}).create(model='sonnet', messages=REQUEST['messages'],
+                                                          response_format={'type': 'json_object'})
+    verdict = classify_api_error(raised.value, provider=profile.name, model='sonnet')
+    assert (verdict.reason.value, verdict.retryable, verdict.should_fallback) == ('format_error', False, True)
+    # A ValueError that is not this transport's own refusal keeps core's verdict.
+    assert profile.classify_api_error(ValueError('Only json_schema structured output is supported')) is None
+
+
+def test_auxiliary_json_object_is_dropped_before_the_request(profile):
+    from agent.auxiliary_structured_output import without_unsupported_response_format
+
+    extra = {'response_format': {'type': 'json_object'}, 'max_tokens': 5}
+    assert without_unsupported_response_format(extra, profile.name, profile.base_url, 'claude-sonnet-5-5') == {'max_tokens': 5}

@@ -161,8 +161,8 @@ Catalog entries come in two tiers:
 <a href="agent-importers/"><img src="assets/agent-importers.jpg" alt="Agent Importers plugin"></a>
 <h3><a href="agent-importers/">Agent Importers</a></h3>
 <code>hermes plugins install agent-importers</code>
-<p><code>hermes import-agent</code> brings an OpenClaw, Claude Code, Codex CLI or Cursor setup into Hermes in one command: instructions, Cursor rules and memories become memory entries, Bash permission rules become allow/deny lists, MCP servers land in <code>config.yaml</code> and skills are copied. Always previews first and never imports API keys (OpenClaw's allowlisted secrets only with <code>--migrate-secrets</code>); <code>--sync</code> re-imports sources that changed. The old <code>hermes claw migrate</code> / <code>hermes claw cleanup</code> spelling and the openclaw-migration skill come along. Formerly built into Hermes core.</p>
-<p>CLI command · <code>hermes import-agent [openclaw|claude-code|codex|cursor]</code></p>
+<p><code>hermes import-agent</code> brings an OpenClaw, Claude Code, Codex CLI, Cursor, Grok Bot or OpenBot setup into Hermes in one command (Grok Bot and OpenBot routines become Hermes cron jobs): instructions, Cursor rules and memories become memory entries, Bash permission rules become allow/deny lists, MCP servers land in <code>config.yaml</code> and skills are copied. Always previews first and never imports API keys (OpenClaw's allowlisted secrets only with <code>--migrate-secrets</code>); <code>--sync</code> re-imports sources that changed. The old <code>hermes claw migrate</code> / <code>hermes claw cleanup</code> spelling and the openclaw-migration skill come along. Formerly built into Hermes core.</p>
+<p>CLI command · <code>hermes import-agent [openclaw|claude-code|codex|cursor|grok-bot|openbot]</code></p>
 </td>
 <td width="50%" valign="top">
 <a href="mcp-serve/"><img src="assets/mcp-serve.jpg" alt="MCP Serve plugin"></a>
@@ -177,7 +177,7 @@ Catalog entries come in two tiers:
 <a href="bubblewrap/"><img src="assets/bubblewrap.jpg" alt="Bubblewrap plugin"></a>
 <h3><a href="bubblewrap/">Bubblewrap</a></h3>
 <code>hermes plugins install bubblewrap</code>
-<p>A terminal backend that runs every <code>terminal</code> and <code>execute_code</code> command in its own bwrap sandbox on this machine, at the same paths: read-only root, writable working directory, SSH keys, cloud credentials and the Hermes home hidden, private <code>/tmp</code> and <code>/proc</code>, agent sockets masked, memory, CPU and process limits. No image, no daemon. The file tools (<code>read_file</code>, <code>write_file</code>, <code>patch</code>, <code>search_files</code>) run on the host, outside the sandbox.</p>
+<p>A terminal backend that runs every <code>terminal</code> and <code>execute_code</code> command in its own bwrap sandbox on this machine, at the same paths: read-only root, writable working directory, SSH keys, cloud credentials and the Hermes home hidden, private <code>/tmp</code> and <code>/proc</code>, agent sockets masked, memory, CPU and process limits. No image, no daemon. The file tools (<code>read_file</code>, <code>write_file</code>, <code>patch</code>, <code>search_files</code>) run in the sandbox too.</p>
 <p>Terminal backend <code>terminal.backend: bubblewrap</code> · Linux</p>
 </td>
 <td width="50%" valign="top">
@@ -222,10 +222,15 @@ Catalog entries come in two tiers:
 </tr>
 <tr>
 <td width="50%" valign="top">
-<h3>More on the way</h3>
-<p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
+<a href="hermes-security/"><img src="assets/hermes-security.jpg" alt="Security plugin"></a>
+<h3><a href="hermes-security/">Security</a></h3>
+<code>hermes plugins install hermes-security</code>
+<p>Security review for a local repository. Parallel subagents read the code in chunks, check each candidate against the code, and trace whether an attacker can reach it. Optional tests confirm findings in a temporary copy, and an optional grant lets the agent test your running app for an hour. Reports keep evidence, coverage gaps and rejected candidates, export to Markdown, JSON, CSV and SARIF, and get a Security page in Hermes Desktop.</p>
+<p><code>security_scan_start</code> and 8 more · <code>/security</code> · <code>hermes security-review</code></p>
 </td>
 <td width="50%" valign="top">
+<h3>More on the way</h3>
+<p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
 </td>
 </tr>
 </table>

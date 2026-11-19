@@ -99,6 +99,11 @@ class HomeAssistantAdapter(BasePlatformAdapter):
 
     MAX_MESSAGE_LENGTH = 4096
     _BACKOFF_STEPS = [5, 10, 30, 60]  # reconnect backoff (seconds)
+    # WebSocket ping interval, in seconds. Home Assistant does not answer a ping
+    # within half the interval on every install, so aiohttp closes the socket and
+    # the adapter reconnects in a loop (issue #139). Configurable per install:
+    # ``platforms.homeassistant.extra.ws_heartbeat_seconds``; 0 turns it off.
+    DEFAULT_WS_HEARTBEAT = 30
 
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform("homeassistant"))
@@ -117,7 +122,23 @@ class HomeAssistantAdapter(BasePlatformAdapter):
         self._ignore_entities: Set[str] = set(extra.get("ignore_entities", []))
         self._watch_all: bool = bool(extra.get("watch_all", False))
         self._cooldown_seconds: int = int(extra.get("cooldown_seconds", 30))
+        self._ws_heartbeat: Optional[float] = self._read_heartbeat(extra.get("ws_heartbeat_seconds"))
         self._last_event_time: Dict[str, float] = {}  # entity_id -> last event ts
+
+    @classmethod
+    def _read_heartbeat(cls, raw: Any) -> Optional[float]:
+        """The configured ping interval, or None when the heartbeat is off.
+
+        0 (or an empty setting) disables the ping. A non-numeric setting falls
+        back to the default rather than failing the connection.
+        """
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            return float(cls.DEFAULT_WS_HEARTBEAT)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return float(cls.DEFAULT_WS_HEARTBEAT)
+        return value if value > 0 else None
 
     def _next_id(self) -> int:
         self._msg_id += 1
@@ -165,7 +186,8 @@ class HomeAssistantAdapter(BasePlatformAdapter):
         """Open the WebSocket, authenticate, and subscribe to ``state_changed``."""
         ws_url = self._hass_url.replace("https://", "wss://").replace("http://", "ws://")
         self._session = self._new_session()
-        self._ws = await self._session.ws_connect(f"{ws_url}/api/websocket", heartbeat=30, timeout=30)
+        self._ws = await self._session.ws_connect(
+            f"{ws_url}/api/websocket", heartbeat=self._ws_heartbeat, timeout=30)
         msg = await self._ws.receive_json()
         if msg.get("type") != "auth_required":
             return await self._handshake_failed("Expected auth_required, got: %s", msg.get("type"))
@@ -241,6 +263,10 @@ class HomeAssistantAdapter(BasePlatformAdapter):
             return
         async for ws_msg in self._ws:
             if ws_msg.type in {aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR}:
+                # Name the reason before reconnecting: the close code and the
+                # exception explain a dropped socket, while a bare "Reconnecting
+                # in 5s..." leaves the gateway log silent about the cause.
+                logger.warning("[%s] WebSocket closed: %s", self.name, self._close_reason())
                 break
             if ws_msg.type != aiohttp.WSMsgType.TEXT:
                 continue
@@ -251,6 +277,24 @@ class HomeAssistantAdapter(BasePlatformAdapter):
                 continue
             if data.get("type") == "event":
                 await self._handle_ha_event(data.get("event", {}))
+
+    def _close_reason(self) -> str:
+        """A one-line description of why the WebSocket ended."""
+        ws = self._ws
+        if ws is None:
+            return "no socket"
+        parts = []
+        close_code = getattr(ws, "close_code", None)
+        if close_code:
+            parts.append(f"code {close_code}")
+        exception = None
+        try:
+            exception = ws.exception()
+        except Exception as exc:  # pragma: no cover - defensive: a broken socket must not raise here
+            exception = exc
+        if exception is not None:
+            parts.append(f"{type(exception).__name__}: {exception}")
+        return ", ".join(parts) if parts else "no reason reported"
 
     def _passes_filters(self, entity_id: str) -> bool:
         """Closed by default: requires watch_domains, watch_entities, or watch_all."""

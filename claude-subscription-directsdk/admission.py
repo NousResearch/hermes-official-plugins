@@ -162,10 +162,11 @@ def _frame_first(messages, queried):
     return True
 
 
-# The only trailing system text the relay moves: native 2.1.299's date line, exactly as its opening request ends the
-# environment message. Any other trailing text stays put, since moving text that varies per request into the
-# environment message would change the prefix from message 1 on every request.
-_DATE_LINE = re.compile(r"Today's date is \d{4}-\d{2}-\d{2}\.")
+# The only trailing system text the relay moves: native's date line, exactly as its opening request ends the
+# environment message (bare on 2.1.299, wrapped in a system-reminder on 2.1.292 and 2.1.319). Any other trailing
+# text stays put, since moving text that varies per request into the environment message would change the prefix
+# from message 1 on every request.
+_DATE_LINE = re.compile(r"(?:<system-reminder>\n)?Today's date is \d{4}-\d{2}-\d{2}\.(?:\n</system-reminder>)?")
 
 
 def stable_request_context(payload, queried):
@@ -212,6 +213,27 @@ def stable_request_context(payload, queried):
                 mark = tail.get('cache_control', last.get('cache_control'))
                 messages.pop()
                 previous = messages[-1]['content']
+                if mark is not None and isinstance(previous, list) and previous:
+                    previous[-1].setdefault('cache_control', mark)
+                changed = True
+        elif last.get('role') == 'system' and env is not None and isinstance(content, list) and len(content) > 1 \
+                and content[0].get('type') == 'text' and _DATE_LINE.fullmatch(content[0].get('text', '')):
+            # Native 2.1.311 on Fable sends the date line first in the same
+            # trailing system message as a per-step reminder. Moving only
+            # the date into the environment message keeps messages[1]
+            # identical on user turns and tool-result steps alike; the
+            # reminder stays trailing, where later requests never replay it.
+            date_block = content[0]
+            original = env['content']
+            target = {'type': 'text', 'text': original} if isinstance(original, str) else (original[-1] if original else {})
+            if target.get('type') == 'text' and not target['text'].endswith(date_block['text']):
+                if isinstance(original, str):
+                    env['content'] = original + '\n\n' + date_block['text']
+                else:
+                    target['text'] += '\n\n' + date_block['text']
+                del content[0]
+                mark = date_block.get('cache_control')
+                previous = messages[-2]['content'] if len(messages) > 1 else None
                 if mark is not None and isinstance(previous, list) and previous:
                     previous[-1].setdefault('cache_control', mark)
                 changed = True
@@ -531,6 +553,8 @@ class Capture:
         self.decoder = codecs.getincrementaldecoder('utf-8')()
         self.arguments = {}
         self.unparsed = []
+        # (id, native name, raw arguments) of each call whose streamed arguments did not parse.
+        self.unparsed_calls = []
 
     def feed(self, chunk):
         self.pending += self.decoder.decode(chunk)
@@ -578,10 +602,12 @@ class Capture:
             try:
                 self.message['content'][index]['input'] = json.loads(raw) if raw.strip() else {}
             except ValueError:
-                # Streamed tool input is not validated (``eager_input_streaming``): a reply cut off at
-                # max_tokens ends mid-argument. The call is dropped at message_stop, never run with guessed
-                # arguments, and the stop reason (finish ``length``) tells Hermes the reply was cut short.
+                # Streamed tool input is not validated (``eager_input_streaming``): a reply cut at max_tokens ends
+                # mid-argument, and the API can stream invalid JSON. Dropped from native's turn at message_stop; the
+                # client hands it to Hermes with finish ``length``, so it is never run.
+                block = self.message['content'][index]
                 self.unparsed.append(index)
+                self.unparsed_calls.append((block.get('id'), block.get('name'), raw))
 
     def _delta(self, event):
         self.message.update(event.get('delta', {}))
@@ -650,7 +676,9 @@ class _Server(HTTPServer):
 
 
 class Admission:
-    def __init__(self, upstream, timeout, queried=None):
+    def __init__(self, upstream, timeout, queried=None, *, proxy=None, context=None):
+        """``proxy`` (``(host, port, tunnel_headers)``) replaces the proxy-variable lookup and ``context`` the
+        default TLS context; both come from the plugin's upstream settings (``directsdk_setup.resolve_upstream``)."""
         self.upstream = urlsplit(upstream)
         self.queried = queried
         host = self.upstream.hostname
@@ -661,12 +689,16 @@ class Admission:
         if (self.upstream.scheme != 'https' and not (self.upstream.scheme == 'http' and local)) or not host or self.upstream.username or self.upstream.password or self.upstream.query or self.upstream.fragment:
             raise ValueError('Native upstream must be HTTPS or a loopback HTTP fixture')
         self.timeout = timeout
-        self.proxy = upstream_proxy(self.upstream)
+        self.proxy = proxy if proxy is not None else upstream_proxy(self.upstream)
+        self.context = context
         self.lock = threading.Lock()
         self.sockets = set()
         self.cancelled = False
         self.used = False
         self.denied = 0
+        # Ask the API to stream tool arguments; off for a conversation whose streamed arguments came back invalid.
+        self.eager = True
+        self.auth_retry_used = False
         self.request_id = None
         self.status = None
         self.failure = None
@@ -744,10 +776,10 @@ class Handler(BaseHTTPRequestHandler):
         if target.scheme == 'https':
             if gate.proxy:
                 proxy_host, proxy_port, tunnel_headers = gate.proxy
-                conn = http.client.HTTPSConnection(proxy_host, proxy_port, timeout=gate.timeout, context=ssl.create_default_context())
+                conn = http.client.HTTPSConnection(proxy_host, proxy_port, timeout=gate.timeout, context=gate.context or ssl.create_default_context())
                 conn.set_tunnel(target.hostname, target.port or 443, headers=tunnel_headers)
             else:
-                conn = http.client.HTTPSConnection(target.hostname, target.port, timeout=gate.timeout, context=ssl.create_default_context())
+                conn = http.client.HTTPSConnection(target.hostname, target.port, timeout=gate.timeout, context=gate.context or ssl.create_default_context())
         else:
             conn = http.client.HTTPConnection(target.hostname, target.port, timeout=gate.timeout)
         try:
@@ -764,6 +796,29 @@ class Handler(BaseHTTPRequestHandler):
             conn.close()
             raise
 
+    def _allows_auth_retry(self):
+        """One extra upstream round for native to refresh a revoked OAuth login and re-issue (#162).
+
+        Claude Code refreshes the shared login and re-issues the whole request when Anthropic
+        rejects its token with 401; the one-per-call gate denied that retry and the refreshed
+        token never reached upstream, so every later request failed the same way. Only a first
+        attempt that was itself an auth error buys the retry: a retried 401, any other status
+        (rate limit, 5xx, stall) and any other body shape stay denied as before.
+        """
+        gate = self.server.admission
+        if gate.auth_retry_used or gate.status != 401:
+            return False
+        try:
+            answer = json.loads(gate.error_body.decode('utf-8', errors='replace').strip())
+        except ValueError:
+            return False
+        error = answer.get('error') if isinstance(answer, dict) else None
+        if not isinstance(error, dict) or error.get('type') != 'authentication_error':
+            return False
+        gate.auth_retry_used = True
+        gate.error_body = b''  # The retry's own answer is the one Hermes reports.
+        return True
+
     def do_POST(self):
         global _gzip_latched
         gate = self.server.admission
@@ -772,7 +827,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         with gate.lock:
-            if gate.cancelled or gate.used:
+            if gate.cancelled or (gate.used and not self._allows_auth_retry()):
                 gate.denied += 1
                 body = b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_MODEL_ADMISSION_CONSUMED"}}'
                 self.send_response(400)
@@ -798,7 +853,8 @@ class Handler(BaseHTTPRequestHandler):
                 gate.unrestored = str(exc)
             payload = stable_request_context(payload, gate.queried)
             payload = pin_message_breakpoint(payload, gate.queried)
-            payload = stream_tool_input(payload)
+            if gate.eager:
+                payload = stream_tool_input(payload)
             target = gate.upstream
             conn, upstream_socket = self._connect_upstream()
             if conn is None:

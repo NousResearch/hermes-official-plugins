@@ -24,9 +24,9 @@ Layout of the argv (later mounts overlay earlier ones):
    a command cannot rename the parent of a hidden path out from under its
    overlay
 6. the HOME layout (bubblewrap_home.home_layout_args), which makes HOME
-   default-deny for dot entries: a tmpfs over HOME, the non-dot entries
-   and the allowed dot entries bound back, a tmpfs with the allowed
-   children for HOME/.config, HOME/.local and HOME/.local/share, an
+   default-deny for dot entries, or for every entry under home_default_deny
+   all: a tmpfs over HOME, the visible entries bound back, a tmpfs with
+   the allowed children for HOME/.config, HOME/.local and HOME/.local/share, an
    overlay for each hidden path that is still visible, and at the very
    end a read-only remount of each tmpfs. The cwd, the operator binds and
    the pins of steps 3 to 5 that land under HOME, and the binds of steps
@@ -38,8 +38,9 @@ Layout of the argv (later mounts overlay earlier ones):
    when HERMES_HOME points elsewhere (a profile under
    HOME/.hermes/profiles, or any other directory), so a profile's sandbox
    cannot read the default home's credentials
-8. a tmpfs over the sandbox dir when no hidden path covers it, so a
-   sandbox sees no other environment's state (read-only after step 10);
+8. a tmpfs over the sandbox dir when no hidden path covers it, and over
+   each second view of it through an operator bind, so a sandbox sees no
+   other environment's state (read-only after step 10);
    the trust-anchor files the overlays hide (CA_BUNDLE_VARS), read-only
    from the paths they resolved to; this environment's own scratch dir
    mounted at the Hermes scratch dir, which every Hermes process and
@@ -57,7 +58,7 @@ Layout of the argv (later mounts overlay earlier ones):
     duration of an execute_code call the hermes_exec_<id> dir with the
     script, the tools module and the rpc files
 11. ``--chdir`` to the tracked cwd, then ``--`` so the caller can append
-    the shell argv
+    the process limit and the shell argv
 
 The paths in the argv are fixed at construction: the hidden set and the
 HOME allowlist are resolved once, so a symlinked entry is hidden at its
@@ -78,14 +79,17 @@ above it, lets a command rename the parent, and the next spawn then finds
 nothing to hide at the old path while the secret is readable under the
 new one.
 
-Resource limits are applied by prlimit(1) from util-linux, which the
-environment places in front of the bwrap argv above: prlimit sets
-RLIMIT_AS, RLIMIT_CPU and RLIMIT_NPROC on itself and execs bwrap, so the
-limits are in place before the sandbox starts and no Python code runs in
-the forked child. (Popen's pre-exec callback is documented as unsafe in
-a threaded process, and the gateway is one.) A value above the inherited
-hard limit is clamped to it in the parent, since raising a hard limit
-needs CAP_SYS_RESOURCE.
+Resource limits are applied by prlimit(1) from util-linux, in two
+places. In front of the bwrap argv above, prlimit sets RLIMIT_AS and
+RLIMIT_CPU on itself and execs bwrap, so those limits are in place before
+the sandbox starts. After bwrap's ``--`` separator, a second prlimit sets
+RLIMIT_NPROC and execs the shell: inside the user namespace bwrap made,
+the kernel counts the processes of that sandbox alone, so the value is a
+ceiling for the sandbox whatever the host runs (see rlimit_values). No
+Python code runs in the forked child. (Popen's pre-exec callback is
+documented as unsafe in a threaded process, and the gateway is one.) A
+value above the inherited hard limit is clamped to it in the parent,
+since raising a hard limit needs CAP_SYS_RESOURCE.
 """
 
 from __future__ import annotations
@@ -95,6 +99,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import resource
 import shlex
 import shutil
@@ -165,6 +170,8 @@ SETTING_MEMORY_MB = "memory_mb"
 SETTING_CPU_SECONDS = "cpu_seconds"
 SETTING_MAX_PROCS = "max_procs"
 SETTING_HOME_ALLOW = "home_allow"
+SETTING_HIDE = "hide"
+SETTING_HOME_DEFAULT_DENY = "home_default_deny"
 SETTINGS_PREFIX = "plugins.entries.bubblewrap.settings"
 # terminal.home_mode is a core setting; core bridges it to this env name and
 # hermes_constants.get_subprocess_home reads it. The spellings that
@@ -223,8 +230,11 @@ class BubblewrapConfig:
     # is the subprocess HOME and so must be bound back over the overlay.
     home_mode: str = DEFAULT_HOME_MODE
     # The home_allow setting: more allowlist units under HOME
-    # (bubblewrap_home.allow_unit), shown read-only.
+    # (bubblewrap_home.allow_unit), shown read-only. The hide setting: more
+    # paths to hide, absolute or relative to HOME.
     home_allow: tuple[str, ...] = ()
+    hide: tuple[str, ...] = ()
+    home_default_deny: str = bubblewrap_home.DENY_DOT
 
 
 def _setting_name(key: str) -> str:
@@ -293,6 +303,16 @@ def _parse_limit(key: str, raw: object, default: int) -> int:
     return parsed
 
 
+def _parse_choice(key: str, raw: object, choices: tuple[str, ...], default: str) -> str:
+    """One of *choices*, case and surrounding blanks ignored; missing or blank gives *default*."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return default
+    value = raw.strip().lower() if isinstance(raw, str) else None
+    if value not in choices:
+        raise ValueError(f"{_setting_name(key)} must be one of {', '.join(choices)}, got {raw!r}")
+    return value
+
+
 def load_bubblewrap_config(settings: Mapping[str, object] | None = None, home_mode: str = "") -> BubblewrapConfig:
     """Build the config from the plugin's settings mapping and terminal.home_mode.
 
@@ -311,6 +331,11 @@ def load_bubblewrap_config(settings: Mapping[str, object] | None = None, home_mo
         max_procs=_parse_limit(SETTING_MAX_PROCS, settings.get(SETTING_MAX_PROCS), DEFAULT_MAX_PROCS),
         home_mode=(home_mode or "").strip().lower() or DEFAULT_HOME_MODE,
         home_allow=_parse_string_list(SETTING_HOME_ALLOW, settings.get(SETTING_HOME_ALLOW)),
+        hide=_parse_string_list(SETTING_HIDE, settings.get(SETTING_HIDE)),
+        home_default_deny=_parse_choice(
+            SETTING_HOME_DEFAULT_DENY, settings.get(SETTING_HOME_DEFAULT_DENY),
+            (bubblewrap_home.DENY_DOT, bubblewrap_home.DENY_ALL), bubblewrap_home.DENY_DOT,
+        ),
     )
 
 
@@ -319,14 +344,39 @@ def home_replaced_by_bind(home_root: str, binds: Iterable[BindMount]) -> bool:
     return any(_is_within(home_root, bind.dest) and not _same_host_path(bind.src, bind.dest) for bind in binds)
 
 
-def sensitive_paths(home: str, hermes_home: str) -> tuple[str, ...]:
+def operator_hidden_paths(home: str, items: Iterable[str]) -> tuple[str, ...]:
+    """Real host paths the operator hides through the hide setting.
+
+    An item is absolute, starts with ``~/``, or is relative to *home*. An
+    item that names HOME, a parent of it or the root would hide every
+    command's working set and is ignored with a warning.
+    """
+    home = os.path.realpath(os.path.abspath(os.path.expanduser(home)))
+    resolved: list[str] = []
+    for item in items:
+        text = item.strip()
+        if not text:
+            continue
+        if text == "~" or text.startswith("~/"):
+            text = os.path.join(home, text[2:])
+        real = os.path.realpath(text if os.path.isabs(text) else os.path.join(home, text))
+        if _is_within(home, real):
+            logger.warning("Ignoring %s entry %r: it covers the home directory", _setting_name(SETTING_HIDE), item)
+            continue
+        if real not in resolved:
+            resolved.append(real)
+    return tuple(resolved)
+
+
+def sensitive_paths(home: str, hermes_home: str, extra: Sequence[str] = ()) -> tuple[str, ...]:
     """Real host paths that must stay hidden: the HOME set, HERMES_HOME and HOME/.hermes.
 
     The default HOME/.hermes rides along with the resolved HERMES_HOME so a
     relocated HERMES_HOME (a profile at HOME/.hermes/profiles/<name>) does
     not leave the default home readable; when the two are the same
     directory it is listed once. A missing HOME/.hermes stays in the set
-    and emits no mount (sensitive_overlay_args skips absent paths).
+    and emits no mount (sensitive_overlay_args skips absent paths). *extra*
+    is the operator's own hidden paths (operator_hidden_paths).
 
     Each path goes through os.path.realpath, so an entry that is a symlink
     (a dotfiles repository linking HOME/.ssh to HOME/dotfiles/ssh) or that sits
@@ -340,15 +390,22 @@ def sensitive_paths(home: str, hermes_home: str) -> tuple[str, ...]:
 
     The HOME part is bubblewrap_home.denied_home_paths: the module list
     plus the HOME paths the file safety policy refuses. An entry under
-    another one is dropped as covered by it.
+    another one is dropped as covered by it, except an operator entry: a
+    directory under HERMES_HOME that is bound back on top of its overlay
+    (the profile home) would show it again, and _check_profile_home
+    refuses a hidden path inside the profile home.
     """
     home = os.path.abspath(os.path.expanduser(home))
     resolved = list(bubblewrap_home.denied_home_paths(home))
-    for path in (os.path.abspath(os.path.expanduser(hermes_home)), os.path.join(home, DEFAULT_HERMES_HOME_NAME)):
+    for path in (os.path.abspath(os.path.expanduser(hermes_home)), os.path.join(home, DEFAULT_HERMES_HOME_NAME), *extra):
         real = os.path.realpath(path)
         if real not in resolved:
             resolved.append(real)
-    return tuple(p for p in resolved if not any(p != other and _is_within(p, other) for other in resolved))
+    kept = {os.path.realpath(path) for path in extra}
+    return tuple(
+        p for p in resolved
+        if p in kept or not any(p != other and _is_within(p, other) for other in resolved)
+    )
 
 
 def empty_file_path(state_dir: str) -> str:
@@ -397,6 +454,59 @@ _UNRESOLVED: object = object()
 
 
 DOCKER_SOCKETS: tuple[str, ...] = ("/var/run/docker.sock", "/run/docker.sock")
+
+
+# How many symlinks the walk of one chain follows; the kernel stops at 40.
+DOT_LINK_MAX_HOPS = 40
+
+
+def dot_link_entries(home_root: str, name: str) -> list[str]:
+    """Every directory entry the kernel passes when it resolves *name* at the top of *home_root*.
+
+    The walk goes one path component at a time and follows each symlink
+    it meets, as path resolution does, so the list holds the links in the
+    middle of a chain and the directories that lead to them, not just the
+    final target that realpath gives. The last item is the final target,
+    or the first entry that does not exist: a command that can make it
+    decides what the link resolves to. The entry *name* itself is left
+    out. A chain longer than the kernel allows resolves to nothing on the
+    host, so the walk stops there.
+    """
+    entries: list[str] = []
+    # *name* may be nested (.config/nvim): a relative target starts at the link's own directory.
+    current = os.path.dirname(os.path.join(home_root, name))
+    try:
+        pending = os.readlink(os.path.join(home_root, name)).split(os.sep)
+    except OSError:
+        return entries
+    if pending and pending[0] == "":
+        current = os.sep
+    hops = 1
+    while pending:
+        part = pending.pop(0)
+        if part in ("", "."):
+            continue
+        if part == "..":
+            current = os.path.dirname(current)
+            continue
+        entry = os.path.join(current, part)
+        entries.append(entry)
+        if os.path.islink(entry):
+            hops += 1
+            if hops > DOT_LINK_MAX_HOPS:
+                break
+            try:
+                target = os.readlink(entry)
+            except OSError:
+                break
+            if os.path.isabs(target):
+                current = os.sep
+            pending = target.split(os.sep) + pending
+        elif os.path.lexists(entry):
+            current = entry
+        else:
+            break
+    return entries
 
 
 def runtime_overlay_args(state_dir: str, uid: int) -> list[str]:
@@ -463,6 +573,7 @@ def bind_guard(
     writable: Iterable[str],
     home_root: str | None,
     home_allow: Sequence[str],
+    home_default_deny: str = bubblewrap_home.DENY_DOT,
 ) -> bubblewrap_binds.BindGuard:
     """The BindGuard for an environment: the hidden set split into credential stores and Hermes homes."""
     homes = tuple(homes)
@@ -473,6 +584,7 @@ def bind_guard(
         writable=tuple(dict.fromkeys(os.path.realpath(p) for p in writable)),
         home_root=home_root,
         home_allow=tuple(home_allow),
+        home_default_deny=home_default_deny,
     )
 
 
@@ -670,6 +782,22 @@ def ancestor_pin_args(
     return argv
 
 
+def sandbox_dir_views(sandbox_root: str, binds: Iterable[BindMount]) -> tuple[str, ...]:
+    """The paths where an operator bind shows *sandbox_root* a second time.
+
+    A bind of a parent of the sandbox dir to another destination shows the
+    sandbox dir below that destination, with the state dir of every
+    environment in it. Hiding the sandbox dir at its own path leaves that
+    view open, so each view gets the same tmpfs.
+    """
+    views: list[str] = []
+    for bind in binds:
+        src = os.path.realpath(bind.src)
+        if src != bind.dest and _is_within(sandbox_root, src):
+            views.append(os.path.normpath(os.path.join(bind.dest, os.path.relpath(sandbox_root, src))))
+    return tuple(dict.fromkeys(views))
+
+
 def _late_mounts(
     profile: Profile,
     state_dir: str,
@@ -679,6 +807,7 @@ def _late_mounts(
     ca_bundles: Sequence[tuple[str, str]],
     profile_home: tuple[str, str] | None,
     sandbox_root: str | None,
+    sandbox_views: Sequence[str] = (),
 ) -> list[tuple[str, ...]]:
     """The mounts that go on top of every overlay, in order: the sandbox dir, trust anchors, scratch, the profile home, the state dir."""
     late: list[tuple[str, ...]] = []
@@ -688,6 +817,8 @@ def _late_mounts(
     # (below), so a sandbox sees its own state and nothing of another's.
     if sandbox_root:
         late.append(("--tmpfs", sandbox_root))
+    # The same holds where an operator bind shows the sandbox dir again.
+    late += [("--tmpfs", view) for view in sandbox_views]
     # Trust anchors the overlays hid come back read-only, from the path
     # they resolved to at construction (see ca_bundle_binds); -try, so a
     # bundle removed from the host between spawns fails in the tool that
@@ -715,6 +846,7 @@ def _late_mounts(
     late.append(("--bind", state_dir, state_dir))
     if sandbox_root:
         late.append(("--remount-ro", sandbox_root))
+    late += [("--remount-ro", view) for view in sandbox_views]
     return late
 
 
@@ -751,7 +883,7 @@ def build_bwrap_args(
     (private_scratch_path), mounted at *scratch_dir*; without it nothing of
     the scratch dir is bound. *sandbox_root*, when given, is hidden but for
     the state dir (the environment passes it when no hidden path covers
-    it). The listing of the top of HOME is the one input read from the host
+    it), and so is each second view of it through an operator bind. The listing of the top of HOME is the one input read from the host
     at each call, so a directory made on the host later shows in the next
     spawn.
     """
@@ -781,7 +913,7 @@ def build_bwrap_args(
         writable += [scratch_dir, os.path.dirname(state_dir)]
         guard = bind_guard(
             hidden_paths, hermes_homes(home, hermes_home), writable,
-            home_root, home_allow or (),  # type: ignore[arg-type]
+            home_root, home_allow or (), config.home_default_deny,  # type: ignore[arg-type]
         )
         ca_bundles = ca_bundle_binds(guard)
 
@@ -834,6 +966,7 @@ def build_bwrap_args(
         scratch_dir=scratch_dir, scratch_private=scratch_private, ca_bundles=ca_bundles,
         profile_home=profile_home,  # type: ignore[arg-type]
         sandbox_root=sandbox_root,
+        sandbox_views=sandbox_dir_views(sandbox_root, binds) if sandbox_root else (),
     )
 
     if home_root is None:
@@ -861,7 +994,7 @@ def build_bwrap_args(
             listing = sorted(os.listdir(root))
         except OSError:
             listing = []
-        # A writable bind that covers HOME makes the non-dot entries
+        # A writable bind that covers HOME makes the visible non-dot entries
         # writable and nothing else under HOME: the dot entries are
         # read-only or hidden, and the top of HOME is a read-only tmpfs.
         # So inside HOME the pins are computed against those entries, and
@@ -871,10 +1004,14 @@ def build_bwrap_args(
         plain = [pair for pair in writable if pair not in covering]
         hidden_in = [path for path in hidden_paths if in_home(path)]
         hidden_out = [path for path in hidden_paths if not in_home(path)]
+        units = tuple(home_allow or ())
         pins = ancestor_pin_args(plain, mount_points, hidden_paths)
         pins += ancestor_pin_args(covering, mount_points, hidden_out)
         if covering:
-            entries = [os.path.join(root, name) for name in listing if not name.startswith(".")]
+            entries = [
+                os.path.join(root, name) for name in listing
+                if not name.startswith(".") and bubblewrap_home.shows_entry(name, units, config.home_default_deny)
+            ]
             entries = [path for path in entries if os.path.isdir(path) and not os.path.islink(path)]
             pins += ancestor_pin_args([(path, path) for path in entries], [*mount_points, *entries], hidden_in)
         mounts += [(pins[i], pins[i + 1], pins[i + 2]) for i in range(0, len(pins), 3)]
@@ -884,13 +1021,14 @@ def build_bwrap_args(
                 argv += mount
         argv += bubblewrap_home.home_layout_args(
             root,
-            tuple(home_allow or ()),
+            units,
             hidden_paths,
             empty_file=empty_file_path(state_dir),
             writable_roots=[dest for _src, dest in covering],
             listing=listing,
             binds=[mount for mount in mounts if in_home(mount[2])],
             late_args=[token for mount in late if in_home(mount[-1]) for token in mount],
+            default_deny=config.home_default_deny,
         )
         # The overlays for hidden paths outside HOME (a HERMES_HOME kept
         # elsewhere, a credential directory that is a symlink out of HOME).
@@ -1025,48 +1163,77 @@ def probe_bwrap() -> str:
     return _probed_bwrap_path
 
 
-def uid_thread_count(uid: int) -> int:
-    """Threads owned by *uid* host-wide, counted from /proc.
+# The process limit the probe sets inside its sandbox: room for bwrap's
+# init, the shell and the one child the shell forks, and far below what a
+# uid runs on any host that has a Hermes process on it.
+PROCESS_LIMIT_PROBE_VALUE = 4
 
-    RLIMIT_NPROC counts threads, not processes (getrlimit(2)), and a desktop
-    uid runs several threads per process.
+# Whether RLIMIT_NPROC set inside a sandbox counts that sandbox alone on
+# this kernel. Probed once per process; None until then.
+_process_limit_scoped: bool | None = None
+
+
+def run_process_limit_probe(bwrap_path: str, prlimit_path: str) -> bool:
+    """True when a process limit set inside a sandbox is counted for that sandbox alone.
+
+    Linux counts RLIMIT_NPROC per user namespace from 5.14 on (with
+    enforcement fixes up to 5.17). Before that the count is every thread
+    of the uid on the host, and a limit set inside a sandbox would stop
+    every fork. The kernel exposes no flag for this, and a version check
+    cannot see a distribution backport, so the probe measures it: inside
+    a sandbox it sets a limit of PROCESS_LIMIT_PROBE_VALUE, well below the
+    host count, and has the shell fork once. The fork passes only where
+    the count is the sandbox's own. Any other outcome counts as not
+    scoped, so a doubtful kernel gets no limit instead of a broken sandbox.
     """
-    count = 0
-    for name in os.listdir("/proc"):
-        if not name.isdigit():
-            continue
-        proc = os.path.join("/proc", name)
-        try:
-            if os.stat(proc).st_uid == uid:
-                count += len(os.listdir(os.path.join(proc, "task")))
-        except OSError:
-            continue
-    return count
+    argv = [
+        bwrap_path, "--unshare-all", "--die-with-parent", "--ro-bind", "/", "/", "--",
+        prlimit_path, f"--nproc={PROCESS_LIMIT_PROBE_VALUE}", "sh", "-c", "( : ) && exit 0",
+    ]
+    try:
+        # The exit status is the whole answer: no output is decoded.
+        result = subprocess.run(
+            argv, stdin=subprocess.DEVNULL, check=False, capture_output=True, timeout=PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
 
 
-# Processes the wrapper itself forks before the command runs: bwrap, its
-# pid-1 init, the bash that runs the command, and that shell's command
-# substitutions and mktemp for the snapshot; a python3 under execute_code
-# counts too. RLIMIT_NPROC is checked against the uid's live thread count
-# at each fork, so without headroom a tight max_procs (or host threads
-# started between the /proc scan and the fork) fails the spawn before the
-# command starts: "bwrap: Can't fork for pid 1: Resource temporarily
-# unavailable".
-WRAPPER_PROCESS_ALLOWANCE = 16
+def process_limit_is_scoped(bwrap_path: str, prlimit_path: str) -> bool:
+    """run_process_limit_probe, run once per process; warns once when the limit cannot be applied."""
+    global _process_limit_scoped
+    if _process_limit_scoped is None:
+        _process_limit_scoped = bool(run_process_limit_probe(bwrap_path, prlimit_path))
+        if not _process_limit_scoped:
+            logger.warning(
+                "bubblewrap: this kernel does not count the process limit per sandbox (that needs "
+                f"Linux 5.14 or later), so {_setting_name(SETTING_MAX_PROCS)} is not applied. The memory "
+                "and CPU limits still apply."
+            )
+    return _process_limit_scoped
 
 
-def rlimit_values(config: BubblewrapConfig, *, uid_threads: int) -> dict[int, int]:
-    """The rlimits a spawn gets from the three terminal.bubblewrap_* keys.
+# The wrapper's own processes that exist beside the command for its whole
+# run: bwrap's pid-1 init and the shell that runs the command. They count
+# against the same limit, so they come on top of max_procs.
+SANDBOX_BASE_PROCESSES = 2
 
-    A key at 0 leaves its limit out. RLIMIT_NPROC is counted per uid
-    host-wide, and a bwrap user namespace does not change that (kernel
-    6.8: with the limit below the uid's thread count bwrap cannot even
-    create its namespace), so max_procs is applied on top of the uid's
-    current thread count: it bounds what the sandbox may add, and the
-    documented default of 256 keeps working on a desktop that already runs
-    more. WRAPPER_PROCESS_ALLOWANCE is added on top of that for the
-    wrapper's own processes, so max_procs is what the command may add,
-    not what the command and the wrapper share.
+
+def rlimit_values(config: BubblewrapConfig) -> dict[int, int]:
+    """The rlimits a spawn gets from the memory_mb, cpu_seconds and max_procs settings.
+
+    A key at 0 leaves its limit out. The memory and CPU limits are per
+    process and are set in front of bwrap. RLIMIT_NPROC is different: the
+    kernel counts it per user and per user namespace, and checks a
+    namespace's creator limit against the count of the namespace above. A
+    value set in front of bwrap is therefore compared with every thread
+    the uid runs on the host, which makes it either useless as a ceiling
+    or fatal to the spawn. Set inside the sandbox, after bwrap has made
+    its user namespace, it is compared with the processes of that sandbox
+    alone, so max_procs is what the command may run, whatever the host
+    does. A process in the sandbox cannot raise it (the hard limit is set
+    too), and a nested user namespace stays inside it.
     """
     limits: dict[int, int] = {}
     if config.memory_mb:
@@ -1074,7 +1241,7 @@ def rlimit_values(config: BubblewrapConfig, *, uid_threads: int) -> dict[int, in
     if config.cpu_seconds:
         limits[resource.RLIMIT_CPU] = config.cpu_seconds
     if config.max_procs:
-        limits[resource.RLIMIT_NPROC] = uid_threads + config.max_procs + WRAPPER_PROCESS_ALLOWANCE
+        limits[resource.RLIMIT_NPROC] = config.max_procs + SANDBOX_BASE_PROCESSES
     return limits
 
 
@@ -1172,6 +1339,42 @@ def chdir_failed(result: Mapping[str, object], tracked_cwd: str) -> bool:
     return len(lines) == 1 and lines[0].startswith(f"bwrap: Can't chdir to {tracked_cwd}:")
 
 
+# The pid file of Hermes core's background-job triplet (``hermes_bg_<session>``
+# as .log/.pid/.exit in the environment's temp dir); core's own local backend
+# matches the same name when sweeping stale artifacts.
+_BG_PID_FILE_RE = re.compile(r"hermes_bg_[A-Za-z0-9_-]+\.pid")
+
+
+def is_background_launch(command: str) -> bool:
+    """True when *command* is Hermes core's background-job launch wrapper.
+
+    Core starts a ``background=true`` job on a non-local backend by executing
+    one wrapper command in the environment (``spawn_via_env`` in
+    tools/process_registry.py): it nohups the command with its output going
+    to the triplet's .log and echoes the child's pid out of the .pid file,
+    which the launcher reads back as proof the job started. Poll, wait and
+    kill of an already-started job reference the triplet too but run no
+    nohup, so only the launch matches. Like chdir_failed this reads a shape
+    core generates, never a user command: a foreground command would have to
+    name another session's pid file and run nohup to be refused, and
+    refusing it is the safe direction anyway.
+    """
+    return "nohup" in command and _BG_PID_FILE_RE.search(command) is not None
+
+
+#: What execute() answers a background launch with. The text reaches the
+#: model inside core's failed-launch error, so it names the backend, why
+#: the job cannot live, and what to do instead. It must never contain a
+#: line of digits alone: the launcher scans the output for the pid.
+BACKGROUND_LAUNCH_REFUSAL = (
+    "bubblewrap: background processes are not supported by this backend: "
+    "each command runs in its own sandbox, which is torn down when the "
+    "command returns, so a background job would die with the sandbox "
+    "instead of running to completion. Run the command in the foreground, "
+    "or use a backend that keeps processes."
+)
+
+
 # Directories the sandboxes this process built can write to, per Hermes home
 # (real path): the working directories, read-write bind sources and profile
 # homes. Sessions of one profile can run with different working
@@ -1191,6 +1394,10 @@ class BubblewrapEnvironment(LocalEnvironment):
     snapshot and cwd file, the empty file bound over sensitive files, and
     their removal on cleanup.
     """
+
+    # Host paths do not imply the host's filesystem view: HERMES_HOME is hidden,
+    # scratch paths are remapped, and executables must be resolved inside bwrap.
+    uses_host_filesystem = False
 
     def __init__(
         self,
@@ -1219,6 +1426,10 @@ class BubblewrapEnvironment(LocalEnvironment):
         resolve_profile(self._config.profile)
         self._bwrap_path = probe_bwrap()
         self._prlimit_path = shutil.which("prlimit") or "prlimit"
+        # Probed once per process, and only when the limit is asked for.
+        self._process_limit_scoped = bool(self._config.max_procs) and process_limit_is_scoped(
+            self._bwrap_path, self._prlimit_path,
+        )
         # The OS user's home anchors the sensitive set even when this process
         # runs with HOME pointed at the profile home. Every mount path is
         # taken through realpath: bwrap resolves a mount destination inside
@@ -1227,16 +1438,24 @@ class BubblewrapEnvironment(LocalEnvironment):
         self._hermes_home = os.path.realpath(str(get_hermes_home()))
         # Resolved once and kept for the life of the environment: the set
         # never follows a symlink swapped in later.
-        self._hidden_paths = sensitive_paths(self._home, self._hermes_home)
-        # HOME is default-deny for dot entries. What a sandbox may see is
+        self._operator_hidden = operator_hidden_paths(self._home, self._config.hide)
+        self._hidden_paths = sensitive_paths(self._home, self._hermes_home, self._operator_hidden)
+        # HOME is default-deny (home_default_deny). What a sandbox may see is
         # fixed here too: a command cannot widen it by changing PATH.
         self._home_root = bubblewrap_home.resolve_home_root(self._home)
+        if self._home_root is None and self._config.home_default_deny != bubblewrap_home.DENY_DOT:
+            raise ValueError(
+                f"{bubblewrap_home.DENY_KEY} is {self._config.home_default_deny}, but HOME ({self._home}) is not a "
+                "usable directory, so nothing under it could be hidden. Point HOME at a real directory or set "
+                f"{bubblewrap_home.DENY_KEY} to {bubblewrap_home.DENY_DOT}."
+            )
         self._home_allow: tuple[str, ...] = ()
         if self._home_root is not None:
             self._home_allow = bubblewrap_home.resolve_allowlist(
                 self._home_root, os.environ.get("PATH", ""), self._config.home_allow,
                 denied_names=bubblewrap_home.denied_home_names(self._home_root),
                 denied_paths=self._hidden_paths,
+                default_deny=self._config.home_default_deny,
             )
         self._scratch_dir: str | None = resolve_scratch_dir(self._hermes_home)
         # The operator binds are filtered, their sources expanded and their
@@ -1254,6 +1473,7 @@ class BubblewrapEnvironment(LocalEnvironment):
         # tracked cwd starts; without a root they are the same directory.
         self._initial_cwd = os.path.realpath(_resolve_local_initial_cwd(root or cwd))
         self._check_initial_cwd()
+        self._check_writable_dot_links()
         # Checked and recorded under one lock, so two environments built at
         # once each see the other's writable directories.
         with _WRITABLE_ROOTS_LOCK:
@@ -1264,6 +1484,7 @@ class BubblewrapEnvironment(LocalEnvironment):
                 **own,
             }
             self._check_bind_sources()
+            self._check_absent_denied_paths()
             sandbox_root = os.path.realpath(get_sandbox_dir())
             self._check_sandbox_root(sandbox_root)
             self._validate_host_binds(sandbox_root)
@@ -1343,6 +1564,7 @@ class BubblewrapEnvironment(LocalEnvironment):
             home_root = None
         guard = bind_guard(
             self._hidden_paths, hermes_homes(self._home, self._hermes_home), writable, home_root, self._home_allow,
+            self._config.home_default_deny,
         )
         kept: list[BindMount] = []
         for bind in self._config.binds:
@@ -1376,7 +1598,7 @@ class BubblewrapEnvironment(LocalEnvironment):
         resolved to here, at HERMES_HOME/home, never the name. A missing
         profile home gets no bind. A refused one (a link to a directory a
         sandbox can write to, where a command could swap it for a link to
-        another tree, or into a hidden dot entry of HOME) stops the
+        another tree, or into a hidden entry of HOME) stops the
         construction like the other profile home checks
         (_check_profile_home). The plain directory lies in the hidden
         Hermes home and is the one public part of it.
@@ -1510,11 +1732,105 @@ class BubblewrapEnvironment(LocalEnvironment):
         home = os.path.abspath(self._home).rstrip(os.sep) or os.sep
         if cwd == home or _is_within(home, cwd):
             logger.warning(
-                "bubblewrap cwd %s covers the home directory: every existing non-dot "
+                "bubblewrap cwd %s covers the home directory: every visible non-dot "
                 "entry of it is writable inside the sandbox, and no new entry can be made "
                 "at the top of it (its dot entries are read-only or hidden). Set "
                 "terminal.cwd to a project or scratch directory for a smaller writable set.",
                 self._initial_cwd,
+            )
+
+    def _check_writable_dot_links(self) -> None:
+        """Refuse a dot symlink of HOME that a command could redirect or rewrite.
+
+        A dot entry is read-only or hidden in the sandbox, and a symlink
+        at the top of HOME cannot be replaced there. What it leads to is
+        another matter: ~/.bashrc linked into a dotfiles directory that the
+        cwd makes writable can be rewritten through that directory, and the
+        host reads it at the next login, long after the sandbox is gone.
+        The same holds for any link or directory on the way: a command
+        that can replace one of them decides what the host reads.
+
+        The backend does not try to hold such a chain in place with
+        mounts. It walks the chain of each dot symlink at the top of HOME
+        (dot_link_entries) and refuses to start when an entry on it lies
+        in the writable cwd, in a read-write operator bind or in the
+        profile home that a profile home mode binds read-write. Not counted:
+        an entry at or under a hidden path, which no command can reach; a
+        directory on the way that holds a hidden path, which is pinned as
+        a mount point and cannot be renamed or replaced; and, under a
+        source that covers HOME, the dot entries of HOME, which the layout
+        makes read-only or hides.
+        """
+        root = self._home_root
+        if root is None:
+            return
+        sources: list[str] = [self._initial_cwd] if resolve_profile(self._config.profile).writable_cwd else []
+        sources += [os.path.realpath(bind.src) for bind in self._config.binds if not bind.readonly]
+        # Under a profile home mode HERMES_HOME/home is bound read-write on
+        # top of the HERMES_HOME overlay, under every profile: what lies in
+        # it is writable although it is under a hidden path.
+        profile_home: str | None = None
+        if self._config.home_mode in PROFILE_HOME_MODES:
+            candidate = os.path.join(self._hermes_home, "home")
+            if os.path.isdir(candidate):
+                profile_home = os.path.realpath(candidate)
+        if not sources and profile_home is None:
+            return
+        # The top of HOME and each default-deny directory (a stow-style
+        # ~/.config/nvim link counts as much as ~/.bashrc).
+        names: list[str] = []
+        for parent in ("", *bubblewrap_home.DEFAULT_DENY_DIRS):
+            directory = os.path.join(root, parent)
+            if parent and (os.path.islink(directory) or not os.path.isdir(directory)):
+                continue
+            try:
+                listing = os.listdir(directory)
+            except OSError:
+                continue
+            names += sorted(
+                os.path.join(parent, name) for name in listing
+                if (parent or name.startswith(".")) and os.path.islink(os.path.join(directory, name))
+            )
+
+        def writable(entry: str, last: bool) -> bool:
+            if profile_home is not None and _is_within(entry, profile_home) and (last or entry != profile_home):
+                return True
+            if any(_is_within(entry, hidden) for hidden in self._hidden_paths):
+                return False
+            if not last and any(_is_within(hidden, entry) for hidden in self._hidden_paths):
+                return False
+            for source in sources:
+                if not _is_within(entry, source):
+                    continue
+                if entry == source and not last:
+                    # The top of a bind is a mount point: it cannot be replaced.
+                    continue
+                if _is_within(root, source) and _is_within(entry, root):
+                    # A source that covers HOME makes only its non-dot entries writable.
+                    if entry == root or os.path.relpath(entry, root).split(os.sep)[0].startswith("."):
+                        continue
+                return True
+            return False
+
+        def exposed(name: str) -> bool:
+            parent = os.path.dirname(os.path.join(root, name))
+            if parent != root and writable(parent, True):
+                # The link itself is writable through the bind that holds it: the operator chose that.
+                return False
+            entries = dot_link_entries(root, name)
+            return any(writable(entry, index == len(entries) - 1) for index, entry in enumerate(entries))
+
+        refused = [name for name in names if exposed(name)]
+        if refused:
+            raise ValueError(
+                f"{', '.join(refused)} in the home directory {'is a symlink' if len(refused) == 1 else 'are symlinks'} "
+                "that a command in the bubblewrap sandbox could redirect or rewrite: the link leads "
+                "through, or ends in, a place that is writable inside the sandbox (terminal.cwd "
+                f"{self._initial_cwd}, a read-write {_setting_name(SETTING_BINDS)} source or the profile "
+                "home HERMES_HOME/home). The host "
+                "reads such a file after the sandbox is gone, at the next login for a shell startup "
+                "file. Set terminal.cwd to a project directory that does not hold the link target, "
+                "or make the bind read-only."
             )
 
     def _check_bind_sources(self) -> None:
@@ -1567,6 +1883,50 @@ class BubblewrapEnvironment(LocalEnvironment):
                 "way: bound at its own path the source is a mount point, which no "
                 "command can rename or move from any path; or make it read-only."
             )
+
+    def _check_absent_denied_paths(self) -> None:
+        """Refuse a writable bind under which a command could create a credential path.
+
+        A denied path that exists gets an overlay. One that does not exist
+        cannot be mounted over, and a placeholder made for it would land on
+        the host through the same writable bind. The top of HOME and the
+        default-deny directories are read-only tmpfs layers, so a name
+        there cannot be created whatever the cwd is. That leaves a denied
+        path inside a directory the sandbox may write to: the cwd under a
+        writable profile, or a read-write operator bind. A command there
+        could create ~/.config/gh or a token file and the host would use
+        it later, so the environment does not start.
+        """
+        root = self._home_root
+        if root is None:
+            return
+        writable: list[tuple[str, str]] = []
+        if resolve_profile(self._config.profile).writable_cwd:
+            writable.append(("terminal.cwd", self._initial_cwd))
+        writable += [
+            (f"the {_setting_name(SETTING_BINDS)} entry {bind.src}", bind.dest)
+            for bind in self._config.binds if not bind.readonly
+        ]
+        homes = hermes_homes(self._home, self._hermes_home)
+        for label, bound in writable:
+            # The hidden set without the Hermes homes: the credential stores of
+            # HOME and any path the operator hides.
+            for path in (p for p in self._hidden_paths if p not in homes):
+                if path == bound or not _is_within(path, bound) or os.path.lexists(path):
+                    continue
+                if _is_within(root, bound) and _is_within(path, root):
+                    # The bind covers HOME. Under HOME only an existing
+                    # non-dot entry is writable through it.
+                    top = os.path.relpath(path, root).split(os.sep)
+                    if len(top) == 1 or top[0].startswith(".") or not os.path.isdir(os.path.join(root, top[0])):
+                        continue
+                raise ValueError(
+                    f"{label} makes {bound} writable inside the bubblewrap sandbox, and the "
+                    f"credential path {path} does not exist on the host, so the backend cannot "
+                    "hide it and a command could create it. Narrow the bind to the "
+                    "subdirectory you need (for a cache, that one cache directory), or use "
+                    "a project directory as terminal.cwd."
+                )
 
     def _check_sandbox_root(self, sandbox_root: str) -> None:
         """Refuse a sandbox dir a sandbox could write to.
@@ -1633,6 +1993,13 @@ class BubblewrapEnvironment(LocalEnvironment):
     def execute(self, command: str, cwd: str = "", **kwargs) -> dict:
         """Run a command; report a tracked cwd that the sandbox mounts hide.
 
+        A background launch (terminal(background=true), which core runs
+        through this method as a nohup wrapper) is refused before anything
+        spawns: the job would die with this command's sandbox, while the
+        wrapper's pid echo would make core report a live, pollable process.
+        The refusal result carries no pid-shaped line, so core reports the
+        launch as failed with BACKGROUND_LAUNCH_REFUSAL as the reason.
+
         The tracked cwd is checked against the host (LocalEnvironment's
         missing-cwd recovery), not against what the overlays mask
         inside the sandbox. After ``cd`` into a host directory under a
@@ -1646,6 +2013,9 @@ class BubblewrapEnvironment(LocalEnvironment):
         command: its shape can be forged by a command that prints the
         bwrap line and replaces its shell.
         """
+        if is_background_launch(command):
+            logger.warning("bubblewrap: refusing a background launch; this backend cannot keep processes")
+            return {"output": BACKGROUND_LAUNCH_REFUSAL, "returncode": 1}
         if cwd and cwd == self._replaced_cwd:
             cwd = ""
         note = self._reset_masked_cwd()
@@ -1736,7 +2106,7 @@ class BubblewrapEnvironment(LocalEnvironment):
 
     def _wrap_popen_args(self, args: list[str]) -> list[str]:
         self._refresh_private_scratch()
-        return self._prlimit_prefix() + self._bwrap_prefix(self.cwd) + list(args)
+        return self._prlimit_prefix() + self._bwrap_prefix(self.cwd) + self._process_limit_prefix() + list(args)
 
     def _run_bash(self, cmd_string: str, *, login: bool = False, timeout: int = 120,
                   stdin_data: str | None = None) -> subprocess.Popen:
@@ -1809,14 +2179,17 @@ class BubblewrapEnvironment(LocalEnvironment):
         return super()._wrap_command(f"unset {' '.join(HOST_SOCKET_VARS)}; {retarget}{command}", cwd)
 
     def _prlimit_prefix(self) -> list[str]:
-        # uid_thread_count scans /proc once per spawn, and only when max_procs
-        # is non-zero (the one limit that needs it). The count must be fresh:
-        # the kernel checks RLIMIT_NPROC against the uid's live thread count
-        # when the sandbox forks, so a count taken at construction goes stale
-        # as the host starts threads, and a limit that falls below the live
-        # count stops bwrap from creating its namespace at all.
-        uid_threads = uid_thread_count(os.getuid()) if self._config.max_procs else 0  # windows-footgun: ok — Linux-only backend
-        return prlimit_args(rlimit_values(self._config, uid_threads=uid_threads), self._prlimit_path)
+        """prlimit in front of bwrap: the per-process memory and CPU limits."""
+        limits = rlimit_values(self._config)
+        limits.pop(resource.RLIMIT_NPROC, None)
+        return prlimit_args(limits, self._prlimit_path)
+
+    def _process_limit_prefix(self) -> list[str]:
+        """prlimit after bwrap's separator: the process limit, set inside the sandbox."""
+        limit = rlimit_values(self._config).get(resource.RLIMIT_NPROC)
+        if not limit or not self._process_limit_scoped:
+            return []
+        return prlimit_args({resource.RLIMIT_NPROC: limit}, self._prlimit_path)
 
     def _live_sandbox_pids(self) -> list[int]:
         """PIDs of this instance's bwrap wrappers still running.

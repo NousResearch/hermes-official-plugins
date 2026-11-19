@@ -1,0 +1,19 @@
+{
+  "findingId": "hsf_111111111111111111111111", "occurrenceId": "occ_111111111111111111111111",
+  "ruleId": "authz.missing-ownership-check", "identity": {"anchor": "src/api.py/get_invoice"},
+  "fingerprints": {"algorithm": "hermes-security/v1", "primary": "hermes-security/v1:sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+  "title": "A project member can download another tenant's invoices",
+  "summary": "A signed-in member who knows an invoice number can read another tenant's billing details.",
+  "rootCause": "The invoice lookup filters by identifier but does not constrain the owning tenant.",
+  "attackPath": {"source": "Invoice request parameter", "sink": "Invoice response", "steps": ["Sign in as a project member.", "Request an invoice identifier belonging to another tenant.", "Read the returned billing details."], "controls": ["A session is required."], "assumptions": ["The route is deployed."]},
+  "severity": {"level": "high", "rationale": "Billing records cross a tenant boundary without permission, exposing customer details.", "reachability": "Signed-in route", "impact": "Cross-tenant disclosure", "likelihood": "Identifiers may be shared", "prerequisites": ["An account"]},
+  "confidence": {"level": "medium", "rationale": "The lookup and response are visible in source."},
+  "evidenceState": "source_supported", "taxonomy": {"category": "broken-access-control", "cwe": ["CWE-639"], "owasp": ["A01:2025"], "asvs": ["V8.2.2"]},
+  "locations": [{"path": "src/api.py", "startLine": 40, "endLine": 40, "role": "sink"}],
+  "codeEvidence": [{"id": "ev-1", "label": "Unscoped lookup", "path": "src/api.py", "startLine": 40, "endLine": 40, "code": "invoice = invoices.get(invoice_id)", "sha256": "818a642e06b763002e54e053e625857fc7bb5af494576658aa86ba1e646a02bf", "explanation": "The caller's tenant is not part of the query."}],
+  "counterEvidence": ["A gateway might enforce ownership before routing the request."], "proofGaps": ["Production gateway policy was not available."],
+  "validation": {"status": "NOT_RUN", "level": "static", "receiptIds": [], "summary": "Inspected the route, query, and session check; no runtime request was sent."},
+  "remediation": {"summary": "Bind the invoice query to the authenticated tenant and deny unmatched records.", "regressionTests": ["A member requesting another tenant's invoice receives a denial."]},
+  "capabilities": {"preconditions": [], "effects": []}, "secret": null, "diffAttribution": null,
+  "provenance": {"methodologyVersion": "hermes-security/method-1", "workerAttemptIds": [], "sourceCandidateIds": [], "supersedes": null}
+}

@@ -75,12 +75,13 @@ class BindGuard:
     writable: tuple[str, ...] = ()
     home_root: str | None = None
     home_allow: tuple[str, ...] = ()
+    home_default_deny: str = bubblewrap_home.DENY_DOT
 
     def home_hidden_unit(self, path: str) -> str | None:
-        """The dot entry of HOME, off the allowlist, that *path* lies in, else None."""
+        """The entry of HOME, off the allowlist and so hidden, that *path* lies in, else None."""
         if self.home_root is None:
             return None
-        unit = bubblewrap_home.allow_unit(self.home_root, path)
+        unit = bubblewrap_home.allow_unit(self.home_root, path, self.home_default_deny)
         return unit if unit is not None and unit not in self.home_allow else None
 
     def writable_root(self, path: str) -> str | None:
@@ -99,7 +100,8 @@ class BindGuard:
             if any(_is_within(path, mask) and _strictly_within(mask, root) for mask in self.masks):
                 continue
             if self.home_root is not None and _is_within(self.home_root, root) and (
-                bubblewrap_home.allow_unit(self.home_root, path) is not None
+                # Dot-only: under all, an allowed non-dot entry is bound read-write when HOME is writable.
+                bubblewrap_home.allow_unit(self.home_root, path, bubblewrap_home.DENY_DOT) is not None
                 or os.path.dirname(path) == self.home_root
             ):
                 continue
@@ -146,8 +148,9 @@ def _refusal(
             return f"{real} lies in the Hermes home {hermes_home}, which the sandbox hides"
     unit = guard.home_hidden_unit(real)
     if unit is not None:
+        entry = "a dot entry" if unit.startswith(".") else "an entry"
         return (
-            f"{real} lies in {os.path.join(guard.home_root or '', unit)}, a dot entry of HOME the sandbox "
+            f"{real} lies in {os.path.join(guard.home_root or '', unit)}, {entry} of HOME the sandbox "
             f"hides (add {unit!r} to {bubblewrap_home.ALLOW_KEY} to show it)"
         )
     if os.path.isdir(real):
@@ -174,8 +177,8 @@ def bind_refusal(
     host, one that is not of *kind*, one that lies in a directory a sandbox
     can write to (unless bound at its own path, *dest*, directly under such
     a root), and with *hidden_rules* one that lies in a credential store,
-    in a hidden Hermes home outside the *public* roots, or in a dot entry
-    of HOME off the allowlist, and a directory that holds any of those.
+    in a hidden Hermes home outside the *public* roots, or in an entry of
+    HOME the sandbox hides, and a directory that holds any of those.
     """
     real = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
     if not os.path.exists(real):

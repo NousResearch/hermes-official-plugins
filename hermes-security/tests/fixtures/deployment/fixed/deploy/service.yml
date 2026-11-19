@@ -1,0 +1,8 @@
+services:
+  collector:
+    image: example.invalid/telemetry:synthetic
+    environment:
+      MANAGEMENT_BIND: 127.0.0.1:9090
+      MANAGEMENT_AUTH: required
+      RAW_EVENTS: disabled
+    networks: [isolated-management]

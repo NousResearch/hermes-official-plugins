@@ -1001,8 +1001,7 @@ def _save_format(row: dict, urls: dict[str, str], task_id: str, fmt: str, folder
         folder.mkdir(parents=True, exist_ok=True)
         if folder.resolve() != (_data_root() / "meshy_output").resolve() / task_id:
             raise HTTPException(status_code=403, detail="the download folder must not be a symlink")
-        # Replaced, never written through: a planted link at the sidecar's name must not redirect the write.
-        _write_new(folder / _TASK_SIDECAR, [task_id.encode("ascii")])
+        _write_sidecar(folder / _TASK_SIDECAR, task_id)
     else:
         folder.mkdir(parents=True, exist_ok=True)
     # Two clicks (or two windows) saving one file: the second waits, then finds it saved.
@@ -1025,6 +1024,18 @@ def _save_format(row: dict, urls: dict[str, str], task_id: str, fmt: str, folder
     if fmt in ("glb", "gltf"):
         _record_asset(dest, task_id)
     return {"path": str(dest), "bytes": dest.stat().st_size}
+
+
+def _write_sidecar(sidecar: Path, task_id: str) -> None:
+    """Replaced, never written through: a planted link at the sidecar's name must not redirect the write. Written
+    once, under a lock: on Windows a rename onto a file another save is renaming, or a reader holds open, is denied."""
+    body = task_id.encode("ascii")
+    with _STATE_LOCK:
+        lock = _SAVE_LOCKS.setdefault(str(sidecar), threading.Lock())
+    with lock:
+        if not sidecar.is_symlink() and sidecar.is_file() and sidecar.read_bytes() == body:
+            return
+        _write_new(sidecar, [body])
 
 
 def _finishable(folder: Path, stem: str, fmt: str, task_id: str, beside: bool) -> bool:

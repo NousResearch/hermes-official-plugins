@@ -13,7 +13,6 @@ to and the system prompt note that tells the model where the boundary is.
 from __future__ import annotations
 
 import logging
-import os
 import shutil
 import subprocess
 import sys
@@ -25,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 BACKEND_NAME = "bubblewrap"
 PROMPT_SECTION_ID = "bubblewrap-sandbox"
-SETTING_KEYS = ("profile", "binds", "memory_mb", "cpu_seconds", "max_procs", "home_allow")
+SETTING_KEYS = ("profile", "binds", "memory_mb", "cpu_seconds", "max_procs", "home_allow", "hide", "home_default_deny")
 
 _PROFILE_CHOICES = (
     ("restricted", "restricted - read-only working directory, no network"),
@@ -40,18 +39,6 @@ def _sandbox():
     from . import sandbox
 
     return sandbox
-
-
-def _file_tools_bypass_sandbox() -> bool:
-    """Whether Hermes' file tools skip this sandbox and touch files from the Hermes process itself.
-
-    Core gives ``read_file``, ``write_file``, ``patch`` and ``search_files`` an in-process path (Python
-    reads and writes, ripgrep spawned directly) on any POSIX ``LocalEnvironment``, which
-    ``BubblewrapEnvironment`` is; ``HERMES_NATIVE_FILE_READ`` off sends every file operation through
-    ``env.execute``, so into the sandbox (``ShellFileOperations._native_read_enabled`` in
-    ``tools/file_operations.py``, same parse).
-    """
-    return os.environ.get("HERMES_NATIVE_FILE_READ", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def _terminal_env(name: str, default: str = "") -> str:
@@ -203,23 +190,16 @@ class BubblewrapProvider(TerminalEnvironmentProvider):
         else:
             writable = "nothing (the working directory is read-only under this profile)"
         network = "the host network" if profile.share_net else "no network (loopback only)"
-        if _file_tools_bypass_sandbox():
-            file_tools = (
-                "`read_file`, `write_file`, `patch` and `search_files` do not run in this sandbox: Hermes performs them "
-                "itself on the host, with the host user's permissions and its own file-safety rules, so they can read "
-                "and change paths that are hidden or read-only for commands. The scratch directory ($TMPDIR) is not "
-                "the same directory for them: a file a command writes there is not visible to `read_file`, and one "
-                "`write_file` puts there is not visible to commands, so hand files over through the working directory."
-            )
-        else:
-            file_tools = (
-                "`read_file`, `write_file`, `patch` and `search_files` run through this sandbox too, so the same paths "
-                "are hidden and read-only for them."
-            )
+        dot_only = config is None or config.home_default_deny == sandbox.bubblewrap_home.DENY_DOT
+        entries = "dot entries" if dot_only else "entries"
+        file_tools = (
+            "`read_file`, `write_file`, `patch` and `search_files` run through this sandbox too, so the same paths "
+            "are hidden and read-only for them, and they share the commands' scratch directory ($TMPDIR)."
+        )
         return (
             f"Terminal sandbox: bubblewrap, profile `{profile.name}`. Every `terminal` and `execute_code` call runs "
             f"in its own bwrap sandbox on this host with the same paths: the filesystem is read-only except {writable}; "
-            "dot entries of the home directory that are not on the allowlist do not exist, the Hermes home is hidden, "
+            f"{entries} of the home directory that are not on the allowlist do not exist, the Hermes home is hidden, "
             "and credential paths below a visible entry appear empty; the Hermes scratch directory ($TMPDIR) is this "
             "sandbox's own and shows none of the files other sessions keep there; /tmp and /proc are private to "
             f"each command; it has {network}. A `Read-only file system` error, a missing or empty credential path or a "

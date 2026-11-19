@@ -1,0 +1,301 @@
+{
+  "gates": [
+    {
+      "command": [
+        "~/.hermes/hermes-agent/venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "--ignore=tests/unit/test_run_evals.py",
+        "--junitxml=~/.hermes-dashboard/cache/scratch/security-contract-jaef3odj/result.xml",
+        "tests"
+      ],
+      "gate": "deterministic-contract-tests",
+      "measured": 1.0,
+      "output": ".......................................x................................ [ 16%]\n........................................................................ [ 33%]\n........................................................................ [ 49%]\n...............................................................sssss.... [ 66%]\n........................................................................ [ 82%]\n........................................................................ [ 99%]\n....                                                                     [100%]\n430 passed, 5 skipped, 1 xfailed in 15.44s",
+      "status": "PASS",
+      "tests": {
+        "errors": 0,
+        "expectedFailures": 1,
+        "failures": 0,
+        "skipped": 6,
+        "tests": 436
+      },
+      "threshold": "100% executed non-skipped tests"
+    },
+    {
+      "command": [
+        "~/.hermes/hermes-agent/venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "--ignore=tests/unit/test_run_evals.py",
+        "--junitxml=~/.hermes-dashboard/cache/scratch/security-contract-pfyvoujf/result.xml",
+        "tests/integration/test_end_to_end_static.py::test_end_to_end_static",
+        "tests/integration/test_service_security.py::test_reject_candidate_citations_claims_and_secrets"
+      ],
+      "gate": "citation-resolution-and-forgery-rejection",
+      "measured": 1.0,
+      "output": "......                                                                   [100%]\n6 passed in 0.47s",
+      "status": "PASS",
+      "tests": {
+        "errors": 0,
+        "expectedFailures": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 6
+      },
+      "threshold": "100% executed non-skipped tests"
+    },
+    {
+      "command": [
+        "~/.hermes/hermes-agent/venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "--ignore=tests/unit/test_run_evals.py",
+        "--junitxml=~/.hermes-dashboard/cache/scratch/security-contract-2roxtk_r/result.xml",
+        "tests/integration/test_service_security.py::test_runtime_receipt_cannot_be_forged_by_worker_or_tool"
+      ],
+      "gate": "zero-fabricated-runtime-claims",
+      "measured": 1.0,
+      "output": ".                                                                        [100%]\n1 passed in 0.12s",
+      "status": "PASS",
+      "tests": {
+        "errors": 0,
+        "expectedFailures": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 1
+      },
+      "threshold": "100% executed non-skipped tests"
+    },
+    {
+      "command": [
+        "~/.hermes/hermes-agent/venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "--ignore=tests/unit/test_run_evals.py",
+        "--junitxml=~/.hermes-dashboard/cache/scratch/security-contract-zq8a4cyu/result.xml",
+        "tests/integration/test_service_security.py::test_packet_scan_and_attempt_binding",
+        "tests/integration/test_profile_isolation.py",
+        "tests/unit/test_schemas.py::test_cross_scan_and_reference_checks"
+      ],
+      "gate": "zero-cross-scan-contamination",
+      "measured": 1.0,
+      "output": "...                                                                      [100%]\n3 passed in 0.18s",
+      "status": "PASS",
+      "tests": {
+        "errors": 0,
+        "expectedFailures": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 3
+      },
+      "threshold": "100% executed non-skipped tests"
+    },
+    {
+      "command": [
+        "~/.hermes/hermes-agent/venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "--ignore=tests/unit/test_run_evals.py",
+        "--junitxml=~/.hermes-dashboard/cache/scratch/security-contract-qid30m5i/result.xml",
+        "tests/unit/test_detector_sarif.py::test_invalid_and_truncated",
+        "tests/unit/test_schemas.py::test_nested_limits_and_unknowns",
+        "tests/unit/test_target_hostile.py::test_hardlinks_classification_and_limits"
+      ],
+      "gate": "no-hidden-truncation-input-canaries",
+      "measured": 1.0,
+      "output": "...                                                                      [100%]\n3 passed in 0.06s",
+      "status": "PASS",
+      "tests": {
+        "errors": 0,
+        "expectedFailures": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 3
+      },
+      "threshold": "100% executed non-skipped tests"
+    },
+    {
+      "command": [
+        "~/.hermes/hermes-agent/venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "--ignore=tests/unit/test_run_evals.py",
+        "--junitxml=~/.hermes-dashboard/cache/scratch/security-contract-ovshf3yr/result.xml",
+        "tests/integration/test_service_modes.py::test_missing_sections_retained_and_detector_unavailable",
+        "tests/unit/test_standards_mapping.py"
+      ],
+      "gate": "no-false-clean-unavailable-detectors",
+      "measured": 1.0,
+      "output": ".............                                                            [100%]\n13 passed in 0.25s",
+      "status": "PASS",
+      "tests": {
+        "errors": 0,
+        "expectedFailures": 0,
+        "failures": 0,
+        "skipped": 0,
+        "tests": 13
+      },
+      "threshold": "100% executed non-skipped tests"
+    },
+    {
+      "evidence": {
+        "cases": 12,
+        "failures": [],
+        "falseNegatives": 0,
+        "falsePositives": 0,
+        "inventedEdgeCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositives": 6
+      },
+      "gate": "chain-precision",
+      "measured": 1.0,
+      "status": "PASS",
+      "threshold": 0.95
+    },
+    {
+      "evidence": {
+        "cases": 12,
+        "failures": [],
+        "falseNegatives": 0,
+        "falsePositives": 0,
+        "inventedEdgeCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositives": 6
+      },
+      "gate": "chain-recall",
+      "measured": 1.0,
+      "status": "PASS",
+      "threshold": 0.85
+    },
+    {
+      "evidence": {
+        "cases": 12,
+        "failures": [],
+        "falseNegatives": 0,
+        "falsePositives": 0,
+        "inventedEdgeCount": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "truePositives": 6
+      },
+      "gate": "chain-inventedEdgeCount",
+      "measured": 0,
+      "status": "PASS",
+      "threshold": 0
+    },
+    {
+      "cases": 4,
+      "gate": "zero-false-clean-failed-detectors",
+      "measured": 0,
+      "status": "PASS",
+      "threshold": 0
+    },
+    {
+      "gate": "zero-hidden-inventory-truncation",
+      "measured": 0,
+      "status": "PASS",
+      "threshold": 0
+    },
+    {
+      "cases": [
+        {
+          "case": "same-cwe-distinct-control",
+          "problems": [],
+          "unexpected": []
+        },
+        {
+          "case": "same-anchor-different-rule",
+          "problems": [],
+          "unexpected": []
+        },
+        {
+          "case": "duplicate-observation",
+          "problems": [],
+          "unexpected": []
+        },
+        {
+          "case": "rejected-not-erased",
+          "problems": [],
+          "unexpected": []
+        }
+      ],
+      "gate": "dedup-source-conservation",
+      "measured": 1.0,
+      "status": "PASS",
+      "threshold": 1.0
+    },
+    {
+      "gate": "dedup-invalid-merges",
+      "measured": 0,
+      "observedMerges": 1,
+      "status": "PASS",
+      "threshold": 0
+    },
+    {
+      "cases": 4,
+      "gate": "code-computed-chain-severity",
+      "measured": 1.0,
+      "status": "PASS",
+      "threshold": 1.0
+    }
+  ],
+  "mode": "deterministic",
+  "notRun": [
+    {
+      "command": "python scripts/run-evals.py --score-bundles /path/to/sealed-bundles",
+      "gate": "blind-discovery-and-model-severity",
+      "status": "NOT RUN"
+    },
+    {
+      "command": "python scripts/run-evals.py --score-bundles /path/to/five-run-bundles",
+      "gate": "five-run-provider-agreement",
+      "status": "NOT RUN"
+    },
+    {
+      "command": "python scripts/compare-upstream.py --pairs /path/to/paired-bundles/pairs.json",
+      "gate": "paired-upstream-comparison",
+      "status": "NOT RUN"
+    }
+  ]
+}
+
+Gate | Threshold | Measured | Status
+--- | --- | --- | ---
+deterministic-contract-tests | 100% executed non-skipped tests | 1.0 | PASS
+citation-resolution-and-forgery-rejection | 100% executed non-skipped tests | 1.0 | PASS
+zero-fabricated-runtime-claims | 100% executed non-skipped tests | 1.0 | PASS
+zero-cross-scan-contamination | 100% executed non-skipped tests | 1.0 | PASS
+no-hidden-truncation-input-canaries | 100% executed non-skipped tests | 1.0 | PASS
+no-false-clean-unavailable-detectors | 100% executed non-skipped tests | 1.0 | PASS
+chain-precision | 0.95 | 1.0 | PASS
+chain-recall | 0.85 | 1.0 | PASS
+chain-inventedEdgeCount | 0 | 0 | PASS
+zero-false-clean-failed-detectors | 0 | 0 | PASS
+zero-hidden-inventory-truncation | 0 | 0 | PASS
+dedup-source-conservation | 1.0 | 1.0 | PASS
+dedup-invalid-merges | 0 | 0 | PASS
+code-computed-chain-severity | 1.0 | 1.0 | PASS
+blind-discovery-and-model-severity | — | — | NOT RUN: python scripts/run-evals.py --score-bundles /path/to/sealed-bundles
+five-run-provider-agreement | — | — | NOT RUN: python scripts/run-evals.py --score-bundles /path/to/five-run-bundles
+paired-upstream-comparison | — | — | NOT RUN: python scripts/compare-upstream.py --pairs /path/to/paired-bundles/pairs.json

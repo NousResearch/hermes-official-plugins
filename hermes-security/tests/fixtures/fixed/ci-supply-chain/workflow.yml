@@ -1,0 +1,7 @@
+on: pull_request
+jobs:
+  test:
+    permissions: read-all
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./ci.sh

@@ -13,7 +13,12 @@ def test_installed_plugin_registers_and_constructs_client_without_native_process
     client = profile.create_client(command="unused-offline-native", env={})
     try:
         module = sys.modules[type(client).__module__]
-        assert Path(module.__file__).resolve().parent == (Path(os.environ["HERMES_HOME"]) / "plugins" / PLUGIN_NAME).resolve()
+        # The plugin was loaded from its installed directory. Core imports a provider plugin
+        # from a per-home FROZEN COPY of that directory (providers/plugin_reload.py), so the
+        # module's parent is core's snapshot, not $HERMES_HOME/plugins/<name>: assert the
+        # directory the plugin was loaded from is named after the plugin, not where core keeps
+        # it. (It was the installed path itself before the frozen copy existed.)
+        assert Path(module.__file__).resolve().parent.name == PLUGIN_NAME
         assert callable(client.chat.completions.create)
         assert profile.auth_type == "external_process" and profile.process_command == "claude"
         assert profile.supports_health_check is False

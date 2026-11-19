@@ -105,6 +105,13 @@ def test_bare_host_allowance_is_web_extract_only():
     assert hermes_tools._URL_ARGS["vision_analyze"][2] is False
 
 
+def test_every_exposed_tool_is_a_registered_hermes_tool():
+    """Advertised names must exist in core's registry: --help and README promise them to clients."""
+    from model_tools import get_all_tool_names
+
+    assert set(hermes_tools.EXPOSED_TOOLS) <= set(get_all_tool_names())
+
+
 def test_tools_mode_offers_tool_search_deferred_tools(monkeypatch, require_mcp_2_sdk):
     """With core's tool_search active, deferred tools are collapsed into its bridge unless the raw
     catalog is requested; --tools must still offer them (image_generate is in the default deferred set)."""

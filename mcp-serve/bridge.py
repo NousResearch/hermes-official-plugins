@@ -740,9 +740,9 @@ _TOOLS_INSTRUCTIONS = (
     "vision analysis, image generation, skills and text-to-speech) as directly callable tools."
 )
 _TOOLS_ONLY_INSTRUCTIONS = (
-    "Hermes Agent tool face. Exposes Hermes' own capabilities (web search/extract, browser "
-    "automation, vision analysis, image generation, skills and text-to-speech) as directly "
-    "callable tools. No messaging, conversation or approval tools are served in this mode."
+    "Hermes Agent tool face. Exposes Hermes' own capabilities (web search/extract, vision "
+    "analysis, image generation, skills and text-to-speech) as directly callable tools. No "
+    "messaging, conversation or approval tools are served in this mode."
 )
 
 

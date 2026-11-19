@@ -70,7 +70,9 @@ REPLY_CACHE_MAX = 200
 # Cap inbound attachments processed per message.
 MAX_INBOUND_ATTACHMENTS = 5
 # Message ids Hermes sent, kept so self-chat echoes are never answered.
-# Cross-process locking primitives for the shared sent-id file.
+SENT_IDS_MAX = 500
+
+# Cross-process lock for the shared sent-id file (gateway + cron / `hermes send`).
 try:
     import msvcrt as _msvcrt  # type: ignore
 
@@ -91,7 +93,7 @@ except ImportError:  # pragma: no cover - Unix
     def _unlock_fd(fd: int) -> None:
         _fcntl.flock(fd, _fcntl.LOCK_UN)
 
-SENT_IDS_MAX = 500
+# Group-chat mention wake words — same defaults as the other Hermes channels
 # so group gating behaves identically everywhere.
 _DEFAULT_MENTION_PATTERNS = [
     r"(?<![\w@])@?hermes\s+agent\b[,:\-]?",
@@ -169,11 +171,13 @@ def _remember_sent(message_id: str) -> None:
         logger.debug("[xchat] sent-id lock open failed", exc_info=True)
         return
     try:
+        locked = True
         try:
             _lock_fd(fd)
         except OSError:
-            logger.debug("[xchat] sent-id lock acquire failed", exc_info=True)
-            return
+            # Still record the id: dropping it would make the poll loop answer our own message.
+            locked = False
+            logger.debug("[xchat] sent-id lock acquire failed; writing unlocked", exc_info=True)
         try:
             ids = [m for m in _load_sent_ids() if m != message_id] + [message_id]
             path = _sent_path()
@@ -191,7 +195,8 @@ def _remember_sent(message_id: str) -> None:
                         raise
                     time.sleep(0.05 * (attempt + 1))
         finally:
-            _unlock_fd(fd)
+            if locked:
+                _unlock_fd(fd)
     except OSError:
         logger.debug("[xchat] sent-id persist failed", exc_info=True)
     finally:

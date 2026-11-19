@@ -640,19 +640,10 @@ class XChatAdapter(BasePlatformAdapter):
                 event = self._crypto.decrypt_one(
                     event_b64, self._conversation_keys.get(_conv_key(conv_id)) or None
                 )
-            except Exception:
-                # The key may have rotated while we were offline, with its
-                # KeyChange behind the cursor: rebuild from the event itself
-                # and retry once before dropping the message.
-                self._absorb_key_batch(conv_id, [event_b64], label="key-rebuild")
-                try:
-                    event = self._crypto.decrypt_one(
-                        event_b64, self._conversation_keys.get(_conv_key(conv_id)) or None
-                    )
-                except Exception as e:
-                    logger.warning("[xchat] decrypt failed conv=%s event=%s: %s", conv_id, event_id, e)
-                    self._set_cursor(conv_id, event_id)
-                    continue
+            except Exception as e:
+                logger.warning("[xchat] decrypt failed conv=%s event=%s: %s", conv_id, event_id, e)
+                self._set_cursor(conv_id, event_id)
+                continue
 
             etype = event.get("type")
             if etype == "KeyChange":

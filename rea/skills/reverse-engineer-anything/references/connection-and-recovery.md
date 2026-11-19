@@ -27,11 +27,15 @@ such; only actual REA output supplies REA Evidence.
 
 Hermes filters arbitrary inherited environment variables before launching MCP
 servers. Exporting `GHIDRA_INSTALL_DIR` in the shell alone is not sufficient for
-this pinned REA build. Supply Ghidra and JDK paths in the server's explicit
-`env`. Do not weaken Hermes' environment filter or put these non-secret paths
-in the secrets file.
+this pinned REA build. The plugin forwards `GHIDRA_INSTALL_DIR`, `JAVA_HOME`,
+`REA_ANALYSIS_PROVIDER`, `REA_KUNA_COMMAND`, `REA_TSHARK_COMMAND`,
+`REA_CAPINFOS_COMMAND`, `REA_SIGROK_COMMAND`, `REA_WABT_BIN_DIRECTORY` and
+`REA_PWNTOOLS_PYTHON` when Hermes itself has them: in `~/.hermes/.env` (or the
+profile's `.env`) or in the environment the gateway starts from. An unset one
+is left out. After the user adds one, a new session restarts the server. Do not
+weaken Hermes' environment filter.
 
-For a durable user configuration, set a complete native `mcp_servers.rea`
+To pin values per machine instead, set a complete native `mcp_servers.rea`
 entry with the normal Hermes configuration interface. This is an intentional
 override, not the duplicate registration made by `rea setup`:
 

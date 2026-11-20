@@ -28,7 +28,7 @@ import threading
 import uuid
 
 CACHE_DIRNAME = "memory-wiki"
-CACHE_FILENAME = "session_units-v1.json"
+CACHE_FILENAME = "session_units-v2.json"
 _DEFAULT_MAX_UNITS = 2000
 _DEFAULT_MAX_BYTES = 64 * 1024 * 1024
 

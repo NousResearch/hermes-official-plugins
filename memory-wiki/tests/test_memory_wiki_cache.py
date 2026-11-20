@@ -136,7 +136,7 @@ def test_cached_result_is_identical_to_the_uncached_path(tmp_path, memory_wiki_c
     db_path = tmp_path / "state.db"
     db = _three_sessions(db_path)
     try:
-        sidecar = tmp_path / "cache" / "memory-wiki" / "session_units-v1.json"
+        sidecar = tmp_path / "cache" / "memory-wiki" / "session_units-v2.json"
         cache = memory_wiki_cache.SessionUnitCache(sidecar)
         cached = memory_wiki_core.build_memory_overview(
             db, subject_limit=50, day_limit=30, cache=cache

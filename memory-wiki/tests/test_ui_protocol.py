@@ -22,9 +22,10 @@ def test_desktop_localizes_kinds_from_actual_backend_output(memory_wiki_core):
         {"role": "user", "content": "日常沟通", "timestamp": 4},
         {"role": "tool", "tool_name": "web_search", "content": "", "timestamp": 5},
     ]
+    # Tool calls are not work items (#48); the UI dictionaries may keep the legacy "tool" key.
     items = memory_wiki_core._work_items_for_session({"id": "synthetic-protocol", "started_at": 1}, messages)
     produced = {item["kind"] for item in items}
-    assert produced == {"coding", "research", "planning", "conversation", "tool"}
+    assert produced == {"coding", "research", "planning", "conversation"}
     source = (PLUGIN / "desktop/plugin.js").read_text(encoding="utf-8")
     dictionaries = _dictionary_keys(source, "kind")
     assert len(dictionaries) == 2

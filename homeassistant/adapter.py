@@ -123,6 +123,35 @@ def _gateway_silence_markers() -> Optional[tuple]:
 
 _GATEWAY_SILENCE_MARKERS = _gateway_silence_markers()
 
+# Cross-platform ``deliver`` and ``deliver_mode: session`` reach gateway internals that are not in
+# the published plugin API. Every call is wrapped to fall back to the HA notification, so a core
+# rename would otherwise read as "deliver quietly stopped routing". (module, attribute path)
+_GATEWAY_INTERNALS = (
+    ("gateway.wake", "admit_internal_event"),
+    ("gateway.run", "_profile_runtime_scope"),
+    ("gateway.session", "build_session_key"),
+    ("gateway.session", "SessionStore.lookup_by_session_key"),
+    ("gateway.response_filters", "LIVE_GATEWAY_SILENT_MARKERS"),
+)
+_gateway_internals_checked = False
+
+
+def _missing_gateway_internals(runner) -> list:
+    """Names of the gateway internals the deliver paths use that this core does not have."""
+    import importlib
+
+    missing = []
+    if runner is not None and not callable(getattr(runner, "_authorization_adapter", None)):
+        missing.append("gateway_runner._authorization_adapter")
+    for module_name, path in _GATEWAY_INTERNALS:
+        try:
+            obj = importlib.import_module(module_name)
+            for part in path.split("."):
+                obj = getattr(obj, part)
+        except (ImportError, AttributeError):
+            missing.append(f"{module_name}.{path}")
+    return missing
+
 # Caller-supplied thread routing wins over the home channel's thread. Core keeps the same list
 # (gateway/delivery.py:_THREAD_ROUTING_KEYS) and only adds its default when NONE of these keys is
 # present: checking "thread_id" alone would shadow a caller's message_thread_id / DM topic id and
@@ -393,6 +422,26 @@ class HomeAssistantAdapter(BasePlatformAdapter):
             return self._deliver_overrides[domain]
         return self._default_deliver
 
+    def _warn_missing_gateway_internals(self) -> None:
+        """Once per process, name any gateway internal the deliver paths need that core lacks."""
+        global _gateway_internals_checked
+        if _gateway_internals_checked:
+            return
+        uses_deliver = any(
+            target.strip().lower() != "homeassistant"
+            for target in (self._default_deliver, *self._deliver_overrides.values())
+        )
+        if not uses_deliver:
+            return
+        _gateway_internals_checked = True
+        missing = _missing_gateway_internals(getattr(self, "gateway_runner", None))
+        if missing:
+            logger.warning(
+                "[%s] This Hermes core lacks gateway internals that cross-platform deliver uses (%s); "
+                "deliver falls back to the Home Assistant notification until the plugin is updated",
+                self.name, ", ".join(missing),
+            )
+
     # -- Connection lifecycle -----------------------------------------------
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         """Connect to HA WebSocket API and subscribe to events."""
@@ -407,6 +456,7 @@ class HomeAssistantAdapter(BasePlatformAdapter):
             # Not retryable: only a config edit fixes it, so reconnecting would fail the same way forever.
             self._set_fatal_error("homeassistant_url_scheme", problem, retryable=False)
             return False
+        self._warn_missing_gateway_internals()
         try:
             if not await self._ws_connect():
                 return False

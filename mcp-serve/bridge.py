@@ -655,10 +655,18 @@ class _ToolHandlers:
         if not target or not message:
             return json.dumps({"error": "Both target and message are required"})
         try:
-            from tools.send_message_tool import send_message_tool
+            try:
+                from gateway.outbound.send import send_message_tool
+            except ModuleNotFoundError as exc:
+                # Older Hermes versions keep the sender in tools. Do not mask a
+                # missing dependency inside the new sender by falling back.
+                if exc.name not in ("gateway.outbound", "gateway.outbound.send"):
+                    raise
+                from tools.send_message_tool import send_message_tool
+        except ImportError as exc:
+            return json.dumps({"error": f"Send message tool not available: {exc}"})
+        try:
             return send_message_tool({"action": "send", "target": target, "message": message})
-        except ImportError:
-            return json.dumps({"error": "Send message tool not available"})
         except Exception as e:
             return json.dumps({"error": f"Send failed: {e}"})
 

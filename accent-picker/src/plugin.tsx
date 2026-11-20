@@ -14,28 +14,67 @@
  */
 
 import type { HermesPlugin, PaletteContribution } from '@hermes/plugin-sdk'
-import { $accentOverride, PALETTE_AREA, setAccentOverride, STATUSBAR_AREAS } from '@hermes/plugin-sdk'
+import { $accentOverride, normalizeHex, PALETTE_AREA, setAccentOverride, STATUSBAR_AREAS } from '@hermes/plugin-sdk'
 
 import { AccentPickerTrigger } from './picker.tsx'
+
+const STORAGE_KEY = 'accent'
+const FILE_NAME = 'accent.txt'
 
 const plugin: HermesPlugin = {
   id: 'accent',
   name: 'Accent Picker',
   description:
-    'Pick the theme accent from an OKLCH color picker in the status bar; the palette re-derives live. Authoring tool — the color is not persisted.',
+    'Pick the theme accent from an OKLCH color picker in the status bar; the palette re-derives live. The pick is saved and restored on the next launch.',
   defaultEnabled: false,
   register(ctx) {
-    // The override is a scratch value, not a setting. Dropping it on unregister
-    // means disabling the plugin (or reloading) returns every surface to the
-    // authored theme instead of stranding a color with no control to clear it.
-    ctx.onDispose(() => setAccentOverride(null))
+    // The pick is the plugin's own saved setting, applied as the live override.
+    // Disabling the plugin clears the override (the saved pick stays), so no
+    // colour is stranded without a control; re-enabling restores it.
+    const restore = (value: unknown) => {
+      const hex = typeof value === 'string' ? normalizeHex(value) : null
+
+      if (hex) {
+        setAccentOverride(hex)
+      }
+    }
+
+    restore(ctx.storage.get(STORAGE_KEY, null))
+    // ctx.files is the disk copy, for shells whose localStorage did not survive.
+    void ctx.files.readText(ctx.files.dataFolder, FILE_NAME).then(result => {
+      if (result.ok && !$accentOverride.get()) {
+        restore(result.text.trim())
+      }
+    })
+
+    // A drag commits on every pointer move: write storage at once, the file
+    // once the pointer settles.
+    let fileTimer: ReturnType<typeof setTimeout> | undefined
+
+    const persist = (value: null | string) => {
+      const hex = value === null ? null : normalizeHex(value)
+
+      if (value !== null && !hex) {
+        return
+      }
+
+      setAccentOverride(hex)
+      ctx.storage.set(STORAGE_KEY, hex)
+      clearTimeout(fileTimer)
+      fileTimer = setTimeout(() => void ctx.files.writeText(ctx.files.dataFolder, FILE_NAME, hex ?? ''), 400)
+    }
+
+    ctx.onDispose(() => {
+      clearTimeout(fileTimer)
+      setAccentOverride(null)
+    })
 
     ctx.registerMany([
       {
         id: 'picker',
         area: STATUSBAR_AREAS.right,
         order: 90,
-        render: () => <AccentPickerTrigger />
+        render: () => <AccentPickerTrigger persist={persist} />
       },
       {
         id: 'reset',
@@ -44,7 +83,7 @@ const plugin: HermesPlugin = {
           id: 'accent.reset',
           label: 'Accent: reset to the theme default',
           keywords: ['accent', 'color', 'theme', 'reset', 'default'],
-          run: () => setAccentOverride(null)
+          run: () => persist(null)
         } satisfies PaletteContribution
       },
       {

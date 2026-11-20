@@ -1,5 +1,5 @@
 // src/plugin.tsx
-import { $accentOverride as $accentOverride2, PALETTE_AREA, setAccentOverride as setAccentOverride2, STATUSBAR_AREAS } from "@hermes/plugin-sdk";
+import { $accentOverride as $accentOverride2, normalizeHex, PALETTE_AREA, setAccentOverride, STATUSBAR_AREAS } from "@hermes/plugin-sdk";
 
 // src/picker.tsx
 import {
@@ -12,7 +12,6 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-  setAccentOverride,
   useTheme,
   useValue
 } from "@hermes/plugin-sdk";
@@ -141,7 +140,7 @@ function HueRail({ lch, onPick }) {
     }
   );
 }
-function AccentPicker() {
+function AccentPicker({ persist }) {
   const { theme, renderedMode } = useTheme();
   const override = useValue($accentOverride);
   const painted = theme.colors.primary;
@@ -159,7 +158,7 @@ function AccentPicker() {
     setLch(next);
     const hex = oklchToHex(next);
     setText(hex);
-    setAccentOverride(hex);
+    persist(hex);
     requestAnimationFrame(() => {
       dragging.current = false;
     });
@@ -177,7 +176,7 @@ function AccentPicker() {
           className: "min-w-0 flex-1 rounded-sm border border-(--dt-border) bg-transparent px-1.5 py-0.5 font-mono text-[11px] uppercase",
           onChange: (event) => {
             setText(event.target.value);
-            setAccentOverride(event.target.value);
+            persist(event.target.value);
           },
           spellCheck: false,
           value: text
@@ -187,17 +186,17 @@ function AccentPicker() {
         "button",
         {
           className: "shrink-0 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px]",
-          onClick: () => setAccentOverride(null),
+          onClick: () => persist(null),
           type: "button",
           children: "reset"
         }
       )
     ] }),
-    /* @__PURE__ */ jsx("div", { className: "grid grid-cols-8 gap-1", children: SWATCHES.map((swatch) => /* @__PURE__ */ jsx(
+    /* @__PURE__ */ jsx("div", { style: { display: "grid", gridTemplateColumns: "repeat(8, minmax(0, 1fr))", gap: "4px" }, children: SWATCHES.map((swatch) => /* @__PURE__ */ jsx(
       "button",
       {
         className: "size-5 rounded-sm border border-(--dt-border)",
-        onClick: () => setAccentOverride(swatch.hex),
+        onClick: () => persist(swatch.hex),
         style: { background: swatch.hex },
         title: `${swatch.name} \xB7 ${swatch.hex}`,
         type: "button"
@@ -223,7 +222,7 @@ function AccentPicker() {
     /* @__PURE__ */ jsx("p", { className: "h-3 font-mono text-[10px] leading-tight text-(--ui-text-tertiary)", children: override && override.toLowerCase() !== painted.toLowerCase() ? `picked ${override} \u2192 ${painted} for contrast` : "\xA0" })
   ] });
 }
-function AccentPickerTrigger() {
+function AccentPickerTrigger({ persist }) {
   const { theme } = useTheme();
   return /* @__PURE__ */ jsxs(Popover, { children: [
     /* @__PURE__ */ jsx(PopoverTrigger, { asChild: true, children: /* @__PURE__ */ jsxs(
@@ -244,25 +243,53 @@ function AccentPickerTrigger() {
         ]
       }
     ) }),
-    /* @__PURE__ */ jsx(PopoverContent, { align: "end", className: "w-auto p-0", side: "top", children: /* @__PURE__ */ jsx(AccentPicker, {}) })
+    /* @__PURE__ */ jsx(PopoverContent, { align: "end", className: "w-auto p-0", side: "top", children: /* @__PURE__ */ jsx(AccentPicker, { persist }) })
   ] });
 }
 
 // src/plugin.tsx
 import { jsx as jsx2 } from "react/jsx-runtime";
+var STORAGE_KEY = "accent";
+var FILE_NAME = "accent.txt";
 var plugin = {
   id: "accent",
   name: "Accent Picker",
-  description: "Pick the theme accent from an OKLCH color picker in the status bar; the palette re-derives live. Authoring tool \u2014 the color is not persisted.",
+  description: "Pick the theme accent from an OKLCH color picker in the status bar; the palette re-derives live. The pick is saved and restored on the next launch.",
   defaultEnabled: false,
   register(ctx) {
-    ctx.onDispose(() => setAccentOverride2(null));
+    const restore = (value) => {
+      const hex = typeof value === "string" ? normalizeHex(value) : null;
+      if (hex) {
+        setAccentOverride(hex);
+      }
+    };
+    restore(ctx.storage.get(STORAGE_KEY, null));
+    void ctx.files.readText(ctx.files.dataFolder, FILE_NAME).then((result) => {
+      if (result.ok && !$accentOverride2.get()) {
+        restore(result.text.trim());
+      }
+    });
+    let fileTimer;
+    const persist = (value) => {
+      const hex = value === null ? null : normalizeHex(value);
+      if (value !== null && !hex) {
+        return;
+      }
+      setAccentOverride(hex);
+      ctx.storage.set(STORAGE_KEY, hex);
+      clearTimeout(fileTimer);
+      fileTimer = setTimeout(() => void ctx.files.writeText(ctx.files.dataFolder, FILE_NAME, hex ?? ""), 400);
+    };
+    ctx.onDispose(() => {
+      clearTimeout(fileTimer);
+      setAccentOverride(null);
+    });
     ctx.registerMany([
       {
         id: "picker",
         area: STATUSBAR_AREAS.right,
         order: 90,
-        render: () => /* @__PURE__ */ jsx2(AccentPickerTrigger, {})
+        render: () => /* @__PURE__ */ jsx2(AccentPickerTrigger, { persist })
       },
       {
         id: "reset",
@@ -271,7 +298,7 @@ var plugin = {
           id: "accent.reset",
           label: "Accent: reset to the theme default",
           keywords: ["accent", "color", "theme", "reset", "default"],
-          run: () => setAccentOverride2(null)
+          run: () => persist(null)
         }
       },
       {

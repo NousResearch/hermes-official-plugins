@@ -118,6 +118,14 @@ would do the work twice. Turn the routine off in Grok Bot, then `hermes cron res
 prints each id). `--activate-routines` creates them running instead. Cron output stays in Hermes
 until you pick a destination: `hermes cron edit <id> --deliver telegram` (or discord, slack, ...).
 
+Several Bots in one export are offered a profile each (recommended). Each Bot then gets its own
+profile, made with `hermes profile create <name> --clone` — cloned from the current one, so it can
+chat straight away — with its role in that profile's `SOUL.md` and only its own routines; the printed
+`hermes cron resume` lines carry `-p <profile>`, so they work pasted from anywhere. Answering no, or
+running non-interactively (`-y`), imports them all into the current profile instead: only the first
+role can reach `SOUL.md` and the rest become memory entries of the same agent. `--bot` picks Bots
+explicitly and always imports into the current profile.
+
 | Flag | Meaning |
 |---|---|
 | `--source <path>` | An export file, a pasted reply, a folder of them, or `-` for stdin |

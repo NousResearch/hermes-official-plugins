@@ -1,7 +1,7 @@
 """``hermes mcp-serve --tools``: a curated slice of Hermes' own tool surface over MCP.
 
 Off by default. With ``--tools`` an MCP client (Claude Code, Codex, Cursor, a custom harness) can
-call Hermes' configured web, browser, vision, image, skills and TTS tools, under this profile's
+call Hermes' configured web, vision, image, skills and TTS tools, under this profile's
 credentials, next to the messaging bridge. Ported from hermes-agent PR #83364.
 
 What is never exposed, whatever the profile enables:
@@ -12,7 +12,7 @@ What is never exposed, whatever the profile enables:
   included), so it is the shell by another route.
 * delegate_task / memory / session_search / todo / clarify: they need a running agent.
 
-The exposed tools stay off this machine's files: ``browser_navigate`` / ``web_extract`` take only web
+The exposed tools stay off this machine's files: ``web_extract`` takes only web
 URLs (no ``file:``), ``vision_analyze`` only web or ``data:`` images (no local paths), and
 ``text_to_speech`` writes only into Hermes' own cache (``output_path`` is not offered). Web URLs include
 local-network addresses, as they do for the Hermes model.
@@ -34,9 +34,9 @@ logger = logging.getLogger("hermes.mcp_serve.tools")
 
 # Each name must be a registered Hermes tool ``model_tools.handle_function_call`` can dispatch.
 EXPOSED_TOOLS: tuple[str, ...] = (
+    # No browser tool on purpose: ``browser_exec`` runs model-written Python on this host, the same
+    # reason terminal and the file tools stay out (the pre-0.23 ``browser_*`` tools left core).
     "web_search", "web_extract",
-    "browser_navigate", "browser_click", "browser_type", "browser_press", "browser_snapshot", "browser_scroll",
-    "browser_back", "browser_get_images", "browser_console", "browser_vision",
     "vision_analyze", "image_generate", "skill_view", "skills_list", "text_to_speech",
 )
 
@@ -46,8 +46,7 @@ _DROPPED_ARGS: dict[str, tuple[str, ...]] = {"text_to_speech": ("output_path",)}
 # file:/javascript: URLs. vision_analyze reads any scheme-less source (``pic.png``, ``shots/a.png``) as a
 # file path, so it needs an explicit scheme.
 _URL_ARGS: dict[str, tuple[str, bool, bool]] = {
-    "browser_navigate": ("url", False, True), "web_extract": ("urls", False, True),
-    "vision_analyze": ("image_url", True, False),
+    "web_extract": ("urls", False, True), "vision_analyze": ("image_url", True, False),
 }
 _SCHEME_RE = re.compile(r"^\s*([a-zA-Z][a-zA-Z0-9+.-]*):(?!\d)")
 _JSON_TO_PY = {"string": str, "integer": int, "number": float, "boolean": bool, "array": list, "object": dict}

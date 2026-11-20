@@ -15,6 +15,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import shutil
 import ssl
 import subprocess
@@ -69,12 +70,52 @@ def _install_prefixes(env):
     return prefixes + ([] if os.name == "nt" else list(_SYSTEM_PREFIXES))
 
 
+# Minimum Claude Code version this plugin supports. An older CLI drops the tool payload from the
+# request and answers as a title generator (#380), so a service PATH that finds it first must not
+# win over a newer install in the user's prefixes.
+_MIN_CLAUDE_VERSION = (2, 1, 280)
+
+
+_cli_versions = {}  # (path, mtime_ns, size) -> version tuple or None: `--version` runs once per installed binary
+
+
+def _cli_version(exe, env):
+    """``(major, minor, patch)`` from ``<exe> --version``, or None when it cannot be read. Cached per binary
+    (path, mtime, size), since every turn resolves the CLI and `claude update` replaces the file."""
+    try:
+        stat = os.stat(exe)
+    except OSError:
+        return None
+    key = (os.path.realpath(exe), stat.st_mtime_ns, stat.st_size)
+    if key not in _cli_versions:
+        try:
+            out = subprocess.run([exe, "--version"], capture_output=True, text=True, encoding="utf-8",
+                                 errors="replace", timeout=5, env=env).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None  # not cached: a transient failure is asked again next time
+        match = re.search(r"(\d+)\.(\d+)\.(\d+)", out or "")
+        _cli_versions[key] = tuple(int(x) for x in match.groups()) if match else None
+    return _cli_versions[key]
+
+
 def _resolve(command, env):
     command = list(command) if command else [env.get("CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND") or "claude"]
     head = command[0]
     exe = head if os.path.isabs(head) and os.access(head, os.X_OK) else shutil.which(head, path=env.get("PATH") or os.defpath)
+    # Only the default bare name is second-guessed: an explicit command or override is the user's
+    # choice. When PATH finds an outdated CLI, prefer a supported version from the install prefixes.
+    if head == "claude" and exe:
+        found = _cli_version(exe, env)
+        if found is not None and found < _MIN_CLAUDE_VERSION:
+            for prefix in _install_prefixes(env):
+                # which() per prefix, so Windows finds claude.exe / claude.cmd through PATHEXT.
+                candidate = shutil.which(head, path=prefix)
+                if candidate and os.path.normcase(candidate) != os.path.normcase(exe):
+                    version = _cli_version(candidate, env)
+                    if version is not None and version >= _MIN_CLAUDE_VERSION:
+                        exe = candidate
+                        break
     if not exe and head == "claude":
-        # Only the default bare name: an explicit command or override is the user's choice, never second-guessed.
         exe = shutil.which(head, path=os.pathsep.join(_install_prefixes(env)))
     return ([exe] + command[1:]) if exe else None
 

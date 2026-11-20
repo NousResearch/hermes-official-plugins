@@ -66,7 +66,8 @@ def _result(scan, step, reason, progress_key, items=(), actionable=None, **extra
     if actionable is None:
         actionable = 1 if step in {'chains', 'finalize'} else len(items)
     return {'scanId': scan['scan_id'], 'step': step, 'reason': reason, 'items': items[:ITEM_LIMIT],
-            'total': len(items), 'actionable': actionable, 'progressKey': progress_key, 'how': HOW[step], **extra}
+            'total': len(items), 'actionable': actionable, 'progressKey': progress_key, 'how': HOW[step],
+            'context': (scan.get('options') or {}).get('notes') or '', **extra}
 
 
 def derive(*, scan, packets, attempts, dispatches, reduced, receipts, chains_recorded, progress_key, now,
@@ -89,6 +90,9 @@ def derive(*, scan, packets, attempts, dispatches, reduced, receipts, chains_rec
         return _result(scan, 'wait', why, progress_key, actionable=0,
                        slots=0, running=0, how='Wait about 30 seconds, then read security_scan_get section next '
                                                'again. Do not dispatch workers until the step changes.')
+    if 'snapshot_digest' in scan and not scan['snapshot_digest']:
+        return _result(scan, 'blocked', scan.get('reason') or
+                       'The target has no inventory snapshot; resume preparation before reviewing.', progress_key)
     accepted = [a for a in attempts if a.get('status') == 'accepted']
     accepted_ids = [a['attempt_id'] for a in accepted]
 

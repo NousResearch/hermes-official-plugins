@@ -6,6 +6,7 @@ FILE_OPEN_REPARSE_POINT; symlinks, junctions and mount points are refused like
 POSIX symlinks. Other platforms without either primitive fail closed rather
 than claim equivalent protection.
 """
+import errno
 import os
 import stat
 from pathlib import Path, PurePosixPath
@@ -107,8 +108,19 @@ def safe_read(root, path, max_bytes=2_000_000):
         if close is not None: close()
 
 
-def _directory_paths(root):
+def _directory_paths(root, excluded):
     def walk_error(exc):
+        # A protected child (for example a database volume) must not discard
+        # readable sibling projects. Keep the missing subtree as a coverage gap.
+        if exc.errno in {errno.EACCES, errno.EPERM} and exc.filename is not None:
+            try:
+                path = Path(exc.filename).relative_to(root).as_posix()
+                validate_path(path)
+            except (ValueError, FileRejected):
+                pass  # Root/outside/invalid paths still fail closed below.
+            else:
+                excluded.append({'path': path, 'reason': 'unreadable'})
+                return
         raise TargetError('Unable to enumerate target directory') from exc
     for parent, dirs, files in os.walk(root, followlinks=False, onerror=walk_error):
         dirs.sort(); files.sort()
@@ -132,6 +144,7 @@ def build_inventory(target, *, max_file_bytes=8_000_000, max_files=100_000, with
         raise TargetError('Inventory limits must be positive integers')
     root = Path(target['root'])
     submodules = set()
+    excluded = []
     if target['kind'] == 'git':
         raw = git_bytes(root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard')
         paths = {os.fsdecode(p) for p in raw.split(b'\x00') if p}
@@ -140,8 +153,8 @@ def build_inventory(target, *, max_file_bytes=8_000_000, max_files=100_000, with
             if entry.startswith(b'160000 '): submodules.add(os.fsdecode(entry.split(b'\t', 1)[1]))
         paths.add('.git')
     else:
-        paths = set(_directory_paths(root))
-    files = []; excluded = []; truncated = False
+        paths = set(_directory_paths(root, excluded))
+    files = []; truncated = False
     for path in sorted(paths):
         try:
             validate_path(path)

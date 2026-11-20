@@ -71,14 +71,19 @@ Requirements:
   these, and the skill tells the agent not to either.
 
 Engines found on `PATH` (objdump, gdb, rizin) work as is. Engines REA locates
-through an environment variable do not: Hermes passes MCP servers only a small
-set of environment variables, and this plugin forwards only
-`REA_PWNTOOLS_PYTHON`. To use Kuna (`REA_KUNA_COMMAND`), TShark
-(`REA_TSHARK_COMMAND`, `REA_CAPINFOS_COMMAND`), sigrok (`REA_SIGROK_COMMAND`),
-WABT (`REA_WABT_BIN_DIRECTORY`) or Ghidra/JDK locations, add them to a
-same-name `mcp_servers.rea` override as shown in the
-[recovery guide](skills/reverse-engineer-anything/references/connection-and-recovery.md)
-(keep the pinned launch command).
+through an environment variable are forwarded for you: `mcp.json` passes
+`GHIDRA_INSTALL_DIR`, `JAVA_HOME`, `REA_ANALYSIS_PROVIDER`,
+`REA_KUNA_COMMAND`, `REA_TSHARK_COMMAND`, `REA_CAPINFOS_COMMAND`,
+`REA_SIGROK_COMMAND` and `REA_WABT_BIN_DIRECTORY` from Hermes' own
+environment — set them in `~/.hermes/.env` (a value exported only in your
+shell does not reach the gateway that spawns the server, so restart Hermes
+after adding them). An unset variable is dropped, so an install that does not
+use the engine is unaffected; that drop needs Hermes v0.22.3 or newer (older
+releases pass the literal `${GHIDRA_INSTALL_DIR}`, and REA refuses to start). The same-name `mcp_servers.rea` override from
+the [recovery guide](skills/reverse-engineer-anything/references/connection-and-recovery.md)
+remains available to pin a value per machine — note that it **replaces** the
+plugin's pinned server, so keep the launch command current when this plugin
+bumps its `rea-agents` pin.
 
 Do not also run `npx rea-agents setup --client hermes`. It writes its own
 `mcp_servers.rea` entry to config.yaml, which replaces this plugin's pinned
@@ -86,11 +91,13 @@ server.
 
 ## Native analysis wait budget
 
-Every REA call runs under Hermes' normal MCP tool deadline (300 seconds by
-default). The plugin sets Ghidra's internal startup deadline to 900 seconds
-so a large import is not cut short on REA's side. A per-server Hermes call
-budget for REA ships with Hermes v0.23.0; this package will declare it once
-that release is out, so it installs on every current Hermes release today.
+Every REA call runs under the 1000-second deadline this package declares for its
+own server (`extensions.com.nousresearch.hermes.servers.rea.timeout` in
+`plugin.json`), so a large Ghidra import is not cut short while it analyzes. The
+plugin also sets Ghidra's internal startup deadline to 900 seconds. The
+declaration needs Hermes v0.22.3 or newer: v0.22.0 and v0.22.2 refuse the
+whole package (`server declaration 'rea' has unknown keys ['timeout']`), so
+the catalog entry requires `>=0.22.3`.
 
 `open_binary` validates a target, but the first Ghidra-backed query imports and
 analyzes it. Large executables can take several minutes. Subsequent queries
@@ -99,8 +106,7 @@ Cancellation remains available, and a completed open is not a progress signal.
 
 In a binary-first test on WinSCP 6.7, the console launcher imported in about
 30 seconds. The GUI executable exceeded the upstream 330-second default and
-completed in 663 seconds with a 1000-second Hermes budget, which needs
-Hermes v0.23.0 or newer. A subsequent real Hermes
+completed in 663 seconds with a 1000-second Hermes budget. A subsequent real Hermes
 chat using the same native target completed its first query in 580 seconds,
 then made successful follow-up decompilation and caller queries. Both runs
 recovered 28,701 procedures. The Windows executable was analyzed statically,

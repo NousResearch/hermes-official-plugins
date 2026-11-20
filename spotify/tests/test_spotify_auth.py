@@ -87,3 +87,21 @@ def test_status_and_logout_commands_read_and_clear_the_stored_login(capsys):
 
     spotify_cli.handle_cli(SimpleNamespace(action="status"))
     assert "spotify: logged out" in capsys.readouterr().out
+
+
+def test_relogin_requests_default_scopes_added_after_the_stored_login(monkeypatch):
+    """A login saved before ugc-image-upload joined DEFAULT_SCOPE must request it on re-login."""
+    old_scope = spotify_auth.DEFAULT_SCOPE.replace("ugc-image-upload", "").strip()
+    _seed({**_STATE, "scope": f"{old_scope} custom-extra", "granted_scope": old_scope})
+    seen = {}
+
+    def capture(**kwargs):
+        seen["scope"] = kwargs["scope"]
+        raise SystemExit("stop before the browser")
+
+    monkeypatch.setattr(spotify_auth, "_build_authorize_url", capture)
+    with pytest.raises(SystemExit):
+        spotify_auth.login(SimpleNamespace(scope=None, client_id=None, redirect_uri=None, no_browser=True))
+    requested = seen["scope"].split()
+    assert "ugc-image-upload" in requested and "custom-extra" in requested
+    assert len(requested) == len(set(requested))

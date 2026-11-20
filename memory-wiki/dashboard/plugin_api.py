@@ -18,6 +18,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 import sys
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -26,24 +27,52 @@ _log = logging.getLogger(__name__)
 router = APIRouter()
 
 _CORE_MODULE = "hermes_dashboard_plugin_memory_wiki_core"
+_CACHE_MODULE = "hermes_dashboard_plugin_memory_wiki_cache"  # same name memory_wiki_core loads it under
+_LOAD_LOCK = threading.Lock()
+
+
+def _sibling(name: str, filename: str):
+    """A sibling module loaded by path (the host imports this file via ``spec_from_file_location``
+    with no package, so a relative import is not available)."""
+    mod = sys.modules.get(name)
+    if mod is not None:
+        return mod
+    with _LOAD_LOCK:  # double-checked: concurrent first requests must not exec twice
+        mod = sys.modules.get(name)
+        if mod is not None:
+            return mod
+        path = Path(__file__).with_name(filename)
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:  # pragma: no cover
+            raise ImportError(f"cannot load memory-wiki module from {path}")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        try:
+            spec.loader.exec_module(mod)
+        except Exception:
+            sys.modules.pop(name, None)
+            raise
+        return mod
 
 
 def _core():
-    """The sibling ``memory_wiki_core`` module, loaded by path (the host imports this file via
-    ``spec_from_file_location`` with no package, so a relative import is not available)."""
-    mod = sys.modules.get(_CORE_MODULE)
-    if mod is not None:
-        return mod
-    path = Path(__file__).with_name("memory_wiki_core.py")
-    spec = importlib.util.spec_from_file_location(_CORE_MODULE, path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[_CORE_MODULE] = mod
+    return _sibling(_CORE_MODULE, "memory_wiki_core.py")
+
+
+def _memory_cache():
+    """Process-wide per-session aggregation cache (#49): memoizes each session's
+    extraction under a cheap fingerprint so dashboard refreshes stop re-reading the
+    whole history. The sidecar lives under ``HERMES_HOME/cache/memory-wiki/``, resolved
+    per call so each profile gets its own."""
+    cache = _sibling(_CACHE_MODULE, "memory_wiki_cache.py")
     try:
-        spec.loader.exec_module(mod)
-    except Exception:
-        sys.modules.pop(_CORE_MODULE, None)
-        raise
-    return mod
+        from hermes_constants import get_hermes_home
+
+        cache_dir = Path(get_hermes_home()) / "cache" / cache.CACHE_DIRNAME
+    except (ImportError, OSError, AttributeError):
+        _log.debug("memory-wiki cache: no HERMES_HOME, keeping the cache in-process")
+        cache_dir = None
+    return cache.default_cache(cache_dir)
 
 
 def _open_db():
@@ -72,9 +101,11 @@ async def _with_db(label: str, fn, *, empty):
             if db is None:
                 return empty
             try:
-                return fn(db)
+                payload = fn(db)
             finally:
                 db.close()
+            _memory_cache().flush()
+            return payload
         except HTTPException:
             raise
         except Exception:
@@ -92,7 +123,9 @@ async def get_overview(subject_limit: int = 50, day_limit: int = 30):
     empty = {"subjects": [], "daily_logs": [], "recent_sessions": [], "notes": core.build_memory_notes()}
     return await _with_db(
         "overview",
-        lambda db: core.build_memory_overview(db, subject_limit=subject_limit, day_limit=day_limit),
+        lambda db: core.build_memory_overview(
+            db, subject_limit=subject_limit, day_limit=day_limit, cache=_memory_cache()
+        ),
         empty=empty,
     )
 
@@ -104,7 +137,9 @@ async def get_subjects(q: str = "", limit: int = 100):
     query = q.strip()
     subjects = await _with_db(
         "subjects",
-        lambda db: core.build_memory_subjects(db, limit=safe_limit, query=query or None),
+        lambda db: core.build_memory_subjects(
+            db, limit=safe_limit, query=query or None, cache=_memory_cache()
+        ),
         empty=[],
     )
     return {"subjects": subjects, "query": query, "limit": safe_limit}
@@ -113,7 +148,9 @@ async def get_subjects(q: str = "", limit: int = 100):
 @router.get("/subjects/{slug}")
 async def get_subject(slug: str):
     core = _core()
-    subject = await _with_db("subject", lambda db: core.get_memory_subject(db, slug), empty=None)
+    subject = await _with_db(
+        "subject", lambda db: core.get_memory_subject(db, slug, cache=_memory_cache()), empty=None
+    )
     if subject is None:
         raise HTTPException(status_code=404, detail="Memory subject not found")
     return {"subject": subject}
@@ -123,14 +160,18 @@ async def get_subject(slug: str):
 async def get_days(limit: int = 60):
     core = _core()
     safe_limit = _clamp(limit, 1, 365)
-    daily_logs = await _with_db("days", lambda db: core.build_daily_logs(db, limit_days=safe_limit), empty=[])
+    daily_logs = await _with_db(
+        "days", lambda db: core.build_daily_logs(db, limit_days=safe_limit, cache=_memory_cache()), empty=[]
+    )
     return {"daily_logs": daily_logs, "limit": safe_limit}
 
 
 @router.get("/days/{date}")
 async def get_day(date: str):
     core = _core()
-    daily_log = await _with_db("day", lambda db: core.get_daily_log(db, date), empty=None)
+    daily_log = await _with_db(
+        "day", lambda db: core.get_daily_log(db, date, cache=_memory_cache()), empty=None
+    )
     if daily_log is None:
         raise HTTPException(status_code=404, detail="Memory day not found")
     return {"daily_log": daily_log}

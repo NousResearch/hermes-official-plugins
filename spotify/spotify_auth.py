@@ -39,6 +39,8 @@ DEFAULT_SCOPE = " ".join((
     "user-modify-playback-state", "user-read-playback-state", "user-read-currently-playing",
     "user-read-recently-played", "playlist-read-private", "playlist-read-collaborative",
     "playlist-modify-public", "playlist-modify-private", "user-library-read", "user-library-modify",
+    # Playlist cover uploads need it on top of the playlist-modify scopes.
+    "ugc-image-upload",
 ))
 
 
@@ -456,7 +458,9 @@ def login(args) -> None:
         client_id = _interactive_setup(redirect_uri_hint=getattr(args, "redirect_uri", None) or DEFAULT_REDIRECT_URI)
 
     redirect_uri = _redirect_uri(getattr(args, "redirect_uri", None), existing_state)
-    scope = _scope_string(getattr(args, "scope", None) or existing_state.get("scope"))
+    # A re-login keeps any scope the stored login asked for and adds the current defaults, so a
+    # scope added in a plugin update (ugc-image-upload) is requested; an explicit --scope wins.
+    scope = _scope_string(getattr(args, "scope", None) or f"{existing_state.get('scope') or ''} {DEFAULT_SCOPE}")
     accounts_base_url = _accounts_base_url(existing_state)
     api_base_url = _api_base_url(existing_state)
     open_browser = not getattr(args, "no_browser", False)

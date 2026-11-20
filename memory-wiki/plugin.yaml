@@ -1,5 +1,5 @@
 name: memory-wiki
-version: 1.1.0
+version: 1.1.1
 description: "Memory Wiki dashboard tab and opt-in native Desktop page: browsable subject pages and daily logs derived from local session history, plus a read-only Persistent Memory audit panel (MEMORY.md / USER.md)."
 author: "Abdullah Raja (@Araja119, original #31244), NousResearch (plugin port)"
 license: MIT

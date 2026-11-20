@@ -168,6 +168,7 @@ ephemeral identity they last only while the same Camofox session lives.
 | `browser.command_timeout` | `30` | Per-request timeout in seconds (floor 5; navigation allows 60). |
 | `browser.snapshot_threshold` | `15000` | Snapshots longer than this are cut at a line boundary; the full tree is saved under `cache/web` and the cut says how to page it with `read_file`. |
 | `browser.restrict_evaluate` | `false` | Refuse `browser_console(expression=...)` that names sensitive primitives (cookies, storage, network calls). `browser.allow_unsafe_evaluate: true` overrides it. |
+| `browser.camofox.allow_insecure_transport` | `false` | Let `browser_vault` send a password over plain HTTP to a non-loopback `CAMOFOX_URL`. Only `true` (a YAML boolean) enables it. |
 | `browser.camofox.cookies_dir` | `~/.camofox/cookies` | Where `browser_import_cookies` reads cookie files. |
 | `auxiliary.camofox_vision.*` | inherits `auxiliary.vision` | Model used by `browser_vision`. |
 
@@ -193,16 +194,11 @@ plugin seam yet. Each is imported at its point of use:
 | `agent.redact.redact_sensitive_text`, `agent.redact._PREFIX_RE` | secret redaction in tool output; refusing URLs that embed a secret |
 | `tools.credential_files.to_agent_visible_cache_path` | the stored-snapshot path as the agent's file tools see it (Docker/SSH terminals) |
 
-Vault fill (`browser_vault` filling a login form) reaches the Camofox tab on Hermes cores that have
-the browser page backend seam (`ctx.register_browser_page_backend`): the vault reads the tab's origin,
-inspects the form and writes the password through Camofox's `/tabs/<id>/evaluate`, with the same
-exact-origin checks as on a CDP browser. It only fills a tab `browser_navigate` already opened (it
-never opens one), and sends the password only when `CAMOFOX_URL` is loopback or HTTPS. A value the
-vault filled shows as `«redacted-vault-secret»` in `browser_snapshot`. On older cores, type
-credentials with `browser_type`. Snapshots also mask values that look like secrets (API keys,
-tokens), but Camoufox prints every other filled field's value and does not mark which field is a
-password: a plain password typed into the page (by the agent, or by you over VNC) shows up in
-`browser_snapshot` and the navigate result.
+Vault fill (`browser_vault`) fills login forms on Camofox tabs via `/tabs/<id>/evaluate` using exact-origin checks. It only fills tabs previously opened by `browser_navigate` and, by default, only sends credentials over HTTPS or loopback HTTP.
+
+To allow plain HTTP to other hosts (e.g., over a container network), set `browser.camofox.allow_insecure_transport: true` in `config.yaml`. The password then crosses that network unencrypted.
+
+Values filled by the vault appear as `«redacted-vault-secret»` in `browser_snapshot`. On older cores, use `browser_type` instead. Note that plain credentials typed manually or via `browser_type` are not masked and will appear in snapshots.
 
 ## License
 

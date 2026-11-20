@@ -14,7 +14,7 @@
 //
 // It drives `$accentOverride`, which the theme context feeds through
 // `retintTheme`, so the whole app repaints against the REAL derivation on every
-// pointer move. Nothing persists: reload and you're back on the authored theme.
+// pointer move. The plugin saves the pick in its own storage (see plugin.tsx).
 //
 // Sizing note: the statusbar is `h-5` (20px). The TRIGGER must live inside that
 // band or it clips to a sliver; the panel is a popover and can be any size.
@@ -30,7 +30,6 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-  setAccentOverride,
   useTheme,
   useValue
 } from '@hermes/plugin-sdk'
@@ -198,7 +197,7 @@ function HueRail({ lch, onPick }: { lch: Oklch; onPick: (h: number) => void }) {
   )
 }
 
-function AccentPicker() {
+function AccentPicker({ persist }: { persist: (hex: null | string) => void }) {
   const { theme, renderedMode } = useTheme()
   const override = useValue($accentOverride)
   const painted = theme.colors.primary
@@ -208,7 +207,6 @@ function AccentPicker() {
   // Follow the painted accent when it changes from outside this control — but
   // never mid-drag, which would fight the user's own pointer.
   const dragging = useRef(false)
-
   useEffect(() => {
     if (!dragging.current) {
       setLch(hexToOklch(painted) ?? { l: 0.5, c: 0.15, h: 260 })
@@ -221,7 +219,7 @@ function AccentPicker() {
     setLch(next)
     const hex = oklchToHex(next)
     setText(hex)
-    setAccentOverride(hex)
+    persist(hex)
     requestAnimationFrame(() => {
       dragging.current = false
     })
@@ -241,26 +239,26 @@ function AccentPicker() {
           className="min-w-0 flex-1 rounded-sm border border-(--dt-border) bg-transparent px-1.5 py-0.5 font-mono text-[11px] uppercase"
           onChange={event => {
             setText(event.target.value)
-            setAccentOverride(event.target.value)
+            persist(event.target.value)
           }}
           spellCheck={false}
           value={text}
         />
         <button
           className="shrink-0 rounded-sm border border-(--dt-border) px-1.5 py-0.5 text-[11px]"
-          onClick={() => setAccentOverride(null)}
+          onClick={() => persist(null)}
           type="button"
         >
           reset
         </button>
       </div>
 
-      <div className="grid grid-cols-8 gap-1">
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(8, minmax(0, 1fr))', gap: '4px' }}>
         {SWATCHES.map(swatch => (
           <button
             className="size-5 rounded-sm border border-(--dt-border)"
             key={swatch.hex}
-            onClick={() => setAccentOverride(swatch.hex)}
+            onClick={() => persist(swatch.hex)}
             style={{ background: swatch.hex }}
             title={`${swatch.name} · ${swatch.hex}`}
             type="button"
@@ -294,7 +292,7 @@ function AccentPicker() {
   )
 }
 
-export function AccentPickerTrigger() {
+export function AccentPickerTrigger({ persist }: { persist: (hex: null | string) => void }) {
   const { theme } = useTheme()
 
   return (
@@ -318,7 +316,7 @@ export function AccentPickerTrigger() {
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-auto p-0" side="top">
-        <AccentPicker />
+        <AccentPicker persist={persist} />
       </PopoverContent>
     </Popover>
   )

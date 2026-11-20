@@ -41,6 +41,27 @@ def test_secret_scripts_need_loopback_or_https(url, ok):
     assert secret_transport_ok(url) is ok
 
 
+def test_secret_scripts_allow_plain_http_only_when_explicitly_opted_in(camofox, write_config, monkeypatch):
+    from camofox_plugin.camofox_vault import secret_transport_ok
+
+    # Default unchanged, regardless of what CAMOFOX_URL points at; an env var does not opt in.
+    monkeypatch.setenv("CAMOFOX_URL", "http://test-browser-host:9377")
+    monkeypatch.setenv("CAMOFOX_ALLOW_INSECURE_TRANSPORT", "true")
+    assert secret_transport_ok("http://test-browser-host:9377") is False
+    write_config("browser:\n  camofox:\n    allow_insecure_transport: \"false\"\n")
+    assert secret_transport_ok("http://test-browser-host:9377") is False  # only a real boolean opts in
+
+    write_config("browser:\n  camofox:\n    allow_insecure_transport: true\n")
+    assert secret_transport_ok("http://test-browser-host:9377") is True
+    assert secret_transport_ok("http://test-browser-host:9377/tabs") is True  # a path is fine, as on loopback
+    assert secret_transport_ok("http://10.0.0.5:9377") is True
+    assert secret_transport_ok("http://test-browser-host:9377?x=1") is False  # query stays refused
+    assert secret_transport_ok("http://test-browser-host:9377#frag") is False  # fragment stays refused
+    assert secret_transport_ok("http://u:p@test-browser-host:9377") is False  # userinfo stays refused
+    assert secret_transport_ok("ftp://test-browser-host:9377") is False  # only plain HTTP is admitted
+    assert secret_transport_ok("https://camofox.internal") is True
+
+
 def test_secret_scripts_ignore_environment_proxies(camofox, backend, monkeypatch):
     """HTTP_PROXY would carry the fill script in clear text past the loopback check."""
     from camofox_plugin import camofox_tools as t

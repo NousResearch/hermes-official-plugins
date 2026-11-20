@@ -13,7 +13,10 @@ from tools.registry import tool_error, tool_result
 
 from .spotify_auth import auth_status
 from .spotify_client import (
-    SpotifyClient, SpotifyError, normalize_spotify_id, normalize_spotify_uri, normalize_spotify_uris)
+    SpotifyClient, SpotifyError, normalize_spotify_id, normalize_spotify_uri, normalize_spotify_uris,
+    spotify_uri_type)
+from .spotify_cover import cover_content_type, resolve_cover_image
+from .spotify_device import resolve_default_device
 
 _Handler = Callable[[SpotifyClient, dict, str], str]
 
@@ -23,6 +26,50 @@ def _check_spotify_available() -> bool:
         return bool(auth_status().get("logged_in"))
     except Exception:
         return False
+
+
+# Item types Spotify's queue endpoint accepts.
+_QUEUEABLE_TYPES = {"track", "episode"}
+
+# Message shown when a playback-changing command has no device to act on. The
+# API answers 403 for these, which reads as a permissions problem rather than
+# the actual cause: nothing is playing anywhere.
+_NO_ACTIVE_DEVICE = (
+    "No active Spotify playback device is available. Use `spotify_devices` to list devices, "
+    "then transfer playback before retrying."
+)
+
+
+def _coerce_queueable_spotify_uri(value: str) -> str:
+    """Normalize a queue target into ``spotify:track:<id>`` or ``spotify:episode:<id>``.
+
+    Spotify's ``POST /v1/me/player/queue`` accepts tracks *and* episodes, so the
+    type is inferred per input rather than forced to "track": a typed URI or an
+    ``open.spotify.com/<type>/<id>`` URL keeps its own type (and is still
+    canonicalized, never forwarded as a raw URL), while a bare id - the
+    search-result case - defaults to a track. Types Spotify cannot queue are
+    rejected here instead of coming back as a "Bad URI" from the API.
+    """
+    item_type = spotify_uri_type(value) or "track"
+    if item_type.lower() not in _QUEUEABLE_TYPES:
+        raise SpotifyError(f"Spotify can only queue a track or an episode, got {item_type}.")
+    # Pass the canonical lower-case type on: Spotify's own types are lower-case, so
+    # an oddly-cased one has to fail here with a clear message rather than be
+    # forwarded as `spotify:EPISODE:<id>` for the API to reject as a Bad URI.
+    return normalize_spotify_uri(value, item_type.lower())
+
+
+def _has_active_device(client: SpotifyClient) -> bool:
+    """Return True only when a device is currently *active* for playback.
+
+    Distinguishes the active device from merely-listed devices (Spotify's API
+    requires the currently active device when ``device_id`` is omitted). Lookup
+    failures are deliberately NOT swallowed here: the caller's top-level
+    ``except`` surfaces them via ``_spotify_tool_error`` instead of masking the
+    real cause behind a misleading "no active device" message.
+    """
+    devices = client.request("GET", "/me/player/devices") or {}
+    return any(bool(device.get("is_active")) for device in devices.get("devices") or [])
 
 
 def _spotify_tool_error(exc: Exception) -> str:
@@ -80,12 +127,14 @@ def _limit(args: dict, default: int = 20) -> int:
 _ok = lambda action, result, **extra: tool_result({"success": True, "action": action, **extra, "result": result})
 
 
-def _dispatcher(tool_name: str, default: str, table: dict[str, _Handler], prepare: Optional[Callable[[dict], dict]] = None):
+def _dispatcher(tool_name: str, default: str, table: dict[str, _Handler], prepare: Optional[Callable[[dict], dict]] = None,
+                prepare_with_client: Optional[Callable[[SpotifyClient, dict], dict]] = None):
     """Build a tool handler that routes ``args['action']`` through *table*.
 
     The client is constructed outside the error boundary (auth failures propagate
     as exceptions, as they always have). *prepare* runs inside the boundary before
     the action lookup, so its validation errors surface even for unknown actions.
+    *prepare_with_client* is the same, for a step that has to call the API.
     """
     def handle(args: dict, **kw) -> str:
         action = str(args.get("action") or default).strip().lower()
@@ -93,6 +142,8 @@ def _dispatcher(tool_name: str, default: str, table: dict[str, _Handler], prepar
         try:
             if prepare is not None:
                 args = prepare(args)
+            if prepare_with_client is not None:
+                args = prepare_with_client(client, args)
             handler = table.get(action)
             if handler is None:
                 return tool_error(f"Unknown {tool_name} action: {action}")
@@ -101,6 +152,29 @@ def _dispatcher(tool_name: str, default: str, table: dict[str, _Handler], prepar
             return _spotify_tool_error(exc)
     handle.__name__ = handle.__qualname__ = f"_handle_{tool_name}"
     return handle
+
+
+# Playback and queue actions that target a device, and so honour the configured default.
+_DEVICE_ACTIONS = {
+    "spotify_playback": {"play", "pause", "next", "previous", "seek", "set_repeat", "set_shuffle", "set_volume"},
+    "spotify_queue": {"add"},
+}
+
+
+def _prepare_default_device(tool_name: str) -> Callable[[SpotifyClient, dict], dict]:
+    """Resolve the configured default device for the actions that target one.
+
+    Read-only actions keep their current behaviour: they do not name a device,
+    so there is nothing to resolve and no device list to fetch.
+    """
+    targeted = _DEVICE_ACTIONS[tool_name]
+
+    def prepare(client: SpotifyClient, args: dict) -> dict:
+        action = str(args.get("action") or "").strip().lower()
+        if action not in targeted:
+            return args
+        return resolve_default_device(client, args)
+    return prepare
 
 
 # -- spotify_playback ---------------------------------------------------------
@@ -123,6 +197,18 @@ def _pb_read(fetch: Callable[..., Any], args: dict, action: str) -> str:
 _CONTEXT_TYPES = (("album", "spotify:album:", "/album/"), ("playlist", "spotify:playlist:", "/playlist/"), ("artist", "spotify:artist:", "/artist/"))
 
 
+def _pb_device_guard(client: SpotifyClient, args: dict) -> Optional[str]:
+    """Active-device requirement for playback-changing commands: an error string, or None.
+
+    A command that names its own ``device_id`` needs no lookup; without one
+    Spotify requires a currently active device, and answers 403 ("insufficient
+    client scope" / "no active device") rather than naming the real problem.
+    """
+    if not args.get("device_id") and not _has_active_device(client):
+        return _NO_ACTIVE_DEVICE
+    return None
+
+
 def _pb_play_tracks(client: SpotifyClient, args: dict, action: str, uris: list[str]) -> str:
     """Play a bare list of tracks: the first inside its album, the rest queued behind it.
 
@@ -141,6 +227,9 @@ def _pb_play_tracks(client: SpotifyClient, args: dict, action: str, uris: list[s
 
 
 def _pb_play(client: SpotifyClient, args: dict, action: str) -> str:
+    guard = _pb_device_guard(client, args)
+    if guard:
+        return tool_error(guard)
     offset = args.get("offset")
     payload_offset = {k: v for k, v in offset.items() if v is not None} if isinstance(offset, dict) else None
     uris = normalize_spotify_uris(_as_list(args.get("uris")), "track") if args.get("uris") else None
@@ -158,6 +247,9 @@ def _pb_play(client: SpotifyClient, args: dict, action: str) -> str:
 
 def _pb_cmd(client: SpotifyClient, args: dict, action: str, method: str, path: str, **extra: Any) -> str:
     """Player command whose only free argument is ``device_id`` (*extra* = fixed params)."""
+    guard = _pb_device_guard(client, args)
+    if guard:
+        return tool_error(guard)
     return _ok(action, client.request(method, path, params={**extra, "device_id": args.get("device_id")}))
 
 
@@ -196,7 +288,7 @@ _handle_spotify_playback = _dispatcher("spotify_playback", "get_state", {
     "set_shuffle": lambda c, a, act: _pb_cmd(c, a, act, "PUT", "/me/player/shuffle", state=str(_coerce_bool(a.get("state"))).lower()),
     "set_volume": _pb_required_param("/me/player/volume", "volume_percent", lambda v: max(0, min(100, int(v)))),
     "recently_played": _pb_recently_played,
-})
+}, prepare_with_client=_prepare_default_device("spotify_playback"))
 
 
 # -- spotify_devices / spotify_queue / spotify_search ---------------------------
@@ -210,12 +302,17 @@ _handle_spotify_devices = _dispatcher("spotify_devices", "list", {
 
 
 def _queue_add(client: SpotifyClient, args: dict, action: str) -> str:
-    uri = normalize_spotify_uri(str(args.get("uri") or ""), None)
+    # Validate the input before the device lookup, so a bad URI never costs an API call.
+    uri = _coerce_queueable_spotify_uri(str(args.get("uri") or ""))
+    guard = _pb_device_guard(client, args)
+    if guard:
+        return tool_error(guard)
     return _ok(action, client.request("POST", "/me/player/queue", params={"uri": uri, "device_id": args.get("device_id")}), uri=uri)
 
 
 _handle_spotify_queue = _dispatcher("spotify_queue", "get", {
-    "get": lambda c, a, act: tool_result(c.request("GET", "/me/player/queue")), "add": _queue_add})
+    "get": lambda c, a, act: tool_result(c.request("GET", "/me/player/queue")), "add": _queue_add},
+    prepare_with_client=_prepare_default_device("spotify_queue"))
 
 _SEARCH_TYPES = {"album", "artist", "playlist", "track", "show", "episode", "audiobook"}
 
@@ -257,6 +354,9 @@ _handle_spotify_playlists = _dispatcher("spotify_playlists", "list", {
         "items": [{"uri": u} for u in normalize_spotify_uris(_as_list(a.get("uris")))], "snapshot_id": a.get("snapshot_id")})),
     "update_details": lambda c, a, act: tool_result(c.request("PUT", _playlist_path(a), json_body={
         "name": a.get("name"), "public": a.get("public"), "collaborative": a.get("collaborative"), "description": a.get("description")})),
+    "upload_cover": lambda c, a, act: tool_result(c.request(
+        "PUT", _playlist_path(a, "/images"), content=resolve_cover_image(str(a.get("image_url") or "")),
+        content_type=cover_content_type(), empty_response={"success": True, "action": act, "status_code": 202})),
 })
 
 
@@ -326,12 +426,13 @@ SPOTIFY_SEARCH_SCHEMA = _schema(
     {"query": COMMON_STRING, "types": _STR_ARRAY, "type": COMMON_STRING, "limit": _INT, "offset": _INT, **_strs("market", "include_external")}, ("query",),
 )
 SPOTIFY_PLAYLISTS_SCHEMA = _schema("spotify_playlists", "List, inspect, create, update, and modify Spotify playlists.", {
-    "action": _enum("list", "get", "items", "create", "add_items", "remove_items", "update_details"),
+    "action": _enum("list", "get", "items", "create", "add_items", "remove_items", "update_details", "upload_cover"),
     **_strs("playlist_id", "market"),
     "limit": _idesc("For list and items: page size (max 50). get always returns the first 100 items"),
     "offset": _idesc("For list and items: index of the first entry. Use items to page past 100 tracks"),
     **_strs("name", "description"),
-    "public": _BOOL, "collaborative": _BOOL, "uris": _STR_ARRAY, "position": _INT, "snapshot_id": COMMON_STRING})
+    "public": _BOOL, "collaborative": _BOOL, "uris": _STR_ARRAY, "position": _INT, "snapshot_id": COMMON_STRING,
+    "image_url": {"type": "string", "description": "For upload_cover: an http(s) URL or a data: URL with the cover image."}})
 SPOTIFY_ALBUMS_SCHEMA = _schema("spotify_albums", "Fetch Spotify album metadata or album tracks.",
                                 {"action": _enum("get", "tracks"), **_strs("album_id", "id", "market"), "limit": _INT, "offset": _INT})
 SPOTIFY_LIBRARY_SCHEMA = _schema("spotify_library", "List, save, or remove the user's saved Spotify tracks or albums. Use `kind` to select which.", {

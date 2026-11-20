@@ -19,8 +19,28 @@ from typing import Any, Mapping, Optional, Sequence
 
 # Entry delimiter of the Hermes memory store (memories/MEMORY.md, as MemoryStore writes it).
 ENTRY_DELIMITER = "\n§\n"
-# Character budget for merged memory files.
-MEMORY_CHAR_LIMIT = 20_000
+# Memory store budgets: (config key, MemoryStore's own default) per store file. The merge must
+# honor the budget the memory tool enforces: against a larger one the imported store arrives
+# over its limit and the memory tool refuses every write to it, consolidation included.
+_STORE_BUDGETS = {"MEMORY.md": ("memory_char_limit", 2200), "USER.md": ("user_char_limit", 1375)}
+
+
+def memory_char_limit(target_root: Path, store: str) -> int:
+    """The char budget of memory store ``store`` in the profile at ``target_root``: that
+    profile's ``memory.<key>`` (the target's config, not the running profile's), else the
+    store's default. An unreadable config falls back to the default too: never a larger budget."""
+    key, default = _STORE_BUDGETS.get(store, _STORE_BUDGETS["MEMORY.md"])
+    try:
+        section = load_config_file(target_root / "config.yaml").get("memory")
+    except ConfigReadError:
+        return default
+    value = section.get(key) if isinstance(section, dict) else None
+    try:
+        return int(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
 SUPPORTED_AGENTS = ("claude-code", "codex", "cursor")
 AGENT_DEFAULT_DIRS = {"claude-code": ".claude", "codex": ".codex", "cursor": ".cursor"}
 _SKILL_CATEGORY = {"claude-code": "claude-code-imports", "codex": "codex-imports",
@@ -444,10 +464,15 @@ class AgentImporter:
         """Merge ``incoming`` entries into the memory store file ``destination`` (deduplicated,
         within the char budget), backing the old file up first."""
         existing = parse_existing_memory_entries(destination)
-        merged, stats = merge_entries(existing, incoming, MEMORY_CHAR_LIMIT)
+        limit = memory_char_limit(self.target_root, destination.name)
+        merged, stats = merge_entries(existing, incoming, limit)
         details = {"existing_entries": stats["existing"], "added_entries": stats["added"],
                    "duplicate_entries": stats["duplicates"],
                    "overflowed_entries": stats["overflowed"]}
+        if stats["overflowed"]:  # left out, never dropped silently
+            self.record(kind, source, destination, "skipped",
+                        f"{stats['overflowed']} entry(ies) did not fit {destination.name}'s "
+                        f"{limit:,}-char budget; raise it in config.yaml memory: or trim the store")
         if stats["added"] == 0:
             self.record(kind, source, destination, "skipped", "No new entries to import", **details)
             return

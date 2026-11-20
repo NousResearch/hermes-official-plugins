@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import re
 import shutil
 import sys
@@ -29,8 +30,8 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .importer import (AgentImporter, atomic_write_text, extract_markdown_entries, is_secret_key,
-                       read_text)
+from .importer import (AgentImporter, ConfigReadError, atomic_write_text, extract_markdown_entries,
+                       is_secret_key, load_config_file, read_text)
 
 AGENT = "grok-bot"
 EXPORT_FORMAT = "grok-bot-export"
@@ -388,9 +389,35 @@ class GrokBotImporter(AgentImporter):
         self._merge_list("user-facts", source, memories / "USER.md", _strings(bot.get("user_facts")))
         imported_skills = self._import_skills(source, _dicts(bot.get("skills")))
         self._import_routines(source, name, _dicts(bot.get("routines")), imported_skills)
+        self._record_import(source, name)
         self._import_apps(source, _dicts(bot.get("apps")))
         if isinstance(bot.get("mcp_servers"), dict) and bot["mcp_servers"]:
             self.import_mcp_servers(bot["mcp_servers"], kind="mcp-servers")
+
+    def _record_import(self, source: str, bot_name: str) -> None:
+        """One memory entry per import, so the agent can answer "which routines did I have?"
+        from what actually happened instead of offering to recreate jobs that already exist
+        (#266): date, Bot, the paused job names/ids, and where the left-out routines live."""
+        jobs = [i for i in self.items
+                if i.get("kind") == "routine" and i.get("status") == "imported"
+                and str(i.get("source") or "").startswith(f"{source} /")]
+        if not jobs:
+            return
+        from datetime import date
+
+        rendered = ", ".join(
+            f"'{i['job_name']}'" + (f" (id {i['job_id']})" if i.get("job_id") else "")
+            + (" [paused]" if i.get("paused") else "")
+            for i in jobs)
+        # The full path: the agent has no other way to find the notes (#266).
+        notes = next((i["destination"] for i in self.items
+                      if i.get("kind") == "event-routines" and i.get("source") == source), None)
+        left_out = (f" Routines the import could not turn into jobs are in {notes}." if notes else "")
+        entry = (f"Imported from {self.PRODUCT} on {date.today().isoformat()}: Bot '{bot_name}' "
+                 f"routines became Hermes cron jobs: {rendered}.{left_out} Do not recreate these "
+                 f"routines — they already exist as cron jobs; resume or edit them instead.")
+        self.merge_memory_entries("import-record", source,
+                                  self.target_root / "memories" / "MEMORY.md", [entry])
 
     def _merge_list(self, kind: str, source: str, destination: Path, entries: list[str]) -> None:
         if not entries:
@@ -481,6 +508,7 @@ class GrokBotImporter(AgentImporter):
             return
         from cron import jobs as cron_jobs
         unscheduled: list[dict[str, Any]] = []
+        needs_schedule: list[dict[str, Any]] = []
         with cron_jobs.use_cron_store(self.target_root):
             existing = {str(j.get("name")) for j in cron_jobs.load_jobs()}
             planned: set[str] = set()
@@ -498,7 +526,11 @@ class GrokBotImporter(AgentImporter):
                     continue
                 schedule = _routine_schedule(routine, cron_jobs.parse_schedule)
                 if schedule is None:
-                    unscheduled.append(routine)
+                    # A scheduled routine whose time only exists in words is
+                    # NOT an event routine: it needs a schedule, and must be
+                    # counted as such instead of vanishing into the notes (#266).
+                    trigger = str(routine.get("trigger") or "schedule").strip().lower()
+                    (needs_schedule if trigger in _SCHEDULE_TRIGGERS else unscheduled).append(routine)
                     continue
                 if job_name in existing:
                     self.record("routine", f"{source} / {label}", where, "skipped",
@@ -508,11 +540,16 @@ class GrokBotImporter(AgentImporter):
                 job_skills = [skills[s.lower()] for s in _strings(routine.get("skills")) if s.lower() in skills]
                 paused = not self.activate_routines or bool(routine.get("paused"))
                 kwargs = _create_job_kwargs(cron_jobs.create_job, routine, paused, self.PRODUCT)
+                deliver = _delivery_target(self.target_root)
+                if deliver and "deliver" in inspect.signature(cron_jobs.create_job).parameters:
+                    kwargs["deliver"] = deliver
 
-                details: dict[str, Any] = {"schedule": schedule, "paused": paused, "skills": job_skills}
+                details: dict[str, Any] = {"schedule": schedule, "paused": paused, "skills": job_skills,
+                                           "deliver": deliver or "local"}
                 if zone_note := _zone_note(routine, kwargs):  # imported rows print only where they went
                     details["timezone_note"] = zone_note
                     where = f"{where} ({zone_note})"
+                where = f"{where} (delivers to {deliver or 'local'})"  # the preview row says where (#264)
 
                 def create(job_name=job_name, instruction=instruction, schedule=schedule,
                            job_skills=job_skills, kwargs=kwargs, details=details) -> None:
@@ -521,24 +558,42 @@ class GrokBotImporter(AgentImporter):
                                                    skills=job_skills or None, **kwargs)
                     details["job_id"] = job.get("id")
 
+                details["job_name"] = job_name  # the import record names jobs by this (#266)
                 self.apply("routine", f"{source} / {label}", where,
                            f"Would create a {'paused ' if paused else ''}cron job ({schedule})",
                            create, details)
-        if unscheduled:
-            self._note_event_routines(source, bot_name, unscheduled)
+        if unscheduled or needs_schedule:
+            self._note_event_routines(source, bot_name, unscheduled, needs_schedule)
+        if needs_schedule:
+            names = ", ".join(str(r.get("name") or "routine").strip() for r in needs_schedule)
+            self.record("needs-schedule", source, None, "skipped",
+                        f"{len(needs_schedule)} routine(s) need a schedule set: {names}")
 
-    def _note_event_routines(self, source: str, bot_name: str, routines: list[dict[str, Any]]) -> None:
+    def _note_event_routines(self, source: str, bot_name: str, routines: list[dict[str, Any]],
+                             needs_schedule: list[dict[str, Any]] | None = None) -> None:
         """Event-triggered routines have no cron equivalent: keep their full text where the user can
-        rebuild them (a webhook subscription, a gateway channel, or a polling cron job)."""
+        rebuild them (a webhook subscription, a gateway channel, or a polling cron job). Scheduled
+        routines whose time did not parse get their own heading — they are not event routines."""
+        needs_schedule = needs_schedule or []
         destination = self.target_root / f"{self.AGENT}-import" / f"{_slug(bot_name)}-event-routines.md"
         lines = [f"# {bot_name}: {self.PRODUCT} routines that run on an event", "",
                  "These start on something happening instead of a schedule, so they were not turned into "
-                 "cron jobs. Recreate each in Hermes (ask Hermes to set it up from this file).", ""]
+                 "cron jobs. Recreate each in Hermes (ask Hermes to set it up from this file).", ""
+                 ] if routines else []
         for r in routines:
             lines += [f"## {str(r.get('name') or 'routine').strip()}", "",
                       f"- Trigger: {r.get('trigger') or 'unknown'}",
                       f"- Details: {r.get('trigger_details') or r.get('schedule_text') or 'n/a'}", "",
                       str(r.get("instruction") or "").strip(), ""]
+        if needs_schedule:
+            lines += ["# Routines that need a schedule", "",
+                      "These ARE scheduled routines, but their time is only in words Hermes cron "
+                      "could not parse. Give each a schedule (ask Hermes to create the cron job "
+                      "from this file).", ""]
+            for r in needs_schedule:
+                lines += [f"## {str(r.get('name') or 'routine').strip()}", "",
+                          f"- Schedule (unparsed): {r.get('schedule_text') or r.get('schedule_cron') or 'n/a'}",
+                          "", str(r.get("instruction") or "").strip(), ""]
         text = "\n".join(lines)
         if destination.is_file():
             current = read_text(destination)
@@ -554,7 +609,8 @@ class GrokBotImporter(AgentImporter):
             atomic_write_text(destination, text)
 
         self.apply("event-routines", source, destination,
-                   f"Would save {len(routines)} routine(s) with no schedule as notes to recreate", write)
+                   f"Would save {len(routines) + len(needs_schedule)} routine(s) with no cron job "
+                   f"as notes to recreate", write)
 
     def _import_apps(self, source: str, apps: list[dict[str, Any]]) -> None:
         if not apps:
@@ -592,6 +648,47 @@ def _routine_schedule(routine: dict[str, Any], parse_schedule) -> Optional[str]:
         except (ValueError, TypeError):
             continue
         return candidate
+    return None
+
+
+# Platform ids as cron's ``deliver`` spells them (``gateway.config.Platform`` values).
+_HOME_CHANNEL_PLATFORMS = ("telegram", "discord", "slack", "whatsapp", "signal", "matrix",
+                           "qqbot", "feishu", "dingtalk", "mattermost")
+
+
+def _delivery_target(target_root: Path) -> Optional[str]:
+    """First delivery target the target profile can actually receive on: a platform whose home
+    channel is configured (``<PLATFORM>_HOME_CHANNEL`` in the profile's ``.env``, or a
+    ``home_channel`` in its config), else None — the job then stays ``local`` and the summary
+    must say where its output lands instead of staying silent (#264). The process env counts
+    only when the target IS the running profile: it holds the launch profile's channels, and a
+    job in another profile cannot deliver through them."""
+    from hermes_constants import get_hermes_home
+
+    env: dict[str, str] = {}
+    if target_root.resolve() == get_hermes_home().resolve():
+        env.update(os.environ)
+
+    dotenv = target_root / ".env"
+    if dotenv.is_file():
+        for line in read_text(dotenv).splitlines():
+            key, _, value = line.strip().partition("=")
+            if key.strip() and value.strip():
+                env[key.strip()] = value.strip().strip("'\"")
+
+    for name in _HOME_CHANNEL_PLATFORMS:
+        if str(env.get(f"{name.upper()}_HOME_CHANNEL") or "").strip():
+            return name
+
+    try:
+        data = load_config_file(target_root / "config.yaml")
+    except ConfigReadError:
+        return None  # an unreadable config names no channel; the job stays local
+    platforms = data.get("platforms")
+    if isinstance(platforms, dict):
+        for name, section in platforms.items():
+            if isinstance(section, dict) and section.get("home_channel"):
+                return str(name).strip().lower()
     return None
 
 

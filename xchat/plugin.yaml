@@ -1,7 +1,7 @@
 name: xchat
 label: X Chat (encrypted DMs)
 kind: platform
-version: 0.1.0
+version: 0.1.1
 description: >
   X Chat gateway adapter for Hermes Agent.
   Connects the agent to X's end-to-end encrypted direct messages via the

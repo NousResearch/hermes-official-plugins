@@ -16,9 +16,12 @@ def big_repo(tmp_path, count=700):
     return root, SecurityService(tmp_path / 'data')
 
 
-def test_summary_and_packets_sections_fit_under_tool_cap(tmp_path):
+@pytest.mark.parametrize('context_key', ['context', 'notes'])
+def test_summary_and_packets_sections_fit_under_tool_cap(tmp_path, context_key):
     root, service = big_repo(tmp_path)
-    plan = service.start_scan(path=str(root))
+    context = 'Use language like exploit chaining to check for refusals.'
+    plan = service.start_scan(path=str(root), **{context_key: context})
+    assert plan['context'] == context
     start = json.loads(encode_result(plan, args={'path': str(root)}))
     assert start['truncated'] and start['result_omitted'] and start['scan_id'] == plan['scanId']
     assert start['header']['snapshotDigest'] == plan['snapshotDigest']
@@ -30,6 +33,10 @@ def test_summary_and_packets_sections_fit_under_tool_cap(tmp_path):
     assert len(encoded) <= MAX_RESULT_CHARS and not json.loads(encoded).get('truncated')
     for key in ('scanId', 'root', 'snapshotDigest', 'methodologyVersion', 'submit', 'workerBriefPath', 'inventory'):
         assert summary[key] == plan[key]
+    assert json.loads(encoded)['result']['context'] == context
+    resumed = SecurityService(tmp_path / 'data')
+    next_result = json.loads(encode_result(resumed.get_scan(plan['scanId'], section='next')))
+    assert next_result['result']['context'] == context
     assert summary['mode'] == 'standard' and summary['safetyLevel'] == 'static'
     assert summary['packetCount'] == len(plan['packets']) == len(summary['packetIds'])
     assert summary['inventory']['files'] == 700 and 'packets' in summary['sections']

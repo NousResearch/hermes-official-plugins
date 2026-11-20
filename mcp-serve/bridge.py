@@ -8,7 +8,7 @@ channels_list. Client config: {"mcpServers": {"hermes": {"command": "hermes", "a
 
 Formerly ``mcp_serve.py`` in hermes-agent core (``hermes mcp serve``); the tool names, schemas and
 descriptions are unchanged. ``--tools`` (see :mod:`.hermes_tools`) also exposes a curated slice of
-Hermes' own tool surface.
+Hermes' own tool surface; ``--tools-only`` serves that slice alone, with no messaging bridge.
 """
 
 from __future__ import annotations
@@ -736,49 +736,66 @@ _BRIDGE_INSTRUCTIONS = (
     "Matrix, and other connected platforms."
 )
 _TOOLS_INSTRUCTIONS = (
-    " Also exposes Hermes' own capabilities (web search/extract, browser automation, "
+    " Also exposes Hermes' own capabilities (web search/extract, "
     "vision analysis, image generation, skills and text-to-speech) as directly callable tools."
+)
+_TOOLS_ONLY_INSTRUCTIONS = (
+    "Hermes Agent tool face. Exposes Hermes' own capabilities (web search/extract, vision "
+    "analysis, image generation, skills and text-to-speech) as directly callable tools. No "
+    "messaging, conversation or approval tools are served in this mode."
 )
 
 
-def create_mcp_server(event_bridge: Optional[EventBridge] = None, include_tools: bool = False) -> MCPServer:
-    """Create and return the Hermes MCP server with all tools registered.
+def create_mcp_server(event_bridge: Optional[EventBridge] = None, include_tools: bool = False,
+                      tools_only: bool = False) -> MCPServer:
+    """Create and return the Hermes MCP server.
 
-    *include_tools* (``--tools``) also registers the curated Hermes tool surface
-    (:data:`.hermes_tools.EXPOSED_TOOLS`) after the bridge tools; off by default."""
+    *include_tools* (``--tools``) adds the curated Hermes tool surface
+    (:data:`.hermes_tools.EXPOSED_TOOLS`) after the messaging bridge; *tools_only*
+    (``--tools-only``) serves that surface **instead of** the bridge — the safe face
+    without ``messages_send`` and the approval tools."""
     if not _MCP_SERVER_AVAILABLE:
         raise ImportError(f"MCP server requires the 'mcp' package. {_MCP_INSTALL_HINT}")
-    mcp = MCPServer("hermes", instructions=_BRIDGE_INSTRUCTIONS + (_TOOLS_INSTRUCTIONS if include_tools else ""))
-    handlers = _ToolHandlers(event_bridge or EventBridge())
-    for name in _TOOL_NAMES:
-        mcp.tool()(getattr(handlers, name))
-    if include_tools:
+    if tools_only:
+        mcp = MCPServer("hermes", instructions=_TOOLS_ONLY_INSTRUCTIONS)
+    else:
+        mcp = MCPServer("hermes", instructions=_BRIDGE_INSTRUCTIONS + (_TOOLS_INSTRUCTIONS if include_tools else ""))
+        handlers = _ToolHandlers(event_bridge or EventBridge())
+        for name in _TOOL_NAMES:
+            mcp.tool()(getattr(handlers, name))
+    if tools_only or include_tools:
         from .hermes_tools import register_hermes_tools
-        logger.info("exposed %d Hermes tools over MCP", register_hermes_tools(mcp, reserved=_TOOL_NAMES))
+        reserved = () if tools_only else _TOOL_NAMES
+        logger.info("exposed %d Hermes tools over MCP", register_hermes_tools(mcp, reserved=reserved))
     return mcp
 
 
-def run_mcp_server(verbose: bool = False, include_tools: bool = False, accept_hooks: bool = False) -> None:
+def run_mcp_server(verbose: bool = False, include_tools: bool = False, accept_hooks: bool = False,
+                   tools_only: bool = False) -> None:
     """Start the Hermes MCP server on stdio."""
     if not _MCP_SERVER_AVAILABLE:
         print(f"Error: MCP server requires the 'mcp' package.\n{_MCP_INSTALL_HINT}", file=sys.stderr)
         sys.exit(1)
     logging.basicConfig(level=logging.DEBUG if verbose else logging.WARNING, stream=sys.stderr)
-    if include_tools:
+    if include_tools or tools_only:
         from .hermes_tools import prepare_tool_process
         prepare_tool_process(accept_hooks=accept_hooks)
-    bridge = EventBridge()
-    bridge.start()
-    server = create_mcp_server(event_bridge=bridge, include_tools=include_tools)
+    # --tools-only serves no bridge tools, so it starts no event bridge (no state.db poller).
+    bridge = None if tools_only else EventBridge()
+    if bridge is not None:
+        bridge.start()
+    server = create_mcp_server(event_bridge=bridge, include_tools=include_tools, tools_only=tools_only)
     import asyncio
 
     async def _run():
         try:
             await server.run_stdio_async()
         finally:
-            bridge.stop()
+            if bridge is not None:
+                bridge.stop()
 
     try:
         asyncio.run(_run())
     except KeyboardInterrupt:
-        bridge.stop()
+        if bridge is not None:
+            bridge.stop()

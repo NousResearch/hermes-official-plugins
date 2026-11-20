@@ -120,7 +120,7 @@ Catalog entries come in two tiers:
 <a href="accent-picker/"><img src="assets/accent-picker.jpg" alt="Accent Picker plugin"></a>
 <h3><a href="accent-picker/">Accent Picker</a> <sup>desktop</sup></h3>
 <code>hermes plugins install accent-picker</code>
-<p>An OKLCH colour wheel in the Hermes Desktop status bar. Drag it and the whole theme retints live, so theme authors can try accents in place. The colour is scratch state and never persisted.</p>
+<p>An OKLCH colour wheel in the Hermes Desktop status bar. Drag it and the whole theme retints live, and the pick is restored on the next launch.</p>
 <p>Desktop plugin · status bar + palette commands</p>
 </td>
 </tr>

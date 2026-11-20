@@ -237,6 +237,7 @@ class SecurityService:
         excluded = scan['options']['excluded']
         return {'scanId': scan['scan_id'], 'root': scan['root'], 'snapshotDigest': scan['snapshot_digest'],
                 'methodologyVersion': METHODOLOGY_VERSION, 'surfaces': scan['options']['surfaces'],
+                'context': scan['options'].get('notes') or '',
                 'specialistProfiles': [{'name': name, 'path': str(refs / 'specialist-profiles' / (name + '.md'))} for name in profiles],
                 'lanes': standard.lanes(), 'applicableControls': ledger.applicable_controls(scan['options']['surfaces']),
                 'packets': self._packets(scan) if packets is None else packets,
@@ -457,7 +458,7 @@ class SecurityService:
             plan = self._plan(scan, packets=[])
             packets = self._packets(scan)
             keep = ('scanId', 'root', 'snapshotDigest', 'methodologyVersion', 'surfaces', 'specialistProfiles',
-                    'workerBriefPath', 'workDir', 'submit', 'inventory', 'status')
+                    'workerBriefPath', 'workDir', 'submit', 'inventory', 'status', 'context')
             return {**{k: plan[k] for k in keep}, 'mode': scan['mode'], 'safetyLevel': scan['safety_level'],
                     'packetCount': len(packets), 'packetIds': [p['packetId'] for p in packets],
                     'laneCount': len(plan['lanes']), 'excludedTotal': plan['excluded']['total'],
@@ -986,6 +987,18 @@ class SecurityService:
 
     def resume(self, scan_id):
         with self._mutation(scan_id, canceled=True) as scan:
+            if not scan['snapshot_digest']:
+                # An initial inventory failure has no pinned evidence to resume.
+                # Retry preparation, never dispatch empty packets or replace a snapshot.
+                if self.store.inventory(scan_id) or self._attempts(scan_id):
+                    raise Conflict('missing snapshot with saved review data; start a new scan')
+                self.store.update_scan_options(scan_id, {'preparing': True, 'dependenciesPending': True})
+                self.store.update_scan_option(scan_id, 'autoResume',
+                                              lambda old: {**(old or {}), 'count': 0, 'stoppedAt': None, 'offAt': None})
+                scan = self.store.set_scan_status(scan_id, 'created')
+                self.store.add_event(scan_id, 'scan.preparing', 'Retrying the initial target inventory.')
+                self._start_dependency_check(scan_id)
+                return {**self._plan(scan, packets=[]), 'status': 'created', 'stopReason': None}
             self._current(scan)
             attempts = self._attempts(scan_id)
             accepted = {a['packet_id'] for a in attempts if a['status'] == 'accepted'}

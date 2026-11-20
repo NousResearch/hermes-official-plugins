@@ -7,6 +7,8 @@ network, no gateway process.
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import time
 from typing import Any, Dict, List, Optional
 
@@ -496,6 +498,34 @@ async def test_self_chat_answers_owner_never_own_replies(monkeypatch):
     assert off.resolved_allowlist_user_ids() == set()
 
 
+def test_remember_sent_survives_concurrent_writers(monkeypatch, tmp_path):
+    """Two processes (gateway + cron/hermes send) writing at once must not clobber each other's id."""
+    import threading
+    from xchat_plugin import adapter as xchat_adapter
+
+    ids = [f"uuid-{i}" for i in range(20)]
+    errors = []
+
+    def worker(mid):
+        try:
+            for _ in range(5):
+                xchat_adapter._remember_sent(mid)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(m,)) for m in ids]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors
+    loaded = set(xchat_adapter._load_sent_ids())
+    # Every writer's id must have survived (at least one record per id).
+    missing = [m for m in ids if m not in loaded]
+    assert not missing, f"lost ids: {missing}"
+
+
 @pytest.mark.asyncio
 async def test_keychange_routes_through_batch(monkeypatch):
     adapter = _make_adapter(monkeypatch)
@@ -546,6 +576,20 @@ async def test_discovery_adds_conversations(monkeypatch):
     assert adapter._conversations == {"111-222", "g333"}
 
 
+def test_discovery_runs_on_a_slower_cadence_than_polling(monkeypatch):
+    """#228: one list read per poll cycle spends the separate 1,000/day list budget in
+    ~8 hours at a 30 s interval; discovery is due at startup, then on its own cadence."""
+    adapter = _make_adapter(monkeypatch)
+    assert adapter._discovery_due() is True  # first pass always runs
+
+    adapter._initial_discovery_done = True
+    adapter._last_discovery_at = xchat_adapter.time.monotonic()
+    assert adapter._discovery_due() is False
+
+    adapter._last_discovery_at -= 601
+    assert adapter._discovery_due() is True
+
+
 def test_dedup_prune_bounds_memory(monkeypatch):
     adapter = _make_adapter(monkeypatch)
     now = time.time()
@@ -555,6 +599,18 @@ def test_dedup_prune_bounds_memory(monkeypatch):
     assert len(adapter._seen_event_ids) <= xchat_adapter.DEDUP_MAX_SIZE
     # Newest entries survive the prune.
     assert f"e{xchat_adapter.DEDUP_MAX_SIZE + 99}" in adapter._seen_event_ids
+
+
+def test_conversation_keys_persist_across_restarts(monkeypatch):
+    """Verified keys learned from a KeyChange survive a restart, so the next message
+    under a rotated key decrypts without waiting for the KeyChange to page in."""
+    adapter = _make_adapter(monkeypatch)
+    _, crypto = _wire(adapter)
+    adapter._absorb_key_batch("111:999", ["a2V5"])
+    assert adapter._conversation_keys["111-999"] == {"1": b"k"}
+
+    fresh = _make_adapter(monkeypatch)
+    assert fresh._conversation_keys["111-999"] == {"1": b"k"}
 
 
 # ---------------------------------------------------------------------------
@@ -1201,6 +1257,94 @@ async def test_idle_conversation_not_reread(monkeypatch):
     assert reads == []
 
 
+@pytest.mark.asyncio
+async def test_degraded_discovery_polls_known_conversations(monkeypatch, tmp_path):
+    monkeypatch.setattr(xchat_adapter, "_state_dir", lambda: tmp_path)
+    adapter = _make_adapter(monkeypatch)
+    api, _crypto = _wire(adapter)
+    adapter._conversations = {"111:999"}
+
+    calls = {"n": 0}
+
+    async def throttled(**_kw):
+        calls["n"] += 1
+        raise xchat_adapter.XChatRateLimited("rate limited", int(time.time()) + 600)
+
+    api.get_conversations = throttled
+
+    # The throttled list degrades to the known set instead of ending the cycle.
+    assert await adapter._discover_or_degrade() == {}
+    assert calls["n"] == 1
+    assert adapter._discovery_blocked_until > 0
+
+    # While the block is live the list is not called again.
+    assert await adapter._discover_or_degrade() == {}
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_degraded_discovery_without_known_conversations_raises(monkeypatch, tmp_path):
+    monkeypatch.setattr(xchat_adapter, "_state_dir", lambda: tmp_path)
+    adapter = _make_adapter(monkeypatch)
+    api, _crypto = _wire(adapter)
+    adapter._conversations = set()
+
+    async def throttled(**_kw):
+        raise xchat_adapter.XChatRateLimited("rate limited", int(time.time()) + 600)
+
+    api.get_conversations = throttled
+
+    with pytest.raises(RuntimeError):
+        await adapter._discover_or_degrade()
+
+
+def test_known_conversations_persist_across_restart(monkeypatch, tmp_path):
+    monkeypatch.setattr(xchat_adapter, "_state_dir", lambda: tmp_path)
+    adapter = _make_adapter(monkeypatch)
+    adapter._conversations = {"111:999"}
+    adapter._persist_conversations()
+
+    path = tmp_path / "conversations.json"
+    assert path.exists()
+    # chmod(0o600) does not change the mode Windows reports (666). The mode is a
+    # POSIX property; the restart check below is what this test exists to prove.
+    if xchat_adapter.os.name != "nt":
+        assert oct(path.stat().st_mode)[-3:] == "600"
+
+    second = _make_adapter(monkeypatch)
+    second._load_conversations()
+    assert "111:999" in second._conversations
+
+
+def test_known_conversations_recover_from_cursor_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(xchat_adapter, "_state_dir", lambda: tmp_path)
+    adapter = _make_adapter(monkeypatch)
+    adapter._conversations = set()
+    adapter._cursors = {"111-999": "e1"}
+    adapter._load_conversations()
+    assert "111-999" in adapter._conversations
+
+
+def test_poll_cycle_stays_inside_the_events_allowance(monkeypatch):
+    """#228: between discoveries each known conversation costs one events read per cycle, so
+    the cycle must stretch as conversations accumulate or the 10,000/day events budget dies too."""
+    adapter = _make_adapter(monkeypatch)
+    adapter._conversations = {"111-999"}
+    assert adapter._cycle_interval() == adapter._poll_interval
+    adapter._conversations = {f"{i}-999" for i in range(10)}
+    interval = adapter._cycle_interval()
+    assert 10 * 86400 / interval <= xchat_adapter.EVENTS_READS_PER_DAY
+
+
+def test_pinned_conversations_are_not_widened_by_persisted_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(xchat_adapter, "_state_dir", lambda: tmp_path)
+    (tmp_path / "conversations.json").write_text('["111-999", "222-999"]')
+    adapter = _make_adapter(monkeypatch, conversation_ids=["333-999"])
+    adapter._cursors["444-999"] = "e1"
+    adapter._load_conversations()
+    assert adapter._conversations == {"333-999"}
+
+
 def test_send_target_forms():
     """`hermes send xchat:<id>` accepts the ids the API and events use; anything else is refused."""
     parse = xchat_adapter._parse_target_ref
@@ -1209,3 +1353,69 @@ def test_send_target_forms():
     assert parse("999") == ("999", None)
     assert parse("g12345") == ("g12345", None)
     assert parse("#general") is None
+
+@pytest.mark.asyncio
+async def test_a_keychange_refreshes_a_known_senders_roster(monkeypatch):
+    """#173: a second device's KeyChange must bring that version's signing key in, even though
+    the sender was already known - otherwise the rotated key never verifies and decryption is
+    wedged for good."""
+    adapter = _make_adapter(monkeypatch)
+    api, crypto = _wire(adapter)
+    adapter._cursors["111-999"] = "e1"
+    api.public_keys["111"] = [
+        {"public_key_version": "3", "signing_public_key": "SPK3", "public_key": "IPK3",
+         "identity_public_key_signature": "SIG3"}
+    ]
+    await adapter._register_signing_keys([{"id": "e0", "sender_id": "111"}])
+    assert [k["public_key_version"] for k in crypto.signing_keys] == ["3"]
+
+    # The phone registers a second identity and rotates the conversation key.
+    api.public_keys["111"].append(
+        {"public_key_version": "4", "signing_public_key": "SPK4", "public_key": "IPK4",
+         "identity_public_key_signature": "SIG4"}
+    )
+    key_change = base64.b64encode(json.dumps({"type": "KeyChange", "sender_id": "111"}).encode()).decode()
+    api.events_pages["111-999"] = {"data": [], "meta": {"conversation_key_events": [key_change]}}
+    await adapter._poll_conversation("111-999")
+
+    assert {k["public_key_version"] for k in crypto.signing_keys} == {"3", "4"}
+    assert crypto.signing_keys[-1]["public_key"] == "SPK4"
+    assert crypto.signing_keys[-1]["public_key_version"] == "4"
+
+
+@pytest.mark.asyncio
+async def test_the_roster_does_not_grow_on_repeat_keychanges(monkeypatch):
+    adapter = _make_adapter(monkeypatch)
+    api, crypto = _wire(adapter)
+    adapter._cursors["111-999"] = "e1"
+    api.public_keys["111"] = [
+        {"public_key_version": "4", "signing_public_key": "SPK4", "public_key": "IPK4",
+         "identity_public_key_signature": "SIG4"}
+    ]
+    key_change = base64.b64encode(json.dumps({"type": "KeyChange", "sender_id": "111"}).encode()).decode()
+    api.events_pages["111-999"] = {"data": [], "meta": {"conversation_key_events": [key_change]}}
+    await adapter._poll_conversation("111-999")
+    await adapter._poll_conversation("111-999")
+    assert [k["public_key_version"] for k in crypto.signing_keys] == ["4"]
+
+
+@pytest.mark.asyncio
+async def test_a_binary_keychange_from_the_accounts_other_device_refreshes_its_roster(monkeypatch):
+    """Real KeyChange blobs are Thrift, not JSON: the refresh must not depend on parsing the signer
+    out of the blob. The account's phone registers v2 and rotates the self-chat key (#173)."""
+    adapter = _make_adapter(monkeypatch)
+    api, crypto = _wire(adapter)
+    adapter._cursors["999-999"] = "e1"
+    api.public_keys["999"] = [
+        {"public_key_version": "1", "signing_public_key": "SPK1", "public_key": "IPK1",
+         "identity_public_key_signature": "SIG1"}
+    ]
+    await adapter._register_signing_keys([])
+    api.public_keys["999"].append(
+        {"public_key_version": "2", "signing_public_key": "SPK2", "public_key": "IPK2",
+         "identity_public_key_signature": "SIG2"}
+    )
+    thrift_like = base64.b64encode(b"\x0c\x00\x03\x0b\x00\x01\x00\x00\x00\r1795089016792").decode()
+    api.events_pages["999-999"] = {"data": [], "meta": {"conversation_key_events": [thrift_like]}}
+    await adapter._poll_conversation("999-999")
+    assert {k["public_key_version"] for k in crypto.signing_keys} == {"1", "2"}

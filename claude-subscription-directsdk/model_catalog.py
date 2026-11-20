@@ -54,6 +54,14 @@ def _route_base(base):
     dotted = base.replace('.', '-')
     if dotted != base:
         return _route_base(dotted)
+    # Hermes core may hand us an OpenRouter-style canonical id (`anthropic/claude-sonnet-5`) even
+    # when the config names the plain route. The CLI only knows the bare id; passing the vendor
+    # prefix through 404s, and a 404 consumes the one admission so every retry is denied (#377).
+    # Only strip a vendor we recognise; an unrelated `a/b` name is left for the CLI to reject.
+    if '/' in base:
+        vendor, _, short = base.partition('/')
+        if vendor in ('anthropic', 'openrouter') and short:
+            return _route_base(short)
     without_vendor = base.removeprefix('claude-')
     # `haiku-4-5` names the `claude-haiku-4-5` alias, not a pinned id, so check both tables.
     if 'claude-' + without_vendor in CONTEXT_WINDOWS or 'claude-' + without_vendor in ALIASES:

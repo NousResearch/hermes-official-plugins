@@ -1,0 +1,9 @@
+{
+  "name": "advanced-delegation",
+  "label": "Advanced Delegation",
+  "description": "Model-route preset API",
+  "version": "1.0.0",
+  "tab": { "path": "/advanced-delegation", "hidden": true },
+  "entry": "dist/index.js",
+  "api": "api.py"
+}

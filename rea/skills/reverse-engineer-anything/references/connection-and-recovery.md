@@ -27,11 +27,15 @@ such; only actual REA output supplies REA Evidence.
 
 Hermes filters arbitrary inherited environment variables before launching MCP
 servers. Exporting `GHIDRA_INSTALL_DIR` in the shell alone is not sufficient for
-this pinned REA build. Supply Ghidra and JDK paths in the server's explicit
-`env`. Do not weaken Hermes' environment filter or put these non-secret paths
-in the secrets file.
+this pinned REA build. The plugin forwards `GHIDRA_INSTALL_DIR`, `JAVA_HOME`,
+`REA_ANALYSIS_PROVIDER`, `REA_KUNA_COMMAND`, `REA_TSHARK_COMMAND`,
+`REA_CAPINFOS_COMMAND`, `REA_SIGROK_COMMAND`, `REA_WABT_BIN_DIRECTORY` and
+`REA_PWNTOOLS_PYTHON` when Hermes itself has them: in `~/.hermes/.env` (or the
+profile's `.env`) or in the environment the gateway starts from. An unset one
+is left out. After the user adds one, a new session restarts the server. Do not
+weaken Hermes' environment filter.
 
-For a durable user configuration, set a complete native `mcp_servers.rea`
+To pin values per machine instead, set a complete native `mcp_servers.rea`
 entry with the normal Hermes configuration interface. This is an intentional
 override, not the duplicate registration made by `rea setup`:
 
@@ -60,11 +64,11 @@ only validates the target; repeated opens do not make analysis faster. Keep one
 session for related questions and explain the initial wait before starting it.
 
 This plugin sets `REA_GHIDRA_STARTUP_TIMEOUT_MS` to `900000` in its server
-environment. REA calls use Hermes' normal MCP tool deadline (300 seconds by
-default), which a large executable's first native query can exceed. When it
-does, explain the limit; on Hermes v0.23.0 or newer, offer the native
-`mcp_servers.rea` entry above with `timeout: 1000`. Do not pretend the
-default will handle large executables.
+environment and declares a 1000-second Hermes call deadline for REA, so a large
+executable's first native query can run past the normal 300-second MCP tool
+deadline. A query that still runs past 1000 seconds times out; explain the
+limit, and offer a native `mcp_servers.rea` entry with a larger `timeout` only
+if the user wants to wait longer.
 
 Distinguish REA's structured `provider_timeout` from a Hermes/client timeout.
 The client deadline must exceed the backend startup deadline so the backend can

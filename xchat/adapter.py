@@ -35,6 +35,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -61,6 +62,10 @@ logger = logging.getLogger(__name__)
 MAX_MESSAGE_LENGTH = 9500
 
 DEFAULT_POLL_INTERVAL = 10.0
+# Between discoveries every known conversation gets an events read each cycle, and the events
+# endpoint has its own per-account allowance (10,000 per 24 h measured, #228). Keep that spend
+# under this many reads a day by stretching the cycle as the conversation count grows.
+EVENTS_READS_PER_DAY = 9000
 ERROR_BACKOFF = [5, 15, 30, 60, 120]
 DEDUP_MAX_SIZE = 5000
 # Bounded cache of recent decrypted events per conversation — used to build
@@ -70,6 +75,27 @@ REPLY_CACHE_MAX = 200
 MAX_INBOUND_ATTACHMENTS = 5
 # Message ids Hermes sent, kept so self-chat echoes are never answered.
 SENT_IDS_MAX = 500
+
+# Cross-process lock for the shared sent-id file (gateway + cron / `hermes send`).
+try:
+    import msvcrt as _msvcrt  # type: ignore
+
+    def _lock_fd(fd: int) -> None:
+        _msvcrt.locking(fd, _msvcrt.LK_LOCK, 1)
+
+    def _unlock_fd(fd: int) -> None:
+        try:
+            _msvcrt.locking(fd, _msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+except ImportError:  # pragma: no cover - Unix
+    import fcntl as _fcntl  # type: ignore
+
+    def _lock_fd(fd: int) -> None:
+        _fcntl.flock(fd, _fcntl.LOCK_EX)
+
+    def _unlock_fd(fd: int) -> None:
+        _fcntl.flock(fd, _fcntl.LOCK_UN)
 
 # Group-chat mention wake words — same defaults as the other Hermes channels
 # so group gating behaves identically everywhere.
@@ -89,6 +115,11 @@ def _cursor_path() -> Path:
     return _state_dir() / "cursors.json"
 
 
+def _conversations_path() -> Path:
+    """Conversation ids seen so far — the fallback when the list endpoint is dark."""
+    return _state_dir() / "conversations.json"
+
+
 def _load_cursors() -> Dict[str, str]:
     """Per-conversation cursors (last processed event id), persisted to disk.
 
@@ -104,6 +135,55 @@ def _load_cursors() -> Dict[str, str]:
     if not isinstance(data, dict):
         return {}
     return {str(k): str(v) for k, v in data.items() if str(v)}
+
+
+def _keys_path() -> Path:
+    return _state_dir() / "conversation_keys.json"
+
+
+def _load_conversation_keys() -> Dict[str, Dict[str, bytes]]:
+    """Verified conversation keys persisted across restarts (base64, mode 600).
+
+    Keys learned from a KeyChange live only in memory today: after a restart
+    the next message under a rotated key fails decrypt until its KeyChange
+    event happens to page in again — and that event may sit behind the
+    cursor. Persisting the verified cache closes the gap."""
+    import base64
+
+    try:
+        data = json.loads(_keys_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    out: Dict[str, Dict[str, bytes]] = {}
+    if isinstance(data, dict):
+        for conv, versions in data.items():
+            if isinstance(versions, dict):
+                decoded = {}
+                for version, blob in versions.items():
+                    try:
+                        decoded[str(version)] = base64.b64decode(str(blob))
+                    except Exception:
+                        continue
+                if decoded:
+                    out[str(conv)] = decoded
+    return out
+
+
+def _save_conversation_keys(conversation_keys: Dict[str, Dict[str, bytes]]) -> None:
+    import base64
+
+    try:
+        path = _keys_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {conv: {v: base64.b64encode(k).decode("ascii") for v, k in versions.items()}
+                   for conv, versions in conversation_keys.items()}
+        tmp = path.with_suffix(".json.tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload) + "\n")
+        tmp.replace(path)
+    except OSError:
+        logger.debug("[xchat] conversation-key persist failed", exc_info=True)
 
 
 def _conv_key(conversation_id: str) -> str:
@@ -135,18 +215,53 @@ def _remember_sent(message_id: str) -> None:
     The gateway and out-of-process senders (cron, ``hermes send``) share this file, so in the
     self-chat the poll loop can tell Hermes' own messages from ones the owner typed. Ids are the
     SDK-generated message UUIDs, which the decrypted event carries back as ``id``.
+
+    The read-modify-write is serialized with a lock file and the temp file gets a unique name, so
+    two concurrent writers cannot clobber each other's id (or each other's temp file).
     """
     if not message_id:
         return
-    ids = [m for m in _load_sent_ids() if m != message_id] + [message_id]
     try:
-        path = _sent_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(ids[-SENT_IDS_MAX:]) + "\n", encoding="utf-8")
-        tmp.replace(path)
+        lock_path = _sent_path().with_suffix(".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        logger.debug("[xchat] sent-id lock open failed", exc_info=True)
+        return
+    try:
+        locked = True
+        try:
+            _lock_fd(fd)
+        except OSError:
+            # Still record the id: dropping it would make the poll loop answer our own message.
+            locked = False
+            logger.debug("[xchat] sent-id lock acquire failed; writing unlocked", exc_info=True)
+        try:
+            ids = [m for m in _load_sent_ids() if m != message_id] + [message_id]
+            path = _sent_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + f".{uuid.uuid4().hex}.tmp")
+            tmp.write_text(json.dumps(ids[-SENT_IDS_MAX:]) + "\n", encoding="utf-8")
+            # Windows can raise sharing violations if another process is replacing
+            # concurrently; retry briefly.
+            for attempt in range(5):
+                try:
+                    tmp.replace(path)
+                    break
+                except OSError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
+        finally:
+            if locked:
+                _unlock_fd(fd)
     except OSError:
         logger.debug("[xchat] sent-id persist failed", exc_info=True)
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def _event_id_newer(a: str, b: str) -> bool:
@@ -223,6 +338,19 @@ def _compile_mention_patterns(raw: Any) -> List[re.Pattern]:
     return compiled or [re.compile(p, re.IGNORECASE) for p in _DEFAULT_MENTION_PATTERNS]
 
 
+def _key_change_participants(conv_id: str, events: List[Dict[str, Any]], account_id: str) -> set:
+    """Whose public keys a KeyChange in *conv_id* may be signed with.
+
+    KeyChange blobs are Thrift-encoded, so the signer is not readable before verification. A 1:1
+    id (``A-B``) names both participants; for a group, the page's message senders stand in. The
+    account itself is always included: its own other device is the #173 case.
+    """
+    key = _conv_key(conv_id)
+    named = set() if key.startswith("g") else {p for p in key.split("-") if p}
+    senders = {str(e.get("sender_id")) for e in events if e.get("sender_id")}
+    return named | senders | ({account_id} if account_id else set())
+
+
 class XChatAdapter(BasePlatformAdapter):
     """X Chat (encrypted X DMs) adapter."""
 
@@ -292,12 +420,15 @@ class XChatAdapter(BasePlatformAdapter):
         # backlog guard; the in-memory dedup set is only a same-session
         # safety net (echo suppression of our own sends).
         self._conversations: Set[str] = set(self._pinned_conversations)
+        # Monotonic deadline before which the conversation list is not re-tried.
+        self._discovery_blocked_until = 0.0
         # Conversations that appeared after the first discovery pass: no backlog to skip.
         self._initial_discovery_done = False
+        self._last_discovery_at = 0.0
         self._live_conversations: Set[str] = set()
         self._cursors: Dict[str, str] = _load_cursors()
         self._seen_event_ids: Dict[str, float] = {}
-        self._conversation_keys: Dict[str, Dict[str, bytes]] = {}
+        self._conversation_keys: Dict[str, Dict[str, bytes]] = _load_conversation_keys()
         # Latest verified key version per conversation — media decrypt must
         # use the key for the EVENT's version, media encrypt the latest.
         self._latest_key_version: Dict[str, str] = {}
@@ -327,6 +458,9 @@ class XChatAdapter(BasePlatformAdapter):
         # Signing-key roster (accumulated; the SDK store is replaced wholesale)
         self._signing_keys: List[Dict[str, str]] = []
         self._known_senders: Set[str] = set()
+        # KeyChange blobs already seen: the events meta repeats them, and only a new one
+        # warrants re-fetching the participants' public keys.
+        self._seen_key_events: Set[str] = set()
 
         logger.info(
             "[xchat] adapter initialized: user_id=%s poll=%.0fs pinned=%d refresh=%s",
@@ -401,6 +535,7 @@ class XChatAdapter(BasePlatformAdapter):
             await self._teardown()
             return False
 
+        self._load_conversations()
         self._running = True
         self._poll_task = asyncio.create_task(self._run_poll_loop())
         self._mark_connected()
@@ -451,11 +586,18 @@ class XChatAdapter(BasePlatformAdapter):
         backoff_idx = 0
         while self._running:
             try:
-                # One conversation-list read per cycle says which conversations have
-                # anything newer than our cursor; only those get an events read. Events
-                # are billed per resource returned, so re-reading idle conversations
-                # every cycle is the dominant cost.
-                newest = await self._discover_conversations()
+                # A conversation-list read says which conversations have anything
+                # newer than our cursor; only those get an events read. But the list
+                # call itself is billed per call against a separate 1,000/day budget:
+                # at a 30 s poll interval, one list read per cycle spends it in ~8
+                # hours (#228). Discovery therefore runs on its own slower cadence;
+                # between discoveries every known conversation is polled (an idle
+                # events page returns no resources, so it stays cheap).
+                if self._discovery_due():
+                    newest = await self._discover_or_degrade()
+                    self._last_discovery_at = time.monotonic()
+                else:
+                    newest = {}
                 for conv_id in list(self._conversations):
                     if not self._running:
                         return
@@ -466,7 +608,7 @@ class XChatAdapter(BasePlatformAdapter):
                     await self._poll_conversation(conv_id)
 
                 backoff_idx = 0
-                await asyncio.sleep(self._poll_interval)
+                await asyncio.sleep(self._cycle_interval())
             except asyncio.CancelledError:
                 return
             except XChatRateLimited as e:
@@ -479,6 +621,19 @@ class XChatAdapter(BasePlatformAdapter):
                 backoff_idx += 1
                 logger.warning("[xchat] poll error (retry in %ds): %s", delay, e)
                 await asyncio.sleep(delay)
+
+    def _cycle_interval(self) -> float:
+        """The poll interval, stretched so reading every known conversation each cycle stays
+        inside the events allowance (one conversation at 10 s fits; ten need ~96 s)."""
+        return max(self._poll_interval, len(self._conversations) * 86400.0 / EVENTS_READS_PER_DAY)
+
+    def _discovery_due(self) -> bool:
+        """Discovery runs at most once per cadence (default 10 min, at least 20 poll
+        cycles): the first pass always runs so startup learns the conversation set."""
+        if not self._initial_discovery_done:
+            return True
+        cadence = max(600.0, self._poll_interval * 20)
+        return (time.monotonic() - self._last_discovery_at) >= cadence
 
     async def _discover_conversations(self) -> Dict[str, str]:
         """List conversations; returns ``{conversation: newest_event_id}`` where reported."""
@@ -507,7 +662,74 @@ class XChatAdapter(BasePlatformAdapter):
         if self._pinned_conversations:
             return newest  # pinned: poll exactly those, never widen the set
         self._conversations |= found
+        if new:
+            self._persist_conversations()
         return newest
+
+    def _persist_conversations(self) -> None:
+        try:
+            path = _conversations_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(sorted(self._conversations)))
+            os.chmod(tmp, 0o600)
+            tmp.replace(path)
+        except Exception as e:  # noqa: BLE001 - cache only
+            logger.warning("[xchat] could not persist conversation list: %s", e)
+
+    def _load_conversations(self) -> None:
+        if self._pinned_conversations:
+            return  # pinned: poll exactly those, never widen the set
+        path = _conversations_path()
+        before = len(self._conversations)
+        try:
+            if path.exists():
+                known = json.loads(path.read_text() or "[]")
+                if isinstance(known, list):
+                    self._conversations |= {str(c) for c in known if c}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[xchat] could not load known conversations: %s", e)
+        # Cursors are keyed by conversation, so a conversation we have polled
+        # before is recoverable even if the id list was never written.
+        self._conversations |= set(self._cursors)
+        if len(self._conversations) > before:
+            logger.info(
+                "[xchat] loaded %d known conversation(s)",
+                len(self._conversations) - before,
+            )
+
+    async def _discover_or_degrade(self) -> Dict[str, str]:
+        """List conversations, or fall back to known ones when the list is refused.
+
+        The list endpoint and the per-conversation events endpoint are metered
+        separately (1,000/day against 10,000/day on current limits), so a
+        throttled list does not mean inbound has to stop: known conversation ids
+        — persisted, so a restart mid-throttle still has them — can be polled
+        directly. Discovery is re-tried when the throttle is due to lift rather
+        than every cycle, which would spend a refused request per cycle.
+        """
+        now = time.monotonic()
+        if now >= self._discovery_blocked_until:
+            try:
+                return await self._discover_conversations()
+            except XChatRateLimited as e:
+                wait = 300.0
+                if e.reset_epoch:
+                    wait = min(max(60.0, e.reset_epoch - time.time()), 1800.0)
+                self._discovery_blocked_until = now + wait
+                logger.warning(
+                    "[xchat] conversation list throttled — polling %d known conversation(s) "
+                    "directly for the next %.0fs",
+                    len(self._conversations),
+                    wait,
+                )
+        if not self._conversations:
+            raise RuntimeError(
+                "conversation list throttled and no known conversations to fall back on"
+            )
+        # No head ids without the list: every known conversation is polled, and
+        # the cursor check inside _poll_conversation keeps that to one page each.
+        return {}
 
     async def _poll_conversation(self, conv_id: str) -> None:
         assert self._api is not None and self._crypto is not None
@@ -548,7 +770,15 @@ class XChatAdapter(BasePlatformAdapter):
 
         # Process oldest-first.
         collected.reverse()
-        await self._register_signing_keys(collected)
+        # A KeyChange is the signal that the participant roster itself moved: refresh the senders'
+        # keys even when they were already seen, or the new version's signing key never reaches the
+        # SDK and every rotated key stays unverifiable (#173).
+        new_key_events = [k for k in key_events_b64 if k not in self._seen_key_events]
+        self._seen_key_events.update(new_key_events)
+        refresh = (
+            _key_change_participants(conv_id, collected, self._bot_user_id) if new_key_events else set()
+        )
+        await self._register_signing_keys(collected, refresh=refresh)
 
         # Verify + cache any conversation-key changes FIRST (after signing
         # keys are registered — an unverifiable KeyChange is dropped by the
@@ -677,6 +907,7 @@ class XChatAdapter(BasePlatformAdapter):
         keys = (batch.get("conversation_keys") or {}).get("keys") or {}
         if keys:
             self._conversation_keys.setdefault(_conv_key(conv_id), {}).update(keys)
+            _save_conversation_keys(self._conversation_keys)
         latest = batch.get("latest_key_version")
         if latest:
             self._latest_key_version[_conv_key(conv_id)] = str(latest)
@@ -807,20 +1038,31 @@ class XChatAdapter(BasePlatformAdapter):
         for eid, _ in items[: len(items) // 2]:
             self._seen_event_ids.pop(eid, None)
 
-    async def _register_signing_keys(self, events: List[Dict[str, Any]]) -> None:
-        """Fetch new senders' public keys into the SDK's signing-key store."""
+    async def _register_signing_keys(
+        self, events: List[Dict[str, Any]], refresh: Optional[set] = None
+    ) -> None:
+        """Fetch public keys for new senders, plus *refresh* senders unconditionally."""
         assert self._api is not None and self._crypto is not None
+        refresh = set(refresh or ())
         senders = {
             str(e.get("sender_id")) for e in events if e.get("sender_id")
-        } | {self._bot_user_id}
-        senders -= self._known_senders
+        } | {self._bot_user_id} | refresh
+        senders -= self._known_senders - refresh
         for sender_id in senders:
             try:
-                for pk in await self._api.get_public_keys(sender_id):
+                known = {
+                    (k.get("user_id"), k.get("public_key_version"))
+                    for k in self._signing_keys
+                }
+                rows = await self._api.get_public_keys(sender_id)
+                for pk in rows:
+                    version = str(pk.get("public_key_version") or "")
+                    if (sender_id, version) in known:
+                        continue
                     self._signing_keys.append(
                         {
                             "user_id": sender_id,
-                            "public_key_version": str(pk.get("public_key_version") or ""),
+                            "public_key_version": version,
                             "public_key": pk.get("signing_public_key") or "",
                             "identity_public_key": pk.get("public_key") or "",
                             "identity_public_key_signature": pk.get("identity_public_key_signature") or "",

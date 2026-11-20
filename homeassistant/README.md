@@ -134,6 +134,9 @@ platforms:
         - sensor.cpu_usage
         - sensor.memory_usage
       cooldown_seconds: 30
+      # Reuse one persistent notification for routine Hermes replies.
+      # Set an empty string to let Home Assistant create a new one per reply.
+      notification_id: hermes_agent
 ```
 
 | Setting | Default | Description |
@@ -146,6 +149,7 @@ platforms:
 | `ignore_entities` | *(none)* | Always ignore these entities (applied before domain/entity filters) |
 | `cooldown_seconds` | `30` | Minimum seconds between events for the same entity |
 | `ws_heartbeat_seconds` | `30` | WebSocket ping interval. Raise it if your instance does not answer a ping in time (the adapter then reconnects in a loop); `0` turns the ping off |
+| `notification_id` | `hermes_agent` | Persistent-notification ID for agent replies; set to an empty string to create a new notification per reply |
 | `deliver` | `homeassistant` | Default cross-platform target for forwarded events (e.g. `whatsapp`, `telegram`); the destination is that platform's home channel |
 | `deliver_mode` | `broadcast` | `broadcast` = send the alert to the target chat; `session` = inject the event into that chat's session, so the agent reasons inside its own history (one turn per event) |
 

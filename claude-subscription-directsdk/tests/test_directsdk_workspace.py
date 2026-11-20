@@ -98,6 +98,8 @@ def unsafe(kind, tmp_path, monkeypatch):
     root.mkdir(mode=0o700)
     monkeypatch.setattr(native.tempfile, "tempdir", str(root))
     if kind == "no_uid":
+        # This fixture removes UID support, not the synthetic host's login identity.
+        monkeypatch.setenv("USER", "test-workspace-user")
         monkeypatch.delattr(native.os, "getuid", raising=False)
         return
     shared = shared_path(root)

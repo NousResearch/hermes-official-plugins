@@ -916,10 +916,13 @@ class TestCliIntegration:
         parser = argparse.ArgumentParser()
         cli.setup_cli(parser)
         cli.handle_cli(parser.parse_args(["--verbose"]))
-        mock_run.assert_called_once_with(verbose=True, include_tools=False, accept_hooks=False)
+        mock_run.assert_called_once_with(verbose=True, include_tools=False, accept_hooks=False, tools_only=False)
         mock_run.reset_mock()
         cli.handle_cli(parser.parse_args(["--tools", "--accept-hooks"]))
-        mock_run.assert_called_once_with(verbose=False, include_tools=True, accept_hooks=True)
+        mock_run.assert_called_once_with(verbose=False, include_tools=True, accept_hooks=True, tools_only=False)
+        mock_run.reset_mock()
+        cli.handle_cli(parser.parse_args(["--tools-only"]))
+        mock_run.assert_called_once_with(verbose=False, include_tools=False, accept_hooks=False, tools_only=True)
 
 # ---------------------------------------------------------------------------
 # 6. EDGE CASES

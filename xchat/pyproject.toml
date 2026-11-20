@@ -1,6 +1,6 @@
 [project]
 name = "hermes-xchat"
-version = "0.1.0"
+version = "0.1.1"
 description = "X Chat (end-to-end encrypted X DMs) gateway platform for Hermes Agent (official plugin)"
 readme = "README.md"
 license = { text = "MIT" }

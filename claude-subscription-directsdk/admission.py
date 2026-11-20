@@ -8,10 +8,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import secrets
+import selectors
 import socket
+import socketserver
 import ssl
 import sys
 import threading
@@ -78,6 +81,21 @@ def _rejection_kind(response, body):
     elif value.get('reason') == 'bad_json' and isinstance(error, str) and _GO_BAD_JSON.match(error):
         return 'invalid_json_at_origin'
     return None
+
+
+def rejected_window_reset(response):
+    """Epoch seconds a used-up plan window reopens, from the 429 that rejected it; None for any other answer.
+
+    Every answer carries the window's reset, so only a rejected window makes it this 429's reset: a throttle
+    while the window is open must not bench the route for hours.
+    """
+    if response.status != 429 or (response.getheader('anthropic-ratelimit-unified-status') or '').strip() != 'rejected':
+        return None
+    try:
+        reset = float(response.getheader('anthropic-ratelimit-unified-reset') or '')
+    except ValueError:
+        return None
+    return round(reset) if math.isfinite(reset) and reset > 0 else None
 
 
 class UpstreamIdle(OSError):
@@ -674,6 +692,13 @@ class _Server(HTTPServer):
             return
         super().handle_error(request, client_address)
 
+    def server_bind(self):
+        # HTTPServer.server_bind also asks DNS for the bound address's name (socket.getfqdn) only to fill
+        # server_name, which nothing here reads. Every call starts a relay, and on a host whose resolver stalls on
+        # 127.0.0.1 the first call of each process waited out that lookup (35 s on one macOS host).
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[0], self.server_address[1]
+
 
 class Admission:
     def __init__(self, upstream, timeout, queried=None, *, proxy=None, context=None):
@@ -701,6 +726,7 @@ class Admission:
         self.auth_retry_used = False
         self.request_id = None
         self.status = None
+        self.reset_at = None
         self.failure = None
         self.unrestored = None
         self.capture = Capture()
@@ -708,9 +734,36 @@ class Admission:
         self.prefix = '/admit/' + secrets.token_urlsafe(32)
         self.server = _Server(('127.0.0.1', 0), Handler)
         self.server.admission = self
+        # _serve() calls handle_request() once the listener is readable; it selects again before accepting, and must
+        # not wait there: a connection gone in between would hold the loop, and close() with it.
+        self.server.timeout = 0
         self.url = f'http://127.0.0.1:{self.server.server_port}' + self.prefix
-        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval':.05}, daemon=True)
-        self.thread.start()
+        # close() wakes the loop through this pair at once; serve_forever() noticed a shutdown only at its next poll,
+        # up to 50 ms after close() asked, on every step.
+        selector = None
+        try:
+            self._wake, self._waker = socket.socketpair()
+            # Made here, not in the thread: an epoll that cannot be had (out of descriptors) fails the relay's start.
+            selector = selectors.DefaultSelector()
+            selector.register(self.server, selectors.EVENT_READ)
+            selector.register(self._wake, selectors.EVENT_READ)
+            self.thread = threading.Thread(target=self._serve, args=(selector,), daemon=True)
+            self.thread.start()
+        except BaseException:
+            # Out of descriptors or threads: the listener must not outlive the relay that could not start.
+            self.server.server_close()
+            for each in (selector, getattr(self, '_wake', None), getattr(self, '_waker', None)):
+                if each is not None:
+                    each.close()
+            raise
+
+    def _serve(self, selector):
+        with selector:
+            while True:
+                ready = [key.fileobj for key, _ in selector.select()]
+                if self._wake in ready:
+                    return
+                self.server.handle_request()
 
     def error_text(self):
         """The upstream's own message for a non-200 answer, '' when none was captured."""
@@ -740,9 +793,14 @@ class Admission:
 
     def close(self):
         self.abort()
-        self.server.shutdown()
+        try:
+            self._waker.send(b'\0')
+        except OSError:
+            pass  # Already closed: a second close().
         self.thread.join()
         self.server.server_close()
+        self._wake.close()
+        self._waker.close()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -898,6 +956,7 @@ class Handler(BaseHTTPRequestHandler):
             del headers, payload, wire
             gate.request_id = response.getheader('request-id') or response.getheader('x-request-id')
             gate.status = response.status
+            gate.reset_at = rejected_window_reset(response)
             self.send_response(response.status)
             for key, value in response.getheaders():
                 if key.lower() not in ('connection','transfer-encoding','server','date'):

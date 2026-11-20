@@ -7,6 +7,7 @@ Hermes never installs or starts the Camofox server; it only needs its URL.
 from __future__ import annotations
 
 import argparse
+import json
 
 from . import camofox_client as client
 
@@ -20,6 +21,12 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     setup = sub.add_parser("setup", help="Save CAMOFOX_URL (and an optional CAMOFOX_API_KEY) to this profile's .env")
     setup.add_argument("--url", help="Camofox server URL (default: prompt, http://localhost:9377)")
     sub.add_parser("status", help="Show the configured Camofox server and whether it answers")
+    signed_in = sub.add_parser(
+        "signed-in", help="Check whether a site is still signed in for this profile's Camofox identity")
+    signed_in.add_argument("origin", help="Site to check (e.g., https://github.com or github.com)")
+    signed_in.add_argument("--user-id", help="Check this Camofox userId instead of the resolved profile identity")
+    signed_in.add_argument("--open-session", action="store_true",
+                           help="Load the persisted profile first (opens an about:blank tab) when no session is active")
     identity = sub.add_parser(
         "identity", help="Close the browser session of a scheduled agent (its cron job)")
     identity.add_argument("job", help="Cron job id (or cron:<job_id>): that job's Camofox session is closed")
@@ -82,10 +89,48 @@ def cmd_identity(job: str) -> int:
     return 0
 
 
+def cmd_signed_in(origin: str, user_id: str | None, open_session: bool) -> int:
+    from . import camofox_tools as tools
+    result = tools.browser_signed_in_status(origin, user_id=user_id, open_session=open_session)
+    try:
+        data = json.loads(result)
+    except ValueError:
+        data = {"error": result}
+    if data.get("error"):
+        print(f"Signed-in check failed: {data['error']}")
+        return 1
+    print(f"Origin:    {data.get('origin')}")
+    print(f"Identity:  {data.get('user_id')} ({data.get('identity_source')})")
+    signed = data.get("signed_in")
+    if signed is None:
+        print("Signed in: unknown — no active Camofox session for this profile.")
+        note = data.get("note") or ""
+        if note:
+            print(f"           {note}")
+        return 0
+    if signed:
+        detail = f"{data.get('active_cookie_count')} cookie(s) for this origin"
+        if data.get("earliest_expiry"):
+            detail += f", earliest expiry {data['earliest_expiry']}"
+            if data.get("earliest_expiry_cookie"):
+                detail += f" (cookie {data['earliest_expiry_cookie']})"
+        print(f"Signed in: yes — {detail}")
+    else:
+        print("Signed in: no — no live cookies for this origin (or all have expired).")
+    if data.get("expired_count"):
+        print(f"Expired:   {data['expired_count']} cookie(s) for this origin have expired")
+    names = ", ".join(data.get("cookie_names") or []) or "(none)"
+    print(f"Cookie names: {names} (values are never shown)")
+    return 0
+
+
 def handle_cli(args: argparse.Namespace) -> int:
     command = getattr(args, "camofox_command", None)
     if command == "setup":
         return cmd_setup(getattr(args, "url", None))
+    if command == "signed-in":
+        return cmd_signed_in(getattr(args, "origin", ""), getattr(args, "user_id", None),
+                             bool(getattr(args, "open_session", False)))
     if command == "identity":
         return cmd_identity(getattr(args, "job", ""))
     return cmd_status()

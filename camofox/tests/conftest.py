@@ -92,6 +92,8 @@ class FakeCamofox:
         self.snapshot = '- heading "Example Domain" [e1]\n- link "Learn more" [e2]'
         self.health = {"ok": True}
         self.overrides: dict[tuple[str, str], tuple[int, dict]] = {}  # (method, path) -> (status, body)
+        self.storage_states: dict[str, dict] = {}  # userId -> Playwright storage state
+        self.no_session_users: set[str] = set()    # userIds GET storage_state must 404 for
         self.evaluate_result = "Example Domain"
         self.navigate_title: str | None = None
         self._next = 0
@@ -152,6 +154,7 @@ class FakeCamofox:
             tid = f"tab-{self._next}"
             self.tabs[tid] = {"userId": body.get("userId"), "listItemId": body.get("listItemId") or body.get("sessionKey"),
                               "url": body.get("url", "about:blank"), "title": "Example Domain"}
+            self.no_session_users.discard(body.get("userId"))
             return 200, {"tabId": tid, "url": body.get("url")}
         if method == "DELETE" and parts[0] == "sessions":
             for tid in [t for t, v in self.tabs.items() if v["userId"] == parts[1]]:
@@ -159,6 +162,11 @@ class FakeCamofox:
             return 200, {"ok": True}
         if method == "POST" and len(parts) == 3 and parts[0] == "sessions" and parts[2] == "cookies":
             return 200, {"ok": True, "userId": parts[1], "count": len(body.get("cookies", []))}
+        if method == "GET" and len(parts) == 3 and parts[0] == "sessions" and parts[2] == "storage_state":
+            user = parts[1]
+            if user in self.no_session_users or user not in self.storage_states:
+                return 404, {"error": f'No active session for userId="{user}"'}
+            return 200, self.storage_states[user]
         if parts[0] == "tabs" and len(parts) == 3:
             tid, action = parts[1], parts[2]
             tab = self.tabs.get(tid)

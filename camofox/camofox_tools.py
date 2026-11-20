@@ -11,7 +11,9 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 from urllib.parse import urlsplit
 
@@ -483,6 +485,122 @@ def cleanup_task(task_id: Optional[str]) -> None:
             logger.debug("Camofox close for task %s: %s", task_id, warning)
 
 
+# ---- Signed-in status (read-only) ----
+
+def _cookie_host_match(cookie_domain: str, host: str) -> bool:
+    """RFC 6265 domain-match: the host equals the cookie's domain or is a subdomain of it."""
+    domain = cookie_domain.strip().strip(".").lower()
+    return bool(domain) and (host == domain or host.endswith("." + domain))
+
+
+def _origin_host(origin: str) -> str:
+    """A URL or bare host → the hostname cookies are matched against."""
+    text = (origin or "").strip()
+    if not text:
+        raise ValueError("origin is required (e.g., 'https://github.com' or 'github.com')")
+    if "://" not in text:
+        text = f"https://{text}"
+    parts = urlsplit(text)
+    host = (parts.hostname or "").strip().strip("[]").lower()
+    if parts.scheme not in ("http", "https") or not host:
+        raise ValueError(f"Could not read an http(s) host from origin {origin!r}")
+    return host
+
+
+def _summarise_cookies(cookies: list, host: str, now: float) -> dict[str, Any]:
+    """Names, counts and earliest expiry for the origin's cookies — values never leave here."""
+    matching = [c for c in cookies if isinstance(c, dict) and isinstance(c.get("domain"), str)
+                and _cookie_host_match(c["domain"], host)]
+    live, expired = [], 0
+    for cookie in matching:
+        try:
+            expires = float(cookie.get("expires", -1))
+        except (TypeError, ValueError):
+            expires = -1
+        if expires > 0 and expires <= now:
+            expired += 1
+        else:
+            live.append(cookie)
+    earliest = None
+    for cookie in live:
+        try:
+            expires = float(cookie.get("expires", -1))
+        except (TypeError, ValueError):
+            continue
+        if expires > 0 and (earliest is None or expires < earliest[0]):
+            earliest = (expires, str(cookie.get("name", "")))
+    summary: dict[str, Any] = {
+        "cookie_count": len(matching),
+        "active_cookie_count": len(live),
+        "cookie_names": sorted(str(c.get("name", "")) for c in matching),
+        "expired_count": expired,
+        "session_cookie_count": sum(1 for c in live
+                                    if not (isinstance(c.get("expires"), (int, float)) and c["expires"] > 0)),
+    }
+    if earliest is not None:
+        summary["earliest_expiry"] = datetime.fromtimestamp(
+            earliest[0], tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        summary["earliest_expiry_cookie"] = earliest[1]
+    return summary
+
+
+def check_signed_in_status_available() -> bool:
+    """Storage-state export is gated by the same bearer token as cookie import."""
+    return bool(client.get_camofox_url()) and bool(client._env("CAMOFOX_API_KEY"))
+
+
+def browser_signed_in_status(origin: str, user_id: Optional[str] = None, open_session: bool = False,
+                             task_id: Optional[str] = None) -> str:
+    """Whether the Camofox profile still holds cookies for ``origin`` — names and expiries only,
+    never cookie values (``GET /sessions/<user>/storage_state``, the route ``CAMOFOX_API_KEY`` gates)."""
+    if not check_signed_in_status_available():
+        return _fail("CAMOFOX_API_KEY is not set. Signed-in status reads the server's storage-state "
+                     "route, which requires CAMOFOX_API_KEY on both the Camofox server and Hermes.")
+    try:
+        host = _origin_host(origin)
+    except ValueError as exc:
+        return _fail(str(exc))
+    checked, source = (str(user_id).strip(), "user_id") if str(user_id or "").strip() else (None, None)
+    if checked is None:
+        identity = client.status_identity(task_id)
+        if identity is None:
+            return _fail("No durable Camofox identity to check: turn on browser.camofox.managed_persistence "
+                         "(or durable_agent_identity for a cron task), or pass user_id.")
+        checked, source = identity["user_id"], identity["source"]
+    state_path = f"/sessions/{checked}/storage_state"
+    try:
+        data = client.get(state_path)
+    except requests.HTTPError as exc:
+        if getattr(exc.response, "status_code", None) != 404:
+            return _fail(f"Camofox storage-state read failed ({exc}).")
+        if not open_session:
+            return _dumps({
+                "success": True, "origin": host, "user_id": checked, "identity_source": source,
+                "signed_in": None, "reason": "no_active_session",
+                "note": "No active Camofox session for this profile: its persisted logins are not "
+                        "loaded right now, so they may still be valid. Retry with open_session to "
+                        "load the profile (starts the browser), or run the check from the task that "
+                        "uses the profile.",
+            })
+        # Opt-in: building the session restores the persisted cookies (camofox-browser persistence).
+        try:
+            client.create_tab({"userId": checked, "sessionKey": f"status_{uuid.uuid4().hex[:12]}",
+                               "url": "about:blank"})
+            data = client.get(state_path)
+        except requests.HTTPError as exc2:
+            return _fail(f"Camofox could not load the profile ({exc2}).")
+        except requests.ConnectionError:
+            return _fail(client.connection_error_message())
+    except requests.ConnectionError:
+        return _fail(client.connection_error_message())
+    cookies = data.get("cookies") if isinstance(data, dict) else None
+    if not isinstance(cookies, list):
+        return _fail("Camofox storage-state response had no cookie list.")
+    summary = _summarise_cookies(cookies, host, time.time())
+    return _dumps({"success": True, "origin": host, "user_id": checked, "identity_source": source,
+                   "signed_in": summary["active_cookie_count"] > 0, **summary})
+
+
 # ---- Registry adapters ----
 
 def _kw_task(kw: dict[str, Any]) -> Optional[str]:
@@ -530,6 +648,11 @@ def handle_import_cookies(args: dict, **kw: Any) -> str:
     suffix = args.get("domain_suffix")
     return browser_import_cookies(str(args.get("cookies_path", "")), None if suffix is None else str(suffix),
                                   task_id=_kw_task(kw))
+
+
+def handle_signed_in_status(args: dict, **kw: Any) -> str:
+    return browser_signed_in_status(str(args.get("origin", "")), user_id=str(args.get("user_id") or ""),
+                                    open_session=bool(args.get("open_session")), task_id=_kw_task(kw))
 
 
 def make_vision_handler(llm_source: Callable[[], Any]) -> Callable[..., str]:

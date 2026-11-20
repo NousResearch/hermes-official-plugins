@@ -12,6 +12,7 @@ EXPECTED_TOOLS = {
     "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_scroll",
     "browser_back", "browser_press", "browser_get_images", "browser_vision", "browser_console",
     "browser_import_cookies",
+    "browser_signed_in_status",
 }
 
 
@@ -76,6 +77,17 @@ def test_cookie_import_needs_the_api_key_too(monkeypatch):
     ctx = _Ctx()
     camofox_plugin.register(ctx)
     check = ctx.tools["browser_import_cookies"]["check_fn"]
+    monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
+    assert check() is False
+    monkeypatch.setenv("CAMOFOX_API_KEY", "k")
+    assert check() is True
+
+
+def test_signed_in_status_needs_the_api_key_too(monkeypatch):
+    """The storage-state route is bearer-gated on the server, like cookie import."""
+    ctx = _Ctx()
+    camofox_plugin.register(ctx)
+    check = ctx.tools["browser_signed_in_status"]["check_fn"]
     monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
     assert check() is False
     monkeypatch.setenv("CAMOFOX_API_KEY", "k")

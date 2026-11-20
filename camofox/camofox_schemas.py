@@ -151,7 +151,31 @@ BROWSER_IMPORT_COOKIES = {
     }
 }
 
+BROWSER_SIGNED_IN_STATUS = {
+    "name": "browser_signed_in_status",
+    "description": "Read-only check whether a site is still signed in for a Camofox profile's persisted browser identity (browser.camofox.managed_persistence), without navigating there. Returns which cookie names exist for the origin (never their values) and when the earliest one expires — use it to warn that a site needs signing in again before an unattended task fails. Requires CAMOFOX_API_KEY (the server's storage-state route checks it).",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "origin": {
+                "type": "string",
+                "description": "The site to check, as a URL or bare host (e.g., 'https://github.com' or 'github.com')"
+            },
+            "user_id": {
+                "type": "string",
+                "description": "Optional. Check this Camofox userId instead of the resolved profile identity (e.g., a scheduled agent's own profile)"
+            },
+            "open_session": {
+                "type": "boolean",
+                "description": "Optional. When the profile has no active server session, open an about:blank tab in it first to load the persisted profile, then report (starts the browser; default false reports signed_in 'unknown' instead)"
+            }
+        },
+        "required": ["origin"]
+    }
+}
+
 ALL_SCHEMAS = (
     BROWSER_NAVIGATE, BROWSER_SNAPSHOT, BROWSER_CLICK, BROWSER_TYPE, BROWSER_SCROLL, BROWSER_BACK,
     BROWSER_PRESS, BROWSER_GET_IMAGES, BROWSER_VISION, BROWSER_CONSOLE, BROWSER_IMPORT_COOKIES,
+    BROWSER_SIGNED_IN_STATUS,
 )

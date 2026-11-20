@@ -9,8 +9,9 @@ description: >
   Firefox fork with fingerprint spoofing) over its REST API. Provides the browser_navigate,
   browser_snapshot, browser_click, browser_type, browser_scroll, browser_back, browser_press,
   browser_get_images, browser_vision and browser_console tools (toolset camofox), cookie import
-  from a cookies.txt file (browser_import_cookies, with CAMOFOX_API_KEY), plus
-  `hermes camofox setup|status`, and lets browser_vault fill saved logins on the Camofox tab.
+  from a cookies.txt file (browser_import_cookies, with CAMOFOX_API_KEY), a read-only per-origin
+  signed-in check (browser_signed_in_status, with CAMOFOX_API_KEY), plus
+  `hermes camofox setup|status|signed-in`, and lets browser_vault fill saved logins on the Camofox tab.
   Hermes does not install or start the server; set
   CAMOFOX_URL. Formerly built into Hermes core.
 provides_tools:
@@ -25,6 +26,7 @@ provides_tools:
   - browser_vision
   - browser_console
   - browser_import_cookies
+  - browser_signed_in_status
 provides_hooks:
   - on_session_end
   - on_session_finalize

@@ -73,6 +73,16 @@ Adds these Hermes tools next to the bridge, using this profile's configured prov
 
 Serves the same curated Hermes tool surface as `--tools` **instead of** the conversation bridge: no `messages_send`, no `permissions_*`, no conversation reads, and no `state.db` poller starts. Useful when a client should get Hermes' free web/vision/skills/TTS without the messaging-as-you surface. Everything under `--tools` above still applies (allowlist, no local files, profile choices, hooks, redaction).
 
+`--tools-only` also serves three read-only state tools, so an MCP client can read Hermes' state through the tool plane without the profile home or a shell:
+
+| Tool | What it returns |
+|---|---|
+| `hermes_status` | version, profile home, the config file's path/size/sha256, and the plugin counts |
+| `hermes_config_get` | one **allowlisted** non-secret config value by dotted key; a secret-shaped key is refused by name, never read |
+| `hermes_plugins_list` | the plugins installed under the profile (name, manifest version, kind, state); skills are served by `skills_list` |
+
+Nothing here writes or returns a credential, and no tool can become a general config reader: the allowlist is the surface, and the secret refusal precedes any lookup.
+
 ## Options
 
 ```bash

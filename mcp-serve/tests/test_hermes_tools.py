@@ -61,11 +61,13 @@ def test_tools_mode_dispatches_through_handle_function_call(real_tools):
 
 
 def test_tools_only_mode_serves_the_face_without_the_bridge(real_tools):
-    """--tools-only: the curated Hermes tools, none of the ten messaging/approval bridge tools."""
+    """--tools-only: the curated Hermes tools + the three read-only state tools, none of the ten
+    messaging/approval bridge tools."""
     server = bridge.create_mcp_server(tools_only=True)
     listed = _listed(server)
     with_bridge = _listed(bridge.create_mcp_server(event_bridge=bridge.EventBridge(), include_tools=True))
-    assert listed and set(listed) == set(with_bridge) - _BRIDGE_TOOLS
+    assert listed and set(listed) == (set(with_bridge) - _BRIDGE_TOOLS) | {
+        "hermes_status", "hermes_config_get", "hermes_plugins_list"}
     assert not set(listed) & _BRIDGE_TOOLS
     assert "terminal" not in listed and "kanban_create" not in listed
 

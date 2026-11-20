@@ -494,6 +494,19 @@ def _platform_matches(wanted: Optional[str], actual: str) -> bool:
     return not wanted or actual.lower() == wanted.lower()
 
 
+
+def _load_send_message_tool():
+    """The outbound sender. Core moved it from ``tools.send_message_tool`` to
+    ``gateway.outbound.send`` (hermes-agent#156512). Try the current path first and
+    keep the old one so a plugin install still works on Hermes that predates the move.
+    """
+    try:
+        from gateway.outbound.send import send_message_tool
+    except ImportError:
+        from tools.send_message_tool import send_message_tool
+    return send_message_tool
+
+
 class _ToolHandlers:
     """The MCP tool handlers; each method named in _TOOL_NAMES is registered as one tool.
 
@@ -655,10 +668,10 @@ class _ToolHandlers:
         if not target or not message:
             return json.dumps({"error": "Both target and message are required"})
         try:
-            from tools.send_message_tool import send_message_tool
+            send_message_tool = _load_send_message_tool()
             return send_message_tool({"action": "send", "target": target, "message": message})
-        except ImportError:
-            return json.dumps({"error": "Send message tool not available"})
+        except ImportError as exc:
+            return json.dumps({"error": f"Send message tool not available: {exc}"})
         except Exception as e:
             return json.dumps({"error": f"Send failed: {e}"})
 

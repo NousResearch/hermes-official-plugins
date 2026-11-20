@@ -41,9 +41,9 @@ def parse_url(url):
         host, path = match['host'], match['path']
     else:
         parts = urlsplit(url)
-        if parts.scheme not in {'https', 'http', 'ssh'}:
+        if parts.scheme not in {'https', 'ssh'}:
             raise CloneError('Use an https:// or ssh address. Local paths and other transports are not cloned.')
-        if parts.scheme in {'https', 'http'} and (parts.username or parts.password):
+        if parts.scheme == 'https' and (parts.username or parts.password):
             raise CloneError('Leave sign-in details out of the URL; Git will use your saved credentials.')
         if parts.query or parts.fragment or not parts.hostname:
             raise CloneError('That does not look like a repository URL.')
@@ -120,7 +120,10 @@ def clone_or_update(url, data_dir):
         if not (dest / '.git').is_dir():
             raise CloneError('A folder for this repository already exists but is not a Git checkout.')
         code, out, _ = _git(['-C', str(dest), 'config', '--get', 'remote.origin.url'], timeout=30)
-        if code != 0 or _identity(out.strip()) != _identity(clone_url):
+        origin = out.strip()
+        if origin.lower().startswith('http://'):
+            raise CloneError('This copy was cloned over plain http. Remove it and clone again over https.')
+        if code != 0 or _identity(origin) != _identity(clone_url):
             raise CloneError('This repository was cloned from a different address; remove the old copy first.')
         code, _, err = _git(['-C', str(dest), 'pull', '--ff-only', '--no-recurse-submodules'])
         if code != 0:

@@ -762,6 +762,55 @@ class TestMCPToolParameterCoercion:
         assert result["event"]["content"] == "waiting for this"
 
 class TestE2EMessagesSend:
+    def test_send_dispatches_to_current_sender(self, fake_mcp_server, _event_loop, monkeypatch):
+        outbound_send = pytest.importorskip("gateway.outbound.send", reason="requires the current Hermes sender layout")
+
+        sender = MagicMock(return_value='{"success": true}')
+        monkeypatch.setattr(outbound_send, "send_message_tool", sender)
+        server, _ = fake_mcp_server
+
+        result = _run_tool(server, "messages_send", {"target": "telegram:123", "message": "hello"})
+
+        assert result == {"success": True}
+        sender.assert_called_once_with({"action": "send", "target": "telegram:123", "message": "hello"})
+
+    def test_send_uses_legacy_sender_when_new_module_absent(self, fake_mcp_server, _event_loop, monkeypatch):
+        import builtins
+        from types import SimpleNamespace
+
+        original_import = builtins.__import__
+        sender = MagicMock(return_value='{"success": true}')
+
+        def import_legacy(name, *args, **kwargs):
+            if name == "gateway.outbound.send":
+                raise ModuleNotFoundError("No module named 'gateway.outbound'", name="gateway.outbound")
+            if name == "tools.send_message_tool":
+                return SimpleNamespace(send_message_tool=sender)
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", import_legacy)
+        server, _ = fake_mcp_server
+        result = _run_tool(server, "messages_send", {"target": "telegram:123", "message": "hello"})
+
+        assert result == {"success": True}
+        sender.assert_called_once_with({"action": "send", "target": "telegram:123", "message": "hello"})
+
+    def test_send_reports_missing_sender_dependency(self, fake_mcp_server, _event_loop, monkeypatch):
+        import builtins
+
+        original_import = builtins.__import__
+
+        def import_with_missing_dependency(name, *args, **kwargs):
+            if name == "gateway.outbound.send":
+                raise ModuleNotFoundError("No module named 'missing_dependency'", name="missing_dependency")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", import_with_missing_dependency)
+        server, _ = fake_mcp_server
+        result = _run_tool(server, "messages_send", {"target": "telegram:123", "message": "hello"})
+
+        assert "missing_dependency" in result["error"]
+
     def test_send_missing_args(self, mcp_server_e2e, _event_loop):
         server, _ = mcp_server_e2e
         result = _run_tool(server, "messages_send", {"target": "", "message": "hi"})

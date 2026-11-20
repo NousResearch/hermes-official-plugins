@@ -132,6 +132,34 @@ def get_agent_identity(agent_key: str) -> dict[str, str]:
     return {"user_id": f"hermes_ag_{digest[:12]}", "session_key": f"agent_{digest}"}
 
 
+def status_identity(task_id: Optional[str]) -> Optional[dict[str, str]]:
+    """The identity a signed-in status check reports on, without creating a session.
+
+    Same precedence as ``get_session`` (external override → durable agent → managed persistence →
+    deterministic per-task userId), but nothing is registered and no server call is made. Returns
+    ``None`` when only a random identity would resolve (no override, no durable agent, managed
+    persistence off, no task id): such a profile holds nothing worth checking.
+    """
+    camofox_cfg = get_camofox_config()
+    identity = _camofox_identity_override(task_id, camofox_cfg)
+    source = "override"
+    if identity is None and _durable_agent_identity_enabled(camofox_cfg):
+        agent_key = agent_key_from_task(task_id)
+        if agent_key:
+            identity = get_agent_identity(agent_key)
+            source = "agent"
+    if identity is None and _managed_persistence_enabled(camofox_cfg):
+        identity = get_camofox_identity(task_id)
+        source = "profile"
+    if identity is None and task_id:
+        digest = uuid.uuid5(uuid.NAMESPACE_URL, f"camofox-task:{get_camofox_state_dir()}:{task_id}").hex[:10]
+        identity = {"user_id": f"hermes_{digest}", "session_key": f"task_{task_id[:16]}"}
+        source = "task"
+    if identity is None:
+        return None
+    return {**identity, "source": source}
+
+
 # Task-id prefixes whose agent outlives one run, so its browser identity has to persist.
 _AGENT_TASK_PREFIXES = ("cron:",)
 

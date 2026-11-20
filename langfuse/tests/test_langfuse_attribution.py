@@ -291,7 +291,7 @@ def test_sender_stash_is_bounded(opted_in, monkeypatch):
     mod._SENDER_BY_TURN.clear()
     for i in range(10):
         mod.on_pre_llm_call(session_id="s", turn_id=f"s:t{i}", sender_id=f"u{i}")
-    assert list(mod._SENDER_BY_TURN) == ["s:t6", "s:t7", "s:t8", "s:t9"]
+    assert list(mod._SENDER_BY_TURN) == [mod._profile_attribution_key(f"s:t{i}") for i in range(6, 10)]
 
 
 # Responses API tool items in generation input (hermes-agent#84186).

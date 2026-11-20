@@ -107,6 +107,12 @@ hermes config set plugins.entries.claude-subscription-directsdk-experimental.set
 
 It is read for the active profile on every spawn, so it applies to the next request without a restart. Whatever the setting, the plugin never lets the CLI auto-update itself, use its feedback upload path or send its own session-title request (`DISABLE_AUTOUPDATER`, `DISABLE_FEEDBACK_COMMAND`, `CLAUDE_CODE_DISABLE_TERMINAL_TITLE`), and an opt-out you export yourself (`DISABLE_TELEMETRY`, `DO_NOT_TRACK`, ...) is passed through untouched.
 
+**Claude Code calls at once** (`max_concurrent`, default 4; #329). At most this many Claude Code turn processes run at the same time in one Hermes process, whatever started them: the main agent, parallel subagents (`delegate_task` runs up to 10 at once), auxiliary calls such as titles and compression, and every profile a multiplexed gateway serves. Each process uses about 250 MB, and all of them draw on one subscription, whose rate limits a burst can trip together (the plugin turns Claude Code's own retries off so Hermes owns retry policy). A call past the limit waits for a free place in arrival order, within its own request timeout; it is not failed and not sent to a fallback provider. Interrupting a waiting call ends it at once without starting Claude Code. A call that waits longer than 2 s writes a warning to the log (`hermes logs`) naming the limit; a model provider has no way to put a line on Hermes' status bar, so the CLI shows the usual spinner meanwhile. A place is freed when its process exits, so a crashed or killed process never holds one; a kept process (see [Transport](#transport)) gives its place back at the end of each step. `/usage`, the model picker and the login check do not count: they send no model request and finish within seconds. The setting is read per call from the profile that makes it; with profiles that set different limits, each call waits until fewer than its own limit are running.
+
+```sh
+hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.max_concurrent 6
+```
+
 **Extra usage** (`extra_usage`, `allow` | `notify` | `ask` | `stop`, default `notify`). What a request does once Claude Code reports that this account has passed its plan limit and is drawing paid extra usage (#43). Claude Code sends that signal with every request (`rate_limit_event`: `isUsingOverage`, `resetsAt`); the plugin keeps it in memory per process, per Claude login, and writes no files.
 
 - `allow`: nothing changes.
@@ -114,7 +120,7 @@ It is read for the active profile on every spawn, so it applies to the next requ
 - `ask`: requests are refused before Claude Code starts, with a message that names the reset time and the command that allows extra usage until then: `hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.extra_usage_allowed_until <reset time>`.
 - `stop`: requests are refused until the plan limit resets; the message names the reset time and how to switch to `ask` or `allow`.
 
-A refusal is a plan-limit stop: Hermes shows the message and does not switch to a fallback provider. The request that crosses the limit is already billed when Claude Code reports it; the setting acts on the next one. In `ask` and `stop`, a process that has not yet seen a request for the login asks Claude Code once (`get_usage`, no Messages request, about 0.5 to 0.9 s) and counts the account as spilling when extra usage is on and the session or weekly limit is at 100%. That check runs on the turn's own login and route. If it cannot tell (Claude Code gives no usage answer, or `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is exported so it skips the fetch), the request is refused with the reason, since these modes exist to prevent spend you did not approve; the next request asks again. An `ask` window you already allowed with `extra_usage_allowed_until` skips the check. An unknown value counts as `stop`.
+A refusal is a plan-limit stop: Hermes shows the message and does not switch to a fallback provider. The request that crosses the limit is already billed when Claude Code reports it; the setting acts on the next one. In `ask` and `stop`, a process that has not yet seen a request for the login asks Claude Code once (`get_usage`, no Messages request, about 0.5 to 0.9 s) and counts the account as spilling when extra usage is on and the session or weekly limit is at 100%. That check runs on the turn's own login and route. If it cannot tell (Claude Code gives no usage answer, or `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is exported so it skips the fetch), the request is refused with the reason, since these modes exist to prevent spend you did not approve; the next request asks again. An `ask` window you already allowed with `extra_usage_allowed_until` skips the check. An unknown value counts as `stop`. `extra_usage_reserve_percent` (for example `97`, default unset = 100) moves the stop earlier: in `ask` and `stop`, once the session or weekly window reaches that percent and extra usage is on, requests are refused before the one that would first be billed, read from the same `get_usage` check and from each turn's own `rate_limit_event`.
 
 A 400 that says "Third-party apps now draw from your extra usage" is reported the same way (a billing stop whose message points at the plan settings and names the `hermes-agent` caller), instead of Hermes silently answering from a fallback provider (P#296).
 
@@ -139,12 +145,70 @@ hermes config set $S.upstream_ca_file /etc/ssl/corp-root.pem
 - An inherited `ANTHROPIC_BASE_URL` stays refused with or without these settings; no environment variable selects the upstream.
 - What goes to the gateway: Claude Code sends only Messages requests (`POST /v1/messages`) to its base URL, and the relay forwards that path and nothing else. Its own account calls go to `api.anthropic.com` whatever the base URL: `/usage` (`/api/oauth/usage`), the picker handshake and every spawn's bootstrap, MCP directory and, with `claude_code_telemetry` on, feature-flag and event logging (measured on 2.1.319 and 2.1.292). Those carry the Claude login to Anthropic itself, never to another host. With `upstream_proxy` or `upstream_ca_file` set, Claude Code is started with that proxy (`HTTPS_PROXY`, credentials included) and that CA (`NODE_EXTRA_CA_CERTS`), so these calls leave through the same egress; the loopback relay stays in `NO_PROXY`. A network that allows no direct route to `api.anthropic.com` therefore needs `upstream_proxy`; with only `upstream_url` set, `/usage` and those calls go out directly.
 
-**Keep one Claude Code process per agent** (`session_mode`, bool, default `true`) and **kept processes per Hermes
-process** (`max_sessions`, int, default `4`). See [Transport](#transport). Turn session mode off to start a new Claude Code
-for every model call, as before 0.4.0:
+**Session mode** (see [Transport](#transport)). These are read from the serving profile's config on every call:
+
+| Setting | Default | What it does |
+|---|---|---|
+| `session_mode` | `true` | Keep one Claude Code process per agent between model calls. `false`: a new process for every call, as before 0.4.0. |
+| `session_min_rounds` | `8` | A conversation starts a kept process only once it has had this many tool rounds (sets of tool results); before that every call runs per-call. Short chats and most subagents then hold none. A process kept already meets every later step, and ends if the history no longer fits it (a compaction). `0`: keep from the first step. |
+| `max_sessions` | `4` | At most this many kept processes in one Hermes process. At the cap, the one that has waited longest for its user gives its place to the step asking now; if every one is serving a step or holds a parked tool call, that step runs per-call. |
+| `session_idle_seconds` | `3600` | A kept process that waits this long for its user ends. A parked tool call does not count as waiting: the process stays while Hermes runs the tool, and ends at the next step if that step cannot continue it, or when its client closes. The default is the prompt cache's lifetime. |
+| `session_unlisted_versions` | `honor` | On a Claude Code release the tested list does not name: `honor` runs every call per-call; `self-test` keeps processes on it once the plugin's own offline test of that binary has passed; `force` keeps processes on it, with one warning. See below. |
+
+What it costs: memory between calls. During a call both modes hold one Claude Code process, about 200 to 250 MB. A kept
+process holds it between calls too, and it grows with the history it carries: 245 to 290 MB at round 200 on Linux, 284
+to 307 MB on macOS, 325 MB the most seen. So `max_sessions` 4 can hold about 1 to 1.3 GB while agents are idle, until
+`session_idle_seconds` ends them. A kept process's request goes upstream only as per-call's bytes (one the relay
+cannot make so is refused before upstream, and the step replays on a new process), so cost and caching do not change.
+
+Session mode runs only on the Claude Code versions its tests passed on, listed in `plugin.yaml`
+(`session_versions` on the `claude` dependency: 2.1.292, the CI pin, plus 2.1.322 to 2.1.329). Any other version
+runs every call per-call, and the log says so once (`session mode runs only on Claude Code ...; this is ..., so every
+call runs per-call`). An update of Claude Code then costs latency, never correctness. A kept process ends at its
+next step when its binary changes or its version leaves the list, and a process that reports another version than the
+one the gate allowed is not kept (restart reason `version` for both). The version is the one Claude Code reports in its own
+init event (`claude_code_version`), kept per binary until the binary changes, so the first step on a new or updated
+binary runs per-call; no extra process is started to ask.
+
+`session_unlisted_versions` decides what happens on a release the list does not name:
+
+- `honor` (the default): every call runs per-call, as above.
+- `self-test`: the plugin tests that binary itself before it keeps a process on it. In the background, one test at a
+  time on the machine, it runs one Hermes-shaped conversation twice, per-call and kept, against a loopback upstream
+  that answers the same way every time: several tool rounds, two calls in one step, error results, a
+  whitespace-only and a large result, a `/steer` after three of them, a reply that leads with a whitespace-only
+  block, then a compacted history with an empty block and a cache mark and a new turn. Every kept request must equal
+  per-call's, byte for byte, on a process kept across the steps, and the binary must report the version it is
+  tested as. About 8 s per release on the Linux test box (7.8 to 9.9 s on each listed release), 4 to 5 s on an
+  Apple M4 Mac. Until it has a verdict, calls run per-call; no call waits
+  for it. Pass: session mode keeps processes on that binary. Fail (twice: one failing run is tried again), a timeout
+  or a test that cannot run: per-call, with the reason in the log. The verdict belongs to that binary's files (an
+  update in place, another install or a wrapper is tested anew), the plugin version and the platform, and is kept
+  under Hermes' home (`cache/claude-subscription-directsdk-experimental/session-selftest.json`); delete the file to
+  test again.
+- `force`: keep processes on any release, with one warning in the log.
+
+How the test is kept away from your login and the network: it runs in a child Python process with a throwaway home,
+Claude config directory and Hermes home, a placeholder API key, and every plugin setting at its default (no profile
+or managed Hermes setting reaches it). On Linux, where unprivileged user namespaces are allowed, it runs in network
+and pid namespaces of its own: loopback is its only network, and everything in it ends with it. Elsewhere (macOS,
+Windows, a Linux that refuses namespaces) Claude Code's traffic is pointed at loopback by its settings and proxy
+variables only; a binary that ignored them could reach the network, holding no login. It is bounded in time (240 s)
+and memory, it ends when Hermes does, and it ends with everything it started (with namespaces; elsewhere, everything
+it saw start).
+
+A pass shows those shapes, on this machine, for this binary; it does not stand in for the list, which names the
+releases the whole session suite passed on. On a release not on the list (`self-test` or `force`) each kept
+process's first request is also held to per-call's own build, as its first resumed one always is, and every kept
+step is still checked before upstream, so a release that frames a request differently costs a restart into
+per-call, not different bytes. Each of these says so once in the log (`hermes logs`), never per call: the release
+and the mode, a self-test's pass or its failure with the reason, a value of the setting that is none of the three
+(taken as `honor`).
 
 ```sh
 hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.session_mode false
+hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.session_idle_seconds 600
+hermes config set plugins.entries.claude-subscription-directsdk-experimental.settings.session_unlisted_versions self-test
 ```
 
 ## Transport
@@ -158,16 +222,61 @@ keeps one Claude Code process alive between model calls:
 - The next upstream request then leaves in about 0.03 s instead of the 0.5 to 1.0 s a fresh process needs to start and
   replay the history (offline, Linux; more with longer histories). A live tool round is about 1.7 to 2.3 s, so this is
   roughly a quarter to a half of each round.
-- What goes upstream is byte for byte what a fresh process would send for the same history, so prompt caching and cost
-  are the same either way. The relay rewrites each replayed tool result to Hermes' own bytes, and refuses, before it
-  reaches Anthropic, any request that does not extend the previous one. That step is then replayed into a new process.
-- Any change Claude Code cannot continue from restarts it with a replay, exactly as a fresh call would: an edited or
-  compacted history, a `/steer` message, a different model, system prompt, tool list, effort or output cap.
-- These calls still start a fresh process for one step (a one-shot): auxiliary calls (titles, summaries), calls without
-  tools, a second call on the same client while one is running, and any call past `max_sessions` kept processes in
-  this Hermes process (about 200 MB each).
-- The process ends on `cancel()`, `close()`, Hermes releasing the client, an hour idle (the prompt cache's lifetime),
-  and when Hermes exits, even by `SIGKILL`: its standard input closes, which ends Claude Code's session.
+- What goes upstream is meant to be byte for byte what a fresh process would send for the same history, so prompt
+  caching and cost are the same either way; where the relay cannot make it so, it refuses the request before it
+  reaches Anthropic, and the step is replayed into a new process. A new process's first request is the replay itself
+  and goes up as built. On later requests the relay rewrites each frame of tool results to Hermes' own bytes (key
+  order included, a steer after them too), leaves earlier user turns of text as the process holds them, requires
+  Claude Code's record of each reply to be Hermes' frame byte for byte, and refuses any request whose rows no longer
+  line up with Hermes' history, whose newest frame it cannot restore to Hermes', or that does not extend the previous
+  one. A kept process's first resumed request is the first with
+  rows it built itself past its launch's replay, so no earlier request vouches for them: it goes upstream only if it
+  equals the request a per-call step builds for the same history. A one-shot builds that request into a relay that
+  sends nothing upstream, so each kept process pays one per-call launch once, at that step (two Claude Code processes
+  for a moment, on that step's one `max_concurrent` slot). The identity is measured offline: the bench's loopback
+  answers a minimal stream (no `ping`, no cache usage detail, no stop sequence) to an API-key login, and the session
+  tests add a claude.ai login with its account reminder on the opening turn. A real login has not been run through
+  the bench.
+- A `/steer` after a tool round continues the same process. The plugin writes the steer to Claude Code's input just
+  before the tool results, so Claude Code reads both and sends one request. It holds the steer as a system row of its
+  own ("The user sent a new message while you were working: ..."); the relay puts it back as the text block after the
+  results, where Hermes has it, in that request and every later one, so the bytes are per-call's (checked on 2.1.292,
+  2.1.322 and 2.1.323, with one to three tool calls in the step). A steer row the relay cannot match is refused before
+  upstream and the step is replayed. At round 200 the steer step takes 0.04 to 0.05 s kept, against 1.0 to 1.2 s when
+  it restarted the process (as before) and 0.9 to 1.1 s per-call (offline, Linux, bench below).
+- Any other change Claude Code cannot continue from restarts it with a replay, exactly as a fresh call would: an edited
+  or compacted history, a steer of more than one text block, a different model, system prompt, tool list, effort or
+  output cap. Each restart logs its reason at debug level (`launch`, `edited`, `results`, `steer`, `exited`,
+  `diverged`, `unproven`, `no_tool_id`, `tool_id`, `control`, `event`, `version`).
+- A kept process that does something the plugin does not know is not trusted again: a tool call without
+  `claudecode/toolUseId`, with an id its step never received or one it asked for before, a control request other than
+  the hermes server's MCP traffic (another server, a tool Hermes did not offer, no JSON-RPC id), or an output line
+  that is not a JSON object. Its call is never parked or waited on. One that comes after its step returned, or the end
+  of its output, ends the process at once. A kept process's relay forwards nothing until that process's own init
+  event has named the Claude Code version the gate allowed (`version` otherwise).
+  If its request had not gone upstream, the step replays on a fresh one-shot; if it had, the process is not kept
+  after the step (the answer stands, or the step fails if native's output no longer parses). `unproven` means the per-call request for the first resumed step could not be built.
+- A kept process counts against `max_concurrent` only while it serves a step. Between steps, idle or with a tool
+  parked, it holds no place, so idle agents do not block title and summary calls; `max_sessions` bounds how many
+  stay alive, across every profile the Hermes process serves.
+- These calls still start a fresh process for one step (a one-shot): a conversation's steps before it has had
+  `session_min_rounds` tool rounds (sets of tool results; the step that brings the last of them starts the kept
+  process), auxiliary calls (titles, summaries), calls without tools, a second call on the same client while one is
+  running, and a call at `max_sessions` when no kept process can give its place up (each is serving a step or holds a
+  parked tool call).
+- The process ends on `cancel()`, `close()`, Hermes releasing the client, an agent call without tools (which it
+  cannot serve), turning `session_mode` off, eviction at `max_sessions` (the one that has
+  waited longest for its user), `session_idle_seconds` waiting for its user (an hour by default, the prompt cache's
+  lifetime), and when Hermes exits, even by `SIGKILL`: its standard input closes, which ends Claude Code's session.
+- A subagent's process ends when the subagent finishes: Hermes closes the child agent on delegate completion
+  (`child.close()`, `tools/delegate_tool_child_run.py`), which closes its model clients (`client.close()` in
+  `agent/client_lifecycle.py`, for the shared client and the cached per-request one), and `close()` ends the kept
+  process at once. A client Hermes drops without closing ends its process when it is collected.
+- A tool parked on a human (an approval, a hand-off) keeps its call open: the plugin holds Claude Code's `tools/call`
+  until Hermes brings the result, and Claude Code waits for it (`MCP_TOOL_TIMEOUT` is set to 24 hours on a kept
+  process). Hermes' request timeout and stale timer run only inside a model call, not while a tool is parked, and the
+  idle limit does not run while a call is parked either. Measured on Linux and macOS: a call parked for 150 s continued
+  on the same process with the same upstream bytes.
 - Claude Code reports list price per process and only when a turn ends, so a tool step has no price of its own and the
   turn's last step carries the turn's.
 
@@ -181,12 +290,12 @@ parse, and the call is never run.
 
 ## Ownership and replay
 
-A new process runs in the plugin's stable working directory, with its system prompt and settings in private launch
-files that are removed after its first step (and swept on the next start if Hermes was killed). Native tools, skills and setting sources are disabled. MCP advertises only the current Hermes tool inventory, and native `dontAsk` denies anything else. Full descriptions and schemas are supplied through tools plus validated generation fields in `CLAUDE_CODE_EXTRA_BODY`, applied from a private native settings file; the system prompt uses a private file too. This avoids the OS per-argument/environment-string limit. Authentication and identity fields are never replaced.
+A new process starts once a `max_concurrent` place is free and runs in the plugin's stable working directory, with
+its system prompt and settings in private launch files that are removed after its first step (and swept on the next start if Hermes was killed). Native tools, skills and setting sources are disabled. MCP advertises only the current Hermes tool inventory, and native `dontAsk` denies anything else. Full descriptions and schemas are supplied through tools plus validated generation fields in `CLAUDE_CODE_EXTRA_BODY`, applied from a private native settings file; the system prompt uses a private file too. This avoids the OS per-argument/environment-string limit. Authentication and identity fields are never replaced.
 
 For per-call replay, native moves today's date line from its environment message into a trailing `role: system` message, and puts its context reminder ahead of the newest user turn; neither recurs on the next request. The relay returns that exact date line to the end of the environment message (other trailing text stays put) and drops plain-text reminders before the newest queried user frame after an assistant turn, as native's own tool-result steps already do. Later requests then replay the context each step's signed thinking was generated against, and keep the previous turn's cache prefix (#40, #36). A frame that cannot be found exactly once is left as native built it. Removed cache markers transfer without increasing their count.
 
-Canonical history is replayed in order. Historical user frames use `shouldQuery:false`, each with a zero-turn acknowledgment; the final user/tool-result frame queries. A kept process receives only the new user frame or the parked tool results. There is no native approval wait, and the adapter adds no synthetic continue prompt. The local admission relay prevents native recovery from issuing another upstream request. The native token-budget reminder is disabled because Hermes owns budgets and replay reconstructs that reminder across the cache boundary. Native's silent-turn reminder ("The user hasn't heard from you in a while...", added after five tool steps without text) is disabled too (`CLAUDE_CODE_SILENT_TURN_REMINDER=0`): a kept process counts those steps live and a replayed one only at the next user turn, so the two would send different requests, and Hermes' own UI already shows tool progress. Other native annotations remain present, so the wire prompt is not byte-identical Hermes-only context. On the conversation's first request native prepends its per-request context (the account-email reminder) to Hermes' first user turn but replays that turn without it afterwards; the relay drops that plain text before Hermes' frame, so the first turn is sent exactly as later requests replay it, is cached once instead of being re-written on call #2 (#77), and Claude never reads Claude Code's context as part of the user's message (#195). Native's auto memory and CLAUDE.md files (including a managed one) stay off (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`): `--setting-sources ''` does not cover auto memory, and Hermes owns memory and instructions.
+Canonical history is replayed in order. Historical user frames use `shouldQuery:false`, each with a zero-turn acknowledgment; the final user/tool-result frame queries. A kept process receives only the new user frame or the parked tool results (with a `/steer` written just before them). There is no native approval wait, and the adapter adds no synthetic continue prompt. The local admission relay prevents native recovery from issuing another upstream request. The native token-budget reminder is disabled because Hermes owns budgets and replay reconstructs that reminder across the cache boundary. Native's silent-turn reminder ("The user hasn't heard from you in a while...", added after five tool steps without text) is disabled too (`CLAUDE_CODE_SILENT_TURN_REMINDER=0`): a kept process counts those steps live and a replayed one only at the next user turn, so the two would send different requests, and Hermes' own UI already shows tool progress. Other native annotations remain present, so the wire prompt is not byte-identical Hermes-only context. On the conversation's first request native prepends its per-request context (the account-email reminder) to Hermes' first user turn but replays that turn without it afterwards; the relay drops that plain text before Hermes' frame, so the first turn is sent exactly as later requests replay it, is cached once instead of being re-written on call #2 (#77), and Claude never reads Claude Code's context as part of the user's message (#195). Native's auto memory and CLAUDE.md files (including a managed one) stay off (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1`): `--setting-sources ''` does not cover auto memory, and Hermes owns memory and instructions.
 
 The relay restores the newest tool-result frame from Hermes' query when it can match the native frame unambiguously, so a native account-email reminder cannot masquerade as tool output. A frame it cannot match losslessly is forwarded exactly as native built it, and the mismatch is reported in the response usage (`native_admission.unrestored`). Restoration is limited to queried frames containing tool results; ordinary user turns and separate native system messages are untouched. The relay treats omitted `is_error` as `false`, restores Hermes' exact original result shape after matching equivalent plain-text encodings, and admits only unmarked plain-text additions after the matched frame. Images, metadata-bearing text, unexpected results, ambiguous cache-marker mappings, or changed tool identity/content leave the native frame untouched (fail open), so a CLI that reshapes its tool results costs an uncached tail, never a failed turn. Marker-bearing additions are validated before breakpoint relocation, preventing cache-marker laundering onto host content. When native marks more than one message block (Claude Code 2.1.287+ marks the last `tool_use` and a trailing per-request `role: system` message), marks after the last block the next request replays are folded into one breakpoint on that block; marks inside the replayed span, and every system/tools mark, stay as native placed them. Once a user message carries more than tool results (the next turn, or a `/steer` row), cache entries written after the finished turn's first thinking block stop matching, and Anthropic's lookup walks back at most 20 blocks from a breakpoint, so after a longer tool loop the next turn's first call read only tools and system and wrote the whole conversation again (#122). The relay therefore keeps one more message breakpoint on the last block of the user message right before the open turn's first assistant message with thinking (usually the turn's opening frame, or a `/steer` row), where an earlier request of the turn already wrote an entry, once that block is more than 20 blocks (counted without merging tool runs) before the recurring breakpoint; the next turn then re-writes only the finished loop from its first thinking block. A shorter loop, or one without thinking, keeps the recurring breakpoint alone. Native 2.1.285 places three breakpoints (two system, one message), so the extra one is the fourth; on a request already at Anthropic's limit of four (2.1.287+), a native mark between it and the recurring breakpoint moves there instead, and with neither it is skipped. Every marker in the request takes a slot, including a top-level one and markers nested in tool-result content. So the count grows by at most one and never past four, the extra mark takes the TTL of the next mark after it, and system/tools marks are never touched. Synthetic loopback tests establish wire-history continuity across requests and client recreation, not vendor cache hits or savings.
 
@@ -204,13 +313,13 @@ In a one-shot, `--max-turns 1` is a logical native step; the relay supplies the 
 
 A versioned `reasoning_details` envelope retains ordered native assistant messages and signed thinking. Unchanged projections preserve native blocks, including harmless surrounding-whitespace normalization. Transformed assistant text/tool projections replay canonical text and tool-use blocks instead of stale signed thinking; foreign provider reasoning carriers are ignored. Edited-assistant replay passed against the real service. Native autocompaction is disabled so Hermes retains compaction ownership; this does not establish parity for every history transformation or cross-model signed replay.
 
-Mid-turn `/steer` uses Hermes' standard delivery: a standalone typed user row appended after the newest tool result. This provider adds no steering-specific transport. Natural change-of-plan steering passed live in the real loop; transport fidelity cannot guarantee model obedience.
+Mid-turn `/steer` uses Hermes' standard delivery: a standalone typed user row appended after the newest tool result, which this provider sends as a text block after the tool results in the same user message. A one-shot replays it that way; a kept process takes it on its input before the results, and the relay restores the same bytes (see Transport). Natural change-of-plan steering passed live in the real loop; transport fidelity cannot guarantee model obedience.
 
 ## Lifecycle and request support
 
 Outside an event loop, `create` is synchronous; inside an event loop, it returns an offloaded coroutine. Streams also support `async for`. One client should belong to one independently cancellable Hermes owner.
 
-`cancel()` kills the owned process tree (POSIX process group / Windows `taskkill /T`) without closing another thread's active descriptors. `close()` prevents new calls and finalizes idle/unstarted streams; active consumers unwind after cancellation. Early stream exit requires `close()` / `aclose()`. Live interruption stopped generation and the observed native PID exited.
+`cancel()` kills the owned process tree (POSIX process group / Windows `taskkill /T`) without closing another thread's active descriptors. `Client.close()` leaves running requests alone and the client keeps accepting new ones: Hermes' auxiliary cache closes a client another event loop is still using, and each request owns and reaps its own process (#378). A stream's own `close()` / `aclose()` stops that request and is required for early stream exit; active consumers unwind after cancellation. Live interruption stopped generation and the observed native PID exited.
 
 Supported translation includes text, base64/native images and documents, canonical tools/results, output-token limits, stop sequences, reasoning enable/disable and effort, and JSON-schema response-format projection. Unsupported native sampling fields are omitted rather than forwarding deprecated `temperature` from auxiliary callers. Reasoning effort is clamped to native-supported levels, including Hermes minimal/ultra inputs. Native thinking deltas surface as `reasoning_content`. An upstream refusal (`stop_reason: refusal`) finishes as `content_filter` with `stop_details`' explanation, or its category, and the request id (`(request_id=req_...)`) as `message.refusal`, and logs one warning with the model, request id and category (#341), so Hermes treats it as a terminal refusal (one fallback try) rather than retrying an empty reply. A tool call the refusal cut off is left out of `tool_calls` (Hermes never runs it, and shows the refusal's reason instead of "no explanation"); the signed native turn in the replay carrier keeps it. Model/service restrictions still apply.
 
@@ -220,7 +329,7 @@ The relay and provider forward every `text_delta` as it arrives, but text that f
 
 Unknown parameters fail explicitly. Hermes Relay's `extra_headers.traceparent` is accepted as host-local tracing metadata and discarded before native request translation; it is never sent to Claude Code or the upstream. Empty/null header containers also work. Any other header or invalid container is rejected, so authorization and native identity remain CLI-owned. Unsupported surfaces include assistant prefill, strict function mode, forced tool choice, `parallel_tool_calls=False`, `n>1`, JSON-object-only mode, arbitrary headers/body fields, remote image downloads, and cross-model signed-history parity. The read-idle timeout defaults to 180 seconds, resets on native output, and accepts Hermes' finite HTTPX read-timeout shape. Large prompts remain subject to native/OS limits.
 
-Hermes chooses retry or fallback from an error's `status_code`, so failures carry one. An upstream rejection carries the first attempt's real HTTP status. An error native answers itself carries the status for native's own error code: `rate_limit` 429 (a plan or session limit), `billing_error` 402, `authentication_failed` and a missing login 401, `overloaded` 529, `server_error` 503; a missing Claude Code CLI is 503. A request this transport cannot serve is refused before Claude Code starts with `RequestRejected` (a `ValueError`), which the provider profile classifies as a non-retryable format error that a different fallback provider may still serve (#328); schema-less `json_object` is declared unsupported, so Hermes drops it from auxiliary calls up front (#327); malformed native output and other process failures carry no status. Hermes' non-streaming stale-call watchdog stops a hung call through `cancel()`; the provider profile classifies that kill as a timeout rather than an unknown error.
+Hermes chooses retry or fallback from an error's `status_code`, so failures carry one. An upstream rejection carries the first attempt's real HTTP status. A 429 that rejects a used-up plan window (`anthropic-ratelimit-unified-status: rejected`) also carries the window's reset, the `anthropic-ratelimit-unified-reset` epoch native's own limit message is built from, as `body['resets_at']`: Hermes cannot parse that message's clock time (`resets 3:45pm`), and with the field it benches the route until the window reopens instead of on a blind backoff and names the reset time in its limit notice. A 429 that rejects no window (a throttle while the window is open) carries no reset. An error native answers itself carries the status for native's own error code: `rate_limit` 429 (a plan or session limit), `billing_error` 402, `authentication_failed` and a missing login 401, `overloaded` 529, `server_error` 503; a missing Claude Code CLI is 503. A request this transport cannot serve is refused before Claude Code starts with `RequestRejected` (a `ValueError`), which the provider profile classifies as a non-retryable format error that a different fallback provider may still serve (#328); schema-less `json_object` is declared unsupported, so Hermes drops it from auxiliary calls up front (#327); malformed native output and other process failures carry no status. Hermes' non-streaming stale-call watchdog stops a hung call through `cancel()`; the provider profile classifies that kill as a timeout rather than an unknown error.
 
 An incomplete upstream response also carries the captured Anthropic request ID in the error text (`request_id=req_...`) and the exception's `request_id` attribute, when available. Only IDs starting with `req_`, containing ASCII letters, digits, underscores or hyphens, and at most 128 characters long are included. Missing or invalid IDs are omitted. This adds no header dump or prompt/response logging and requires no debug setting. It cannot recover an ID from an earlier failure that did not record it.
 
@@ -241,6 +350,10 @@ Selecting the provider asks the Claude CLI itself, never Anthropic, before anyth
 3. **Which models?** The CLI's `initialize` handshake returns the account's own picker. Claude Code serves that picker only when it talks to Anthropic directly: behind any `ANTHROPIC_BASE_URL`, the relay included, it logs `[servedCatalog] off (not_first_party)` and answers a generic list without the models granted to the account. The handshake therefore runs without the relay; it writes only `initialize` and sends no user turn, so it makes no Messages request (on Claude Code 2.1.316 its debug log shows only its bootstrap, MCP-directory and telemetry fetches). Without the relay nothing counts its upstream calls, so these rows report `upstream_requests: null` (unobserved) rather than a counted zero. An inherited auth or backend override (`ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, Bedrock/Vertex/Foundry) keeps the handshake behind the relay. Every row is listed; the pinned catalog below only adds metadata to the models it knows. Pinned rows are mapped to Hermes route ids and deduplicated (`opus` and `opus[1m]` are one 1M route). A model the catalog does not pin yet keeps the id and label the CLI announced and carries a dim `· unpinned` note; it gets `[1m]` only when the CLI itself offers that form, and a plain + `[1m]` pair collapses onto `[1m]` as pinned models do. Rows the CLI marks "Draws from usage credits", plus Fable 5, 5.1 and 5.2 on plans that bill them to usage credits per [Anthropic's plan rule](https://support.claude.com/en/articles/15424964) (Pro; on Team and Enterprise the handshake names only the plan, so those rows read `· usage credits on standard seats`, since premium seats include Fable), carry a dim `· usage credits` note (`· usage credits · unpinned` on an unpinned row); nothing is hidden. Access-gated models (Mythos 5.1 and 5.2) are pinned for their window and thinking policy but listed only when the account's picker offers them: they are never appended from the catalog and never in the fallback list. If the handshake fails the pinned catalog below, minus access-gated models, is used.
 
 The same `discover_models()` feeds `provider_model_ids()`, so the TUI/Desktop pickers and `/model` list the account's picker too.
+
+## Cache lifetime
+
+Claude Code chooses the prompt-cache tier per request: a `claude -p` turn is its main conversation, which asks for the one-hour tier on a subscription within plan usage (and the five-minute tier once the account draws extra usage), at 2x the input rate per write against 1.25x for five minutes. Hermes core never gives a delegated child the one-hour tier, since a subagent calls every few seconds and is gone, but it can only clamp markers it builds; here native places them. The provider therefore asks for five minutes on a delegated child's requests by starting its Claude Code with `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` (a value you export yourself wins). The child is recognised by core's child cache scope (`sub_<hash>`); every other request keeps native's default.
 
 ## Subscription usage
 
@@ -308,7 +421,34 @@ python evals/directsdk_admission.py /path/to/claude
 python evals/directsdk_cache_wire.py /path/to/claude
 ```
 
-CI runs both evals on Linux and macOS through `evals/ci.sh`, against a pinned Claude Code installed from npm (`CLAUDE_CODE_VERSION`, default 2.1.292). They need no credentials and make no inference calls. Bump the pin to qualify a new Claude Code release: a change in native's wire shape fails here before it reaches users.
+CI runs both evals and the session tests that need the CLI (`tests/test_directsdk_session.py`, `_lifecycle.py`, `_parked.py`, `_steer.py`, `_doubt.py`, `_version.py`, `_memory.py` and `_bytes.py`, which skip where no Claude Code is installed) on Linux and macOS through `evals/ci.sh`, against a pinned Claude Code installed from npm (`CLAUDE_CODE_VERSION`, default 2.1.292). They need no credentials and make no inference calls. Bump the pin to qualify a new Claude Code release: a change in native's wire shape fails here before it reaches users. Session mode then runs on that release once it is added to `session_versions` in `plugin.yaml` (`tests/test_directsdk_session_version.py` fails on a pin that is not listed).
+
+The long-session bench compares the per-call and kept-process paths on the real CLI against a scripted loopback
+upstream, with no credentials and no inference:
+
+```sh
+python evals/directsdk_session_bench.py /path/to/claude --rounds 200 --park 150 --out bench.json
+python evals/directsdk_session_bench.py /path/to/claude --rounds 200 --steer 50,200 --out steer.json
+python evals/directsdk_replay_bench.py        # the per-call replay cost alone, on the synthetic CLI fixture
+```
+
+It runs one turn of 200 tool rounds, a compaction and a second turn, then an edited tool result, in both modes with one
+HOME, and reports wall time per model step as the history grows (min, median, p95, by fifty-round bucket), Claude Code
+processes started and alive at once, the kept process's RSS, whether the kept process restarted after the compaction
+and the edit, whether a tool parked for `--park` seconds continued on the same process, and whether every upstream body
+was byte-identical to per-call's. Linux, 2.1.292 and 2.1.322: a per-call tool round takes 0.35 s (median) in the first
+fifty rounds and 0.86 to 0.93 s in rounds 150 to 199; a kept-process round 0.020 to 0.033 s; one process per model
+step per-call (209 for the scenario) against 3 kept; the kept process grows from about 180 MB to 280 to 306 MB RSS over
+200 rounds; a 150 s park
+continues on the same process; every body identical. With `--steer 50,200` Hermes delivers a `/steer` after rounds 50
+and 200 and a third mode runs, `session_restart` (the steer restarts the process, as before this release). Linux,
+2.1.292, 2.1.322 and 2.1.323, the steer step after round 50 / round 200: kept 0.027 to 0.028 s / 0.043 to 0.051 s,
+restarted 0.50 to 0.56 s / 1.03 to 1.18 s, per-call 0.43 to 0.50 s / 0.92 to 1.10 s; every body identical to per-call's
+in both session modes. The replay bench on the synthetic CLI puts the plugin's own share
+of a per-call replay at 0.06 s for one frame and 0.11 s for 401 frames. It runs a fake CLI, so it bounds the plugin's
+share only; the rest of the growth above is Claude Code's start-up and history processing, measured on the real CLI.
+`tests/test_directsdk_session_parked.py` covers a parked call and idle eviction during a park (`DIRECTSDK_PARK_SECONDS`,
+default 2 s).
 
 Transport invariant tests cover signed replay and harmless normalization, transformed projections, final tool batches/usage, async use, lazy failure, invalid parameters, conflicting auth, and active/paused/unstarted stream cleanup. The admission regression fails on the previous implementation (two upstream requests) and passes with one request, preserving first-response usage including zero values. Its cancellation control verifies upstream socket closure. A real-native ten-case loopback qualification covers normal text, tools, output/context limits, thinking-only recovery, refusal, HTTP errors, disconnects and cancellation, with one upstream request per call. Its responses are synthetic protocol fixtures, not paid-model evidence.
 

@@ -15,6 +15,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import shutil
 import ssl
 import subprocess
@@ -27,12 +28,13 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 try:
-    from . import extra_usage
+    from . import extra_usage, selftest
     from .admission import Admission
     from .model_catalog import MODEL_METADATA, PICKER_ROUTES, native_model
     from .process_tree import kill_process_tree, own_process_group
 except ImportError:
     import extra_usage
+    import selftest
     from admission import Admission
     from model_catalog import MODEL_METADATA, PICKER_ROUTES, native_model
     from process_tree import kill_process_tree, own_process_group
@@ -69,12 +71,52 @@ def _install_prefixes(env):
     return prefixes + ([] if os.name == "nt" else list(_SYSTEM_PREFIXES))
 
 
+# Minimum Claude Code version this plugin supports. An older CLI drops the tool payload from the
+# request and answers as a title generator (#380), so a service PATH that finds it first must not
+# win over a newer install in the user's prefixes.
+_MIN_CLAUDE_VERSION = (2, 1, 280)
+
+
+_cli_versions = {}  # (path, mtime_ns, size) -> version tuple or None: `--version` runs once per installed binary
+
+
+def _cli_version(exe, env):
+    """``(major, minor, patch)`` from ``<exe> --version``, or None when it cannot be read. Cached per binary
+    (path, mtime, size), since every turn resolves the CLI and `claude update` replaces the file."""
+    try:
+        stat = os.stat(exe)
+    except OSError:
+        return None
+    key = (os.path.realpath(exe), stat.st_mtime_ns, stat.st_size)
+    if key not in _cli_versions:
+        try:
+            out = subprocess.run([exe, "--version"], capture_output=True, text=True, encoding="utf-8",
+                                 errors="replace", timeout=5, env=env).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None  # not cached: a transient failure is asked again next time
+        match = re.search(r"(\d+)\.(\d+)\.(\d+)", out or "")
+        _cli_versions[key] = tuple(int(x) for x in match.groups()) if match else None
+    return _cli_versions[key]
+
+
 def _resolve(command, env):
     command = list(command) if command else [env.get("CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND") or "claude"]
     head = command[0]
     exe = head if os.path.isabs(head) and os.access(head, os.X_OK) else shutil.which(head, path=env.get("PATH") or os.defpath)
+    # Only the default bare name is second-guessed: an explicit command or override is the user's
+    # choice. When PATH finds an outdated CLI, prefer a supported version from the install prefixes.
+    if head == "claude" and exe:
+        found = _cli_version(exe, env)
+        if found is not None and found < _MIN_CLAUDE_VERSION:
+            for prefix in _install_prefixes(env):
+                # which() per prefix, so Windows finds claude.exe / claude.cmd through PATHEXT.
+                candidate = shutil.which(head, path=prefix)
+                if candidate and os.path.normcase(candidate) != os.path.normcase(exe):
+                    version = _cli_version(candidate, env)
+                    if version is not None and version >= _MIN_CLAUDE_VERSION:
+                        exe = candidate
+                        break
     if not exe and head == "claude":
-        # Only the default bare name: an explicit command or override is the user's choice, never second-guessed.
         exe = shutil.which(head, path=os.pathsep.join(_install_prefixes(env)))
     return ([exe] + command[1:]) if exe else None
 
@@ -156,6 +198,164 @@ def session_settings():
         mode = mode.strip().lower() not in _OFF
     cap = cap if isinstance(cap, int) and not isinstance(cap, bool) and cap >= 0 else 4
     return mode is not False and mode != 0, cap
+
+
+def session_idle_seconds(default):
+    """The active profile's ``session_idle_seconds``: how long a kept process may idle (positive seconds, else
+    ``default``, the prompt cache's lifetime)."""
+    value = _setting("session_idle_seconds", default)
+    # Above TIMEOUT_MAX (or infinite) the idle timer's thread dies at start, and the process would never idle out.
+    ok = isinstance(value, (int, float)) and not isinstance(value, bool) and 0 < value <= threading.TIMEOUT_MAX
+    return value if ok else default
+
+
+def session_min_rounds():
+    """The active profile's ``session_min_rounds``: tool rounds a conversation has had before it is kept (default 8)."""
+    value = _setting("session_min_rounds", 8)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 8
+
+
+_SESSION_VERSIONS = re.compile(r"^\s*session_versions:\s*\[([^\]]*)\]", re.M)
+_versions, _untested, _versions_lock = {}, set(), threading.Lock()
+
+
+def _read_session_versions():
+    try:
+        match = _SESSION_VERSIONS.search(Path(__file__).with_name("plugin.yaml").read_text(encoding="utf-8"))
+    except OSError:
+        return frozenset()
+    return frozenset(v.strip().strip("'\"") for v in match.group(1).split(",") if v.strip()) if match else frozenset()
+
+
+# Read once, at import: a temp cleaner can delete core's frozen copy of the plugin while Hermes runs (#406), and a
+# read after that would find no list and quietly send every kept conversation per-call.
+_TESTED = _read_session_versions()
+
+
+def session_versions():
+    """The Claude Code versions the session tests passed on (plugin.yaml ``session_versions``); none if unreadable."""
+    return _TESTED
+
+
+def _file_key(arg):
+    """An argument that names a file, as that file is now (an update in place or a replaced file changes it)."""
+    try:
+        status = os.stat(arg)
+    except (OSError, TypeError, ValueError):
+        return arg
+    return os.path.realpath(arg), status.st_dev, status.st_ino, status.st_mtime_ns, status.st_size
+
+
+def version_key(command):
+    """``command`` as the files it names are now; a version recorded under this key belongs to exactly those files."""
+    return tuple(_file_key(arg) for arg in command)
+
+
+def note_version(command, reported, key=None):
+    """Record the version a Claude Code process of ``command`` reported in its init event (``claude_code_version``),
+    under ``key``: the files as they were when that process started (an update meanwhile is another binary). Only a
+    release's own number counts ("2.1.323-beta.1" is not 2.1.323)."""
+    version = reported if isinstance(reported, str) and re.fullmatch(r"\d+\.\d+\.\d+", reported) else None
+    key = key if key is not None else version_key(command)
+    with _versions_lock:
+        _versions[key] = version
+
+
+def claude_version(command):
+    """``(seen, version)``: whether a process of ``command`` (as the files it names are now) has reported its version
+    yet, and the release it reported (None: none it could read)."""
+    key = version_key(command)
+    with _versions_lock:
+        return key in _versions, _versions.get(key)
+
+
+UNLISTED_SETTING = "session_unlisted_versions"
+UNLISTED_MODES = ("honor", "self-test", "force")
+_said = set()
+
+
+def _once(key):
+    """True the first time ``key`` is seen in this Hermes process: each of the lines below is said once, not per call."""
+    with _versions_lock:
+        first = key not in _said
+        _said.add(key)
+    return first
+
+
+def session_unlisted_versions():
+    """The active profile's ``session_unlisted_versions``: what session mode does on a Claude Code release the tested
+    list does not name. ``honor`` (the default) runs it per-call, ``self-test`` keeps processes on it once the
+    plugin's own offline test of that binary has passed, ``force`` keeps processes on it. Anything else is honor."""
+    value = _setting(UNLISTED_SETTING, "honor")
+    mode = value.strip().lower().replace("_", "-") if isinstance(value, str) else None
+    if mode in UNLISTED_MODES:
+        return mode
+    if _once(("bad-mode", repr(value))):
+        _logger.warning("claude-subscription-directsdk: %s is %r, not one of %s; honor it is", UNLISTED_SETTING, value,
+                        ", ".join(UNLISTED_MODES))
+    return "honor"
+
+
+def session_tested(version, command=None):
+    """Whether session mode may keep a process on this Claude Code version (``command``: the binary, for a
+    self-test). Listed versions may; a version it could not read never may; any other follows
+    ``session_unlisted_versions``. Each outcome is logged once per version, never per call."""
+    tested = session_versions()
+    if version in tested:
+        return True
+    listed = ", ".join(sorted(tested)) or "none listed"
+    mode = session_unlisted_versions() if version else "honor"
+    if mode == "force":
+        if _once(("force", version)):
+            _logger.warning("claude-subscription-directsdk: Claude Code %s is not on the tested list (%s); %s is force, "
+                            "so session mode keeps processes on it, each step still checked before upstream",
+                            version, listed, UNLISTED_SETTING)
+        return True
+    if mode == "self-test":
+        record = selftest.verdict(version, command)
+        if record is not None:
+            passed = record.get("verdict") == "pass"
+            if version not in selftest._state.logged and _once(("verdict", version)):
+                if passed:
+                    _logger.warning("claude-subscription-directsdk: Claude Code %s is not on the tested list; its "
+                                    "self-test passed, so session mode keeps processes on it, each step still checked "
+                                    "before upstream", version)
+                else:
+                    _logger.warning("claude-subscription-directsdk: Claude Code %s is not on the tested list and its "
+                                    "self-test failed (%s), so every call runs per-call", version, record.get("reason"))
+            return passed
+        if command:
+            selftest.request(command, version)
+        if _once(("testing", version)):
+            _logger.info("claude-subscription-directsdk: Claude Code %s is not on the tested list (%s); testing it "
+                         "offline in the background (%s: self-test); calls run per-call until it passes", version,
+                         listed, UNLISTED_SETTING)
+        return False
+    with _versions_lock:
+        first, _ = version not in _untested, _untested.add(version)
+    if first:
+        _logger.info("claude-subscription-directsdk: session mode runs only on Claude Code %s; this is %s, so every "
+                     "call runs per-call (a new process each)", listed, version or "a version it could not read")
+    return False
+
+
+MAX_CONCURRENT_SETTING = "max_concurrent"
+MAX_CONCURRENT_DEFAULT = 4
+_bad_limits = set()
+
+
+def max_concurrent():
+    """The active profile's ``max_concurrent``: a positive whole number, else the default (warned once per value)."""
+    value = _setting(MAX_CONCURRENT_SETTING, MAX_CONCURRENT_DEFAULT)
+    if isinstance(value, str) and value.strip().isdigit():
+        value = int(value)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+        return value
+    if repr(value) not in _bad_limits:
+        _bad_limits.add(repr(value))
+        _logger.warning("claude-subscription-directsdk: max_concurrent must be a whole number of at least 1 (got %r); "
+                        "using %d", value, MAX_CONCURRENT_DEFAULT)
+    return MAX_CONCURRENT_DEFAULT
 
 
 def apply_config_dir(env):

@@ -1,0 +1,354 @@
+"""A kept-alive native's history must line up with Hermes' frames before its request goes upstream.
+
+Through the real relay; all traffic is loopback, no CLI. ``canonical_history`` rewrites the tool results native
+holds in its own shape (text-block lists from MCP replies) to Hermes' bytes, by position. When the rows do not
+line up (native holds a row Hermes does not, or a role is out of place) nothing can be rewritten, so the request
+is refused before upstream and the step replays into a new process, as a request that does not extend the previous
+one is. Before, it forwarded with native's shape in the replayed rows, and ``extends_previous`` passed it on the
+stable prefix. A fresh native's first request is the replay itself and forwards as built, so a shape the relay
+cannot read never loops a relaunch.
+"""
+import copy
+import http.client
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import pytest
+
+from admission import STEER_ROW, Admission, HistoryMisaligned, canonical_history
+
+ENV = {'role': 'system', 'content': 'Fixture environment'}
+DIVERGED = b'HERMES_SESSION_DIVERGED'
+
+
+def frame(role, *blocks):
+    return {'type': role, 'message': {'role': role, 'content': list(blocks)}}
+
+
+def call(n):
+    return frame('assistant', {'type': 'text', 'text': f'reading {n}'},
+                 {'type': 'tool_use', 'id': f'toolu_{n:04d}', 'name': 'mcp__hermes__read_file', 'input': {'path': f'f{n}'}})
+
+
+def result(n):
+    return frame('user', {'type': 'tool_result', 'tool_use_id': f'toolu_{n:04d}', 'content': f'contents of f{n}'})
+
+
+def native_result(n):
+    """The same result as native holds it: content as a text-block list, built from the MCP reply."""
+    return {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': f'toolu_{n:04d}',
+                                         'content': [{'type': 'text', 'text': f'contents of f{n}'}]}]}
+
+
+OPEN = frame('user', {'type': 'text', 'text': 'go'})
+FRAMES = [OPEN, call(1), result(1), call(2), result(2)]
+
+
+def wire(messages, model='fixture'):
+    return json.dumps({'model': model, 'messages': copy.deepcopy(messages)}, ensure_ascii=False, separators=(',', ':')).encode()
+
+
+def native_rows(frames):
+    """Native's request body for ``frames``: its environment row first, Hermes' rows as it holds them."""
+    rows = [ENV]
+    for f in frames:
+        blocks = f['message']['content']
+        rows.append(native_result(int(blocks[0]['tool_use_id'][-4:])) if blocks[0].get('type') == 'tool_result' else copy.deepcopy(f['message']))
+    return rows
+
+
+@pytest.fixture
+def peer():
+    received = []
+
+    class Peer(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            received.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+            self.send_response(200)
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Peer)
+    thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': .05}, daemon=True)
+    thread.start()
+    server.received = received
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
+def post(gate, messages, model='fixture'):
+    conn = http.client.HTTPConnection('127.0.0.1', gate.server.server_port, timeout=5)
+    try:
+        conn.request('POST', gate.prefix + '/v1/messages', wire(messages, model), {'Content-Type': 'application/json'})
+        response = conn.getresponse()
+        return response.status, response.read()
+    finally:
+        conn.close()
+
+
+def kept(peer, frames):
+    """A relay serving a kept native that has forwarded every step of ``frames`` but the last, rows aligned."""
+    gate = Admission(f'http://127.0.0.1:{peer.server_port}', 5, queried=frames[0]['message']['content'])
+    gate.frames = frames[:1]
+    assert post(gate, native_rows(frames[:1]))[0] == 200  # the launch's own request: the replay
+    for n in range(3, len(frames), 2):
+        gate.rearm(5, frames[n - 1]['message']['content'], frames[:n])
+        assert post(gate, native_rows(frames[:n]))[0] == 200
+    gate.rearm(5, frames[-1]['message']['content'], frames)
+    return gate
+
+
+def test_aligned_rows_are_rewritten_to_hermes_bytes_and_forwarded(peer):
+    gate = kept(peer, FRAMES)
+    try:
+        status, _ = post(gate, native_rows(FRAMES))
+        assert status == 200 and not gate.diverged and gate.failure is None
+        sent = peer.received[-1]['messages']
+        assert [m['role'] for m in sent] == ['system', 'user', 'assistant', 'user', 'assistant', 'user']
+        # The replayed result (row 3) and the queried one (row 5) both carry Hermes' string content, not native's list.
+        assert sent[3]['content'] == result(1)['message']['content']
+        assert sent[5]['content'] == result(2)['message']['content']
+    finally:
+        gate.close()
+
+
+@pytest.mark.parametrize('misalign', ['extra_row', 'role'])
+def test_a_misaligned_tail_is_refused_before_upstream(peer, misalign):
+    """The first resumed step: the forwarded prefix is the opening turn alone, so ``extends_previous`` has no replayed
+    result there to catch a tail that does not line up. Native's new rows drift from Hermes' frames (a row Hermes
+    never saw, or a user row where Hermes holds the call): refused as diverged, never forwarded."""
+    gate = kept(peer, FRAMES[:3])
+    forwarded = len(peer.received)
+    try:
+        rows = native_rows(FRAMES[:3])
+        if misalign == 'extra_row':
+            rows.insert(3, {'role': 'user', 'content': [{'type': 'text', 'text': 'a row Hermes never saw'}]})
+        else:
+            rows[2] = {'role': 'user', 'content': [{'type': 'text', 'text': 'a user row where Hermes holds a call'}]}
+        status, body = post(gate, rows)
+        assert status == 400 and DIVERGED in body
+        assert gate.diverged and len(peer.received) == forwarded
+    finally:
+        gate.close()
+
+
+def test_a_body_the_relay_cannot_read_is_refused_before_upstream(peer):
+    """The first resumed step again, with a tail the rewrite cannot even read (a row that is not an object). A parse
+    error is a divergence too: refused, never forwarded as native built it."""
+    gate = kept(peer, FRAMES[:3])
+    forwarded = len(peer.received)
+    try:
+        rows = native_rows(FRAMES[:3])
+        rows[2] = None
+        status, body = post(gate, rows)
+        assert status == 400 and DIVERGED in body
+        assert gate.diverged and len(peer.received) == forwarded
+    finally:
+        gate.close()
+
+
+@pytest.mark.parametrize('drift', [False, True])
+def test_a_first_resumed_request_goes_upstream_only_as_per_calls_own(peer, drift):
+    """The relay's half of the first resumed step: a probe relay keeps the request per-call sends for the frames and
+    forwards nothing; the kept relay forwards its own request only when it is that request, byte for byte. Its record
+    of the first reply drifted here (one tool argument), which no earlier request can show."""
+    probe = Admission(f'http://127.0.0.1:{peer.server_port}', 5, queried=FRAMES[2]['message']['content'])
+    probe.probe = True
+    try:
+        status, _ = post(probe, [ENV] + [copy.deepcopy(f['message']) for f in FRAMES[:3]])
+        assert status == 400 and probe.probed and not peer.received
+    finally:
+        probe.close()
+    gate = kept(peer, FRAMES[:3])
+    gate.rearm(5, FRAMES[2]['message']['content'], FRAMES[:3], probe.probed)
+    forwarded = len(peer.received)
+    try:
+        rows = native_rows(FRAMES[:3])
+        if drift:
+            rows[2]['content'][-1]['input']['path'] += ' (as native recalls it)'
+        status, body = post(gate, rows)
+        if drift:
+            assert status == 400 and DIVERGED in body and gate.diverged and len(peer.received) == forwarded
+        else:
+            assert status == 200 and not gate.diverged and peer.received[-1] == json.loads(probe.probed)
+    finally:
+        gate.close()
+
+
+def test_a_resumed_request_whose_newest_frame_cannot_be_restored_is_refused(peer):
+    """A resumed kept relay whose newest frame does not match the results Hermes queried refuses before upstream.
+    Before, it recorded ``unrestored`` and forwarded native's version, as the per-call path may."""
+    gate = kept(peer, FRAMES)
+    gate.rearm(5, [{'type': 'tool_result', 'tool_use_id': 'toolu_9999', 'content': 'another result'}], FRAMES)
+    forwarded = len(peer.received)
+    try:
+        status, body = post(gate, native_rows(FRAMES))
+        assert status == 400 and DIVERGED in body
+        assert gate.diverged and len(peer.received) == forwarded
+    finally:
+        gate.close()
+
+
+def test_a_misaligned_prefix_is_refused_as_not_extending_the_previous_request(peer):
+    """Later steps: a replayed result already sits in the forwarded prefix in Hermes' bytes, so a request whose rows
+    shifted there fails ``extends_previous`` whatever ``canonical_history`` does. Both gates refuse the same way."""
+    gate = kept(peer, FRAMES)
+    forwarded = len(peer.received)
+    try:
+        rows = native_rows(FRAMES)
+        rows.insert(3, {'role': 'assistant', 'content': [{'type': 'text', 'text': 'a row Hermes never saw'}]})
+        status, body = post(gate, rows)
+        assert status == 400 and DIVERGED in body
+        assert gate.diverged and len(peer.received) == forwarded
+    finally:
+        gate.close()
+
+
+def test_a_changed_model_on_aligned_rows_is_refused_as_not_extending_the_previous_request(peer):
+    """Every row lines up, so the extension check alone stands before upstream: the kept native asks for another
+    model than its previous request did. ``test_admission_session_drift`` drifts the model against no frames at all,
+    which the alignment refusal now answers first; this case keeps the extension check itself under test."""
+    gate = kept(peer, FRAMES)
+    forwarded = len(peer.received)
+    try:
+        status, body = post(gate, native_rows(FRAMES), model='another')
+        assert status == 400 and DIVERGED in body
+        assert gate.diverged and len(peer.received) == forwarded
+    finally:
+        gate.close()
+
+
+def test_a_fresh_natives_first_request_forwards_as_built(peer):
+    """No request has been forwarded on this relay yet: the launch's replay forwards as native built it, as per-call
+    does, so a shape the relay cannot read costs an uncached row, never a relaunch that repeats itself."""
+    gate = Admission(f'http://127.0.0.1:{peer.server_port}', 5, queried=FRAMES[-1]['message']['content'])
+    gate.frames = FRAMES
+    try:
+        rows = native_rows(FRAMES)
+        rows.insert(3, {'role': 'assistant', 'content': [{'type': 'text', 'text': 'a row Hermes never saw'}]})
+        status, _ = post(gate, rows)
+        assert status == 200 and not gate.diverged and len(peer.received) == 1
+    finally:
+        gate.close()
+
+
+@pytest.mark.parametrize('payload', [
+    wire(native_rows(FRAMES)[:-1]),  # one row fewer
+    wire(native_rows(FRAMES) + [{'role': 'user', 'content': [{'type': 'text', 'text': 'one more'}]}]),
+    wire([ENV, {'role': 'assistant', 'content': [{'type': 'text', 'text': 'x'}]}] + native_rows(FRAMES)[2:]),  # role out of place
+    b'not json', b'{"messages": null}', b'{"messages": [null]}', b'{}'])
+def test_canonical_history_names_what_does_not_line_up(payload):
+    with pytest.raises(HistoryMisaligned):
+        canonical_history(payload, FRAMES)
+
+
+def test_canonical_history_leaves_an_aligned_body_alone_but_for_the_results():
+    out = json.loads(canonical_history(wire(native_rows(FRAMES)), FRAMES))['messages']
+    assert out[0] == ENV and out[1] == OPEN['message'] and out[2] == call(1)['message'] and out[4] == call(2)['message']
+    assert out[3] == result(1)['message'] and out[5] == result(2)['message']
+
+
+def test_a_tool_call_s_caller_is_matched_as_a_replay_drops_it_and_refused_if_native_kept_it():
+    """Hermes' frame of a reply keeps the ``caller`` the Messages API puts on each tool call; a fresh native's replay
+    drops it, so native's record without it is the reply per-call sends. A record that kept it is not, and is refused."""
+    frames = copy.deepcopy(FRAMES)
+    for f in frames:
+        for block in f['message']['content']:
+            if block.get('type') == 'tool_use':
+                block['caller'] = {'type': 'direct'}
+    out = json.loads(canonical_history(wire(native_rows(FRAMES)), frames))['messages']
+    assert out[2] == call(1)['message'] and out[4] == call(2)['message']
+    with pytest.raises(HistoryMisaligned):
+        canonical_history(wire(native_rows(frames)), frames)
+    # Any other caller is not known to drop out of a replay: native's record without it is refused.
+    frames[1]['message']['content'][1]['caller'] = {'type': 'code_execution_20250825', 'tool_id': 'srvtoolu_0001'}
+    with pytest.raises(HistoryMisaligned):
+        canonical_history(wire(native_rows(FRAMES)), frames)
+
+
+STEER = {'type': 'text', 'text': '[OUT-OF-BAND USER MESSAGE]\nread g1 instead\n[/OUT-OF-BAND USER MESSAGE]'}
+
+
+@pytest.mark.parametrize('native', ['wraps_hermes_steer', 'wraps_other_text', 'hermes_holds_none'])
+def test_a_steer_row_goes_back_into_its_frame_and_nowhere_else(native):
+    """A kept native holds a /steer as its own system row after the tool results; per-call has it as a text block
+    after them, where Hermes put it. The row goes back only when it wraps exactly Hermes' steer."""
+    steered = FRAMES[:-1] + [frame('user', *result(2)['message']['content'], STEER)]
+    text = 'read g2 instead' if native == 'wraps_other_text' else STEER['text']
+    rows = native_rows(FRAMES) + [{'role': 'system', 'content': [{'type': 'text', 'text': text.join(STEER_ROW), 'cache_control': {'type': 'ephemeral'}}]}]
+    if native != 'wraps_hermes_steer':
+        with pytest.raises(HistoryMisaligned):
+            canonical_history(wire(rows), FRAMES if native == 'hermes_holds_none' else steered)
+        return
+    out = json.loads(canonical_history(wire(rows), steered))['messages']
+    assert [m['role'] for m in out] == ['system', 'user', 'assistant', 'user', 'assistant', 'user']
+    assert out[-1]['content'][-1] == dict(STEER, cache_control={'type': 'ephemeral'})
+
+
+def test_a_cancel_wakes_a_request_waiting_for_its_native_s_init(peer):
+    """A kept relay holds its first request until its native's init has named the allowed version. A cancel (or the
+    native's death) must end that wait at once: closing the relay waits for its handler. Before, close() waited the
+    whole init wait out."""
+    import time
+    gate = Admission(f'http://127.0.0.1:{peer.server_port}', 30, queried=FRAMES[0]['message']['content'])
+    gate.init_ok = threading.Event()
+    def send():
+        try:
+            post(gate, native_rows(FRAMES[:1]))
+        except OSError:
+            pass  # the cancel closed the connection
+    sender = threading.Thread(target=send, daemon=True)
+    sender.start()
+    time.sleep(.3)
+    started = time.monotonic()
+    gate.abort()
+    gate.close()
+    assert time.monotonic() - started < 2 and not peer.received
+    sender.join(5)
+
+
+def test_a_cancel_is_marked_before_it_wakes_a_request_waiting_for_its_native_s_init(peer):
+    """The cancel's thread stalls between waking the init wait and taking the relay's lock. The request it woke must
+    still be refused: nothing has named the native's version. Before, the wake came first, the request found no cancel
+    and went upstream."""
+    import time
+
+    class Stalls:
+        """The relay's lock, slow to take only in the cancelling thread."""
+        def __init__(self):
+            self.inner, self.slow = threading.Lock(), None
+
+        def __enter__(self):
+            if threading.current_thread() is self.slow:
+                time.sleep(1)
+            return self.inner.__enter__()
+
+        def __exit__(self, *exc):
+            return self.inner.__exit__(*exc)
+
+    gate = Admission(f'http://127.0.0.1:{peer.server_port}', 30, queried=FRAMES[0]['message']['content'])
+    gate.init_ok, gate.lock = threading.Event(), Stalls()
+
+    def send():
+        try:
+            post(gate, native_rows(FRAMES[:1]))
+        except OSError:
+            pass  # the cancel closed the connection
+    sender = threading.Thread(target=send, daemon=True)
+    sender.start()
+    time.sleep(.3)
+    cancel = threading.Thread(target=gate.abort)
+    gate.lock.slow = cancel
+    cancel.start()
+    cancel.join(5)
+    sender.join(5)
+    gate.close()
+    assert not peer.received, 'a request went upstream before its native named its version'

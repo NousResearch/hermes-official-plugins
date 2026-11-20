@@ -3,7 +3,7 @@ never follows a command onto / or into the environment's own state dir.
 
 Hermes core has no argv seam in LocalEnvironment, so the environment overrides ``_run_bash``; these
 tests pin what that override must keep from the local one (login bootstrap included, no pre-exec
-callback, cwd recovery before the wrap).
+callback, the spawn's cwd chosen before the wrap, core's secret channel fds).
 """
 
 import os
@@ -92,7 +92,7 @@ class TestTrackedCwd:
         marker = env._cwd_marker
         for elsewhere in ("/", os.path.join(env.get_temp_dir(), "hermes_exec_x")):
             result = {"output": f"out\n{marker}{elsewhere}{marker}\n"}
-            env._extract_cwd_from_output(result)
+            env._update_cwd(result)
             assert env.cwd == str(work)
             assert result["output"].strip() == "out"
 
@@ -102,7 +102,7 @@ class TestTrackedCwd:
         sub = work / "sub"
         sub.mkdir()
         marker = env._cwd_marker
-        env._extract_cwd_from_output({"output": f"{marker}{sub}{marker}\n"})
+        env._update_cwd({"output": f"{marker}{sub}{marker}\n"})
         assert env.cwd == str(sub)
 
     def test_replaced_cwd_maps_to_the_tracked_cwd(self, env_factory, monkeypatch):

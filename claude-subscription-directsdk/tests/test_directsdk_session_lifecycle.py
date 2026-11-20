@@ -1,0 +1,321 @@
+"""Kept processes never outnumber ``max_sessions`` and never outlive a dropped client, a cancel or a close.
+
+Real Claude Code CLI against the scripted loopback upstream of ``test_directsdk_session``; no credentials, no
+inference. Skipped without the CLI; ``CLAUDE_CODE_BIN`` picks a binary.
+"""
+import gc
+import os
+from pathlib import Path
+import shutil
+import sys
+import threading
+import time
+
+import psutil
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import directsdk
+from test_directsdk_session import MODEL, TOOLS, client, converse, home, session_pids, upstream  # noqa: F401  (fixtures)
+
+pytestmark = pytest.mark.skipif(not (os.environ.get('CLAUDE_CODE_BIN') or shutil.which('claude')), reason='needs the Claude Code CLI')
+
+
+def gone(pid, within=10):
+    deadline = time.monotonic() + within
+    while time.monotonic() < deadline:
+        try:
+            if psutil.Process(pid).status() == psutil.STATUS_ZOMBIE:
+                return True
+        except psutil.Error:
+            return True
+        time.sleep(.05)
+    return False
+
+
+def test_concurrent_launches_never_exceed_max_sessions(home, upstream, monkeypatch):
+    """Three agents start their first step at once with ``max_sessions`` 1: one process is kept, the other two steps
+    run one-shot. Before the place was taken under the lock, all three passed the check and all three were kept."""
+    clients = [client(home, upstream, monkeypatch, session=True, cap=1) for _ in range(3)]
+    gate, errors = threading.Barrier(3), []
+
+    def first_step(c):
+        try:
+            gate.wait(10)
+            c.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+        except Exception as error:  # noqa: BLE001
+            errors.append(error)
+    threads = [threading.Thread(target=first_step, args=(c,)) for c in clients]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(60)
+        assert not errors, errors
+        kept = [c for c in clients if session_pids(c)]
+        assert len(kept) <= 1, f'{len(kept)} processes kept with max_sessions 1'
+        assert len(upstream.bodies) == 3  # every step still answered, the others as one-shots
+        with directsdk._live_lock:
+            assert len(directsdk._live) <= 1
+    finally:
+        for c in clients:
+            c.close()
+
+
+def test_a_dropped_client_ends_its_kept_process(home, upstream, monkeypatch):
+    """Hermes drops a client without close(): once it is collected its kept process is gone, not kept for the idle
+    hour by the timer's reference to the client."""
+    c = client(home, upstream, monkeypatch, session=True)
+    c.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+    pid = next(iter(session_pids(c)))
+    del c
+    gc.collect()
+    assert gone(pid), 'the kept process outlived its dropped client'
+
+
+@pytest.mark.parametrize('stop', ['close', 'cancel'])
+def test_a_stop_while_a_process_becomes_the_kept_session_ends_it(home, upstream, monkeypatch, stop):
+    """close() or cancel() lands after the step has its answer and before its process is the kept session. The stop
+    must still find an owner: the process ends. A cancel() also fails the step; a close() leaves its answer standing,
+    as it leaves every call in flight (#378). Before, the request had already let go of the process and the client did
+    not hold it yet, so the stop found neither and it stayed kept."""
+    c = client(home, upstream, monkeypatch, session=True)
+    reached, proceed, natives, errors = threading.Event(), threading.Event(), [], []
+    keep = directsdk.Client._keep
+
+    def paused(self, native, *rest):
+        natives.append(native)
+        reached.set()
+        proceed.wait(30)
+        return keep(self, native, *rest)
+    monkeypatch.setattr(directsdk.Client, '_keep', paused)
+
+    def step():
+        try:
+            c.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+        except Exception as error:  # noqa: BLE001
+            errors.append(f'{type(error).__name__}: {error}')
+    worker = threading.Thread(target=step)
+    try:
+        worker.start()
+        assert reached.wait(30), 'the step never reached the hand-over'
+        pid = natives[0].process.pid
+        getattr(c, stop)()
+        proceed.set()
+        worker.join(30)
+        assert not worker.is_alive()
+        assert errors == ([] if stop == 'close' else ['RuntimeError: Claude request cancelled'])
+        assert not session_pids(c), 'the stopped step left a kept session'
+        assert gone(pid), 'the process outlived the stop'
+        with directsdk._live_lock:
+            assert not directsdk._live
+    finally:
+        proceed.set()
+        worker.join(30)
+        c.close()
+
+
+def test_an_idle_kept_process_that_dies_gives_its_place_back(home, upstream, monkeypatch):
+    """A kept process that exits while idle (a crash, an OOM kill) frees its relay and its place at once: with
+    ``max_sessions`` 1 the next agent keeps a process. Before, the dead one held the place until its own client's
+    next step, close or the idle hour, and the next agent ran per-call."""
+    first = client(home, upstream, monkeypatch, session=True, cap=1)
+    second = client(home, upstream, monkeypatch, session=True, cap=1)
+    try:
+        first.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+        native = first._session
+        directsdk.kill_process_tree(native.process)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and (directsdk._live or native.admission.thread.is_alive()):
+            time.sleep(.02)
+        assert not directsdk._live, 'the dead process still holds its place'
+        assert first._session is None and not native.admission.thread.is_alive(), 'its relay is still up'
+        second.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+        assert session_pids(second), 'the next agent ran per-call beside a dead process'
+    finally:
+        first.close()
+        second.close()
+
+
+def test_a_process_that_dies_as_it_becomes_the_kept_session_gives_its_place_back(home, upstream, monkeypatch):
+    """The process exits after the step has its answer and before it is the kept session, so its reader finds no
+    session to end. The hand-over itself must then end it: the step still returns, and no place stays held."""
+    c = client(home, upstream, monkeypatch, session=True, cap=1)
+    keep = directsdk.Client._keep
+
+    def dead_first(self, native, *rest):
+        directsdk.kill_process_tree(native.process)
+        native.reader.join(10)
+        return keep(self, native, *rest)
+    monkeypatch.setattr(directsdk.Client, '_keep', dead_first)
+    try:
+        assert c.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000).choices
+        assert c._session is None
+        with directsdk._live_lock:
+            assert not directsdk._live, 'the dead process holds a place'
+    finally:
+        c.close()
+
+
+def test_a_kept_process_holds_a_max_concurrent_slot_only_while_it_serves_a_step(home, upstream, monkeypatch):
+    """With ``max_concurrent`` 1, an agent's kept process waits on its parked tool call while a title call runs: the
+    title call starts at once, because a kept process holds its slot only while it serves a step. The agent's next
+    step then takes the slot again on the same process. Holding it between steps would leave the title call waiting
+    until its own timeout."""
+    monkeypatch.setattr(directsdk, 'max_concurrent', lambda: 1)
+    pool = directsdk.concurrency._pool
+
+    def freed(within=30):
+        # One-shots of earlier tests free their slots only once their processes have exited.
+        deadline = time.monotonic() + within
+        while pool.held and time.monotonic() < deadline:
+            time.sleep(.02)
+        return pool.held == 0
+    assert freed()
+    agent = client(home, upstream, monkeypatch, session=True)
+    titles = client(home, upstream, monkeypatch, session=True)  # hermes_auxiliary makes its call a one-shot
+    try:
+        go = [{'role': 'user', 'content': 'go'}]
+        reply = agent.create(model=MODEL, messages=go, tools=TOOLS, max_tokens=1000).choices[0].message.model_dump()
+        native = agent._session
+        pid = native.process.pid
+        assert native.process.poll() is None and pool.held == 0
+        titles.create(model=MODEL, messages=go, tools=TOOLS, max_tokens=1000, timeout=10, hermes_auxiliary=True)
+        assert freed(10)  # the title call's one-shot, once its process has exited
+        held_while_serving = []
+        deliver = native.deliver
+        monkeypatch.setattr(native, 'deliver', lambda results: (held_while_serving.append(pool.held), deliver(results))[1])
+        assistant = {k: v for k, v in reply.items() if k in ('role', 'content', 'tool_calls', 'reasoning_details') and v is not None}
+        result = {'role': 'tool', 'tool_call_id': reply['tool_calls'][0]['id'], 'content': 'contents'}
+        stream = agent.create(model=MODEL, messages=go + [assistant, result], tools=TOOLS, max_tokens=1000, stream=True)
+        try:
+            for chunk in stream:
+                if chunk.choices[0].finish_reason:
+                    # The slot is back with the answer, not only once the caller ends the stream.
+                    assert pool.held == 0
+                    break
+        finally:
+            stream.close()
+        assert held_while_serving == [1]
+        assert session_pids(agent) == {pid} and pool.held == 0
+    finally:
+        agent.close()
+        titles.close()
+
+
+def test_a_kept_process_ends_after_the_profiles_idle_limit(home, upstream, monkeypatch, tmp_path):
+    """``session_idle_seconds`` from the profile's config: a kept process that has waited that long for its user ends
+    and gives its place back."""
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    (tmp_path / 'config.yaml').write_text('plugins:\n  entries:\n    claude-subscription-directsdk-experimental:\n'
+                                          '      settings:\n        session_idle_seconds: 1\n', encoding='utf-8')
+    c = client(home, upstream, monkeypatch, session=True)
+    try:
+        converse(c, turns=('go',))  # the turn ends: the process now waits for its user
+        pid = next(iter(session_pids(c)))
+        assert gone(pid, within=15), 'the kept process outlived the idle limit'
+        deadline = time.monotonic() + 5
+        while c._session is not None and time.monotonic() < deadline:
+            time.sleep(.02)
+        assert c._session is None and not directsdk._live
+    finally:
+        c.close()
+
+
+def test_an_idle_timer_that_fired_as_a_step_took_the_process_cannot_end_its_next_park(home, upstream, monkeypatch):
+    """The idle limit passes and the timer's callback starts, but a new step takes the process over before the
+    callback ends it, and parks a tool call. The late callback belongs to the earlier idle period. Before, it found
+    the same process as the client's session and killed the parked call's process."""
+    entered, release = threading.Event(), threading.Event()
+    Timer = threading.Timer
+
+    class Late(Timer):
+        def __init__(self, interval, function, args=None, kwargs=None):
+            def late(*a, **k):
+                entered.set()
+                release.wait(15)
+                function(*a, **k)
+            super().__init__(interval, late, args, kwargs)
+    monkeypatch.setattr(directsdk.threading, 'Timer', Late)
+    monkeypatch.setattr(directsdk, 'session_idle_seconds', lambda _: .05)
+    c = client(home, upstream, monkeypatch, session=True)
+    old = None
+    try:
+        history = converse(c, turns=('go',))
+        native = c._session
+        old = native.idle
+        assert entered.wait(5), 'the idle timer never fired'
+        history.append({'role': 'user', 'content': 'next turn'})
+        assert c.create(model=MODEL, messages=history, tools=TOOLS, max_tokens=1000).choices[0].message.tool_calls
+        assert c._session is native and native.idle is not old
+        release.set()
+        old.join(10)
+        assert c._session is native and native.process.returncode is None, 'the earlier idle period ended the new park'
+    finally:
+        release.set()
+        if old is not None:
+            old.join(15)
+        c.close()
+
+
+def test_a_kept_process_that_exits_before_the_next_turn_is_written_is_replayed(home, upstream, monkeypatch, caplog):
+    """The kept process passes the resume check, then exits before the new user turn reaches its input. Nothing went
+    upstream, so the step replays on a new process (``exited``). Before, the write's broken pipe failed the call."""
+    c = client(home, upstream, monkeypatch, session=True)
+    try:
+        history = converse(c, turns=('go',))
+        native = c._session
+        history.append({'role': 'user', 'content': 'next turn'})
+        send = native.send
+
+        def exit_first(request, data, timeout):
+            directsdk.kill_process_tree(native.process)
+            native.reader.join(5)
+            return send(request, data, timeout)
+        monkeypatch.setattr(native, 'send', exit_first)
+        sent = len(upstream.bodies)
+        with caplog.at_level('DEBUG', logger=directsdk.logger.name):
+            c.create(model=MODEL, messages=history, tools=TOOLS, max_tokens=1000)
+        assert len(upstream.bodies) == sent + 1 and session_pids(c) and session_pids(c) != {native.process.pid}
+        assert [r.getMessage() for r in caplog.records if 'session restart' in r.getMessage()] == \
+            ['Claude session restart (exited): replaying into a new process']
+    finally:
+        c.close()
+
+
+def test_max_sessions_bounds_the_hermes_process_across_profiles(home, upstream, monkeypatch, tmp_path):
+    """Hermes loads the plugin once per profile home, each a module of its own (its own provider loader is used
+    here). With max_sessions 1, a second profile's agent runs per-call beside the first one's kept process. Before,
+    each module had its own registry, and both kept a process."""
+    import atexit
+    import providers
+    from test_directsdk_session import CLAUDE
+    captures, clients, modules, names = [], [], [], []
+    monkeypatch.setattr(providers, 'register_provider', captures.append)
+    root = Path(__file__).resolve().parents[1]
+    prototype = client(home, upstream, monkeypatch, session=True, cap=1)
+    version = directsdk.claude_version([CLAUDE])[1]
+    try:
+        for label in ('profile-a', 'profile-b'):
+            name = providers._user_module_name(root, str(tmp_path / label))
+            names.append(name)
+            providers._exec_plugin_module(root, 'user', name)
+            c = captures[-1].create_client(command=CLAUDE, timeout=30, env=prototype.env)
+            clients.append(c)
+            module = sys.modules[type(c).__module__]
+            modules.append(module)
+            module.note_version([CLAUDE], version)
+            monkeypatch.setattr(module, 'session_settings', lambda: (True, 1))
+            monkeypatch.setattr(module, 'session_min_rounds', lambda: 0)
+            c.create(model=MODEL, messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS, max_tokens=1000)
+        kept = [c for c in clients if c._session is not None and c._session.process.returncode is None]
+        assert modules[0]._live is modules[1]._live and len(kept) == 1, f'{len(kept)} kept with max_sessions 1'
+    finally:
+        prototype.close()
+        for c in clients:
+            c.close()
+        for module in modules:
+            atexit.unregister(module._kill_draining)
+        for name in tuple(sys.modules):
+            if any(name == n or name.startswith(n + '.') for n in names):
+                sys.modules.pop(name, None)

@@ -178,6 +178,10 @@ injected there with a source tag and an explicit silence contract, and the agent
 from within that chat's context (capped by a per-chat rolling-window budget; unmatched
 target sessions degrade to broadcast — a session is never created for an injected event).
 
+Routing reaches gateway internals that are not part of the published plugin API. If a Hermes
+update renames one, the gateway log says so once at startup (naming the missing symbol), and
+routed events fall back to the Home Assistant notification instead of being dropped.
+
 Events come from the instance the adapter authenticated to with `HASS_TOKEN`, so they are not
 subject to a user allowlist. The adapter reconnects automatically with 5s → 10s → 30s → 60s backoff.
 

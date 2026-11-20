@@ -1845,3 +1845,30 @@ async def test_session_mode_degrades_to_broadcast_when_markers_unknown(monkeypat
     assert target.sent, "the alert must still be delivered as plain text"
     assert adapter.handle_message.await_count == 0, (
         "the source-session turn would hand unsanitized text to the model")
+
+
+@pytest.mark.asyncio
+async def test_missing_gateway_internal_warns_once_and_deliver_falls_back(monkeypatch, caplog):
+    """A core without one of the private gateway symbols deliver uses says so once, by name,
+    and a routed alert still reaches the user through the HA notification."""
+    import gateway.wake
+    import homeassistant_plugin.adapter as adapter_mod
+
+    monkeypatch.setattr(adapter_mod, "_gateway_internals_checked", False)
+    monkeypatch.delattr(gateway.wake, "admit_internal_event")
+    adapter = HomeAssistantAdapter(PlatformConfig(enabled=True, token="tok", extra={"deliver": "telegram"}))
+    adapter.gateway_runner = MagicMock(spec=["config", "adapters"])  # no _authorization_adapter
+    adapter._send_ha_notification = AsyncMock(return_value=SendResult(success=True, message_id="n1"))
+
+    with caplog.at_level(logging.WARNING, logger=adapter_mod.logger.name):
+        adapter._warn_missing_gateway_internals()
+        HomeAssistantAdapter(PlatformConfig(enabled=True, token="tok", extra={"deliver": "telegram"})) \
+            ._warn_missing_gateway_internals()
+        result = await adapter.send("ha_events:telegram", "door opened")
+
+    warnings = [r.getMessage() for r in caplog.records if "lacks gateway internals" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "gateway.wake.admit_internal_event" in warnings[0]
+    assert "gateway_runner._authorization_adapter" in warnings[0]
+    assert result.success is True
+    adapter._send_ha_notification.assert_awaited_once_with("door opened")

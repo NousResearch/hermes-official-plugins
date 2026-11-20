@@ -1,12 +1,10 @@
-"""Gateway slash-command handlers for Spotify (Discord, Telegram, Slack, ...).
+"""The ``/spotify`` slash command: terse one-line playback control without an agent turn.
 
-Five terse one-line commands for common actions, so they do not need a full agent turn. Each
-handler calls the same tool the model would and formats one line instead of raw tool JSON; the
-underlying tools stay the only Spotify surface.
-
-Dispatch lives in core today: it routes ``/play``, ``/pause``, ``/skip``, ``/nowplaying`` and
-``/queue`` here and answers with the returned string. Availability gating must be two-factor
-(toolset enabled AND Spotify authenticated) and needs core's ``gateway_availability_fn`` hook.
+One command with subcommands (``play [query]``, ``pause``, ``skip``, ``np``, ``queue <track>``),
+registered through ``ctx.register_command`` so it works in the CLI and every messaging gateway.
+A single ``/spotify`` name keeps clear of core's own ``/pause`` and ``/queue``. Each subcommand
+calls the same tool the model would and formats one line instead of raw tool JSON; the tools stay
+the only Spotify surface. Without a stored login every subcommand answers "not configured".
 """
 
 from __future__ import annotations
@@ -99,7 +97,7 @@ def nowplaying() -> str:
 def queue(query: str = "") -> str:
     query = (query or "").strip()
     if not query:
-        return "Usage: /queue <track>"
+        return "Usage: /spotify queue <track>"
     search = _call(_tools._handle_spotify_search, query=query, types=["track"], limit=1)
     failed = _failure(search)
     if failed:
@@ -109,3 +107,24 @@ def queue(query: str = "") -> str:
         return f"No track found for {query!r}"
     out = _call(_tools._handle_spotify_queue, action="add", uri=tracks[0].get("uri"))
     return _failure(out) or f"Queued: {_title(tracks[0])}"
+
+
+# Subcommand -> (handler, takes the rest of the line as its query).
+_SUBCOMMANDS = {
+    "play": (play, True),
+    "pause": (pause, False),
+    "skip": (skip, False),
+    "np": (nowplaying, False),
+    "queue": (queue, True),
+}
+USAGE = "Usage: /spotify play [query] | pause | skip | np | queue <track>"
+
+
+def spotify_command(raw_args: str = "") -> str:
+    """``/spotify <subcommand> [args]`` handler; an unknown or missing subcommand answers the usage line."""
+    name, _, rest = (raw_args or "").strip().partition(" ")
+    entry = _SUBCOMMANDS.get(name.lower())
+    if entry is None:
+        return USAGE
+    handler, takes_query = entry
+    return handler(rest) if takes_query else handler()

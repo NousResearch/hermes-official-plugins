@@ -6,12 +6,14 @@ schemas, env vars ``HERMES_SPOTIFY_CLIENT_ID`` / ``HERMES_SPOTIFY_REDIRECT_URI``
 (``providers.spotify`` in the profile's ``auth.json``). Login moves from ``hermes auth spotify`` to
 ``hermes spotify login``.
 
-Wiring goes only through the public plugin API (``ctx.register_tool`` / ``ctx.register_cli_command``).
+Wiring goes only through the public plugin API (``ctx.register_tool`` / ``ctx.register_cli_command`` /
+``ctx.register_command`` for the ``/spotify`` slash command).
 """
 
 from __future__ import annotations
 
 from . import spotify_tools as _t
+from .gateway_commands import spotify_command
 from .spotify_cli import handle_cli, setup_cli
 
 TOOLSET = "spotify"
@@ -40,6 +42,10 @@ def register(ctx) -> None:
         name="spotify", help="Log in to Spotify and check the plugin's auth status",
         description="Spotify login for the spotify plugin (loopback PKCE; needs your own Spotify app).",
         setup_fn=setup_cli, handler_fn=handle_cli)
+    ctx.register_command(
+        "spotify", handler=spotify_command,
+        description="Spotify playback in one line: play [query], pause, skip, np (now playing), queue <track>",
+        args_hint="play [query] | pause | skip | np | queue <track>")
 
 
 __all__ = ["register"]

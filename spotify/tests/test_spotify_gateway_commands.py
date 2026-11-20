@@ -100,7 +100,7 @@ def test_queue_adds_the_first_match(client):
 
 
 def test_queue_usage(client):
-    assert cmds.queue("") == "Usage: /queue <track>"
+    assert cmds.queue("") == "Usage: /spotify queue <track>"
 
 
 @pytest.mark.parametrize("message, expected", [
@@ -126,3 +126,37 @@ def test_a_missing_login_answers_not_configured_instead_of_raising(monkeypatch):
     monkeypatch.setattr(spotify_tools, "SpotifyClient", no_login)
     assert cmds.nowplaying() == cmds.NOT_CONFIGURED
     assert cmds.pause() == cmds.NOT_CONFIGURED
+
+
+@pytest.mark.parametrize("raw, action, query", [
+    ("play", "play", ""),
+    ("play blackbird the beatles", "play", "blackbird the beatles"),
+    ("PAUSE", "pause", None),
+    ("skip", "skip", None),
+    ("np", "np", None),
+    ("queue  hey jude", "queue", " hey jude"),
+])
+def test_spotify_command_routes_each_subcommand(monkeypatch, raw, action, query):
+    seen = []
+    for name in ("play", "pause", "skip", "np", "queue"):
+        takes_query = cmds._SUBCOMMANDS[name][1]
+        fn = (lambda q="", _n=name: seen.append((_n, q)) or _n) if takes_query \
+            else (lambda _n=name: seen.append((_n, None)) or _n)
+        monkeypatch.setitem(cmds._SUBCOMMANDS, name, (fn, takes_query))
+    assert cmds.spotify_command(raw) == action
+    assert seen == [(action, query)]
+
+
+def test_spotify_command_subcommands_reach_the_right_tool_action(client):
+    client.response = {"item": TRACK, "device": {"name": "Kitchen Sonos"}, "progress_ms": 42000}
+    assert cmds.spotify_command("np") == "▶ Blackbird — The Beatles · 0:42 / 9:22 · Kitchen Sonos"
+    assert cmds.spotify_command("pause") == "Paused"
+    assert client.calls[-1][1] == "/me/player/pause"
+    assert cmds.spotify_command("skip").startswith("Skipped")
+    assert "/me/player/next" in [c[1] for c in client.calls]
+
+
+@pytest.mark.parametrize("raw", ["", "   ", "rewind", "nowplaying", "volume 50"])
+def test_spotify_command_unknown_subcommand_prints_usage(client, raw):
+    assert cmds.spotify_command(raw) == cmds.USAGE
+    assert client.calls == []

@@ -101,9 +101,21 @@ an image and pass its URL, or send the bytes as a `data:` URL.
 
 ## Gateway slash commands
 
-In a messaging gateway (Discord, Telegram, Slack, ...) five commands answer one terse line instead of spending a full agent turn: `/play [query]` (no query resumes), `/pause`, `/skip`, `/nowplaying` (alias `/np`) and `/queue <query>`. They call the same tools the model does and format the result, so playback state, device selection and Premium restrictions behave identically.
+`/spotify` answers one terse line instead of spending a full agent turn, in the CLI and in every
+messaging gateway (Discord, Telegram, Slack, ...):
 
-The handlers live in `gateway_commands.py`. Until core wires the dispatch, the commands are reachable through it directly; availability should gate on the `spotify` toolset being enabled *and* a stored login (two-factor), which needs core's `gateway_availability_fn` hook.
+| Command | Does |
+|---|---|
+| `/spotify play [query]` | no query resumes; with one, plays the top track match |
+| `/spotify pause` | pauses |
+| `/spotify skip` | skips and names the next track |
+| `/spotify np` | now playing: track, progress, device |
+| `/spotify queue <track>` | queues the top track match |
+
+Anything else prints the usage line. The subcommands call the same tools the model does, so
+playback state, device selection and Premium restrictions behave identically; without a stored
+login they answer "Spotify not configured — run `hermes spotify login`". One `/spotify` command
+keeps clear of Hermes' own `/pause` and `/queue`.
 
 ## Free vs Premium
 

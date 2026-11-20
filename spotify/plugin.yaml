@@ -1,14 +1,15 @@
 name: spotify
 label: Spotify
 kind: standalone
-version: 2.1.1
+version: 2.2.0
 author: NousResearch
 homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/spotify
 description: >
   Spotify for Hermes Agent: seven tools (playback, devices, queue, search,
   playlists, albums, library) over the Spotify Web API, plus
   `hermes spotify login|status|logout` (loopback PKCE with your own Spotify
-  developer app). Playback control needs Spotify Premium and an active
+  developer app) and a `/spotify play|pause|skip|np|queue` slash command.
+  Playback control needs Spotify Premium and an active
   Spotify Connect device. Formerly built into Hermes core.
 requires_hermes: ">=0.21.6"
 provides_tools:

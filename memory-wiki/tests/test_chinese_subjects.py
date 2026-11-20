@@ -19,7 +19,8 @@ class _ReadOnlyDB:
         return self.messages.get(session_id, [])
 
 
-@pytest.mark.parametrize("source", ["title", "preview", "user"])
+# Session previews are unverified (they can be tool or system text), so they supply no subjects (#48).
+@pytest.mark.parametrize("source", ["title", "user"])
 @pytest.mark.parametrize(
     "text,queries",
     [("示例甲检索核对", ["示例甲", "检索"]), ("示例 API SDK", ["示例", "API", "SDK"])],
@@ -43,7 +44,7 @@ def test_chinese_sources_are_substring_searchable(memory_wiki_core, source, text
 
 
 @pytest.mark.parametrize("quoted", ['"检索"', "‘检索’", "“检索”", "「检索」", "『检索』"])
-@pytest.mark.parametrize("source", ["title", "preview", "user"])
+@pytest.mark.parametrize("source", ["title", "user"])
 def test_short_quoted_chinese_topics(memory_wiki_core, quoted, source):
     session = {}
     messages = []

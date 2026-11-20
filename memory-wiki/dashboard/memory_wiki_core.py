@@ -141,38 +141,49 @@ def extract_subject_candidates(session: dict, messages: list[dict]) -> list[Subj
     candidates: dict[str, SubjectCandidate] = {}
     chinese_slugs: set[str] = set()
 
-    def add(name: str, *, score: int = 1, source: str = "text") -> None:
+    def add(name: str, *, score: int = 1, source: str = "text", user: bool = True) -> None:
         cleaned = _clean_candidate_name(name)
         if not cleaned:
             return
         slug = slugify_subject(cleaned)
         existing = candidates.get(slug)
         if existing is None:
-            candidates[slug] = SubjectCandidate(cleaned, slug, score, source, source != "title")
+            if _HAN_RE.search(cleaned):
+                if len(chinese_slugs) >= _CHINESE_CANDIDATE_LIMIT:
+                    return
+                chinese_slugs.add(slug)
+            candidates[slug] = SubjectCandidate(cleaned, slug, score, source, user)
         else:
             candidates[slug] = SubjectCandidate(
                 existing.name,
                 existing.slug,
                 existing.score + score,
                 existing.source,
-                existing.user_supported or source != "title",
+                existing.user_supported or user,
             )
 
     title = str(session.get("title") or "")
     if title:
         title_phrase = _keyword_phrase(title)
         if title_phrase:
-            add(title_phrase, score=6, source="title")
-        _extract_chinese_quotes(title, add, base_score=4)
+            add(title_phrase, score=6, source="title", user=False)
+        # Title quotes are title evidence too: they rank, but never as user-raised topics.
+        _extract_chinese_quotes(title, lambda name, **kw: add(name, user=False, **kw), base_score=4)
 
+    first_user_text_seen = False
     for message in messages:
         if message.get("role") != "user":
             continue
         content = _message_text(message)
         _extract_from_text(content, add, base_score=3)
-        phrase = _keyword_phrase(content)
+        # Every user turn supplies its English keyword phrase; an unquoted Han phrase comes only
+        # from the first non-empty user text, so long Chinese prompts stay bounded.
+        phrase = _keyword_phrase(content, allow_chinese=not first_user_text_seen)
+        if content.strip():
+            first_user_text_seen = True
         if phrase:
             add(phrase, score=3, source="user_phrase")
+        _extract_chinese_quotes(content, add, base_score=3)
 
     return sorted(candidates.values(), key=lambda c: (
         not c.user_supported, -c.score, c.name.lower(),
@@ -391,9 +402,12 @@ def build_daily_logs(db, *, limit_days: int = 60, cache=None) -> list[dict]:
             for candidate in (SubjectCandidate(**candidate) for candidate in bucket["candidates"]):
                 entry = day["_subjects"].setdefault(
                     candidate.slug,
-                    {"slug": candidate.slug, "name": candidate.name, "count": 0},
+                    {"slug": candidate.slug, "name": candidate.name, "count": 0,
+                     "_user_supported": False, "_score": 0},
                 )
                 entry["count"] += 1
+                entry["_user_supported"] |= candidate.user_supported
+                entry["_score"] += candidate.score
 
             day["work_items"].extend(bucket["work_items"])
 
@@ -548,7 +562,7 @@ def _session_units(db, sessions: list[dict], cache) -> list[dict]:
 
     if cache is None:
         return [
-            _materialize_unit(_build_session_unit(session, db.get_messages(session["id"])))
+            _build_session_unit(session, db.get_messages(session["id"]))
             for session in sessions
         ]
 
@@ -560,12 +574,12 @@ def _session_units(db, sessions: list[dict], cache) -> list[dict]:
         if cached is None:
             stale.append(session)
         else:
-            units_by_id[str(session["id"])] = _materialize_unit(cached)
+            units_by_id[str(session["id"])] = cached
     for session in stale:
         unit = _build_session_unit(session, db.get_messages(session["id"]))
         unit["fingerprint"] = session_fingerprint(session)
         cache.store(unit)
-        units_by_id[str(session["id"])] = _materialize_unit(unit)
+        units_by_id[str(session["id"])] = unit
     return [units_by_id[str(session["id"])] for session in sessions]
 
 
@@ -581,15 +595,8 @@ def _build_session_unit(session: dict, messages: list[dict]) -> dict:
 
     candidates = extract_subject_candidates(session, messages)
     first_ts = _first_timestamp(session, messages)
-    # Snippets the aggregation actually has are stored per slug; the "no
-    # snippets at all" fallback snippet is stored once — materializing it into
-    # every empty slug at aggregation time keeps cached units small.
-    fallback = None
-    for message in messages:
-        text = _message_text(message)
-        if text:
-            fallback = _snippet(session, message, text)
-            break
+    # No fallback snippet: a subject shows only snippets that mention it, so a title-only
+    # subject is not padded with an unrelated first message (#48).
     return {
         "session": _session_info(session),
         "candidates": [
@@ -598,10 +605,10 @@ def _build_session_unit(session: dict, messages: list[dict]) -> dict:
                 "slug": candidate.slug,
                 "score": candidate.score,
                 "source": candidate.source,
+                "user_supported": candidate.user_supported,
             }
             for candidate in candidates
         ],
-        "fallback_snippet": fallback,
         "first_seen": first_ts,
         "last_seen": _last_timestamp(session, messages),
         "message_count": len(messages),
@@ -643,6 +650,7 @@ def _day_buckets(session: dict, messages: list[dict]) -> list[dict]:
                         "slug": candidate.slug,
                         "score": candidate.score,
                         "source": candidate.source,
+                        "user_supported": candidate.user_supported,
                     }
                     for candidate in extract_subject_candidates(session, day_messages)
                 ],
@@ -723,28 +731,8 @@ def _snippets_for_candidates(
     return snippets
 
 
-def _materialize_unit(unit: dict) -> dict:
-    """Fill empty slugs with the unit's fallback snippet, the way the aggregators read them.
-
-    Units store the fallback once (it is identical for every slug of a session
-    and can number hundreds of slugs); this expands it back to the exact shape
-    the pre-cache aggregation consumed. The shared snippet dict is safe to
-    share: aggregators only read snippets, never mutate them.
-    """
-
-    fallback = unit.get("fallback_snippet")
-    if fallback is None:
-        return unit
-    out = dict(unit)
-    out["snippets_by_slug"] = {
-        slug: items if items else [fallback]
-        for slug, items in unit["snippets_by_slug"].items()
-    }
-    return out
-
-
 def _matches_candidate(text: str, candidate: SubjectCandidate) -> bool:
-    normalized = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    normalized = re.sub(f"[^a-z0-9{_HAN_RANGES}]+", "-", text.lower()).strip("-")
     if not normalized:
         return False
     if f"-{candidate.slug}-" in f"-{normalized}-":

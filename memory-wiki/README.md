@@ -145,7 +145,7 @@ Use Node.js 22.12+ for the native DOM tests.
 Aggregations memoize their per-session extraction in
 `dashboard/memory_wiki_cache.py`, so repeat dashboard requests stop re-reading
 every session's messages (#49). Units persist to an atomic sidecar JSON under
-`HERMES_HOME/cache/memory-wiki/session_units-v1.json` — profile-scoped, bounded
+`HERMES_HOME/cache/memory-wiki/session_units-v2.json` — profile-scoped, bounded
 by unit count and serialized size, evicting least-recently-active sessions
 first — so warm state survives gateway restarts. The plugin stays read-only
 with respect to `state.db`; the sidecar (owner-only, `0600`; safe to delete, it is

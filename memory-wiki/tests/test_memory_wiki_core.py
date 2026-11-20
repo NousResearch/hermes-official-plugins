@@ -318,7 +318,7 @@ def _dated_session(db, db_path, session_id, messages, *, hidden=False):
     day_a = datetime(2026, 10, 20, 12).timestamp()
     db.create_session(session_id, "cli")
     for offset, content in messages:
-        db.append_message(session_id, "assistant", "Updated: " + content, timestamp=day_a + offset)
+        db.append_message(session_id, "user", "Updated: " + content, timestamp=day_a + offset)
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             "UPDATE sessions SET started_at = ?, hidden = ? WHERE id = ?", (day_a, int(hidden), session_id)
@@ -381,8 +381,8 @@ def test_build_single_day_session_unchanged(memory_wiki_core, tmp_path):
         session = memory_wiki_core._recent_sessions(db, limit=100)[0]
         messages = db.get_messages(session["id"])
         candidates = memory_wiki_core.extract_subject_candidates(session, messages)
+        # One session: the day ranks subjects exactly as the session's candidates rank (#48).
         subjects = [{"slug": c.slug, "name": c.name, "count": 1} for c in candidates]
-        subjects.sort(key=lambda subject: (-subject["count"], subject["name"].lower()))
         assert memory_wiki_core.build_daily_logs(db) == [{
             "date": "2026-10-20",
             "started_at_min": started,

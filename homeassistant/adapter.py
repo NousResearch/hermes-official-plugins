@@ -337,8 +337,6 @@ class HomeAssistantAdapter(BasePlatformAdapter):
         if isinstance(top_deliver, str):
             self._default_deliver = top_deliver
 
-        # Cooldown tracking: entity_id -> last_event_timestamp
-        self._last_event_time: Dict[str, float] = {}
         # Injection budget: chat budget_key -> injection timestamps inside the
         # rolling window (pruned on each decision; keys evicted when empty).
         self._injection_times: Dict[str, list] = {}

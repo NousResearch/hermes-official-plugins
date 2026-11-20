@@ -65,7 +65,7 @@ _MAX_TRACE_STATE = 256
 # profile opts in (``_end_user_attribution``). Only the turn-scoped pre_llm_call hook carries
 # ``sender_id``; the root trace opens later, on pre_api_request. A subagent
 # has no sender of its own, so it inherits the user of the turn that spawned it. Both maps are bounded
-# like the trace state and guarded by ``_STATE_LOCK``.
+# like the trace state, guarded by ``_STATE_LOCK``, and keyed per profile (``_profile_attribution_key``).
 _SENDER_BY_TURN: OrderedDict[str, str] = OrderedDict()
 _USER_BY_CHILD_SESSION: OrderedDict[str, str] = OrderedDict()
 _LANGFUSE_CLIENT = None
@@ -417,6 +417,13 @@ def _trace_key(task_id: str, session_id: str, *, turn_id: str = "", api_request_
     return prefix + (task_id or scope)
 
 
+def _profile_attribution_key(key: str) -> str:
+    """Namespace a turn or child-session id by the active profile for the sender maps. Under a
+    multiplexed gateway two profiles can reuse a turn or child-session id, and an unscoped key would
+    hand one profile's sender to the other profile's trace (even one that never opted in)."""
+    return f"{_profile_state_prefix()}{key}"
+
+
 def _remember_locked(mapping: OrderedDict, key: str, value: str) -> None:
     """Caller holds ``_STATE_LOCK``. Insert or refresh ``key``, dropping the oldest entries over the cap."""
     mapping[key] = value
@@ -428,7 +435,7 @@ def _remember_locked(mapping: OrderedDict, key: str, value: str) -> None:
 def _turn_user_locked(turn_id: str, session_id: str) -> str:
     """Caller holds ``_STATE_LOCK``. The messaging user behind a turn: its own sender, else the user
     inherited by a subagent session, else ``""`` (cron, CLI, API-server and other senderless turns)."""
-    return (_SENDER_BY_TURN.get(turn_id, "") if turn_id else "") or _USER_BY_CHILD_SESSION.get(str(session_id), "")
+    return (_SENDER_BY_TURN.get(_profile_attribution_key(turn_id), "") if turn_id else "")         or _USER_BY_CHILD_SESSION.get(_profile_attribution_key(str(session_id)), "")
 
 
 def _state_for_turn(turn_id: str) -> Optional[TraceState]:
@@ -868,7 +875,7 @@ def _finish_trace(task_key: str, *, output: Any = None) -> None:
         state = _TRACE_STATE.pop(task_key, None) if client is not None else None
         _, marker, turn_id = task_key.rpartition(":turn:")
         if marker:
-            _SENDER_BY_TURN.pop(turn_id, None)
+            _SENDER_BY_TURN.pop(_profile_attribution_key(turn_id), None)
     if state is None:
         return
 
@@ -948,7 +955,7 @@ def on_pre_llm_call(*, task_id: str = "", session_id: str = "", platform: str = 
         # It is still the only hook that names the sender: keep it for this turn's root trace.
         if sender and turn_id:
             with _STATE_LOCK:
-                _remember_locked(_SENDER_BY_TURN, str(turn_id), sender)
+                _remember_locked(_SENDER_BY_TURN, _profile_attribution_key(str(turn_id)), sender)
         return
     client, task_key = _client_and_key(task_id, session_id, turn_id, api_request_id)
     if client is None:
@@ -1264,7 +1271,8 @@ def on_subagent_start(*, parent_turn_id: str = "", parent_subagent_id: Any = Non
                     **({"parent_subagent_id": parent_subagent_id} if parent_subagent_id else {})}
         # A subagent has no sender of its own: its traces belong to the user whose turn spawned it.
         if state.propagated.get("user_id"):
-            _remember_locked(_USER_BY_CHILD_SESSION, str(child_session_id), state.propagated["user_id"])
+            _remember_locked(_USER_BY_CHILD_SESSION, _profile_attribution_key(str(child_session_id)),
+                             state.propagated["user_id"])
         state.subagents[str(child_session_id)] = _start_child_observation(
             state, name=f"Subagent: {child_role or 'delegate'}", as_type="span",
             input_value=_capture_content(child_goal), metadata=metadata)
@@ -1277,7 +1285,7 @@ def on_subagent_stop(*, parent_turn_id: str = "", child_session_id: Any = None, 
         return
 
     with _STATE_LOCK:
-        _USER_BY_CHILD_SESSION.pop(str(child_session_id), None)
+        _USER_BY_CHILD_SESSION.pop(_profile_attribution_key(str(child_session_id)), None)
         state = _state_for_turn(parent_turn_id)
         if state is None:
             return

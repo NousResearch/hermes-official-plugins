@@ -114,7 +114,9 @@ class BubblewrapProvider(TerminalEnvironmentProvider):
     def doctor_checks(self) -> List[Tuple[bool, str, str]]:
         bwrap = shutil.which("bwrap")
         if not bwrap:
-            return [(False, "bwrap", "(not found: install the bubblewrap package, apt/dnf/pacman: bubblewrap)")]
+            return [(False, "bwrap", "(not found: install the bubblewrap package, apt/dnf/pacman: bubblewrap)"),
+                    (True, "hidden from commands",
+                     "(credential stores, agent sockets and HERMES_HOME are hidden; not an exhaustive list)")]
         try:
             ver = subprocess.run([bwrap, "--version"], capture_output=True, text=True, encoding="utf-8",
                                  errors="replace", timeout=5)
@@ -128,6 +130,8 @@ class BubblewrapProvider(TerminalEnvironmentProvider):
             failure = f"probe could not run: {exc}"
         rows.append((failure is None, "bwrap sandbox probe",
                      "(ok)" if failure is None else f"({failure}; allow unprivileged user namespaces for this user)"))
+        rows.append((True, "hidden from commands",
+                     "(credential stores, agent sockets and HERMES_HOME are hidden; not an exhaustive list)"))
         return rows
 
     def setup_instructions(self) -> List[str]:

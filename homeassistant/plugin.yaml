@@ -1,7 +1,7 @@
 name: homeassistant
 label: Home Assistant
 kind: platform
-version: 2.0.2
+version: 2.0.3
 author: NousResearch
 homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/homeassistant
 description: >

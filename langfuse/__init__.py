@@ -529,9 +529,24 @@ def _resolve_max_depth(configured_depth: str) -> int:
         return 4
 
 
+@functools.lru_cache(maxsize=8)
+def _resolve_max_chars(configured_chars: str) -> int:
+    """Parse ``HERMES_LANGFUSE_MAX_CHARS`` like ``_resolve_max_depth``: an invalid value warns ONCE
+    per distinct value and falls back to 12000 instead of raising on every captured payload."""
+    try:
+        max_chars = int(configured_chars)
+        if max_chars < 0:
+            raise ValueError
+        return max_chars
+    except ValueError:
+        logger.warning("Invalid HERMES_LANGFUSE_MAX_CHARS=%r; use a non-negative integer. Falling back to 12000.", configured_chars)
+        return 12000
+
+
 def _safe_value(value: Any, *, max_chars: Optional[int] = None, depth: int = 0,
                 parse_json_strings: bool = False, max_depth: Optional[int] = None) -> Any:
-    max_chars = max_chars if max_chars is not None else int(_env("HERMES_LANGFUSE_MAX_CHARS", "12000") or "12000")
+    if max_chars is None:
+        max_chars = _resolve_max_chars(_env("HERMES_LANGFUSE_MAX_CHARS", "12000") or "12000")
     if max_depth is None:
         max_depth = _resolve_max_depth(_env("HERMES_LANGFUSE_MAX_DEPTH", "4") or "4")
     if depth > max_depth:

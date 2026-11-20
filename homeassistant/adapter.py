@@ -760,13 +760,14 @@ class HomeAssistantAdapter(BasePlatformAdapter):
         attrs = new_state.get("attributes", {})
         domain = _domain_of(entity_id)
         if old_val == new_val:
-            # Only temperature fields are actionable attribute-only climate events.
+            # Only setpoint changes are actionable attribute-only climate events; the measured
+            # current_temperature drifts constantly and would wake the agent on every reading.
             # Ignore unrelated attribute changes.
             if domain == "climate" and new_val not in {"unknown", "unavailable"}:
                 old_attrs = (old_state or {}).get("attributes", {})
                 changes = [
                     f"{key}: {old_attrs.get(key, '?')} -> {attrs.get(key, '?')}"
-                    for key in ("current_temperature", "temperature", "target_temp_low", "target_temp_high")
+                    for key in ("temperature", "target_temp_low", "target_temp_high")
                     if old_attrs.get(key) != attrs.get(key)
                 ]
                 if changes:

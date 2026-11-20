@@ -39,13 +39,19 @@ def test_nonbinary_transitions_preserve_actual_states(domain, old, new):
     assert f"changed from '{old}' to '{new}'" in message
 
 
-@pytest.mark.parametrize("field", ["current_temperature", "temperature", "target_temp_low", "target_temp_high"])
+@pytest.mark.parametrize("field", ["temperature", "target_temp_low", "target_temp_high"])
 def test_climate_temperature_attribute_changes(field):
     message = HomeAssistantAdapter._format_state_change(
         "climate.example", {"state": "heat", "attributes": {field: 20}},
         {"state": "heat", "attributes": {field: 21, "friendly_name": "Example Thermostat"}})
     assert f"{field}: 20 -> 21" in message
     assert "HVAC mode: 'heat'" in message
+
+
+def test_measured_climate_temperature_alone_is_not_an_event():
+    assert HomeAssistantAdapter._format_state_change(
+        "climate.example", {"state": "heat", "attributes": {"current_temperature": 20}},
+        {"state": "heat", "attributes": {"current_temperature": 21}}) is None
 
 
 @pytest.mark.parametrize("state", ["heat", "unknown", "unavailable"])

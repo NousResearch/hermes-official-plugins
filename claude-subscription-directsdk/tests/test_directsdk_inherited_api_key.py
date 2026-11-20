@@ -49,6 +49,22 @@ def test_an_inherited_api_credential_never_reaches_the_child(profile, tmp_path, 
         assert leaked == [], f"API credential reached the child: {leaked}"
 
 
+BOOTSTRAP = {"OP_SERVICE_ACCOUNT_TOKEN": "ops_test", "BWS_ACCESS_TOKEN": "bws-test"}
+
+
+@pytest.mark.parametrize("child", ["discovery", "turn"])
+def test_a_secret_source_bootstrap_token_never_reaches_the_child(profile, tmp_path, monkeypatch, child):
+    """`secrets.onepassword` needs OP_SERVICE_ACCOUNT_TOKEN in Hermes' process env; core keeps it from every
+    child (Tier 1), and the plugin's own child env used to carry it to Claude Code."""
+    for key, value in BOOTSTRAP.items():
+        monkeypatch.setenv(key, value)
+    envs = (_discovery_envs(profile, tmp_path, **BOOTSTRAP) if child == "discovery"
+            else [_inherited_turn_env(profile, tmp_path, monkeypatch)])
+    for env in envs:
+        leaked = sorted(k for k in BOOTSTRAP if k in env)
+        assert leaked == [], f"secret-source bootstrap token reached the child: {leaked}"
+
+
 def test_an_explicit_env_keeps_its_api_credential(profile, tmp_path):
     """`Client(env=...)` is a controlled fixture (the offline evals log native in with a fixture key)."""
     env = _turn_env(profile, tmp_path, **CREDENTIALS)

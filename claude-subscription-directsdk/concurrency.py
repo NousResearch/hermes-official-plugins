@@ -27,6 +27,22 @@ _POLL_S = .1
 _BEAT_S = 1.0
 
 
+class SlotCapacityCancelled(RuntimeError):
+    """A queued call was dropped while waiting for a ``max_concurrent`` slot.
+
+    Distinct from an operator interrupt so the turn error and core's ``error_type``
+    name the real cause instead of looking like ``Claude request cancelled`` (#475).
+    """
+
+    def __init__(self, running: int, limit: int):
+        self.running, self.limit = running, limit
+        super().__init__(
+            f"Claude Code call was cancelled while waiting for a free slot "
+            f"({running} running, max_concurrent {limit}). "
+            f"Raise the plugin setting max_concurrent to run more at once."
+        )
+
+
 class _Waiter:
     """Compared by identity: two waiters with the same limit are still two places in the queue."""
     __slots__ = ('limit',)
@@ -97,7 +113,7 @@ def acquire(limit, cancelled, timeout, beat):
                     logger.info('Claude Code call started after waiting %.1f s for a free slot', waited)
                 return slot
             if cancelled.is_set():
-                raise RuntimeError('Claude request cancelled')
+                raise SlotCapacityCancelled(running, limit)
             if waited >= timeout:
                 raise TimeoutError(f'Claude request timed out after {waited:.0f} s waiting for a free Claude Code '
                                    f'slot ({running} running, max_concurrent {limit})')

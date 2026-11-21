@@ -113,6 +113,68 @@ def _secret_url_error(url: str) -> Optional[dict]:
     return None
 
 
+def _alternate_ipv4(hostname: str) -> Optional[str]:
+    """Decode a non-dotted IPv4 literal (decimal, hex, octal, or mixed) to dotted form.
+
+    Browsers accept these as IP addresses; core's literal-IP check does not, so without this the
+    always-blocked cloud-metadata floor can be reached with e.g. ``http://2852039166/``.
+    Loopback/LAN encodings are deliberately left alone — Camofox is a local browser and those are
+    reachable by policy; only the metadata floor is restored here.
+    """
+    host = hostname.strip().rstrip(".")
+    if not host or any(c not in "0123456789abcdefxABCDEF." for c in host):
+        return None
+    parts = host.split(".")
+    if len(parts) > 4 or not parts:
+        return None
+    values = []
+    for part in parts:
+        try:
+            if part.lower().startswith("0x"):
+                values.append(int(part, 16))
+            elif len(part) > 1 and part.startswith("0"):
+                values.append(int(part, 8))
+            else:
+                values.append(int(part, 10))
+        except ValueError:
+            return None
+    # inet_aton forms: a.b.c.d, a.b.c, a.b, a. The last 32-K bits fold into the final parts.
+    if len(values) == 4 and all(0 <= v <= 255 for v in values):
+        dotted = ".".join(str(v) for v in values)
+    elif len(values) == 3 and all(0 <= v <= 255 for v in values[:2]) and 0 <= values[2] <= 65535:
+        dotted = ".".join(str(v) for v in values[:2] + [values[2] >> 8, values[2] & 0xff])
+    elif len(values) == 2 and 0 <= values[0] <= 255 and 0 <= values[1] <= 16777215:
+        dotted = ".".join(str(v) for v in [values[0]] + [
+            (values[1] >> 16) & 0xff, (values[1] >> 8) & 0xff, values[1] & 0xff])
+    elif len(values) == 1 and 0 <= values[0] <= 0xffffffff:
+        n = values[0]
+        dotted = ".".join(str((n >> shift) & 0xff) for shift in (24, 16, 8, 0))
+    else:
+        return None
+    return dotted
+
+
+def _metadata_floor_bypass(url: str) -> bool:
+    from tools.url_safety import _ALWAYS_BLOCKED_IPS, _ALWAYS_BLOCKED_NETWORKS
+    import ipaddress
+
+    try:
+        hostname = urllib.parse.urlsplit(url).hostname or ""
+    except ValueError:
+        return False
+    if not hostname:
+        return False
+    # A dotted address is already handled by core's is_always_blocked_url.
+    if re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", hostname):
+        return False
+    dotted = _alternate_ipv4(hostname)
+    if dotted is None:
+        return False
+    address = ipaddress.ip_address(dotted)
+    blocked = {ipaddress.ip_address(ip) for ip in _ALWAYS_BLOCKED_IPS}
+    return address in blocked or any(address in network for network in _ALWAYS_BLOCKED_NETWORKS)
+
+
 def navigation_policy_error(url: str) -> tuple[str, Optional[dict]]:
     """``(normalized_url, error_or_None)`` for a ``browser_navigate`` target."""
     from tools.url_safety import is_always_blocked_url, normalize_url_for_request
@@ -125,7 +187,7 @@ def navigation_policy_error(url: str) -> tuple[str, Optional[dict]]:
     err = _secret_url_error(url)
     if err is not None:
         return url, err
-    if is_always_blocked_url(url):
+    if is_always_blocked_url(url) or _metadata_floor_bypass(url):
         return url, _err("Blocked: URL targets a cloud metadata endpoint")
     blocked = check_website_access(url)
     if blocked:

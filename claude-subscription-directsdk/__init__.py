@@ -268,3 +268,16 @@ register_provider(profile)
 # install hint; the request path (`directsdk.Client`) refuses with the same message.
 if _found is None:
     logger.warning("%s: %s", profile.display_name, INSTALL_HINT)
+
+
+def register(ctx) -> None:
+    """Register the opt-in native WebSearch provider (#389 Shape A).
+
+    Availability is gated on the per-profile ``native_web_search`` setting inside the provider, so
+    the main turn's registration and admission path are unchanged whether it is on or off.
+    """
+    try:
+        from native_web_search import ClaudeNativeWebSearchProvider
+        ctx.register_web_search_provider(ClaudeNativeWebSearchProvider())
+    except Exception as exc:
+        logger.debug("native WebSearch provider not registered: %s", exc)

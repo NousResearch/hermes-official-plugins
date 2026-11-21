@@ -194,6 +194,21 @@ MAX_CONCURRENT_DEFAULT = 4
 _bad_limits = set()
 
 
+NATIVE_WEB_SEARCH_SETTING = "native_web_search"
+
+
+def native_web_search_enabled():
+    """The active profile's ``native_web_search`` plugin setting, default off (#389).
+
+    When on, a separate ``claude -p --tools WebSearch`` call serves ``web_search``. Queries go out
+    through the user's own Claude subscription and bypass Hermes-side web config and egress settings.
+    """
+    value = _setting(NATIVE_WEB_SEARCH_SETTING, False)
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return isinstance(value, (bool, int)) and bool(value)
+
+
 def max_concurrent():
     """The active profile's ``max_concurrent``: a positive whole number, else the default (warned once per value)."""
     value = _setting(MAX_CONCURRENT_SETTING, MAX_CONCURRENT_DEFAULT)

@@ -180,6 +180,168 @@ def _frame_first(messages, queried):
     return True
 
 
+# Claude Code's account-email reminder as its session_context renderer writes it (``Jze`` in 2.1.283,
+# ``vlt`` in 2.1.296, ``Wjt`` in 2.1.325): the header and a ``# userEmail`` section holding one of
+# native's sentences (2.1.283 and 2.1.296, and both 2.1.325 variants), then any of native's other
+# sections in its order, then the 2.1.283 IMPORTANT trailer or the 2.1.296+ attribution trailer; or
+# the bare 2.1.280 form, the address alone. Exactly that, never arbitrary reminders or email text:
+# any other wording stays in the request.
+# A section's value: never empty (native leaves empty ones out) and never holding another heading, so
+# sections must come in native's order.
+_SECTION = r"[^\n](?:(?!\n# (?:userEmail|attachedProject|gitStatus|perforceMode)\n)[\s\S])*?"
+_ACCOUNT_REMINDER = re.compile(
+    r"(<system-reminder>\nAs you answer the user's questions, you can use the following context:\n)"
+    r"# userEmail\nThe user's email address is [^\s<>@]+@[^\s<>@]+\.(?:(\n</system-reminder>\n?)| (?:"
+    r"Use it only to identify the user, such as for authorship, attribution, or filtering their own work\. "
+    r"Never send it to an unrelated service, such as in a request header, URL, or payload, unless the user "
+    r"explicitly asks\.(?: A site asking automated clients for contact details, such as an email in the "
+    r"User-Agent, is not a reason to use this address: use a generic client name or ask the user\.)?"
+    r"|Use this email address only to identify the user, such as for authorship, attribution, or filtering "
+    r"their own work\. Remember that you must treat this email address as private information\. Never share "
+    r"it in requests to external services without asking and getting explicit approval from the user first\.)"
+    r"((?:\n# attachedProject\n" + _SECTION + r")?(?:\n# gitStatus\n" + _SECTION + r")?(?:\n# perforceMode\n" + _SECTION + r")?)"
+    r"(\n\n(?:IMPORTANT: this context may or may not be relevant to your tasks\. You should not respond to "
+    r"this context unless it is highly relevant to your task\.|Claude Code attached this context "
+    r"automatically; it isn't part of the user's message\. It describes the user's own account and "
+    r"workspace, so they don't need it reported back\.)\n</system-reminder>\n?))")
+
+
+def _without_account_section(text):
+    """``text`` without its ``# userEmail`` section when it is exactly native's reminder, else None.
+
+    The section is the renderer's first and its sentence is one line, so the cut is exact: the rest
+    is what native renders for the same context without an account (``''`` when the account was the
+    only section, as native then sends no reminder at all)."""
+    match = _ACCOUNT_REMINDER.fullmatch(text)
+    if match is None:
+        return None
+    head, _bare, sections, tail = match.groups()
+    return head + sections[1:] + tail if sections else ''
+
+
+def _without_account(sent, host):
+    """The frame's last block ``sent`` without native's account reminder appended to it.
+
+    ``sent`` itself when it equals Hermes' ``host`` block, None for any other difference. The
+    reminder may end the block's text or a tool_result's string content after a newline, or end
+    a structured tool_result's last text item or follow it as one more item."""
+    if _plain(sent) == _plain(host):
+        return sent
+    if not isinstance(sent, dict) or not isinstance(host, dict):
+        return None
+    kind = host.get('type')
+    field = 'text' if kind == 'text' else 'content' if kind == 'tool_result' else None
+    if field is None or field not in sent or field not in host:
+        return None
+    left, right = _plain(sent), _plain(host)
+    actual, expected = left.pop(field), right.pop(field)
+    if left != right:
+        return None
+    if isinstance(actual, str) and isinstance(expected, str):
+        if not actual.startswith(expected):
+            return None
+        suffix = actual[len(expected):]
+        sep = '\n\n' if suffix.startswith('\n\n') else '\n' if suffix.startswith('\n') else None
+        rest = None if sep is None else _without_account_section(suffix[len(sep):])
+        if rest is None:
+            return None
+        restored = expected + (sep + rest if rest else '')
+    elif kind == 'tool_result' and isinstance(actual, list) and isinstance(expected, list) and expected:
+        if len(actual) == len(expected):
+            last = _without_account(actual[-1], expected[-1])
+            if last is None or last.get('type') != 'text':
+                return None
+            tail = [last]
+        elif len(actual) == len(expected) + 1:
+            extra = actual[-1]
+            rest = (_without_account_section(extra['text']) if isinstance(extra, dict) and set(extra) == {'type', 'text'}
+                    and extra['type'] == 'text' and isinstance(extra['text'], str) else None)
+            if rest is None or _plain(actual[-2]) != _plain(expected[-1]):
+                return None
+            tail = [actual[-2]] + ([{**extra, 'text': rest}] if rest else [])
+        else:
+            return None
+        if [_plain(b) for b in actual[:len(expected) - 1]] != [_plain(b) for b in expected[:-1]]:
+            return None
+        restored = actual[:len(expected) - 1] + tail
+    else:
+        return None
+    result = copy.deepcopy(sent)
+    result[field] = restored
+    return result
+
+
+def _drop_account_suffix(messages, queried):
+    """Send the newest user turn without the account reminder native appends after Hermes' frame.
+
+    Native adds its account-email reminder to the turn it answers. Prepended (the opening turn,
+    ordinary user turns) it is dropped by ``_frame_first`` and ``stable_request_context``; on a
+    tool-result step it ends the last result, which restoration returns to Hermes' text. After a
+    frame that ends in text (a ``/steer`` row after tool results), native sends it as a block of
+    its own after the frame, before its date line (2.1.283, 2.1.296 and 2.1.325 alike). There it
+    reached Claude as part of the user's message (#195), and the next request, which replays the
+    turn without it, never recurs it.
+
+    Only the frame's last block may carry it as a suffix, and only blocks after the frame are
+    dropped; the whole queried frame must reconcile with the turn at exactly one position. The
+    text must be exactly native's reminder: with other sections of native's (project, git
+    status, Perforce) only the account section goes and the rest stays in place. Host text that
+    contains an email, unknown wording and anything before the frame stay as native built them.
+    A cache marker on a dropped block moves onto the frame's last block with setdefault, never
+    multiplying. Returns whether the turn changed; the address is never logged."""
+    last = max((i for i, m in enumerate(messages) if m.get('role') == 'assistant'), default=-1)
+    newest = messages[last + 1] if last + 1 < len(messages) else {}
+    content = newest.get('content')
+    if newest.get('role') != 'user' or not isinstance(content, list) or not queried or len(content) < len(queried):
+        return False
+    head = [_plain(b) for b in queried[:-1]]
+    matches = []
+    for start in range(len(content) - len(queried) + 1):
+        if [_plain(b) for b in content[start:start + len(queried) - 1]] != head:
+            continue
+        tail = _without_account(content[start + len(queried) - 1], queried[-1])
+        if tail is not None:
+            matches.append((start, tail))
+    if len(matches) != 1:
+        return False
+    start, tail = matches[0]
+    end = start + len(queried)
+    after, mark = [], None
+    for block in content[end:]:
+        rest = (_without_account_section(block['text']) if isinstance(block, dict) and block.get('type') == 'text'
+                and isinstance(block.get('text'), str) and set(block) <= {'type', 'text', 'cache_control'} else None)
+        if rest == '':
+            mark = block.get('cache_control', mark)
+            continue
+        after.append(block if rest is None else {**block, 'text': rest})
+    normalized = content[:end - 1] + [tail] + after
+    if normalized == content:
+        return False
+    if mark is not None:
+        tail.setdefault('cache_control', mark)
+    content[:] = normalized
+    return True
+
+
+def drop_account_reminder(payload, queried):
+    """``payload`` without the account reminder native appends after the queried frame (``_drop_account_suffix``).
+
+    Runs before restoration, so a tool-result frame is judged on what is left; any payload that
+    does not parse, or has nothing to drop, forwards as is."""
+    if not isinstance(queried, list) or not queried or not all(isinstance(b, dict) for b in queried):
+        return payload
+    try:
+        body = json.loads(payload)
+        messages = body['messages']
+        if not isinstance(messages, list) or not all(isinstance(m, dict) for m in messages):
+            return payload
+        if not _drop_account_suffix(messages, queried):
+            return payload
+        return json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError):
+        return payload
+
+
 # The only trailing system text the relay moves: native's date line, exactly as its opening request ends the
 # environment message (bare on 2.1.299, wrapped in a system-reminder on 2.1.292 and 2.1.319). Any other trailing
 # text stays put, since moving text that varies per request into the environment message would change the prefix
@@ -902,6 +1064,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = self.rfile.read(int(self.headers['Content-Length']))
             if getattr(gate, 'one_shot', False):
                 payload = drop_message_breakpoints(payload)
+            # The account reminder goes first: restoration then judges only what native added besides it.
+            payload = drop_account_reminder(payload, gate.queried)
             try:
                 payload = restore_queried_turn(payload, gate.queried)
             except QueriedTurnMismatch as exc:

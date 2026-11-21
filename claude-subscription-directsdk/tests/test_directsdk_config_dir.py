@@ -173,11 +173,29 @@ def test_manifest_declares_the_setting_under_the_key_the_code_reads(profile):
     assert field["label"] and field["description"]
 
 
-def test_manifest_declares_the_inherit_login_setting_under_the_key_the_code_reads(profile):
+def test_manifest_declares_the_isolation_setting_under_the_key_the_code_reads(profile):
     from hermes_cli.plugins_settings import plugin_settings_fields
     import directsdk_setup
     root = Path(directsdk_setup.__file__).resolve().parent
     fields = {field["key"]: field for field in plugin_settings_fields(PLUGIN_NAME, root)}
-    field = fields[directsdk_setup.INHERIT_LOGIN_SETTING]
+    field = fields[directsdk_setup.ISOLATE_LOGINS_SETTING]
     assert field["type"] == "boolean" and field["default"] is False
     assert field["label"] and field["description"]
+
+
+@pytest.mark.parametrize("source", ["setting", "override", "inherited"])
+@pytest.mark.parametrize("spelling", ["~/.claude", "~/.claude/", "{home}/.claude"])
+def test_the_cli_default_directory_is_never_exported(profile, tmp_path, monkeypatch, source, spelling):
+    """With CLAUDE_CONFIG_DIR set, Claude Code reads the macOS Keychain login under a name derived from the
+    directory, so pointing it at its own default ~/.claude reads as logged out (#409). The default stays
+    unexported; any other directory is exported as before."""
+    import directsdk_setup
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    value = spelling.format(home=tmp_path)
+    env = {"HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}
+    if source == "setting":
+        _set_config_dir(value)
+    else:
+        env[OVERRIDE if source == "override" else NATIVE_DIR] = value
+    assert NATIVE_DIR not in directsdk_setup.apply_config_dir(env)

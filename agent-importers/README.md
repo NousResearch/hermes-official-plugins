@@ -166,10 +166,13 @@ its routines until you turn them off, so turn each off there, then `hermes cron 
 | `settings.json` `permissions.allow` (`Bash(...)` rules) | `command_allowlist` in `config.yaml` |
 | `settings.json` `permissions.deny` (`Bash(...)` rules) | `approvals.deny` in `config.yaml` |
 | `~/.claude.json` / `settings.json` `mcpServers` | `mcp_servers` in `config.yaml` |
+| `settings.json` `hooks` (command hooks) | `hooks:` shell hooks in `config.yaml` |
 | `skills/<name>/` (dirs with `SKILL.md`) | `skills/claude-code-imports/<name>/` |
 | `commands/*.md` | Reported as skipped (no direct equivalent) |
 
 Claude's `Bash(npm run test:*)` prefix rules become `npm run test*` globs. Non-`Bash` rules and bare `Bash` are reported as not mapped.
+
+Hooks: `PreToolUse`/`PostToolUse`/`UserPromptSubmit`/`Stop`/`SubagentStart`/`SubagentStop`/`SessionStart`/`SessionEnd` map to `pre_tool_call`/`post_tool_call`/`pre_llm_call`/`pre_verify`/`subagent_start`/`subagent_stop`/`on_session_start`/`on_session_end`. Tool names in a `matcher` are renamed (`Bash` → `terminal`, `Edit` → `patch`, …). Each entry keeps the original event as `event_name`, so a script that checks `hook_event_name == "PreToolUse"` still sees that name (Hermes cores that predate the `event_name` key send the Hermes name instead). `prompt` hooks, `PreCompact`, `Notification` and `PermissionRequest` are skipped. The report prints a warning under each hook whose matcher names a tool Hermes lacks, that uses `$CLAUDE_PROJECT_DIR` (read the stdin `cwd` instead), or that came from `Stop` (runs only on turns that edited files). Imported hooks are not pre-approved: each asks for consent the first time it runs.
 
 ### Codex CLI (`~/.codex`)
 

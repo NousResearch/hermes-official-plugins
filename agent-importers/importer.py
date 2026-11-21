@@ -228,6 +228,55 @@ def claude_rule_to_command_pattern(rule: str) -> Optional[str]:
     return inner[:-2] + "*" if inner.endswith(":*") else inner
 
 
+# settings.json ``hooks`` event -> Hermes shell-hook event. Each imported entry keeps the Claude name as
+# ``event_name`` so a script branching on ``hook_event_name`` still sees ``PreToolUse`` (core reads it
+# since the shell-hook ``event_name`` key; older cores ignore the key). Absent on purpose: PreCompact (no
+# Hermes event), Notification / PermissionRequest (UI-only), and ``type: "prompt"`` hooks (LLM-judged).
+CLAUDE_HOOK_EVENTS: dict[str, str] = {
+    "PreToolUse": "pre_tool_call", "PostToolUse": "post_tool_call",
+    "UserPromptSubmit": "pre_llm_call", "Stop": "pre_verify",
+    "SubagentStart": "subagent_start", "SubagentStop": "subagent_stop",
+    "SessionStart": "on_session_start", "SessionEnd": "on_session_end",
+}
+# Claude tool name -> Hermes tool name inside a ``matcher``; ``mcp__<server>__<tool>`` is shared as is.
+CLAUDE_TOOL_NAMES: dict[str, str] = {
+    "Bash": "terminal", "Read": "read_file", "Write": "write_file", "Edit": "patch", "MultiEdit": "patch",
+    "Grep": "search_files", "Glob": "search_files", "Task": "delegate_task", "Agent": "delegate_task",
+    "WebFetch": "web_extract", "WebSearch": "web_search", "TodoWrite": "todo_list",
+}
+_MATCHER_TOKEN_RE = re.compile(r"^[A-Za-z0-9_]+$")
+_CLAUDE_TOOL_WORD_RE = re.compile(r"\b(?:" + "|".join(map(re.escape, CLAUDE_TOOL_NAMES)) + r")\b")
+
+
+def claude_hook_matcher(matcher: Any) -> tuple[Optional[str], list[str]]:
+    """``"Edit|Write"`` -> (``"patch|write_file"``, []): the Hermes matcher (None = every tool) and the
+    plain tool names with no Hermes counterpart (such a matcher alternative can never match)."""
+    if not isinstance(matcher, str) or matcher.strip() in ("", "*", ".*"):
+        return None, []
+    mapped: list[str] = []
+    unmapped: list[str] = []
+    for token in filter(None, (t.strip() for t in matcher.split("|"))):
+        if _MATCHER_TOKEN_RE.match(token):
+            mapped.append(CLAUDE_TOOL_NAMES.get(token, token))
+            if token not in CLAUDE_TOOL_NAMES and not token.startswith("mcp__"):
+                unmapped.append(token)
+        else:  # a regex fragment keeps its syntax; only whole-word tool names are renamed
+            mapped.append(_CLAUDE_TOOL_WORD_RE.sub(lambda m: CLAUDE_TOOL_NAMES[m.group(0)], token))
+    return "|".join(dict.fromkeys(mapped)) or None, unmapped
+
+
+def _hook_notes(claude_event: str, command: str, unmapped: list[str]) -> list[str]:
+    """What the user must know for an imported hook to behave as it did under Claude Code."""
+    notes = []
+    if unmapped:
+        notes.append(f"matcher names {', '.join(unmapped)}, which Hermes has no tool for; that part never matches")
+    if "CLAUDE_PROJECT_DIR" in command:
+        notes.append("$CLAUDE_PROJECT_DIR is not set by Hermes; read the stdin `cwd` field instead")
+    if claude_event == "Stop":
+        notes.append("runs only on turns that edited files (Hermes pre_verify)")
+    return notes
+
+
 def detect_agents() -> list[str]:
     """Return the list of supported agents whose default dirs exist."""
     return [a for a in SUPPORTED_AGENTS if (Path.home() / AGENT_DEFAULT_DIRS[a]).is_dir()]
@@ -367,6 +416,7 @@ class AgentImporter:
         self.import_context_file(self.source_root / "CLAUDE.md", "claude-md")
         self._import_permission_rules(settings, "allow")
         self._import_permission_rules(settings, "deny")
+        self._import_hooks(settings)
         # mcpServers: ~/.claude.json (preferred; lives NEXT TO ~/.claude/) then settings.json
         claude_json = self._load_source_mapping(
             "mcp-servers", self.source_root.parent / ".claude.json", json.loads, self._JSON_ERRORS)
@@ -542,6 +592,60 @@ class AgentImporter:
 
         self.apply(kind, label, destination, "Would merge patterns", write,
                    {"added_patterns": added, **unmapped})
+
+    def _import_hooks(self, settings: dict[str, Any]) -> None:
+        """settings.json ``hooks`` -> config.yaml ``hooks:`` shell-hook entries (command hooks only).
+        Never touches the shell-hook consent allowlist: nothing imported runs until the user approves it."""
+        kind, destination = "hooks", self.target_root / "config.yaml"
+        hooks = settings.get("hooks")
+        if not isinstance(hooks, dict) or not hooks:
+            self.record(kind, None, destination, "skipped", "No hooks found")
+            return
+        config = self.load_target_config(kind, "settings.json hooks", destination)
+        if config is None:
+            return
+        raw_block = config.get("hooks")
+        block: dict[str, Any] = raw_block if isinstance(raw_block, dict) else {}
+        added: list[tuple[str, dict[str, Any]]] = []
+        for claude_event, groups in hooks.items():
+            event = CLAUDE_HOOK_EVENTS.get(str(claude_event))
+            if event is None:
+                self.record(kind, f"hooks.{claude_event}", None, "skipped", f"{claude_event} has no Hermes hook event")
+                continue
+            present = [e for e in block.get(event) or [] if isinstance(e, dict)]
+            for group in groups if isinstance(groups, list) else []:
+                if not isinstance(group, dict):
+                    continue
+                matcher, unmapped = claude_hook_matcher(group.get("matcher"))
+                for hook in group.get("hooks") or []:
+                    if not isinstance(hook, dict):
+                        continue
+                    command = hook.get("command")
+                    source = f"hooks.{claude_event}[{group.get('matcher') or '*'}] {command or hook.get('type')}"
+                    if hook.get("type", "command") != "command" or not isinstance(command, str) or not command.strip():
+                        self.record(kind, source, None, "skipped",
+                                    f"{hook.get('type')!r} hooks are not shell commands; Hermes shell hooks run commands only")
+                        continue
+                    entry: dict[str, Any] = {"command": command.strip(), "event_name": str(claude_event)}
+                    if matcher:
+                        entry["matcher"] = matcher
+                    if isinstance(hook.get("timeout"), (int, float)) and hook["timeout"] > 0:
+                        entry["timeout"] = int(hook["timeout"])
+                    # Identity is (command, matcher): the consent allowlist keys on the same pair.
+                    same = [e for e in present + [e for ev, e in added if ev == event]
+                            if (e.get("command"), e.get("matcher")) == (entry["command"], entry.get("matcher"))]
+                    if same:
+                        self.record(kind, source, f"config.yaml hooks.{event}", "skipped", "Hook already present")
+                        continue
+                    added.append((event, entry))
+                    self.record(kind, source, f"config.yaml hooks.{event}", "imported",
+                                "" if self.execute else "Would add shell hook (consent prompt on first use)",
+                                notes=_hook_notes(str(claude_event), entry["command"], unmapped))
+        if added and self.execute:
+            for event, entry in added:
+                block[event] = [*(block.get(event) if isinstance(block.get(event), list) else []), entry]
+            config["hooks"] = block
+            write_config_file(destination, config)
 
     def import_mcp_servers(self, servers: dict[str, Any], kind: str) -> None:
         """mcpServers / [mcp_servers.*] → config.yaml mcp_servers."""

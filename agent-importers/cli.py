@@ -593,9 +593,16 @@ def print_import_report(report: dict[str, Any], dry_run: bool, from_setup: bool 
             continue
         print(_color(f"  {label}:", col))
         for item in group_items:
-            tail = ("→ " + str(item.get("destination") or "").replace(str(Path.home()), "~")
-                    if status == "imported" else f" {item.get('reason', '')}")
+            destination = str(item.get("destination") or "").replace(str(Path.home()), "~")
+            if status != "imported":
+                tail = f" {item.get('reason', '')}"
+            elif item.get("kind") == "hooks":  # several hooks land on one list: name the hook too
+                tail = f"{item.get('source')} → {destination}"
+            else:
+                tail = f"→ {destination}"
             print(f"      {item.get('kind', 'unknown'):<22s} {tail}")
+            for note in item.get("notes") or ():
+                print(_color(f"          ⚠ {note}", "yellow"))
         print()
     if stripped := report.get("stripped_secrets"):
         print(_color("  ⚷ Secrets stripped (never imported):", "yellow"))

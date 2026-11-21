@@ -333,6 +333,92 @@ async def test_new_message_dispatched_after_backlog(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_shared_post_url_appended_to_text(monkeypatch):
+    """A post shared into the chat arrives as an attachment the media path
+    ignores (no media_hash_key). Its URL must reach the agent, or the typed
+    comment arrives with no referent."""
+    adapter = _make_adapter(monkeypatch)
+    api, crypto = _wire(adapter)
+    captured = _capture(adapter, monkeypatch)
+    adapter._cursors["111-999"] = "e1"
+    url = "https://x.com/someone/status/123"
+
+    crypto.decrypt_map["CCC"] = {
+        "type": "Message",
+        "id": "e3",
+        "sender_id": "111",
+        "conversation_id": "111:999",
+        "content": {
+            "text": "thoughts?",
+            "content_type": "Text",
+            "sent_from": "SHARE_SHEET",
+            "attachments": [{"post": {
+                "post_url": url, "rest_id": "123", "attachment_id": "a1"}}],
+        },
+    }
+    api.events_pages["111-999"] = {
+        "data": [{"id": "e3", "encoded_event": "CCC", "sender_id": "111"}]
+    }
+    await adapter._poll_conversation("111-999")
+
+    assert len(captured) == 1
+    assert captured[0].text == f"thoughts?\n{url}"
+
+
+@pytest.mark.asyncio
+async def test_shared_post_without_comment_still_dispatches(monkeypatch):
+    adapter = _make_adapter(monkeypatch)
+    api, crypto = _wire(adapter)
+    captured = _capture(adapter, monkeypatch)
+    adapter._cursors["111-999"] = "e1"
+
+    crypto.decrypt_map["CCC"] = {
+        "type": "Message",
+        "id": "e3",
+        "sender_id": "111",
+        "conversation_id": "111:999",
+        "content": {"text": "", "attachments": [
+            {"post": {"post_url": "https://x.com/a/status/1"}},
+            {"post": {"post_url": "not a url"}},
+            {"post": {"post_url": "https://x.com/a/status/1"}},
+        ]},
+    }
+    api.events_pages["111-999"] = {
+        "data": [{"id": "e3", "encoded_event": "CCC", "sender_id": "111"}]
+    }
+    await adapter._poll_conversation("111-999")
+
+    assert len(captured) == 1
+    assert captured[0].text == "https://x.com/a/status/1"
+
+
+@pytest.mark.asyncio
+async def test_shared_post_already_in_text_not_duplicated(monkeypatch):
+    adapter = _make_adapter(monkeypatch)
+    api, crypto = _wire(adapter)
+    captured = _capture(adapter, monkeypatch)
+    adapter._cursors["111-999"] = "e1"
+    url = "https://x.com/a/status/9"
+    crypto.decrypt_map["CCC"] = {
+        "type": "Message",
+        "id": "e3",
+        "sender_id": "111",
+        "conversation_id": "111:999",
+        "content": {
+            "text": url,
+            "attachments": [{"post": {"post_url": url}}],
+        },
+    }
+    api.events_pages["111-999"] = {
+        "data": [{"id": "e3", "encoded_event": "CCC", "sender_id": "111"}]
+    }
+    await adapter._poll_conversation("111-999")
+
+    assert len(captured) == 1
+    assert captured[0].text == url
+
+
+@pytest.mark.asyncio
 async def test_cursor_survives_restart_and_prune(monkeypatch):
     """The persisted cursor — not the in-memory dedup set — is the duplicate
     guard: a fresh adapter (restart) with a pruned/empty dedup set must not

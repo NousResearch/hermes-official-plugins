@@ -855,6 +855,9 @@ class XChatAdapter(BasePlatformAdapter):
             )
 
             text = message_text(event) or ""
+            for url in self._shared_post_urls(event):
+                if url not in text:
+                    text = f"{text}\n{url}".strip()
             if not text and not media_urls:
                 self._set_cursor(conv_id, event_id)
                 continue
@@ -932,6 +935,28 @@ class XChatAdapter(BasePlatformAdapter):
             "text": reply.get("message_text"),
             "author_id": str(reply.get("sender_id") or "") or None,
         }
+
+    @staticmethod
+    def _shared_post_urls(event: Dict[str, Any]) -> List[str]:
+        """URLs of posts shared into the chat, in attachment order.
+
+        A shared post arrives as an attachment whose only key is ``post``
+        (``post_url``, ``rest_id``, ``attachment_id``), sent from the share
+        sheet. The media path keeps only attachments carrying a
+        ``media_hash_key``, so without this the post is decrypted and then
+        discarded, and the agent sees the typed comment with no referent.
+        """
+        content = event.get("content")
+        if not isinstance(content, dict):
+            return []
+        raw = content.get("attachments") or []
+        urls: List[str] = []
+        for att in raw if isinstance(raw, (list, tuple)) else []:
+            post = att.get("post") if isinstance(att, dict) else None
+            url = post.get("post_url") if isinstance(post, dict) else None
+            if isinstance(url, str) and url.startswith("https://") and url not in urls:
+                urls.append(url)
+        return urls
 
     async def _fetch_attachments(
         self, conv_id: str, event: Dict[str, Any], item: Dict[str, Any]

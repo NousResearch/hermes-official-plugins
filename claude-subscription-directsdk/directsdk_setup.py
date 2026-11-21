@@ -126,11 +126,9 @@ def _resolve(command, env):
 PLUGIN_ID = "claude-subscription-directsdk-experimental"
 TELEMETRY_SETTING = "claude_code_telemetry"
 CONFIG_DIR_SETTING = "claude_config_dir"
-# Set by the profile whose Claude login is the one the Hermes process inherited (the shared ~/.claude, or the
-# process's token), so its tasks that core stamps with the process home keep that login under multiplexing.
-# Setting claude_config_dir to ~/.claude is no substitute: Claude Code keys its Keychain login by config directory,
-# so an explicit CLAUDE_CONFIG_DIR=~/.claude finds no login.
-INHERIT_LOGIN_SETTING = "inherit_launch_login"
+# The install owner's switch (#481): on, a served profile with no Claude login of its own is refused instead of
+# using the login the Hermes process inherited (#313). Off by default: one person's profiles share one subscription.
+ISOLATE_LOGINS_SETTING = "isolate_profile_logins"
 # Set on every child unless the user turns claude_code_telemetry on (#331).
 QUIET_TRAFFIC = {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1"}
 # Either one turns off the feature-flag fetch that the account's own picker needs (2.1.319: 13 rows
@@ -215,13 +213,24 @@ def max_concurrent():
 
 
 def apply_config_dir(env):
-    """Select the active profile's Claude config directory on a child env, in place."""
+    """Select the active profile's Claude config directory on a child env, in place. A directory that is Claude
+    Code's own default (``~/.claude`` under the child's home) is not exported: with ``CLAUDE_CONFIG_DIR`` set,
+    Claude Code looks for its macOS Keychain login under a name derived from the directory, so the default login
+    would read as logged out."""
     override = env.pop("CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR", None)
     setting = _setting(CONFIG_DIR_SETTING)
     config = (setting.strip() if isinstance(setting, str) else "") or override or env.get("CLAUDE_CONFIG_DIR")
     if config:
-        env["CLAUDE_CONFIG_DIR"] = os.path.expanduser(config)
+        _select_config_dir(env, config)
     return env
+
+
+def _select_config_dir(env, config):
+    """Point ``env`` at the login in ``config`` (``~`` expanded), leaving Claude Code's default unexported."""
+    env.pop("CLAUDE_CONFIG_DIR", None)
+    path = os.path.expanduser(config)
+    if os.path.normcase(os.path.abspath(path)) != os.path.normcase(os.path.abspath(_config_dir(env))):
+        env["CLAUDE_CONFIG_DIR"] = path
 
 
 OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
@@ -274,46 +283,6 @@ def _in_cron_worker():
     return getattr(spec, "name", None) == "cron.scheduler"
 
 
-def _config_is_a_local_file():
-    """False when core serves config from a backend with no config file (a remote backend): a config.yaml left in
-    the profile's home is then not its config. A core from before config backends has only the file."""
-    try:
-        from hermes_cli.config_backend import ConfigBackendUnavailable, supports_file_tooling
-    except ImportError:
-        return True
-    try:
-        return supports_file_tooling() is True
-    except (Exception, ConfigBackendUnavailable):  # ConfigBackendUnavailable is a SystemExit
-        return False
-
-
-def _own_setting_is_true(key):
-    """True only when the active profile's own config.yaml parses and sets this plugin's ``key`` to a YAML boolean
-    true, read with core's own parser (``hermes_yaml``; core does not depend on PyYAML). No managed overlay, no
-    last-good fallback: an unreadable or malformed file, a core without that parser, or a config backend with no
-    config file (the local file is then not the profile's config) means not set."""
-    if not _config_is_a_local_file():
-        return False
-    try:
-        from hermes_constants import get_hermes_home
-        from hermes_yaml import safe_load
-        value = safe_load((get_hermes_home() / "config.yaml").read_text(encoding="utf-8"))
-    except Exception:
-        return False
-    for segment in ("plugins", "entries", PLUGIN_ID, "settings", key):
-        if not isinstance(value, Mapping) or segment not in value:
-            return False
-        value = value[segment]
-    return value is True
-
-
-def _keeps_inherited_login():
-    """True when a routed task with no Claude login of its own may keep the one this process inherited: the launch
-    profile's own unstamped turn, or a profile whose own config sets ``inherit_launch_login`` in a process started
-    for it."""
-    return _serves_launch_profile() or (_own_setting_is_true(INHERIT_LOGIN_SETTING) and _scope_is_process_profile())
-
-
 def _scope_is_process_profile():
     """True when the bound scope's profile is the one this process was started for: its stamp, and the home the
     task reads its config from, name the routing process home (core stamps that profile's own tasks that way in a
@@ -338,6 +307,41 @@ def _scope_is_process_profile():
         return False
 
 
+_unreadable_isolation_homes = set()
+
+
+def isolate_profile_logins():
+    """Whether served profiles must bring their own Claude login: the ``isolate_profile_logins`` setting of the
+    install's default profile or of the profile this process was started for, managed overlay included. Those are
+    the install owner's configs; a served profile's own config never counts, so it can't turn the guard off. Either
+    one on, or one that can't be read (warned once per home), means on. A core without these names: off (it has no
+    multiplexing either)."""
+    try:
+        from hermes_cli.config import load_config_readonly
+        from hermes_constants import (get_default_hermes_root, get_routing_process_hermes_home, hermes_home_key,
+                                      reset_hermes_home_override, set_hermes_home_override)
+    except ImportError:
+        return False
+    homes = {hermes_home_key(home): home for home in (get_default_hermes_root(), get_routing_process_hermes_home())}
+    for key, home in homes.items():
+        token = set_hermes_home_override(home)
+        try:
+            value = load_config_readonly()
+        except (Exception, SystemExit):  # a config backend's ConfigBackendUnavailable is a SystemExit
+            if key not in _unreadable_isolation_homes:
+                _unreadable_isolation_homes.add(key)
+                _logger.warning("claude-subscription-directsdk: could not read %s's config for %s; treating it as on",
+                                home, ISOLATE_LOGINS_SETTING)
+            return True
+        finally:
+            reset_hermes_home_override(token)
+        for segment in ("plugins", "entries", PLUGIN_ID, "settings", ISOLATE_LOGINS_SETTING):
+            value = value.get(segment) if isinstance(value, Mapping) else None
+        if value is True or (isinstance(value, str) and value.strip().lower() in ("true", "1", "yes", "on")):
+            return True
+    return False
+
+
 def _scoped(get_secret, name):
     value = get_secret(name)
     return value.strip() if isinstance(value, str) and value.strip() else None
@@ -348,10 +352,12 @@ class ClaudeCodeLoggedOut(RuntimeError):
     status_code = 401
 
 
-PROFILE_LOGIN_HINT = (f"This profile has no Claude login of its own, and Claude Code would otherwise sign in with the login of "
-                      f"the profile this Hermes process was started for. Give it one: set this profile's {CONFIG_DIR_SETTING} "
-                      f"plugin setting to a logged-in Claude config directory, or put {{0}} (from `claude setup-token`) "
-                      f"in this profile's .env.")
+PROFILE_LOGIN_HINT = (f"This profile has no Claude login of its own, and this Hermes install is set to isolate profile "
+                      f"logins ({ISOLATE_LOGINS_SETTING}), so it may not use the login of the profile this Hermes process "
+                      f"was started for. Give it one: put {{0}} (from `claude setup-token`) in this profile's .env, or set "
+                      f"this profile's {CONFIG_DIR_SETTING} plugin setting to a directory logged in with "
+                      f"`CLAUDE_CONFIG_DIR=<dir> claude auth login`. To let profiles share that login, turn "
+                      f"{ISOLATE_LOGINS_SETTING} off in the install's default profile.")
 
 
 def apply_profile_credential(env):
@@ -362,12 +368,13 @@ def apply_profile_credential(env):
     ``os.environ``) is set on the child. A profile served by a process launched for another one never
     inherits that process's token, gateway headers or config directory (#313); a nonempty
     ``claude_config_dir`` setting also drops an inherited token so the selected login is used. A served
-    profile with neither its own token nor its own directory is refused (``ClaudeCodeLoggedOut``): the
-    child would fall back to ``~/.claude`` under the inherited HOME, the launch profile's login. Instead of
-    that refusal, the launch profile's own unstamped turns under multiplexing, and the stamped tasks of a profile
-    that sets ``inherit_launch_login`` in a process started for it, keep the inherited login. With no scope
-    bound, ``UnscopedSecretError`` propagates: no child starts on a guess. ``os.environ`` is never changed and
-    no value is logged.
+    profile with neither its own token nor its own directory shares the login this process inherited (one person's
+    profiles on one subscription), without the launch profile's gateway headers. When the install owner turns
+    ``isolate_profile_logins`` on, such a profile is refused instead (``ClaudeCodeLoggedOut``), except the profile
+    this process was started for (its unstamped launch turns, or a scope stamped with the process home outside
+    core's restart-safe cron worker), whose inherited login is its own. With no scope bound,
+    ``UnscopedSecretError`` propagates: no child starts on a guess. ``os.environ`` is never changed and no value
+    is logged.
     """
     get_secret, routed = _secret_scope()
     inherited = {name: env.get(name) for name in PROFILE_SECRETS}
@@ -387,12 +394,17 @@ def apply_profile_credential(env):
         # apply_config_dir read the launch environment; only this profile's own .env may choose.
         own = next(filter(None, (_scoped(get_secret, name) for name in _CONFIG_DIR_ENV)), None)
         if own:
-            env["CLAUDE_CONFIG_DIR"] = os.path.expanduser(own)
+            _select_config_dir(env, own)
         elif env.get(OAUTH_TOKEN_ENV):
             env.pop("CLAUDE_CONFIG_DIR", None)
-        elif _keeps_inherited_login():
-            # No login of its own, and the one this process inherited is this profile's: keep it, as on one profile.
+        elif _serves_launch_profile() or _scope_is_process_profile():
+            # The profile this process was started for: what it inherited is its own, as on one profile.
             env.update({name: value for name, value in inherited.items() if value and not env.get(name)})
+        elif not isolate_profile_logins():
+            # Another profile on the same subscription: it shares the login, never the launch profile's gateway
+            # headers (those are for that profile's own upstream).
+            if inherited[OAUTH_TOKEN_ENV]:
+                env[OAUTH_TOKEN_ENV] = inherited[OAUTH_TOKEN_ENV]
         else:
             raise ClaudeCodeLoggedOut(PROFILE_LOGIN_HINT.format(OAUTH_TOKEN_ENV))
     return env

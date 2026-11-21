@@ -70,13 +70,40 @@ def test_the_profile_token_wins_over_the_gateways(ambient, tmp_path):
     assert os.environ[TOKEN] == AMBIENT
 
 
+def _isolate(home=None, **settings):
+    """Turn isolate_profile_logins on in ``home`` (default: this install's root profile), with other settings."""
+    from hermes_constants import get_hermes_home
+    _settings(home or get_hermes_home(), isolate_profile_logins=True, **settings)
+
+
 @pytest.mark.parametrize("scope", [{}, {TOKEN: ""}, {TOKEN: "  "}], ids=["miss", "empty", "blank"])
-def test_a_served_profile_never_runs_on_the_gateways_login(ambient, tmp_path, monkeypatch, scope):
-    """#313: without a token of its own a served profile loses the launch profile's token, gateway headers and
-    config directory. With no directory of its own either, Claude Code would fall back to ~/.claude under the
-    inherited HOME (the launch profile's login), so the turn is refused before a spawn, naming both ways to give
-    the profile a login. With a claude_config_dir it runs on that login."""
+def test_a_served_profile_shares_the_subscription_login_by_default(ambient, tmp_path, monkeypatch, scope):
+    """#481: one person's profiles share one subscription. A served profile with no login of its own runs on the
+    login this process inherited (its token or config directory), never on the launch profile's gateway headers."""
+    client, seen = _native(tmp_path, monkeypatch)
+    try:
+        with multiplexed(scope):
+            assert client.create(**REQUEST).choices[0].message.content == "hello\n"
+    finally:
+        client.close()
+    assert seen() == [AMBIENT]
+    inherited = {TOKEN: AMBIENT, "ANTHROPIC_CUSTOM_HEADERS": "X-Gateway: launch", "CLAUDE_CONFIG_DIR": "/launch-login",
+                 "UNRELATED": "kept"}
+    with multiplexed(scope):
+        assert _apply(dict(inherited)) == {TOKEN: AMBIENT, "CLAUDE_CONFIG_DIR": "/launch-login", "UNRELATED": "kept"}
+    monkeypatch.delenv(TOKEN)
+    with multiplexed(scope):  # the shared ~/.claude: nothing to carry, nothing exported
+        assert _apply({"UNRELATED": "kept"}) == {"UNRELATED": "kept"}
+
+
+@pytest.mark.parametrize("scope", [{}, {TOKEN: ""}, {TOKEN: "  "}], ids=["miss", "empty", "blank"])
+def test_an_isolated_install_never_runs_a_served_profile_on_the_gateways_login(ambient, tmp_path, monkeypatch, scope):
+    """#313 under isolate_profile_logins: without a token of its own a served profile loses the launch profile's
+    token, gateway headers and config directory. With no directory of its own either, Claude Code would fall back to
+    ~/.claude under the inherited HOME (the launch profile's login), so the turn is refused before a spawn, naming
+    the switch and both ways to give the profile a login. With a claude_config_dir it runs on that login."""
     import directsdk
+    _isolate()
     client, seen = _native(tmp_path, monkeypatch)
     try:
         with multiplexed(scope), pytest.raises(directsdk.ClaudeCodeLoggedOut) as raised:
@@ -84,10 +111,11 @@ def test_a_served_profile_never_runs_on_the_gateways_login(ambient, tmp_path, mo
     finally:
         client.close()
     assert not (tmp_path / "tokens.jsonl").exists()
-    assert "claude_config_dir" in str(raised.value) and TOKEN in str(raised.value)
+    for named in ("claude_config_dir", TOKEN, "isolate_profile_logins", "CLAUDE_CONFIG_DIR=<dir> claude auth login"):
+        assert named in str(raised.value)
     assert AMBIENT not in str(raised.value)
     setting = str(tmp_path / "login")
-    _set_config_dir(setting)
+    _isolate(claude_config_dir=setting)
     inherited = {TOKEN: AMBIENT, "ANTHROPIC_CUSTOM_HEADERS": "X-Gateway: launch", "CLAUDE_CONFIG_DIR": setting,
                  "UNRELATED": "kept"}
     with multiplexed(scope):
@@ -203,10 +231,19 @@ def test_setup_probes_use_the_serving_profiles_login(ambient, tmp_path, monkeypa
     assert env[TOKEN] == AMBIENT
 
 
-def test_the_launch_profiles_own_turn_keeps_its_login_under_multiplexing(ambient, tmp_path, monkeypatch):
+def _settings(home, **settings):
+    """Write ``settings`` as this plugin's settings in ``home``'s config.yaml."""
+    from conftest import PLUGIN_NAME
+    lines = "".join("        %s: %s\n" % (key, json.dumps(value)) for key, value in settings.items())
+    (home / "config.yaml").write_text("plugins:\n  enabled: []\n  entries:\n    %s:\n      settings:\n%s"
+                                      % (PLUGIN_NAME, lines), encoding="utf-8")
+
+
+def test_the_launch_profiles_own_turn_keeps_its_login_on_an_isolated_install(ambient, tmp_path, monkeypatch):
     """A Desktop backend serving several profiles multiplexes, so core counts every task as routed, the launch
     profile's own turns too (#409). Core binds that profile's scope unstamped, and its login is the process's own:
-    its turns keep the inherited login instead of being refused, as on one profile."""
+    isolation never refuses it."""
+    _isolate()
     client, seen = _native(tmp_path, monkeypatch)
     try:
         with multiplexed({}, home=None):
@@ -216,16 +253,16 @@ def test_the_launch_profiles_own_turn_keeps_its_login_under_multiplexing(ambient
     assert seen() == [AMBIENT]
     with multiplexed({}, home=None):
         assert _apply({TOKEN: AMBIENT, "UNRELATED": "kept"}) == {TOKEN: AMBIENT, "UNRELATED": "kept"}
-    # A served profile in the same process is still refused without a login of its own.
-    with multiplexed({}), pytest.raises(Exception) as raised:
+    with multiplexed({}), pytest.raises(Exception) as raised:  # a served profile in the same process
         _apply({TOKEN: AMBIENT})
     assert type(raised.value).__name__ == "ClaudeCodeLoggedOut"
 
 
-def test_cores_own_launch_turn_bind_keeps_the_launch_login(profile, tmp_path, monkeypatch):
-    """The issue's repro, through core's own binder for a launch-profile turn on a multi-profile host
+@pytest.mark.parametrize("isolated", [False, True], ids=["shared", "isolated"])
+def test_cores_own_launch_turn_bind_keeps_the_launch_login(profile, tmp_path, monkeypatch, isolated):
+    """#409's repro through core's binder for a launch-profile turn on a multi-profile host
     (tui_gateway.launch_profile_policy.launch_profile_runtime_scope): no token anywhere and no claude_config_dir,
-    the login lives in ~/.claude. The turn runs on it instead of being refused."""
+    the login lives in ~/.claude. The turn runs on it, isolated or not."""
     monkeypatch.delenv(TOKEN, raising=False)
     try:
         from tui_gateway.launch_profile_policy import launch_profile_runtime_scope
@@ -233,6 +270,8 @@ def test_cores_own_launch_turn_bind_keeps_the_launch_login(profile, tmp_path, mo
         pytest.skip("core without launch_profile_runtime_scope")
     from agent.secret_scope import reset_multiplex_context, set_multiplex_context
     from hermes_constants import get_routing_process_hermes_home
+    if isolated:
+        _isolate()
     client, seen = _native(tmp_path, monkeypatch)
     mode = set_multiplex_context(True)
     try:
@@ -244,18 +283,11 @@ def test_cores_own_launch_turn_bind_keeps_the_launch_login(profile, tmp_path, mo
     assert seen() == [None]
 
 
-def _settings(home, **settings):
-    """Write ``settings`` as this plugin's settings in ``home``'s config.yaml."""
-    from conftest import PLUGIN_NAME
-    lines = "".join("        %s: %s\n" % (key, json.dumps(value)) for key, value in settings.items())
-    (home / "config.yaml").write_text("plugins:\n  enabled: []\n  entries:\n    %s:\n      settings:\n%s"
-                                      % (PLUGIN_NAME, lines), encoding="utf-8")
-
-
 @contextmanager
 def _own_cron_fire():
     """The launch profile's own job fired in process by a multiplexing gateway, bound by core's own
-    cron/scheduler.py _fire_secret_scope: its scope is stamped with the process home."""
+    cron/scheduler.py _fire_secret_scope: its scope is stamped with the process home, as a multiplexing messaging
+    gateway stamps that profile's own turns (gateway/run.py _profile_runtime_scope)."""
     try:
         from cron.scheduler import _fire_secret_scope
     except ImportError:
@@ -270,19 +302,13 @@ def _own_cron_fire():
         reset_multiplex_context(mode)
 
 
-def test_the_launch_profiles_own_cron_fire_keeps_its_login_when_it_says_so(profile, tmp_path, monkeypatch):
-    """Core stamps the launch profile's own in-process cron fire with the process home (as it stamps that profile's
-    gateway turns under multiplexing), so it counts as served and is refused ("This profile has no Claude login of
-    its own"). A profile whose login is the inherited one says so with inherit_launch_login: true; its fires then
-    run on that login. Without the setting the refusal stands (claude_config_dir=~/.claude is no way out: Claude
-    Code keys its Keychain login by config directory)."""
-    import directsdk_setup
-    from hermes_constants import get_hermes_home
+@pytest.mark.parametrize("isolated", [False, True], ids=["shared", "isolated"])
+def test_the_launch_profiles_stamped_tasks_keep_its_login(profile, tmp_path, monkeypatch, isolated):
+    """The messaging-gateway case 0.4.0 refused (erosika on #420, thebergerking91 on #409): the launch profile's own
+    stamped tasks run on the inherited ~/.claude login without any setting, isolated or not."""
     monkeypatch.delenv(TOKEN, raising=False)
-    home = get_hermes_home()
-    with _own_cron_fire(), pytest.raises(directsdk_setup.ClaudeCodeLoggedOut):
-        _apply({"UNRELATED": "kept"})
-    _settings(home, inherit_launch_login=True)
+    if isolated:
+        _isolate()
     client, seen = _native(tmp_path, monkeypatch)
     try:
         with _own_cron_fire():
@@ -291,17 +317,6 @@ def test_the_launch_profiles_own_cron_fire_keeps_its_login_when_it_says_so(profi
     finally:
         client.close()
     assert seen() == [None]
-
-
-@pytest.mark.parametrize("value", ["true", "yes", 1, "on"])
-def test_only_a_yaml_boolean_true_inherits_the_login(profile, monkeypatch, value):
-    """A credential switch: a string or number that merely looks true does not open it."""
-    import directsdk_setup
-    from hermes_constants import get_hermes_home
-    monkeypatch.delenv(TOKEN, raising=False)
-    _settings(get_hermes_home(), inherit_launch_login=value)
-    with _own_cron_fire(), pytest.raises(directsdk_setup.ClaudeCodeLoggedOut):
-        _apply({"UNRELATED": "kept"})
 
 
 @contextmanager
@@ -342,39 +357,94 @@ def _profile_home(tmp_path, name, **settings):
     return home
 
 
-def test_another_profile_never_inherits_the_launch_login_through_the_setting(profile, tmp_path, monkeypatch):
-    """The setting is read from the served profile's own config: the launch profile opting in gives a served profile
-    nothing. A served profile opting in gets nothing either while this process was started for another profile:
-    what it inherited is that profile's login."""
+def test_a_served_profile_cannot_switch_isolation_for_itself(profile, tmp_path, monkeypatch):
+    """Isolation is the install owner's: a served profile's own ``false`` does not lift the root's ``true``, and its
+    own ``true`` does not isolate an install whose owner left it off."""
     import directsdk_setup
     from hermes_constants import get_hermes_home
     monkeypatch.delenv(TOKEN, raising=False)
-    _settings(get_hermes_home(), inherit_launch_login=True)
-    served_homes = (_profile_home(tmp_path, "served-plain"),
-                    _profile_home(tmp_path, "served-opted", inherit_launch_login=True))
-    for served in served_homes:
-        with _served_turn(served), pytest.raises(directsdk_setup.ClaudeCodeLoggedOut):
-            _apply({"UNRELATED": "kept"})
+    lifted = _profile_home(tmp_path, "lifted", isolate_profile_logins=False)
+    raised = _profile_home(tmp_path, "raised", isolate_profile_logins=True)
+    _isolate()
+    with _served_turn(lifted), pytest.raises(directsdk_setup.ClaudeCodeLoggedOut):
+        _apply({"UNRELATED": "kept"})
+    _settings(get_hermes_home())
+    with _served_turn(raised):
+        assert _apply({"UNRELATED": "kept"}) == {"UNRELATED": "kept"}
 
 
-def test_a_backend_started_for_another_profile_never_lends_its_login_to_an_opted_in_profiles_job(profile, tmp_path,
-                                                                                                monkeypatch):
-    """A Desktop backend started for profile X runs an opted-in profile's job (Run now). Core binds the opted-in
-    profile's home, so the plugin reads its true, but the login this process inherited is X's. The opt-in counts
-    only when the process was started for the profile that set it."""
+def test_the_profile_the_process_was_started_for_can_isolate(profile, tmp_path, monkeypatch):
+    """A gateway started for profile X (``hermes -p X gateway``) reads X's switch as well as the root's: X's owner can
+    isolate the profiles X serves. X's own tasks still keep X's login."""
     import directsdk_setup
     monkeypatch.delenv(TOKEN, raising=False)
-    opted = _profile_home(tmp_path, "opted-home", inherit_launch_login=True)
+    launch = _profile_home(tmp_path, "launch", isolate_profile_logins=True)
+    served = _profile_home(tmp_path, "served")
+    with _process_started_for(launch):
+        with _served_turn(served), pytest.raises(directsdk_setup.ClaudeCodeLoggedOut):
+            _apply({"UNRELATED": "kept"})
+        with _served_turn(launch):
+            assert _apply({"UNRELATED": "kept"}) == {"UNRELATED": "kept"}
+
+
+@pytest.mark.parametrize("value, isolated", [(True, True), ("true", True), ("on", True), (False, False),
+                                             ("no", False), (None, False)])
+def test_isolation_values(profile, monkeypatch, value, isolated):
+    """A restricting switch: a value that reads as on isolates (failing toward the guard), anything else shares."""
+    import directsdk_setup
+    from hermes_constants import get_hermes_home
+    _settings(get_hermes_home(), isolate_profile_logins=value)
+    assert directsdk_setup.isolate_profile_logins() is isolated
+
+
+def test_an_unreadable_owner_config_isolates(profile, monkeypatch, caplog):
+    """If the owner's config can't be read, the guard holds (warned once per home)."""
+    import directsdk_setup
+    import hermes_cli.config
+    monkeypatch.setattr(directsdk_setup, "_unreadable_isolation_homes", set())
+
+    def unreadable():
+        raise OSError("fixture config is unreadable")
+    monkeypatch.setattr(hermes_cli.config, "load_config_readonly", unreadable)
+    caplog.set_level(logging.WARNING)
+    assert directsdk_setup.isolate_profile_logins() is True
+    assert directsdk_setup.isolate_profile_logins() is True
+    assert caplog.text.count("isolate_profile_logins") == 1
+
+
+def test_a_managed_true_isolates(profile, tmp_path, monkeypatch):
+    """An administrator's managed config is the owner's policy too: its ``true`` isolates the install."""
+    import directsdk_setup
+    from hermes_cli import managed_scope
+    managed = _profile_home(tmp_path, "managed", isolate_profile_logins=True)
+    monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed))
+    managed_scope.invalidate_managed_cache()
+    try:
+        assert directsdk_setup.isolate_profile_logins() is True
+    finally:
+        monkeypatch.delenv("HERMES_MANAGED_DIR")
+        managed_scope.invalidate_managed_cache()
+
+
+def test_a_backend_started_for_another_profile_follows_the_install_policy(profile, tmp_path, monkeypatch):
+    """A Desktop backend started for profile X runs profile Y's job (Run now): Y is served. Shared by default;
+    refused under isolation."""
+    import directsdk_setup
+    monkeypatch.delenv(TOKEN, raising=False)
+    served = _profile_home(tmp_path, "served-home")
     other = _profile_home(tmp_path, "other-home")
-    with _process_started_for(other), _served_turn(opted), pytest.raises(directsdk_setup.ClaudeCodeLoggedOut):
+    with _process_started_for(other), _served_turn(served):
+        assert _apply({"UNRELATED": "kept"}) == {"UNRELATED": "kept"}
+    _isolate()
+    with _process_started_for(other), _served_turn(served), pytest.raises(directsdk_setup.ClaudeCodeLoggedOut):
         _apply({"UNRELATED": "kept"})
 
 
-def test_core_cron_worker_never_honours_the_opt_in(profile, tmp_path, monkeypatch):
+def test_core_cron_worker_of_an_isolated_install_refuses_a_profile_without_a_login(profile, tmp_path, monkeypatch):
     """Core's restart-safe worker process runs with the fired profile's home as its process home, whichever gateway
-    started it, so it can't show that the login it inherited is that profile's: the opt-in is never honoured inside
-    it. Core's real worker entry (cron/scheduler.py _run_external_worker_payload) binds the scope; the execution
-    claim (cron.executions.adopt_claimed_execution) and the job body (run_one_job) are stubs."""
+    started it, so a stamp equal to it doesn't show the inherited login is that profile's. Core's real worker entry
+    (cron/scheduler.py _run_external_worker_payload) binds the scope; the execution claim
+    (cron.executions.adopt_claimed_execution) and the job body (run_one_job) are stubs."""
     import directsdk_setup
     try:
         from cron import executions, scheduler
@@ -384,10 +454,13 @@ def test_core_cron_worker_never_honours_the_opt_in(profile, tmp_path, monkeypatc
         if not hasattr(module, name):
             pytest.skip("core without %s.%s" % (module.__name__, name))
     monkeypatch.delenv(TOKEN, raising=False)
-    opted = _profile_home(tmp_path, "opted-home", inherit_launch_login=True)
-    monkeypatch.setenv("HERMES_HOME", str(opted))  # the worker's env: HERMES_HOME is the fired profile's
+    from hermes_constants import get_hermes_home
+    _isolate()
+    (get_hermes_home() / "profiles").mkdir()
+    fired = _profile_home(get_hermes_home() / "profiles", "fired")  # core's layout: <root>/profiles/<name>
+    monkeypatch.setenv("HERMES_HOME", str(fired))  # the worker's env: HERMES_HOME is the fired profile's
     payload, ack = tmp_path / "payload.json", tmp_path / "exec-1.ready"
-    payload.write_text(json.dumps({"job": {"id": "job-1", "execution_id": "exec-1"}, "profile_home": str(opted),
+    payload.write_text(json.dumps({"job": {"id": "job-1", "execution_id": "exec-1"}, "profile_home": str(fired),
                                    "multiplex_active": True}), encoding="utf-8")
     outcome = []
 
@@ -406,172 +479,43 @@ def test_core_cron_worker_never_honours_the_opt_in(profile, tmp_path, monkeypatc
     assert outcome == ["refused"]
 
 
-def test_a_cron_worker_for_a_served_profile_is_still_refused(profile, tmp_path, monkeypatch):
-    """A cron worker started with HERMES_HOME=<served profile> pins that home as its process home and stamps the
-    profile's scope with it (cron/scheduler.py), while HOME and ~/.claude are still the launch profile's. A stamp equal
-    to the process home is therefore not "the launch profile": with no login of its own the turn is refused."""
-    import directsdk_setup
-    from hermes_constants import get_routing_process_hermes_home
-    monkeypatch.delenv(TOKEN, raising=False)
-    with multiplexed({}, home=str(get_routing_process_hermes_home())), pytest.raises(directsdk_setup.ClaudeCodeLoggedOut):
-        _apply({"UNRELATED": "kept"})
-
-
 INHERITED = {TOKEN: AMBIENT, "ANTHROPIC_CUSTOM_HEADERS": "x-inherited: 1", "CLAUDE_CONFIG_DIR": "/inherited-login"}
 OWN_LOGINS = {"scoped-dir": ({"CLAUDE_CONFIG_DIR": "/profile-login"}, {}),
               "scoped-token": ({TOKEN: PROFILE}, {}),
               "setting-dir": ({}, {"claude_config_dir": "/profile-login"})}
 
 
-@pytest.mark.parametrize("exemption", ["unstamped", "opt-in"])
+@pytest.mark.parametrize("path", ["unstamped", "process-stamp", "shared"])
 @pytest.mark.parametrize("own", sorted(OWN_LOGINS))
-def test_an_exempt_profile_keeps_its_own_login_exactly_as_when_served(profile, monkeypatch, exemption, own):
-    """An exemption only replaces the refusal. A profile with a token or directory of its own gets exactly what a
-    served profile with that login gets; it never falls back to the inherited token, headers or directory."""
+def test_a_profile_with_its_own_login_gets_exactly_that_login(profile, monkeypatch, path, own):
+    """Inheriting only replaces the refusal. A profile with a token or directory of its own gets exactly what an
+    isolated served profile with that login gets; it never falls back to the inherited token, headers or
+    directory."""
     from hermes_constants import get_hermes_home
     monkeypatch.delenv(TOKEN, raising=False)
     home = get_hermes_home()
     scope, settings = OWN_LOGINS[own]
-    opt_in = {"inherit_launch_login": True} if exemption == "opt-in" else {}
-    stamp = None if exemption == "unstamped" else str(home)
-    _settings(home, **opt_in)
-    with multiplexed({}, home=stamp):
-        assert _apply(dict(INHERITED)) == INHERITED  # the exemption is in force here
-    _settings(home, **settings)
+    stamp = {"unstamped": None, "process-stamp": str(home), "shared": SERVED_HOME}[path]
+    owner = {} if path == "shared" else {"isolate_profile_logins": True}
+    _isolate(**settings)
     with multiplexed(scope):
         served = _apply(dict(INHERITED))
     assert served.get(TOKEN) != AMBIENT and "ANTHROPIC_CUSTOM_HEADERS" not in served
-    _settings(home, **opt_in, **settings)
+    _settings(home, **owner, **settings)
     with multiplexed(scope, home=stamp):
         assert _apply(dict(INHERITED)) == served
 
 
-def test_a_managed_true_does_not_opt_a_profile_in(profile, tmp_path, monkeypatch):
-    """The opt-in is read from the profile's own config.yaml: a machine-wide managed true reaches the merged config
-    but turns nothing on for a profile that omitted the setting or set it false."""
-    import directsdk_setup
-    from hermes_cli import managed_scope
-    from hermes_constants import get_hermes_home
-    monkeypatch.delenv(TOKEN, raising=False)
-    managed = _profile_home(tmp_path, "managed", inherit_launch_login=True)
-    monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed))
-    managed_scope.invalidate_managed_cache()
-    try:
-        for settings in ({}, {"inherit_launch_login": False}):
-            _settings(get_hermes_home(), **settings) if settings else None
-            assert directsdk_setup._setting(directsdk_setup.INHERIT_LOGIN_SETTING) is True  # the overlay is live
-            with _own_cron_fire(), pytest.raises(directsdk_setup.ClaudeCodeLoggedOut):
-                _apply({"UNRELATED": "kept"})
-    finally:
-        monkeypatch.delenv("HERMES_MANAGED_DIR")
-        managed_scope.invalidate_managed_cache()
-
-
-def test_a_malformed_profile_config_does_not_opt_in(profile, monkeypatch):
-    """A config that no longer parses counts as off, even after a good read with true: core's last-good fallback
-    must not keep the login switch on."""
-    import directsdk_setup
-    from hermes_constants import get_hermes_home
-    monkeypatch.delenv(TOKEN, raising=False)
-    home = get_hermes_home()
-    _settings(home, inherit_launch_login=True)
-    with _own_cron_fire():
-        assert directsdk_setup._setting(directsdk_setup.INHERIT_LOGIN_SETTING) is True
-        assert _apply({"UNRELATED": "kept"}) == {"UNRELATED": "kept"}
-    (home / "config.yaml").write_text((home / "config.yaml").read_text(encoding="utf-8") + "  : [unclosed\n",
-                                      encoding="utf-8")
-    with _own_cron_fire(), pytest.raises(directsdk_setup.ClaudeCodeLoggedOut):
-        _apply({"UNRELATED": "kept"})
-
-
-def test_the_opt_in_is_read_with_cores_parser_not_pyyaml(profile, monkeypatch):
-    """Core parses YAML with its own hermes_yaml and does not depend on PyYAML, so the setting is read without it:
-    with ``yaml`` unimportable (a plain core install) the opt-in still applies."""
-    from hermes_constants import get_hermes_home
-    monkeypatch.setitem(sys.modules, "yaml", None)
-    monkeypatch.delenv(TOKEN, raising=False)
-    _settings(get_hermes_home(), inherit_launch_login=True)
-    with _own_cron_fire():
-        assert _apply({"UNRELATED": "kept"}) == {"UNRELATED": "kept"}
-
-
-@pytest.mark.parametrize("rewrite", [lambda text: "", lambda text: "- plugins\n", lambda text: text.replace("inherit_launch_login: true",
-                                                   "inherit_launch_login: false\n        inherit_launch_login: true")],
-                         ids=["empty", "list-root", "duplicate-key"])
-def test_a_config_core_would_not_read_as_this_setting_does_not_opt_in(profile, monkeypatch, rewrite):
-    """An empty file, a root that is not a mapping, and a duplicated key (core's parser rejects it) all count as
-    off."""
-    import directsdk_setup
-    from hermes_constants import get_hermes_home
-    monkeypatch.delenv(TOKEN, raising=False)
-    home = get_hermes_home()
-    _settings(home, inherit_launch_login=True)
-    (home / "config.yaml").write_text(rewrite((home / "config.yaml").read_text(encoding="utf-8")), encoding="utf-8")
-    assert directsdk_setup._own_setting_is_true(directsdk_setup.INHERIT_LOGIN_SETTING) is False
-    with _own_cron_fire(), pytest.raises(directsdk_setup.ClaudeCodeLoggedOut):
-        _apply({"UNRELATED": "kept"})
-
-
-@pytest.mark.parametrize("answer", ["no-file", "unavailable", "error"])
-def test_a_local_opt_in_does_not_count_when_core_serves_config_without_a_file(profile, monkeypatch, answer):
-    """With a config backend that has no config file (a remote backend), a config.yaml left in the profile's home is
-    not its config: a ``true`` there must not opt it in. A backend that cannot answer counts the same."""
-    import directsdk_setup
-    from hermes_constants import get_hermes_home
-    config_backend = pytest.importorskip("hermes_cli.config_backend")
-    monkeypatch.delenv(TOKEN, raising=False)
-    _settings(get_hermes_home(), inherit_launch_login=True)
-    with _own_cron_fire():
-        assert _apply({"UNRELATED": "kept"}) == {"UNRELATED": "kept"}
-
-    def supports_file_tooling():
-        if answer == "unavailable":
-            raise config_backend.ConfigBackendUnavailable("no such backend")
-        if answer == "error":
-            raise RuntimeError("backend broke")
-        return False
-    monkeypatch.setattr(config_backend, "supports_file_tooling", supports_file_tooling)
-    assert directsdk_setup._own_setting_is_true(directsdk_setup.INHERIT_LOGIN_SETTING) is False
-    with _own_cron_fire(), pytest.raises(directsdk_setup.ClaudeCodeLoggedOut):
-        _apply({"UNRELATED": "kept"})
-
-
-def test_a_core_without_config_backends_reads_the_local_file(profile, monkeypatch):
-    """A core from before config backends has only the file, so the opt-in in it still counts."""
-    import directsdk_setup
-    from hermes_constants import get_hermes_home
-    _settings(get_hermes_home(), inherit_launch_login=True)
-    monkeypatch.setitem(sys.modules, "hermes_cli.config_backend", None)
-    assert directsdk_setup._own_setting_is_true(directsdk_setup.INHERIT_LOGIN_SETTING) is True
-
-
-@pytest.mark.parametrize("process, config, stamp", [("other", "opted", "opted"), ("opted", "other", "opted"),
-                                                     ("opted", "opted", "other")],
-                         ids=["process-home-differs", "config-home-differs", "stamp-differs"])
-def test_the_opt_in_needs_the_stamp_the_config_home_and_the_process_home_to_agree(profile, tmp_path, monkeypatch,
-                                                                                  process, config, stamp):
-    """Each of the three homes is moved alone (every profile here opts in, so only the comparison can refuse)."""
-    import directsdk_setup
-    monkeypatch.delenv(TOKEN, raising=False)
-    homes = {name: _profile_home(tmp_path, name, inherit_launch_login=True) for name in ("opted", "other")}
-    with _process_started_for(homes["opted"]), _served_turn(homes["opted"]):
-        assert _apply({"UNRELATED": "kept"}) == {"UNRELATED": "kept"}  # all three agree: kept
-    with _process_started_for(homes[process]), _served_turn(homes[config], stamp=homes[stamp]):
-        with pytest.raises(directsdk_setup.ClaudeCodeLoggedOut):
-            _apply({"UNRELATED": "kept"})
-
-
-@pytest.mark.parametrize("exemption", ["unstamped", "opt-in"])
+@pytest.mark.parametrize("stamped", [False, True], ids=["unstamped", "process-stamp"])
 @pytest.mark.parametrize("worker", ["env-marker", "worker-main"])
-def test_no_exemption_inside_cores_cron_worker_process(profile, monkeypatch, exemption, worker):
-    """Inside core's restart-safe cron worker (its env marker, or ``python -m cron.scheduler`` as __main__) neither
-    exemption applies."""
+def test_the_launch_exemption_never_applies_inside_cores_cron_worker(profile, monkeypatch, stamped, worker):
+    """Inside core's restart-safe cron worker (its env marker, or ``python -m cron.scheduler`` as __main__) an
+    isolated install exempts no task as the launch profile's."""
     import directsdk_setup
     from hermes_constants import get_hermes_home
     monkeypatch.delenv(TOKEN, raising=False)
-    home = get_hermes_home()
-    _settings(home, inherit_launch_login=True)
-    stamp = None if exemption == "unstamped" else str(home)
+    _isolate()
+    stamp = str(get_hermes_home()) if stamped else None
     with multiplexed({}, home=stamp):
         assert _apply({"UNRELATED": "kept"}) == {"UNRELATED": "kept"}
     if worker == "env-marker":
@@ -584,11 +528,12 @@ def test_no_exemption_inside_cores_cron_worker_process(profile, monkeypatch, exe
 
 def test_the_unstamped_exemption_needs_multiplexing(profile, tmp_path, monkeypatch):
     """Outside multiplexing an unstamped scope under another profile's home override (a per-profile backend) is a
-    served profile as before, and is refused without a login of its own."""
+    served profile as before, and an isolated install refuses it without a login of its own."""
     import directsdk_setup
     from agent.secret_scope import reset_secret_scope, set_secret_scope
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     monkeypatch.delenv(TOKEN, raising=False)
+    _isolate()
     override = set_hermes_home_override(_profile_home(tmp_path, "served"))
     bound = set_secret_scope({})
     try:
@@ -597,3 +542,18 @@ def test_the_unstamped_exemption_needs_multiplexing(profile, tmp_path, monkeypat
     finally:
         reset_secret_scope(bound)
         reset_hermes_home_override(override)
+
+
+def test_a_profile_dir_naming_the_default_login_is_not_exported(profile, tmp_path, monkeypatch):
+    """thebergerking91 on #409: on macOS Claude Code keys its Keychain login by config directory, so an exported
+    CLAUDE_CONFIG_DIR=~/.claude reads as logged out. A profile's own directory that is the CLI default stays
+    unexported; any other is exported."""
+    monkeypatch.delenv(TOKEN, raising=False)
+    _isolate()
+    home = {"HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}
+    with multiplexed({"CLAUDE_CONFIG_DIR": str(tmp_path / ".claude")}):
+        assert _apply({**home, "CLAUDE_CONFIG_DIR": "/launch-login"}) == home
+    with multiplexed({"CLAUDE_CONFIG_DIR": str(tmp_path / ".claude-work")}):
+        assert _apply(dict(home)) == {**home, "CLAUDE_CONFIG_DIR": str(tmp_path / ".claude-work")}
+
+

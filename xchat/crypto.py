@@ -342,9 +342,26 @@ def message_text(event: dict[str, Any]) -> Optional[str]:
     if event.get("type") not in ("Message", "MessageEdit"):
         return None
     content = event.get("content") or {}
-    if isinstance(content, dict):
-        return content.get("text")
-    return None
+    if not isinstance(content, dict):
+        return None
+    text = content.get("text")
+    # A shared post is a card in the attachments, not media: message_attachments only keeps
+    # entries with media_hash_key, so the card was dropped and the typed comment reached the
+    # agent with no referent (#477). Append its canonical URL so the existing post reader sees it.
+    urls = []
+    raw = content.get("attachments") or event.get("attachments") or []
+    for att in raw if isinstance(raw, (list, tuple)) else []:
+        att = _as_dict(att)
+        post = att.get("post")
+        if not isinstance(post, dict):
+            continue
+        url = str(post.get("post_url") or "").strip()
+        if url.startswith("https://x.com/") and url not in urls:
+            urls.append(url)
+    if not urls:
+        return text
+    extra = " ".join(urls)
+    return extra if not text else f"{text}\n{extra}"
 
 
 def message_attachments(event: dict[str, Any]) -> list[dict[str, Any]]:

@@ -187,6 +187,38 @@ def _frame_first(messages, queried):
 _DATE_LINE = re.compile(r"(?:<system-reminder>\n)?Today's date is \d{4}-\d{2}-\d{2}\.(?:\n</system-reminder>)?")
 
 
+# Native writes its own private cwd and a git-status line into the environment message (#385).
+# Hermes' runtime section already names the real cwd, so those two lines contradict it. Drop only
+# those lines, in place: the block structure and every cache_control marker stay exactly as native
+# sent them (#317 was closed for converting the block to a string and losing the marker).
+_NATIVE_CWD_LINES = re.compile(
+    r"^(?:Primary working directory:.*|Is a git repository:.*)(?:\n|$)", re.MULTILINE)
+
+
+def _strip_native_cwd_lines(message: dict) -> bool:
+    content = message.get("content")
+    if isinstance(content, str):
+        stripped = _NATIVE_CWD_LINES.sub("", content)
+        if stripped != content:
+            message["content"] = stripped
+            return True
+        return False
+    if not isinstance(content, list):
+        return False
+    changed = False
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if not isinstance(text, str):
+            continue
+        stripped = _NATIVE_CWD_LINES.sub("", text)
+        if stripped != text:
+            block["text"] = stripped
+            changed = True
+    return changed
+
+
 def stable_request_context(payload, queried):
     """Keep native's per-request context in the prefix later per-call requests replay.
 
@@ -216,6 +248,8 @@ def stable_request_context(payload, queried):
         changed = False
         last = messages[-1] if messages else {}
         env = next((m for m in messages[:-1] if m.get('role') == 'system'), None)
+        if env is not None and _strip_native_cwd_lines(env):
+            changed = True
         content = last.get('content')
         tail = {'type': 'text', 'text': content} if isinstance(content, str) else (
             content[0] if isinstance(content, list) and len(content) == 1 else {})

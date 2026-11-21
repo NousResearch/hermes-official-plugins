@@ -28,7 +28,7 @@ from types import SimpleNamespace
 
 try:
     from . import concurrency
-    from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
+    from .model_catalog import accepts_thinking_disable, names_foreign_model, native_model, supports_adaptive_thinking
     from .process_tree import kill_process_tree, own_process_group, unreaped
     from .directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
@@ -36,7 +36,7 @@ try:
         reap_orphaned_refresh_lock, relay, resolve_upstream, Upstream)
 except ImportError:
     import concurrency
-    from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
+    from model_catalog import accepts_thinking_disable, names_foreign_model, native_model, supports_adaptive_thinking
     from process_tree import kill_process_tree, own_process_group, unreaped
     from directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
@@ -107,6 +107,19 @@ def transport_phrase(failure):
 
 class RequestRejected(ValueError):
     """A request this transport cannot serve, refused before Claude Code starts: the same input fails every time."""
+
+
+class ClaudeModelNotFound(RequestRejected):
+    """Another vendor's model id (`gpt-5.1`, `gemini-3-pro`), refused before Claude Code starts.
+
+    Native has no route for it: it would spawn and send the turn upstream only for Anthropic's 404, which core
+    reads as an unknown, retryable error. The profile classifies this type as `model_not_found`.
+    """
+    status_code = 404
+
+    def __init__(self, model):
+        super().__init__(f'Model not found for provider claude-subscription-directsdk-experimental: {model!r} '
+                         'is not a Claude model')
 
 
 # Native's own error codes for errors it answers without a relayed upstream status.
@@ -961,6 +974,8 @@ class Client:
             system, frames = prepare_history(kwargs.get('messages', []), names)
             if not isinstance(kwargs.get('model'), str) or not kwargs['model']:
                 raise RequestRejected('model is required')
+            if names_foreign_model(kwargs['model']):
+                raise ClaudeModelNotFound(kwargs['model'])
         except BaseException:
             with self._lock:
                 self._requests.discard(request)

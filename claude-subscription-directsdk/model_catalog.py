@@ -86,6 +86,34 @@ def native_model(model):
     return model
 
 
+# Leading words of other vendors' model ids. The guard below refuses only these, so a Claude id no table
+# names yet (a new family, a new alias the CLI starts advertising) still reaches native.
+FOREIGN_FAMILIES = frozenset({
+    'gpt', 'chatgpt', 'gemini', 'gemma', 'llama', 'codellama', 'mistral', 'mixtral', 'codestral', 'devstral',
+    'magistral', 'ministral', 'pixtral', 'deepseek', 'grok', 'qwen', 'qwq', 'kimi', 'glm', 'minimax', 'nemotron'})
+FOREIGN_VENDORS = frozenset({
+    'openai', 'google', 'meta-llama', 'mistralai', 'x-ai', 'xai', 'deepseek', 'qwen', 'moonshotai', 'z-ai',
+    'zhipuai', 'minimax', 'microsoft', 'nvidia', 'cohere', 'perplexity', 'amazon', 'ai21'})
+
+
+def names_foreign_model(model):
+    """Whether a requested id is clearly another vendor's model (`gpt-5.1`, `o3`, `google/gemini-3-pro`).
+
+    Native has no route for one, so it would spawn, send the turn upstream and get a 404. A deny rule, so it
+    cannot refuse a Claude id: anything containing `claude` or an alias is never foreign, and an id whose
+    first word is not a listed vendor's (`lyric`, `unqualified-future-model`) passes as today.
+    """
+    base = model.strip().casefold().removesuffix('[1m]')
+    if 'claude' in base or base in ALIASES:
+        return False
+    vendor, slash, short = base.partition('/')
+    if slash and vendor in FOREIGN_VENDORS:
+        return True
+    word = (short if slash else base).replace('.', '-').split('-', 1)[0]
+    # A version may be glued to the family (`qwen3`); OpenAI's reasoning ids are `o` and a digit (`o3`, `o4-mini`).
+    return word.rstrip('0123456789') in FOREIGN_FAMILIES or (word[:1] == 'o' and word[1:].isdigit())
+
+
 def accepts_thinking_disable(model):
     # Same tolerance as supports_adaptive_thinking: an absent model still reaches `model is required`.
     base = _route_base(model.removesuffix('[1m]')) if isinstance(model, str) else ''

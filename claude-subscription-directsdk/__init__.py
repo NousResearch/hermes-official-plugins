@@ -229,6 +229,9 @@ def classify_api_error(error, **_):
             f'Enterprise, your workspace admin controls them). Upstream said: {str(error)[:400]}')
     # A request refused before Claude Code starts fails the same way on every retry; another provider may serve it.
     # Matched by class name: the plugin can load as a package or as top-level modules, so the class may be either copy.
+    if type(error).__name__ == 'ClaudeModelNotFound':
+        # Another vendor's model id: no retry serves it here, and the configured fallback may.
+        return {'reason': 'model_not_found', 'retryable': False, 'should_fallback': True}
     if type(error).__name__ == 'RequestRejected':
         return {'reason': 'format_error', 'retryable': False, 'should_fallback': True}
     return None

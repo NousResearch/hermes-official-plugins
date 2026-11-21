@@ -105,6 +105,14 @@ def transport_phrase(failure):
     return _TRANSPORT_PHRASES.get(failure.rsplit(".", 1)[-1], "")
 
 
+class ClaudeToolOutsideInventory(ClaudeAPIError):
+    """Native named a tool that is not one offered tool or a slip of one, and Hermes would fuzzy-repair it onto one.
+
+    Never handed to Hermes: its turn validation would run that different tool with these arguments. The provider
+    profile classifies this as non-retryable; a configured fallback still applies. The message names the tool
+    only, never its arguments, and reads as the "Provider said:" part of core's non-retryable notice."""
+
+
 class RequestRejected(ValueError):
     """A request this transport cannot serve, refused before Claude Code starts: the same input fails every time."""
 
@@ -510,18 +518,88 @@ def _buffer_tool_input(session_id):
         _BUFFER_TOOL_INPUT.popitem(last=False)
 
 
+def _core_tool_routing():
+    """Hermes core's own tool-name routing helpers, or None when this core lacks them (names then pass through)."""
+    try:
+        from agent.agent_runtime_helpers import repair_tool_call
+        from agent.tool_executor import _canonical_tool_name
+        from tools.tool_search import is_deferrable_tool_name, load_config_readonly
+        from tools.tool_search_catalog import TOOL_CALL_NAME
+    except Exception:
+        return None
+    return SimpleNamespace(repair=repair_tool_call, canonical=_canonical_tool_name, deferrable=is_deferrable_tool_name,
+                           config=load_config_readonly, bridge=TOOL_CALL_NAME)
+
+
+def _slip_routes(bare, hermes_names):
+    """Offered names ``bare`` is a case, separator or ``_tool`` suffix slip of, from the first reading that finds any.
+
+    The same slips core's repair heals before its fuzzy match (`Probe`, `probe-tool`, `ReadFile`), so the call runs
+    the tool it already would; only the offered name, not core's repair, decides which one."""
+    lower = str.lower
+    norm = lambda s: s.lower().replace('-', '_').replace(' ', '_')
+    squash = lambda s: re.sub(r'[-_ ]', '', s.lower())
+    unsuffixed = lambda s: re.sub(r'(tool){1,2}$', '', squash(s)) or squash(s)
+    for native_key, offered_key in ((lower, lower), (norm, norm), (squash, squash), (unsuffixed, squash)):
+        routes = {alias for alias in hermes_names if offered_key(alias) == native_key(bare)}
+        if routes:
+            return routes
+    return set()
+
+
 def offered_tool_name(name, hermes_names):
-    """``(name to carry in native's history, name Hermes runs)`` for a tool_use native streamed."""
+    """``(name to carry in native's history, name Hermes runs)`` for a tool_use native streamed.
+
+    In order: the exact advertised name (`mcp__hermes__<name>`); a dropped prefix (#62) or server segment (#342);
+    a name core routes to a Tool Search-deferred tool when the `tool_call` bridge is offered (#39), unchanged; a
+    case, separator or `_tool` suffix slip of one offered tool, mapped onto it. Any other name goes to Hermes
+    unchanged for its recoverable unknown-tool error, unless core's fuzzy repair would land it on an offered tool:
+    that runs a different tool with the model's arguments, so it, and a slip two offered tools both claim, raise
+    ClaudeToolOutsideInventory instead. The whole response fails, valid calls in the same batch included; after
+    text has streamed, Hermes keeps that text as a cut-short reply and asks the model to continue."""
+    if name.startswith(PREFIX) and name[len(PREFIX):] in hermes_names:
+        return name, hermes_names[name[len(PREFIX):]]
+    routes = set()
     if name in hermes_names:
         # Native sometimes drops the prefix on a tool it was offered (#62); carry the offered name so replayed
         # history does not teach the slip back to the model.
-        name = PREFIX + name
-    elif name.startswith('mcp__') and not name.startswith(PREFIX) and name[5:] in hermes_names:
+        routes.add(name)
+    if name.startswith('mcp__') and not name.startswith(PREFIX) and name[5:] in hermes_names:
         # Or only the server segment (`mcp__tool_call`); restore it so core does not log an auto-repair per call.
-        name = PREFIX + name[5:]
-    # Any other name is the model's (a Tool Search-deferred tool called directly, #39); Hermes answers it.
+        routes.add(name[5:])
+    shown = name[:80]  # name only, never arguments: they may carry user data
     bare = name.removeprefix(PREFIX)
-    return name, hermes_names.get(bare, bare)
+    if not routes:
+        core = _core_tool_routing()
+        if core is None:
+            return name, bare  # unknown host behaviour: hand Hermes the name as before
+        offered = set(hermes_names.values())
+        try:
+            # Core (since 6bbe4a6c78, v0.23.2) routes a deferred tool through the bridge before it repairs anything
+            # (turn_tool_validation); an older core repairs it like any unknown name.
+            if core.bridge in offered and core.deferrable(core.canonical(bare), core.config().effective_defer_tools):
+                return name, bare
+        except Exception:
+            return name, bare
+        routes = _slip_routes(bare, hermes_names)
+        if not routes:
+            try:
+                fuzzy = core.repair(SimpleNamespace(valid_tool_names=offered), bare)
+            except Exception:
+                fuzzy = None
+            if fuzzy is None:
+                # Nothing core would repair it onto (another server's tool); Hermes answers its own unknown-tool error.
+                return name, bare
+            logger.warning('DirectSDK native tool call %r is not an offered tool; Hermes would run %r; failing closed',
+                           shown, fuzzy[:80])
+            raise ClaudeToolOutsideInventory(f'Claude called {shown!r}, which is not one of the offered tools; Hermes did '
+                                             f'not run the similarly named {fuzzy[:80]!r}. Ask again.')
+    if len(routes) > 1:
+        logger.warning('DirectSDK native tool call matches two offered tools: %r; failing closed', shown)
+        raise ClaudeToolOutsideInventory(f'Claude called {shown!r}, which matches more than one offered tool; Hermes ran '
+                                         f'none of them. Ask again.')
+    route = routes.pop()
+    return PREFIX + route, hermes_names[route]
 
 
 def _json_suffix(prefix):

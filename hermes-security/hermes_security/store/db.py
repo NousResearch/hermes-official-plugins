@@ -241,12 +241,16 @@ class SecurityStore:
             ).fetchall()
             return {"items": [self._scan(c, r[0]) for r in rows], "total": total}
 
-    def set_scan_status(self, scan_id, status, *, reason=None):
+    def set_scan_status(self, scan_id, status, *, reason=None, only_from=None):
+        """Set the status; with ``only_from``, only when the current status is one of those
+        (checked and written in one transaction, so a concurrent cancel is never overwritten)."""
         if status not in STATUSES:
             raise ValidationError("invalid scan status")
         self._json(reason)
         with self.transaction() as c:
             row = self._scan(c, scan_id)
+            if only_from is not None and row["status"] not in only_from:
+                return row
             if row["sealed_at"]:
                 if status == row["status"] and (
                     reason is None or reason == row["reason"]

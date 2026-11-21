@@ -19,6 +19,9 @@ external_dependencies:
   - name: claude
     check: "claude --version"
     install: "npm install -g @anthropic-ai/claude-code"
+    # Session mode keeps a process only on these Claude Code versions (the session tests passed on each, the CI pin
+    # first); any other version runs per-call. Add a version after evals/ci.sh passes with CLAUDE_CODE_VERSION set to it.
+    session_versions: [2.1.292, 2.1.322, 2.1.323, 2.1.324, 2.1.325, 2.1.326, 2.1.327, 2.1.328, 2.1.329, 2.1.330]
 config_schema:
   claude_config_dir:
     type: string
@@ -33,6 +36,15 @@ config_schema:
       Let Claude Code send its usage telemetry and error reports. Off by default. The model picker and
       /usage stay complete either way: their zero-inference probes still fetch Claude Code's feature
       flags and plan limits.
+  max_concurrent:
+    type: int
+    default: 4
+    label: Claude Code calls at once
+    description: >-
+      At most this many Claude Code processes (about 250 MB each) run at once in one Hermes process, across its
+      profiles, subagents and auxiliary calls. A call past the limit waits for a free one within its own timeout;
+      it is not failed or sent to another provider. /usage and the model picker do not count, nor does a kept
+      session process between steps (max_sessions bounds those).
   extra_usage:
     type: string
     default: notify
@@ -51,6 +63,14 @@ config_schema:
     description: >-
       An ISO 8601 time. In ask mode, requests drawing extra usage are sent until then. The refusal message
       prints the exact command with the current window's reset time.
+  extra_usage_reserve_percent:
+    type: string
+    default: ""
+    label: Stop extra usage early at this plan percent (ask and stop modes)
+    description: >-
+      Optional, for example 97. In ask and stop, a request is refused once the session or weekly plan window
+      reaches this percent and extra usage is on, so the request that would first be billed is never sent.
+      Empty, invalid, 0 or above 100 means 100 (refuse only once extra usage has started).
   upstream_url:
     type: string
     default: ""
@@ -81,11 +101,31 @@ config_schema:
     default: true
     label: Keep one Claude Code process per agent
     description: >-
-      Keep one Claude Code process alive per Hermes agent (subagents get their own) and hand it each tool round,
-      instead of starting and replaying a new one on every model call. Requests are byte-identical either way.
+      Keep one Claude Code process alive per Hermes agent (subagents get their own) once its conversation has had
+      session_min_rounds tool rounds, and hand it each later step, instead of starting and replaying a new one on every
+      model call. Requests are byte-identical either way.
   max_sessions:
     type: int
     default: 4
     label: Kept Claude Code processes per Hermes process
     description: >-
-      At most this many kept processes (about 200 MB each); a call past the cap runs as a one-shot.
+      At most this many kept processes (about 200 MB each). At the cap the one that has waited longest for its user
+      gives its place to the step asking now; if each is serving a step or holds a parked tool call, that step runs
+      as a one-shot.
+  session_min_rounds:
+    type: int
+    default: 8
+    label: Tool rounds before a conversation keeps its Claude Code process
+    description: >-
+      A conversation is kept (one Claude Code process between its model calls) only once it has had this many tool
+      rounds; before that every call runs per-call. Short chats and most subagents then hold no process; long tool
+      loops, where the saving grows with history, do. A round is one set of tool results Hermes sends back. 0 keeps
+      every conversation from its first step.
+  session_idle_seconds:
+    type: int
+    default: 3600
+    label: Seconds a kept Claude Code process may idle
+    description: >-
+      A kept process that waits this long for a new user turn ends (its memory, 200 to 300 MB, goes back); the next
+      step starts a new one with the same bytes. A tool call it holds parked does not count as waiting. Default one
+      hour, the prompt cache's lifetime.

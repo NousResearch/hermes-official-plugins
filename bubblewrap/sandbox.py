@@ -2104,9 +2104,55 @@ class BubblewrapEnvironment(LocalEnvironment):
         except OSError:
             logger.debug("bubblewrap: could not refresh the scratch dir %s", path, exc_info=True)
 
-    def _wrap_popen_args(self, args: list[str]) -> list[str]:
+    def _wrap_popen_args(self, args: list[str], chdir: str | None = None) -> list[str]:
         self._refresh_private_scratch()
-        return self._prlimit_prefix() + self._bwrap_prefix(self.cwd) + self._process_limit_prefix() + list(args)
+        return self._prlimit_prefix() + self._bwrap_prefix(chdir or self.cwd) + self._process_limit_prefix() + list(args)
+
+    def _host_spawn_cwd(self) -> str:
+        """The directory to spawn in and pass to --chdir: the tracked cwd, or its nearest existing
+        parent when it is gone from the host.
+
+        Hermes 0.23 recovers by moving the tracked cwd (``_recover_cwd``). Later cores pick the
+        directory per spawn without storing it (``_spawn_cwd``): the wrapper's ``cd`` then decides
+        where the command runs, falling back only for the terminal tool's own commands.
+        """
+        spawn_cwd = getattr(super(), "_spawn_cwd", None)
+        if spawn_cwd is not None:
+            return spawn_cwd()
+        self._recover_cwd()
+        return self.cwd
+
+    def _open_secret_channel(self, cmd_string: str, login: bool) -> tuple[str, tuple[int, ...], object]:
+        """Core's in-memory secret channel for this spawn, when the core has one.
+
+        Cores with ``LocalEnvironment._secret_handoff`` keep secret exports out of the snapshot
+        file: the wrapper script names pipes by per-session tokens that the spawn swaps for open
+        fds (``local_secret_handoff``). This spawn replaces LocalEnvironment._run_bash, so it does
+        the same swap; the fds reach the shell through prlimit and bwrap like any inherited fd.
+        Returns the script, the fds to pass (and close after the spawn) and the reader thread.
+        """
+        handoff = getattr(self, "_secret_handoff", None)
+        if handoff is None:
+            return cmd_string, (), None
+        from tools.environments.base_session_env import (
+            _secret_fd_token, _secret_gen_token, _secret_restore_token, _secret_src_token)
+
+        session_id = self._session_id
+        token = _secret_fd_token(session_id)
+        if token not in cmd_string:
+            return cmd_string, (), None
+        fds: list[int] = []
+        if not login:
+            source_fd, restore_fd = handoff.open_source(
+                self._shell_state_paths(), skip=self._snapshot_excluded_passthrough_names())
+            fds += [source_fd, restore_fd]
+            cmd_string = (cmd_string.replace(_secret_src_token(session_id), str(source_fd))
+                          .replace(_secret_restore_token(session_id), str(restore_fd)))
+        generation = handoff.new_generation()
+        secret_fd, reader = handoff.start_reader(self._snapshot_write_path(login), generation)
+        fds.append(secret_fd)
+        cmd_string = cmd_string.replace(token, str(secret_fd)).replace(_secret_gen_token(session_id), generation)
+        return cmd_string, tuple(fds), reader
 
     def _run_bash(self, cmd_string: str, *, login: bool = False, timeout: int = 120,
                   stdin_data: str | None = None) -> subprocess.Popen:
@@ -2114,22 +2160,28 @@ class BubblewrapEnvironment(LocalEnvironment):
 
         Every spawn goes through here, the login bootstrap that builds the
         shell snapshot included, so the user's rc files are sourced inside
-        the sandbox too. The wrap happens after the cwd recovery so --chdir
-        carries the recovered directory, not a deleted one. Nothing runs in
-        the child between fork and exec: the limits ride the argv (prlimit).
+        the sandbox too. --chdir carries the directory the spawn starts in
+        (_host_spawn_cwd), never a deleted one. Nothing runs in the child
+        between fork and exec: the limits ride the argv (prlimit).
         """
         bash = _find_bash()
+        cmd_string, secret_fds, secret_reader = self._open_secret_channel(cmd_string, login)
         if login:
             cmd_string = _prepend_shell_init(cmd_string, _resolve_shell_init_files())
         args = [bash, *(["-l"] if login else []), "-c", cmd_string]
-        self._recover_cwd()
-        args = self._wrap_popen_args(args)
-        proc = subprocess.Popen(
-            args, text=True, env=_make_run_env(self.env), encoding="utf-8", errors="replace",
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
-            start_new_session=True, cwd=self.cwd,
-        )
+        spawn_cwd = self._host_spawn_cwd()
+        args = self._wrap_popen_args(args, spawn_cwd)
+        try:
+            proc = subprocess.Popen(
+                args, text=True, env=_make_run_env(self.env), encoding="utf-8", errors="replace",
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
+                start_new_session=True, cwd=spawn_cwd, pass_fds=secret_fds,
+            )
+        finally:
+            for fd in secret_fds:
+                os.close(fd)  # the child holds its copy; the reader sees EOF once it is gone
+        proc._hermes_secret_reader = secret_reader
         with contextlib.suppress(ProcessLookupError):
             proc._hermes_pgid = os.getpgid(proc.pid)
             from gateway.status import get_process_start_time
@@ -2139,7 +2191,7 @@ class BubblewrapEnvironment(LocalEnvironment):
             _pipe_stdin(proc, stdin_data)
         return proc
 
-    def _extract_cwd_from_output(self, result: dict):
+    def _update_cwd(self, result: dict, **kwargs):
         """Keep the tracked cwd off / and out of this environment's state dir.
 
         execute_code runs its helper commands with cwd="/" and its script from
@@ -2151,11 +2203,11 @@ class BubblewrapEnvironment(LocalEnvironment):
         where the command ran.
         """
         prev_cwd = self.cwd
-        super()._extract_cwd_from_output(result)
+        super()._update_cwd(result, **kwargs)
         if self.cwd != prev_cwd and (self.cwd == os.sep or _is_within(os.path.realpath(self.cwd), self._state_dir)):
             self.cwd = prev_cwd
 
-    def _wrap_command(self, command: str, cwd: str) -> str:
+    def _wrap_command(self, command: str, cwd: str, **kwargs) -> str:
         # --unsetenv strips the socket variables from the environment bwrap
         # receives, but the login bootstrap sources the shell init files
         # into the snapshot afterwards, and a 1Password or gpg-agent setup
@@ -2176,7 +2228,8 @@ class BubblewrapEnvironment(LocalEnvironment):
                 f'case "${{{name}-}}" in {spelled}) export {name}={real};; esac; '
                 for name in (*SCRATCH_TMP_ENV_VARS, SCRATCH_DIR_MARKER_ENV)
             )
-        return super()._wrap_command(f"unset {' '.join(HOST_SOCKET_VARS)}; {retarget}{command}", cwd)
+        # kwargs: what core's wrapper takes beyond these (cwd_fallback on later cores), passed through.
+        return super()._wrap_command(f"unset {' '.join(HOST_SOCKET_VARS)}; {retarget}{command}", cwd, **kwargs)
 
     def _prlimit_prefix(self) -> list[str]:
         """prlimit in front of bwrap: the per-process memory and CPU limits."""

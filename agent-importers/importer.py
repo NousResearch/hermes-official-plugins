@@ -610,10 +610,26 @@ class AgentImporter:
                                 "Imported skill was modified locally — not refreshed")
                     continue
 
-            def copy(skill_dir=skill_dir, destination=destination) -> None:
+            def copy(skill_dir=skill_dir, destination=destination) -> str | None:
+                # Stage beside the destination and swap only after a complete copy: the old code
+                # deleted the installed skill first, so a failed copytree (disk full, unreadable
+                # source) destroyed a working skill and aborted the whole import.
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                if destination.exists():
-                    shutil.rmtree(destination)
-                shutil.copytree(skill_dir, destination)
+                staging = destination.with_name(f".{destination.name}.importing")
+                previous = destination.with_name(f".{destination.name}.previous")
+                shutil.rmtree(staging, ignore_errors=True)
+                try:
+                    shutil.copytree(skill_dir, staging)
+                    if destination.exists():
+                        shutil.rmtree(previous, ignore_errors=True)
+                        destination.replace(previous)
+                    staging.replace(destination)
+                except OSError as exc:
+                    shutil.rmtree(staging, ignore_errors=True)
+                    if previous.exists() and not destination.exists():
+                        previous.replace(destination)
+                    return f"Could not copy skill directory: {exc}"
+                shutil.rmtree(previous, ignore_errors=True)
+                return None
 
             self.apply("skill", skill_dir, destination, "Would copy skill directory", copy)

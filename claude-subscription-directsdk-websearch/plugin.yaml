@@ -1,0 +1,21 @@
+name: claude-subscription-websearch
+label: Claude Subscription WebSearch
+kind: backend
+version: 0.1.0
+manifest_version: 2
+description: >-
+  Opt-in web_search backend for claude-subscription-directsdk users: a separate, isolated
+  `claude -p --tools WebSearch` call served by your Claude subscription. Off by default. Queries go out through
+  your own Claude subscription and bypass Hermes-side web config and egress settings; results are untrusted text.
+author: Nous Research
+license: MIT
+homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/claude-subscription-directsdk-websearch
+tags: [web-search, claude, subscription, experimental]
+requires_hermes: ">=0.23.0"
+platforms: []
+provides_web_providers:
+  - claude-subscription-websearch
+external_dependencies:
+  - name: claude
+    check: "claude --version"
+    install: "npm install -g @anthropic-ai/claude-code"

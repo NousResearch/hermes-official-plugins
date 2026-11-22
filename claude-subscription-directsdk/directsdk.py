@@ -164,6 +164,10 @@ def content_blocks(content):
             result.append(copy.deepcopy(block))
         elif kind == 'image_url':
             url = block['image_url']['url']
+            if not isinstance(url, str):
+                # A malformed value must take the plugin's rejection path, not raise a raw
+                # TypeError/AttributeError/KeyError out of the URL prefix check below.
+                raise RequestRejected('Only base64 data image_url inputs are supported')
             if url[:8].lower().startswith(('http://', 'https://')):
                 # Native routing passes remote URLs through; the transport never fetches. A hint
                 # keeps the turn alive where an error would fail every retry of the same history.

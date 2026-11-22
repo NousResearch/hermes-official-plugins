@@ -206,6 +206,9 @@ class SessionUnitCache:
                 self._units[key] = unit
                 self._sizes[key] = len(json.dumps(unit).encode("utf-8"))
                 self._bytes += self._sizes[key]
+        # A sidecar can outlive a smaller bound (config change, older build). Apply the same
+        # count/byte limits a store does, so a warm cache never starts above its own budget.
+        self._evict_locked()
 
 
 def default_cache(cache_dir: str | Path | None = None) -> SessionUnitCache:

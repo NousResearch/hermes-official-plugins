@@ -112,17 +112,23 @@ def _build_authorize_url(
 def _validate_redirect_uri(redirect_uri: str) -> tuple[str, int, str]:
     parsed = urlparse(redirect_uri)
     host = parsed.hostname or ""
+    try:
+        port = parsed.port
+    except ValueError:
+        # urllib raises for a non-numeric or out-of-range port; shape it like every other
+        # redirect problem instead of letting a raw ValueError escape the login flow.
+        port = None
     problem = (
         # Both schemes are valid on a loopback IP literal: http is what Spotify documents and
         # what the default uses, https is honoured when the app was registered that way.
         "must use http:// or https:// on 127.0.0.1/localhost." if parsed.scheme not in {"http", "https"}
         else "must point to localhost or 127.0.0.1." if host not in {"127.0.0.1", "localhost"}
-        else "must include an explicit localhost port." if not parsed.port
+        else "must include a valid localhost port." if not port
         else None
     )
     if problem:
         raise _err(f"Spotify PKCE redirect_uri {problem}", "spotify_redirect_invalid")
-    return host, parsed.port, parsed.path or "/"
+    return host, port, parsed.path or "/"
 
 
 def _server_ssl_context_class():

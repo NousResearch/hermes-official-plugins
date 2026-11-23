@@ -68,12 +68,41 @@ def _wait_gone(*pids, timeout=15):
     # Reaping is event-driven; the bound only guards a hang and must tolerate a loaded runner.
     import psutil
 
+    def alive(pid):
+        try:
+            return psutil.pid_exists(pid) and psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            return False
+
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if not any(psutil.pid_exists(pid) and psutil.Process(pid).status() != psutil.STATUS_ZOMBIE for pid in pids):
+        if not any(alive(pid) for pid in pids):
             return True
         time.sleep(0.02)
     return False
+
+
+class WaitGoneContract(unittest.TestCase):
+    def test_pid_reaped_between_checks_counts_as_gone(self):
+        # On a loaded runner the PID can vanish between pid_exists() and Process().
+        from unittest.mock import patch
+
+        import psutil
+
+        def reaped(pid):
+            raise psutil.NoSuchProcess(pid)
+
+        with patch.object(psutil, "pid_exists", return_value=True), patch.object(psutil, "Process", side_effect=reaped):
+            self.assertTrue(_wait_gone(3160, timeout=1))
+
+    def test_live_process_still_counts_as_alive(self):
+        from unittest.mock import patch
+
+        import psutil
+
+        live = SimpleNamespace(status=lambda: "running")
+        with patch.object(psutil, "pid_exists", return_value=True), patch.object(psutil, "Process", return_value=live):
+            self.assertFalse(_wait_gone(3160, timeout=1))
 
 
 class Contract(unittest.TestCase):

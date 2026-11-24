@@ -2,6 +2,8 @@ name: feishu
 label: Feishu / Lark
 kind: platform
 version: 2.0.0
+# The first Hermes release without core's bundled Feishu (its built-in feishu_* tools reject this plugin's).
+requires_hermes: ">=0.23.5"
 description: >
   Feishu / Lark gateway adapter for Hermes Agent. Connects to Feishu (China) or Lark
   (International) via the official lark-oapi SDK over WebSocket or webhook and

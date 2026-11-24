@@ -1,4 +1,8 @@
-# google_meet plugin
+<p align="center"><img src="../assets/google-meet.jpg" alt="Google Meet: official Hermes Agent plugin" width="100%"></p>
+
+# google-meet plugin
+
+> Part of the [Hermes Official Plugins](../README.md), Nous Research's official plugins for Hermes Agent. Formerly bundled with Hermes core as `google_meet`; existing users are migrated automatically.
 
 Let the hermes agent join a Google Meet call, transcribe it, optionally speak
 in it, and do the followup work afterwards.
@@ -50,7 +54,7 @@ Without v2: the "realtime" path is skipped; transcribe runs alone.
 |---|---|
 | `plugin.yaml` | manifest |
 | `__init__.py` | `register(ctx)` — registers 5 tools + `on_session_end` hook + `hermes meet` CLI |
-| `meet_bot.py` | Playwright bot subprocess (standalone, `python -m plugins.google_meet.meet_bot`) |
+| `meet_bot.py` | Playwright bot subprocess (standalone; `process_manager` spawns it with the plugin directory mounted as a package) |
 | `process_manager.py` | local bot lifecycle + `enqueue_say` |
 | `tools.py` | agent-facing tools + node-routing helper |
 | `cli.py` | `hermes meet setup / auth / join / status / transcript / say / stop / node ...` |
@@ -66,8 +70,8 @@ Without v2: the "realtime" path is skipped; transcribe runs alone.
 ## Local quick start
 
 ```bash
-hermes plugins enable google_meet
-hermes meet install                                      # pip + Chromium
+hermes plugins install google-meet
+hermes meet install                                      # Chromium
 hermes meet setup                                        # preflight
 hermes meet auth                                         # optional
 hermes meet join https://meet.google.com/abc-defg-hij    # transcribe
@@ -107,7 +111,7 @@ status` report the result as `micState` (`unmuted`, `unmuted_clicked`, `unknown`
 
 On the node machine (e.g. user's Mac with a signed-in Chrome):
 ```bash
-hermes plugins enable google_meet
+hermes plugins install google-meet
 hermes meet install
 hermes meet node run --display-name my-mac --host 0.0.0.0 --port 18789
 # prints the bearer token on first run; copy it

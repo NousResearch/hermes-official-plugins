@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from plugins.teams_pipeline.cli import register_cli, teams_pipeline_command
-from plugins.teams_pipeline.store import TeamsPipelineStore
+from teams_pipeline_plugin.cli import register_cli, teams_pipeline_command
+from teams_pipeline_plugin.store import TeamsPipelineStore
 
 
 @pytest.fixture(autouse=True)
@@ -104,7 +104,7 @@ def test_validate_accepts_msgraph_credentials_for_graph_delivery(monkeypatch, ca
         }
     )
     monkeypatch.setattr(
-        "plugins.teams_pipeline.cli.load_gateway_config",
+        "teams_pipeline_plugin.cli.load_gateway_config",
         lambda: gateway_config,
     )
 

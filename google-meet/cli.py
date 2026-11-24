@@ -24,10 +24,10 @@ from hermes_cli.browser_runtime import chromium_executable
 from hermes_constants import get_hermes_home
 from utils import atomic_json_write
 
-from plugins.google_meet import process_manager as pm
-from plugins.google_meet.meet_bot import _is_safe_meet_url
-from plugins.google_meet.node.cli import node_command, register_cli as _register_node_cli
-from plugins.google_meet.tools import resolve_node
+from . import process_manager as pm
+from .meet_bot import _is_safe_meet_url
+from .node.cli import node_command, register_cli as _register_node_cli
+from .tools import resolve_node
 
 
 def _auth_state_path() -> Path:
@@ -52,9 +52,9 @@ def register_cli(subparser: argparse.ArgumentParser) -> None:
     subs = subparser.add_subparsers(dest="meet_command")
     p = {name: subs.add_parser(name, help=help_) for name, help_ in _SUBCOMMAND_HELP}
     p["install"].add_argument("--realtime", action="store_true",
-                              help="Also install realtime audio tools (pulseaudio-utils on Linux, BlackHole+ffmpeg on macOS). Uses sudo/brew, prompts before invoking either.")
+                              help="Also install realtime audio tools (pulseaudio-utils on Linux, BlackHole+ffmpeg on macOS). Installs system packages (apt-get as root, or brew) after a prompt.")
     p["install"].add_argument("--yes", "-y", action="store_true",
-                              help="Answer yes to all prompts (use with care; will run sudo apt-get or brew without asking).")
+                              help="Answer yes to all prompts (use with care: system packages get installed without asking).")
     p["join"].add_argument("url", help="https://meet.google.com/...")
     p["join"].add_argument("--guest-name", default="Hermes Agent")
     p["join"].add_argument("--duration", default=None, help="e.g. 30m, 2h, 90s")
@@ -145,15 +145,14 @@ def _cmd_install(*, realtime: bool, assume_yes: bool) -> int:
             print(fail_msg)
 
     print("google_meet install\n-------------------")
-    print("\n[1/3] Python dependencies (google-meet extra)")
-    try:
-        import pm as package_manager
-
-        package_manager.sync_venv(["google-meet"], explicit=True)
-    except Exception as exc:
-        print(f"  dependency install failed: {exc}")
+    print("\n[1/3] Python dependencies (installed with the plugin)")
+    missing = [name for name in ("playwright", "websockets") if importlib.util.find_spec(name) is None]
+    if missing:
+        print(f"  missing: {', '.join(missing)} — run: hermes pm repair, then restart Hermes")
         return 1
+    print("  ok")
     print("\n[2/3] PM-managed Chromium")
+    import pm as package_manager
     try:
         package_manager.ensure("chromium", explicit=True)
     except Exception as exc:
@@ -167,7 +166,7 @@ def _cmd_install(*, realtime: bool, assume_yes: bool) -> int:
             if shutil.which("paplay") and shutil.which("pactl"):
                 print("  pulseaudio-utils already installed.")
             else:
-                _install_pkgs("  install pulseaudio-utils? this runs `sudo apt-get install -y pulseaudio-utils`",
+                _install_pkgs("  install pulseaudio-utils with apt-get, as root?",
                               ["sudo", "apt-get", "install", "-y", "pulseaudio-utils"],
                               "  apt install failed — install pulseaudio-utils manually")
         elif system == "Darwin":

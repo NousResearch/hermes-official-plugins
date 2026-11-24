@@ -43,21 +43,21 @@ Pick `realtime` only when the user actually wants the agent to speak. It costs r
 Easiest path — run the built-in installer:
 
 ```bash
-hermes plugins enable google_meet
+hermes plugins install google-meet
 hermes meet install                 # PM dependencies + Chromium (transcribe only)
 hermes meet install --realtime      # + pulseaudio-utils / brew blackhole+ffmpeg
 hermes meet auth                    # optional; skips guest-lobby wait
 hermes meet setup                   # preflight checks
 ```
 
-`hermes meet install --realtime` prompts before running `sudo apt-get` (Linux)
-or `brew install` (macOS). Pass `--yes` to skip the prompt. It will NOT touch
+`hermes meet install --realtime` prompts before installing system packages
+(`apt-get` as root on Linux, `brew install` on macOS). Pass `--yes` to skip the prompt. It will NOT touch
 your macOS default-input setting — you have to select BlackHole 2ch in
 System Settings yourself before starting a realtime meeting.
 
 For manual realtime audio setup:
 ```bash
-#   Linux:  sudo apt install pulseaudio-utils
+#   Linux:  apt install pulseaudio-utils   (as root)
 #   macOS:  brew install blackhole-2ch ffmpeg
 #           → System Settings → Sound → Input → BlackHole 2ch
 #   Then set OPENAI_API_KEY or HERMES_MEET_REALTIME_KEY in ~/.hermes/.env
@@ -66,7 +66,7 @@ For manual realtime audio setup:
 For a remote node:
 ```bash
 # on the user's Mac (where Chrome is signed in):
-hermes plugins enable google_meet
+hermes plugins install google-meet
 hermes meet install
 hermes meet node run --display-name my-mac    # persistent server
 # copy the printed token

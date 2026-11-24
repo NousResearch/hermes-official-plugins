@@ -7,7 +7,7 @@ import asyncio
 import httpx
 import pytest
 
-from plugins.teams_pipeline.graph_auth import (
+from teams_pipeline_plugin.graph_auth import (
     CachedAccessToken,
     DEFAULT_GRAPH_SCOPE,
     GraphCredentials,

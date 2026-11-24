@@ -6,10 +6,12 @@ import asyncio
 import logging
 from typing import Any
 
-from gateway.config import Platform
-from plugins.teams_pipeline.pipeline import TeamsMeetingPipeline
-from plugins.teams_pipeline.store import TeamsPipelineStore, resolve_teams_pipeline_store_path
-from plugins.teams_pipeline.subscriptions import build_graph_client
+from gateway.config import Platform, load_gateway_config
+from .graph_auth import MicrosoftGraphTokenProvider
+from .graph_client import MicrosoftGraphClient
+from .pipeline import TeamsMeetingPipeline
+from .store import TeamsPipelineStore, resolve_teams_pipeline_store_path
+from .subscriptions import build_graph_client
 
 logger = logging.getLogger(__name__)
 
@@ -48,46 +50,45 @@ def build_pipeline_runtime_config(gateway_config: Any) -> dict[str, Any]:
     return pipeline_config
 
 
-def build_pipeline_runtime(gateway: Any) -> TeamsMeetingPipeline:
+class _StaticAccessTokenProvider:
+    """Minimal token-provider shim so outbound Graph delivery can reuse the shared client."""
+
+    def __init__(self, access_token: str):
+        self._access_token = str(access_token or "").strip()
+
+    async def get_access_token(self, *, force_refresh: bool = False) -> str:
+        if not self._access_token:
+            raise ValueError("TEAMS_GRAPH_ACCESS_TOKEN is required for graph delivery mode.")
+        return self._access_token
+
+    def clear_cache(self) -> None:
+        return None
+
+
+def _graph_client_for(access_token: str) -> MicrosoftGraphClient:
+    """Graph client for Teams outbound delivery: a static token when the Teams config has one, else app creds."""
+    provider = _StaticAccessTokenProvider(access_token) if access_token else MicrosoftGraphTokenProvider.from_env()
+    return MicrosoftGraphClient(provider)
+
+
+def build_pipeline_runtime(gateway_config: Any) -> TeamsMeetingPipeline:
     teams_sender = None
-    teams_config = gateway.config.platforms.get(Platform("teams"))
-    pipeline_config = build_pipeline_runtime_config(gateway.config)
+    teams_config = gateway_config.platforms.get(Platform("teams"))
+    pipeline_config = build_pipeline_runtime_config(gateway_config)
     if teams_config and teams_config.enabled and (pipeline_config.get("teams_delivery") or {}).get("enabled"):
         try:
             from plugins.platforms.teams.summary_writer import TeamsSummaryWriter
         except ImportError:
             logger.debug("TeamsSummaryWriter unavailable; Teams outbound delivery remains disabled until the adapter layer is present.")
         else:
-            teams_sender = TeamsSummaryWriter(platform_config=teams_config)
+            teams_sender = TeamsSummaryWriter(platform_config=teams_config, graph_client_factory=_graph_client_for)
     return TeamsMeetingPipeline(
         graph_client=build_graph_client(), store=TeamsPipelineStore(resolve_teams_pipeline_store_path()),
         config=pipeline_config, teams_sender=teams_sender,
     )
 
 
-def bind_gateway_runtime(gateway: Any) -> bool:
-    """Attach the Teams pipeline runtime to the msgraph webhook adapter."""
-    adapter = gateway.adapters.get(Platform.MSGRAPH_WEBHOOK)
-    if adapter is None:
-        return False
-    if getattr(gateway, "_teams_pipeline_runtime", None) is not None:
-        return True
-    try:
-        runtime = build_pipeline_runtime(gateway)
-    except Exception as exc:
-        # Without a runtime, notifications must still be acked (and dropped) so Graph does not retry-storm.
-        gateway._teams_pipeline_runtime_error = str(exc)
-        logger.warning(
-            "Teams pipeline runtime unavailable: %s. Installing a drop-scheduler "
-            "so Graph notifications ack cleanly without piling up unbound.", exc,
-        )
-
-        async def _drop(notification: dict[str, Any], event: Any) -> None:
-            logger.debug("Dropping Graph notification because runtime is unavailable: id=%s resource=%s",
-                         notification.get("id"), notification.get("resource"))
-        adapter.set_notification_scheduler(_drop)
-        return False
-
+def _install_scheduler(adapter: Any, runtime: TeamsMeetingPipeline) -> None:
     # Graph wants a prompt 202 once the work is durable: accept (persist the job) inside the request,
     # run the fetch/transcript/summary pipeline detached. An accept failure still fails the request.
     background = getattr(adapter, "_background_tasks", set())
@@ -105,6 +106,35 @@ def bind_gateway_runtime(gateway: Any) -> bool:
         task.add_done_callback(background.discard)
         task.add_done_callback(lambda _task: scheduled.discard(job.job_id))
     adapter.set_notification_scheduler(_schedule)
-    gateway._teams_pipeline_runtime = runtime
-    gateway._teams_pipeline_runtime_error = None
+
+
+def bind_adapter(adapter: Any) -> bool:
+    """Attach the Teams pipeline runtime to a msgraph webhook adapter.
+
+    Called from the adapter's ``connect()`` (the ``msgraph_webhook`` platform handler), which runs
+    inside the owning profile's scope, so ``load_gateway_config()`` and the store path resolve that
+    profile. A reconnect builds a new aiohttp app and re-runs the factory: reuse the runtime and only
+    re-install the scheduler."""
+    runtime = getattr(adapter, "_teams_pipeline_runtime", None)
+    if runtime is not None:
+        _install_scheduler(adapter, runtime)
+        return True
+    try:
+        runtime = build_pipeline_runtime(load_gateway_config())
+    except Exception as exc:
+        # Without a runtime, notifications must still be acked (and dropped) so Graph does not retry-storm.
+        adapter._teams_pipeline_runtime_error = str(exc)
+        logger.warning(
+            "Teams pipeline runtime unavailable: %s. Installing a drop-scheduler "
+            "so Graph notifications ack cleanly without piling up unbound.", exc,
+        )
+
+        async def _drop(notification: dict[str, Any], event: Any) -> None:
+            logger.debug("Dropping Graph notification because runtime is unavailable: id=%s resource=%s",
+                         notification.get("id"), notification.get("resource"))
+        adapter.set_notification_scheduler(_drop)
+        return False
+    _install_scheduler(adapter, runtime)
+    adapter._teams_pipeline_runtime = runtime
+    adapter._teams_pipeline_runtime_error = None
     return True

@@ -36,7 +36,7 @@ def _isolate_home(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_is_safe_meet_url_accepts_standard_meet_codes():
-    from plugins.google_meet.meet_bot import _is_safe_meet_url
+    from google_meet_plugin.meet_bot import _is_safe_meet_url
 
     assert _is_safe_meet_url("https://meet.google.com/abc-defg-hij")
     assert _is_safe_meet_url("https://meet.google.com/abc-defg-hij?pli=1")
@@ -45,7 +45,7 @@ def test_is_safe_meet_url_accepts_standard_meet_codes():
 
 
 def test_meeting_id_extraction():
-    from plugins.google_meet.meet_bot import _meeting_id_from_url
+    from google_meet_plugin.meet_bot import _meeting_id_from_url
 
     assert _meeting_id_from_url("https://meet.google.com/abc-defg-hij") == "abc-defg-hij"
     assert _meeting_id_from_url("https://meet.google.com/abc-defg-hij?pli=1") == "abc-defg-hij"
@@ -59,7 +59,7 @@ def test_meeting_id_extraction():
 # ---------------------------------------------------------------------------
 
 def test_bot_state_dedupes_captions_and_flushes_status(tmp_path):
-    from plugins.google_meet.meet_bot import _BotState
+    from google_meet_plugin.meet_bot import _BotState
 
     out = tmp_path / "session"
     state = _BotState(out_dir=out, meeting_id="abc-defg-hij",
@@ -82,7 +82,7 @@ def test_bot_state_dedupes_captions_and_flushes_status(tmp_path):
 
 
 def test_parse_duration():
-    from plugins.google_meet.meet_bot import _parse_duration
+    from google_meet_plugin.meet_bot import _parse_duration
 
     assert _parse_duration("30m") == 30 * 60
     assert _parse_duration("2h") == 2 * 3600
@@ -97,7 +97,7 @@ def test_parse_duration():
 # ---------------------------------------------------------------------------
 
 def test_start_refuses_unsafe_url():
-    from plugins.google_meet import process_manager as pm
+    from google_meet_plugin import process_manager as pm
 
     res = pm.start("https://evil.example.com/abc-defg-hij")
     assert res["ok"] is False
@@ -105,7 +105,7 @@ def test_start_refuses_unsafe_url():
 
 
 def test_status_reports_no_active_meeting():
-    from plugins.google_meet import process_manager as pm
+    from google_meet_plugin import process_manager as pm
 
     assert pm.status()["ok"] is False
     assert pm.transcript()["ok"] is False
@@ -113,7 +113,7 @@ def test_status_reports_no_active_meeting():
 
 
 def test_transcript_reads_last_n_lines(tmp_path):
-    from plugins.google_meet import process_manager as pm
+    from google_meet_plugin import process_manager as pm
 
     meeting_dir = Path(os.environ["HERMES_HOME"]) / "workspace" / "meetings" / "abc-defg-hij"
     meeting_dir.mkdir(parents=True)
@@ -137,7 +137,7 @@ def test_transcript_reads_last_n_lines(tmp_path):
 
 
 def test_stop_signals_process_and_clears_pointer(tmp_path):
-    from plugins.google_meet import process_manager as pm
+    from google_meet_plugin import process_manager as pm
 
     pm._write_active({
         "pid": 11111, "meeting_id": "x-y-z",
@@ -173,7 +173,7 @@ def test_stop_signals_process_and_clears_pointer(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_meet_join_handler_missing_url_returns_error():
-    from plugins.google_meet.tools import handle_meet_join
+    from google_meet_plugin.tools import handle_meet_join
 
     out = json.loads(handle_meet_join({}))
     assert out["success"] is False
@@ -185,9 +185,9 @@ def test_meet_join_handler_missing_url_returns_error():
 # ---------------------------------------------------------------------------
 
 def test_on_session_end_noop_when_nothing_active():
-    from plugins.google_meet import _on_session_end
+    from google_meet_plugin import _on_session_end
     # Should not raise and should not call stop().
-    with patch("plugins.google_meet.pm.stop") as stop_mock:
+    with patch("google_meet_plugin.pm.stop") as stop_mock:
         _on_session_end()
     stop_mock.assert_not_called()
 
@@ -196,6 +196,47 @@ def test_on_session_end_noop_when_nothing_active():
 # Plugin register() — platform gating + tool registration
 # ---------------------------------------------------------------------------
 
+class _RegisterCtx:
+    def __init__(self):
+        self.tools, self.cli_commands, self.hooks = [], [], []
+
+    def register_tool(self, **kwargs):
+        self.tools.append(kwargs["name"])
+
+    def register_cli_command(self, **kwargs):
+        self.cli_commands.append(kwargs["name"])
+
+    def register_hook(self, name, fn):
+        self.hooks.append(name)
+
+
+def test_register_on_a_core_without_the_bundled_copy(monkeypatch):
+    import importlib
+
+    plugin = importlib.import_module("google_meet_plugin")
+    monkeypatch.setattr(plugin, "_core_ships_google_meet", lambda: False)
+    monkeypatch.setattr(plugin.platform, "system", lambda: "Linux")
+    ctx = _RegisterCtx()
+    plugin.register(ctx)
+    assert set(ctx.tools) == {"meet_join", "meet_leave", "meet_status", "meet_transcript", "meet_say"}
+    assert ctx.cli_commands == ["meet"] and ctx.hooks == ["on_session_end"]
+
+
+def test_register_stays_inert_on_a_core_that_still_bundles_google_meet(monkeypatch, tmp_path):
+    """The bundled copy registers the same tools, ``hermes meet`` and session hook."""
+    import importlib
+
+    import plugins as core_plugins
+
+    plugin = importlib.import_module("google_meet_plugin")
+    bundled = tmp_path / "core_plugins"
+    (bundled / "google_meet").mkdir(parents=True)
+    (bundled / "google_meet" / "plugin.yaml").write_text("name: google_meet\n")
+    monkeypatch.setattr(core_plugins, "__path__", [str(bundled)])
+    ctx = _RegisterCtx()
+    plugin.register(ctx)
+    assert ctx.tools == [] and ctx.cli_commands == [] and ctx.hooks == []
+
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +244,7 @@ def test_on_session_end_noop_when_nothing_active():
 # ---------------------------------------------------------------------------
 
 def test_enqueue_say_requires_text():
-    from plugins.google_meet import process_manager as pm
+    from google_meet_plugin import process_manager as pm
     assert pm.enqueue_say("")["ok"] is False
     assert pm.enqueue_say("   ")["ok"] is False
 
@@ -216,7 +257,7 @@ def test_enqueue_say_requires_text():
 def test_cli_register_includes_node_subcommand():
     """`hermes meet` argparse tree includes the node subtree."""
     import argparse
-    from plugins.google_meet.cli import register_cli
+    from google_meet_plugin.cli import register_cli
 
     parser = argparse.ArgumentParser(prog="hermes meet")
     register_cli(parser)
@@ -237,7 +278,7 @@ def test_cli_register_includes_node_subcommand():
 # ---------------------------------------------------------------------------
 
 def test_looks_like_human_speaker():
-    from plugins.google_meet.meet_bot import _looks_like_human_speaker
+    from google_meet_plugin.meet_bot import _looks_like_human_speaker
 
     # Blank, "unknown", "you", and the bot's own name → not human (no barge-in)
     for s in ("", "   ", "Unknown", "unknown", "You", "you", "Hermes Agent", "hermes agent"):
@@ -248,7 +289,7 @@ def test_looks_like_human_speaker():
 
 
 def test_detect_admission_returns_false_on_error():
-    from plugins.google_meet.meet_bot import _ADMISSION_PROBE_JS, _probe
+    from google_meet_plugin.meet_bot import _ADMISSION_PROBE_JS, _probe
 
     class _FakePage:
         def evaluate(self, _js): raise RuntimeError("boom")
@@ -277,7 +318,7 @@ def test_join_polls_for_late_button_and_admission_unmutes_mic(tmp_path):
     The mic check is driven through ``_drain_loop``'s admission branch — the production call site."""
     import time
 
-    from plugins.google_meet.meet_bot import _ADMISSION_PROBE_JS, _BotConfig, _BotState, _drain_loop, _join
+    from google_meet_plugin.meet_bot import _ADMISSION_PROBE_JS, _BotConfig, _BotState, _drain_loop, _join
 
     class _Page:
         def __init__(self, ready_at, mic_muted, stop):
@@ -302,7 +343,7 @@ def test_join_polls_for_late_button_and_admission_unmutes_mic(tmp_path):
         stop = {"stop": False}
         page = _Page(ready_at=0, mic_muted=mic_muted, stop=stop)
         state = _BotState(tmp_path / str(mic_muted), "abc-defg-hij", "https://meet.google.com/abc-defg-hij")
-        with patch("plugins.google_meet.meet_bot.time.sleep"):
+        with patch("google_meet_plugin.meet_bot.time.sleep"):
             _drain_loop(page, _BotConfig(guest_name="Bot", duration_s=0, lobby_timeout=30), state,
                         {"session": None}, stop)
         assert state.in_call is True
@@ -328,7 +369,7 @@ def test_pcm_pump_receives_audio_appended_after_start(tmp_path, monkeypatch):
     import subprocess
     import time
 
-    from plugins.google_meet import meet_bot
+    from google_meet_plugin import meet_bot
 
     pcm, sink = tmp_path / "speaker.pcm", tmp_path / "device.bin"
     pcm.write_bytes(b"")
@@ -361,7 +402,7 @@ def test_pcm_tail_loop_swallows_only_pipe_errors(tmp_path):
     """A closed pump pipe is expected and quiet; any other tail-thread bug must not be silenced."""
     from types import SimpleNamespace
 
-    from plugins.google_meet.meet_bot import _pcm_tail_loop
+    from google_meet_plugin.meet_bot import _pcm_tail_loop
 
     pcm = tmp_path / "speaker.pcm"
     pcm.write_bytes(b"\x00" * 16)
@@ -381,7 +422,7 @@ def test_pcm_tail_loop_swallows_only_pipe_errors(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_realtime_session_cancel_response_when_disconnected():
-    from plugins.google_meet.realtime.openai_client import RealtimeSession
+    from google_meet_plugin.realtime.openai_client import RealtimeSession
 
     sess = RealtimeSession(api_key="sk-test", audio_sink_path=None)
     # No _ws yet — cancel should no-op and return False.
@@ -395,32 +436,34 @@ def test_realtime_session_cancel_response_when_disconnected():
 
 
 
-@pytest.mark.platforms("linux", "macos")
-def test_cmd_install_uses_declared_dependencies_and_pm_chromium(monkeypatch, capsys):
+def test_cmd_install_checks_plugin_dependencies_and_ensures_pm_chromium(monkeypatch, capsys):
+    """playwright/websockets come with the plugin install; ``hermes meet install`` only checks them."""
+    import importlib.util
+
     import pm
 
     calls = []
-    monkeypatch.setattr(pm, "sync_venv", lambda extras, **kwargs: calls.append(("sync", extras, kwargs)))
-    monkeypatch.setattr(pm, "ensure", lambda name, **kwargs: calls.append(("ensure", name, kwargs)))
-    from plugins.google_meet import cli
+    monkeypatch.setattr(pm, "sync_venv", lambda *a, **kw: pytest.fail("the plugin's deps are not a core extra"))
+    monkeypatch.setattr(pm, "ensure", lambda name, **kwargs: calls.append((name, kwargs)))
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec",
+                        lambda name, *a: object() if name in {"playwright", "websockets"} else real_find_spec(name, *a))
+    from google_meet_plugin import cli
     monkeypatch.setattr(cli.subprocess, "run", lambda *a, **kw: pytest.fail("direct installer subprocess"))
     assert cli._cmd_install(realtime=False, assume_yes=True) == 0
-    assert calls == [("sync", ["google-meet"], {"explicit": True}),
-                     ("ensure", "chromium", {"explicit": True})]
-    from pm.features import declared_extras
-
-    assert set(calls[0][1]) <= set(declared_extras(Path(__file__).resolve().parents[2]))
+    assert calls == [("chromium", {"explicit": True})]
     assert "hermes meet setup" in capsys.readouterr().out
 
 
-@pytest.mark.platforms("linux", "macos")
-def test_cmd_install_reports_dependency_failure(monkeypatch, capsys):
+def test_cmd_install_reports_missing_plugin_dependencies(monkeypatch, capsys):
+    import importlib.util
+
     import pm
 
-    def fail(*args, **kwargs):
-        raise RuntimeError("dependency resolution failed")
-
-    monkeypatch.setattr(pm, "sync_venv", fail)
-    from plugins.google_meet import cli
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec",
+                        lambda name, *a: None if name == "playwright" else real_find_spec(name, *a))
+    monkeypatch.setattr(pm, "ensure", lambda *a, **kw: pytest.fail("Chromium before the Python deps"))
+    from google_meet_plugin import cli
     assert cli._cmd_install(realtime=False, assume_yes=True) == 1
-    assert "dependency resolution failed" in capsys.readouterr().out
+    assert "missing: playwright" in capsys.readouterr().out

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from hermes_constants import get_hermes_home
-from plugins.google_meet._jsonfile import say_queue_lock
+from ._jsonfile import say_queue_lock
 
 from utils import atomic_json_write
 
@@ -60,6 +60,14 @@ def _kill(pid: int, sig) -> None:
 
 _NO_ACTIVE = {"ok": False, "reason": "no active meeting"}
 
+# The bot runs as its own interpreter. An installed plugin is not an importable top-level package there, so
+# the child mounts this directory as the package ``google_meet_plugin`` (its ``__init__`` is not run: the bot
+# needs none of the tool or CLI registration) and runs ``meet_bot`` as ``__main__``.
+_BOT_BOOTSTRAP = (
+    "import runpy, sys, types; pkg = types.ModuleType('google_meet_plugin'); pkg.__path__ = [sys.argv[1]]; "
+    "sys.modules['google_meet_plugin'] = pkg; runpy.run_module('google_meet_plugin.meet_bot', run_name='__main__')"
+)
+
 
 def start(url: str, *, out_dir: Optional[Path] = None, headed: bool = False,
           auth_state: Optional[str] = None, guest_name: str = "Hermes Agent", duration: Optional[str] = None,
@@ -67,7 +75,7 @@ def start(url: str, *, out_dir: Optional[Path] = None, headed: bool = False,
           realtime_voice: Optional[str] = None, realtime_instructions: Optional[str] = None,
           realtime_api_key: Optional[str] = None) -> dict[str, Any]:
     """Spawn the meet_bot subprocess for *url*, stopping any running bot first (one active meeting)."""
-    from plugins.google_meet.meet_bot import _is_safe_meet_url, _meeting_id_from_url
+    from .meet_bot import _is_safe_meet_url, _meeting_id_from_url
     if not _is_safe_meet_url(url):
         return {"ok": False, "error": "refusing: only https://meet.google.com/ URLs are allowed. got: " + repr(url)}
     if _pid_alive(int((_read_active() or {}).get("pid", 0))):
@@ -101,7 +109,8 @@ def start(url: str, *, out_dir: Optional[Path] = None, headed: bool = False,
     log_path = out / "bot.log"
     # Detach: stdout/stderr → log file, new session so parent signals don't propagate.
     with open(log_path, "ab", buffering=0) as log_fh:
-        proc = subprocess.Popen([sys.executable, "-P", "-m", "plugins.google_meet.meet_bot"], stdin=subprocess.DEVNULL,
+        proc = subprocess.Popen([sys.executable, "-P", "-c", _BOT_BOOTSTRAP, str(Path(__file__).resolve().parent)],
+                                stdin=subprocess.DEVNULL,
                                 # detached-spawn: ok — reached via files across turns, stopped by meet_leave (pid in .active.json)
                                 stdout=log_fh, stderr=subprocess.STDOUT, env=env, start_new_session=True,
                                 close_fds=True)

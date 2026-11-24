@@ -1,8 +1,18 @@
-name: google_meet
-version: 0.2.0
-description: "Join a Google Meet call, transcribe live captions, speak in realtime, and follow up afterwards. v1 transcribe-only is the default; v2 realtime duplex audio via OpenAI Realtime + BlackHole/PulseAudio ships with mode='realtime'; v3 remote node host lets the bot run on a different machine than the gateway (gateway on Linux, Chrome+signed-in profile on the user's Mac). Explicit-by-design: only joins meet.google.com URLs passed in \u2014 no calendar scanning, no auto-dial."
+name: google-meet
+label: Google Meet
+version: 0.3.0
+manifest_version: 2
 author: NousResearch
 kind: standalone
+homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/google-meet
+description: >
+  Join a Google Meet call, transcribe live captions, speak in realtime, and follow up afterwards.
+  Transcribe-only is the default; realtime duplex audio via OpenAI Realtime + BlackHole/PulseAudio
+  ships with mode='realtime'; a remote node host lets the bot run on a different machine than the
+  gateway (gateway on Linux, Chrome and a signed-in profile on the user's Mac). Explicit by design:
+  only joins meet.google.com URLs passed in, with no calendar scanning and no auto-dial. Formerly
+  built into Hermes core as google_meet.
+requires_hermes: ">=0.21.7"
 platforms:
   - linux
   - macos

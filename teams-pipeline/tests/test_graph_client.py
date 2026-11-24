@@ -7,8 +7,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from plugins.teams_pipeline.graph_auth import GraphCredentials, MicrosoftGraphTokenProvider
-from plugins.teams_pipeline.graph_client import (
+from teams_pipeline_plugin.graph_auth import GraphCredentials, MicrosoftGraphTokenProvider
+from teams_pipeline_plugin.graph_client import (
     MicrosoftGraphAPIError,
     MicrosoftGraphClient,
     MicrosoftGraphClientError,

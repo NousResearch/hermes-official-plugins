@@ -1,4 +1,4 @@
-"""Tests for plugins.google_meet.realtime.openai_client (v2).
+"""Tests for google_meet_plugin.realtime.openai_client (v2).
 
 Uses a scripted fake WebSocket — no network, no API key required.
 """
@@ -84,7 +84,7 @@ def _install_fake_websockets(monkeypatch, fake_ws):
 
 
 def test_connect_sends_session_update_with_voice_and_instructions(monkeypatch):
-    from plugins.google_meet.realtime.openai_client import RealtimeSession
+    from google_meet_plugin.realtime.openai_client import RealtimeSession
 
     ws = _FakeWS(recv_frames=[])
     captured = _install_fake_websockets(monkeypatch, ws)
@@ -123,7 +123,7 @@ def test_connect_sends_session_update_with_voice_and_instructions(monkeypatch):
 
 
 def test_speak_sends_create_and_response_and_writes_audio(monkeypatch, tmp_path):
-    from plugins.google_meet.realtime.openai_client import RealtimeSession
+    from google_meet_plugin.realtime.openai_client import RealtimeSession
 
     audio_bytes = b"\x01\x02\x03\x04PCM!"
     b64 = base64.b64encode(audio_bytes).decode()
@@ -163,7 +163,7 @@ def test_speak_sends_create_and_response_and_writes_audio(monkeypatch, tmp_path)
 
 
 def test_close_is_idempotent_and_closes_ws(monkeypatch):
-    from plugins.google_meet.realtime.openai_client import RealtimeSession
+    from google_meet_plugin.realtime.openai_client import RealtimeSession
 
     ws = _FakeWS(recv_frames=[])
     _install_fake_websockets(monkeypatch, ws)
@@ -196,7 +196,7 @@ class _StubSession:
 
 
 def test_speaker_run_until_stopped_processes_queue(tmp_path):
-    from plugins.google_meet.realtime.openai_client import RealtimeSpeaker
+    from google_meet_plugin.realtime.openai_client import RealtimeSpeaker
 
     queue = tmp_path / "queue.jsonl"
     processed = tmp_path / "processed.jsonl"
@@ -227,17 +227,47 @@ def test_speaker_run_until_stopped_processes_queue(tmp_path):
 
 
 
+def _wait_until(predicate, timeout=10.0, interval=0.01, what=None):
+    """Return ``predicate()``'s first truthy value; fail after ``timeout`` s (a deadline, not a delay)."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while not (value := predicate()):
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"timed out after {timeout}s waiting for {what or 'the condition'}")
+        time.sleep(interval)
+    return value
+
+
+def _watch_file_lock_contention(monkeypatch):
+    """An event set when any thread is refused by ``hermes_cli.auth._file_lock`` (proof a writer waits)."""
+    import threading
+
+    from hermes_cli import auth
+
+    contended = threading.Event()
+    real_kernel_lock = auth._kernel_lock
+
+    def kernel_lock(lock_file, acquire):
+        try:
+            return real_kernel_lock(lock_file, acquire)
+        except OSError as exc:
+            if acquire and auth._is_lock_contention(exc):
+                contended.set()
+            raise
+
+    monkeypatch.setattr(auth, "_kernel_lock", kernel_lock)
+    return contended
+
+
 def test_speaker_drain_keeps_a_say_enqueued_during_the_rewrite(tmp_path, monkeypatch):
     """A meet_say append landing between the speaker's post-speak re-read and its queue rewrite must
     survive the rewrite and be spoken (it was reported "enqueued" to the agent)."""
     import threading
 
-    from plugins.google_meet import process_manager as pm
-    from plugins.google_meet.realtime.openai_client import RealtimeSpeaker
-    from tests.lock_contention import watch_file_lock_contention
-    from tests.waiting import wait_until
-
-    contended = watch_file_lock_contention(monkeypatch)
+    from google_meet_plugin import process_manager as pm
+    from google_meet_plugin.realtime.openai_client import RealtimeSpeaker
+    contended = _watch_file_lock_contention(monkeypatch)
 
     queue = tmp_path / "say_queue.jsonl"
     queue.write_text(json.dumps({"id": "a", "text": "first"}) + "\n")
@@ -259,7 +289,7 @@ def test_speaker_drain_keeps_a_say_enqueued_during_the_rewrite(tmp_path, monkeyp
             peer.start()
             peers.append(peer)
             # Unserialized, the append lands now; serialized, it is seen blocking on the queue lock.
-            wait_until(lambda: appended.is_set() or contended.is_set(),
+            _wait_until(lambda: appended.is_set() or contended.is_set(),
                        what="the append landed or blocked on the say-queue lock")
         return out
 

@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from hermes_constants import get_hermes_home
 
-from plugins.google_meet._jsonfile import read_json
+from .._jsonfile import read_json
 from utils import atomic_json_write
 
 

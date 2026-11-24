@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import logging
 import platform
+from pathlib import Path
 
-from plugins.google_meet import process_manager as pm
-from plugins.google_meet.cli import meet_command as _meet_command, register_cli as _register_meet_cli
-from plugins.google_meet.tools import (
+from . import process_manager as pm
+from .cli import meet_command as _meet_command, register_cli as _register_meet_cli
+from .tools import (
     MEET_JOIN_SCHEMA, MEET_LEAVE_SCHEMA, MEET_SAY_SCHEMA, MEET_STATUS_SCHEMA, MEET_TRANSCRIPT_SCHEMA,
     check_meet_requirements, handle_meet_join, handle_meet_leave, handle_meet_say, handle_meet_status,
     handle_meet_transcript)
@@ -39,8 +40,25 @@ def _on_session_end(**kwargs) -> None:
         logger.debug("google_meet on_session_end cleanup failed: %s", e)
 
 
+def _core_ships_google_meet() -> bool:
+    """True on a Hermes core that still bundles this plugin as ``plugins/google_meet``.
+
+    That copy registers the same tools, ``hermes meet`` command and session hook; registering here too would
+    collide with it. Looks only inside the imported ``plugins`` package's own ``__path__``."""
+    try:
+        import plugins as core_plugins
+    except ImportError:
+        return False
+    return any((Path(p) / "google_meet" / "plugin.yaml").is_file()
+               for p in getattr(core_plugins, "__path__", None) or ())
+
+
 def register(ctx) -> None:
     """Register tools, CLI, and lifecycle hooks (called once by the plugin loader)."""
+    if _core_ships_google_meet():
+        logger.info("google-meet: this Hermes core still ships Google Meet built in; "
+                    "the plugin stays inactive until core drops it")
+        return
     # Windows: no tested audio-routing path and flaky guest-join Chromium — refuse rather than half-work.
     system = platform.system().lower()
     if system not in {"linux", "darwin"}:

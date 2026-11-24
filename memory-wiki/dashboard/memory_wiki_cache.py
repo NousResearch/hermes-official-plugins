@@ -206,6 +206,10 @@ class SessionUnitCache:
                 self._units[key] = unit
                 self._sizes[key] = len(json.dumps(unit).encode("utf-8"))
                 self._bytes += self._sizes[key]
+        # The sidecar may have been written under larger bounds (an older default, a different
+        # profile's config), so ingest through the same eviction the store path uses: otherwise the
+        # "bounded" cache reloads however much a previous run wrote and re-serializes it on flush.
+        self._evict_locked()
 
 
 def default_cache(cache_dir: str | Path | None = None) -> SessionUnitCache:

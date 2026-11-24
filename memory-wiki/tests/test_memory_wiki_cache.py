@@ -284,3 +284,42 @@ def test_default_cache_is_profile_scoped(tmp_path, memory_wiki_cache, monkeypatc
 
     second = mwc.default_cache(tmp_path / "home-b" / "cache" / "memory-wiki")
     assert second is not first, "a different HERMES_HOME must not share units"
+
+
+def test_a_sidecar_written_under_a_bigger_bound_reloads_within_the_current_one(tmp_path, memory_wiki_cache):
+    """``store`` enforces the count/byte bounds, ``_load`` did not: a sidecar written by a run with
+    larger bounds (or by a different profile's config) loaded back unbounded, so the "bounded" cache
+    could hold and re-serialize however much a previous run had written. Every ingested unit has to
+    pass the same ``_evict_locked`` the store path uses."""
+    mwc = memory_wiki_cache
+    sidecar = tmp_path / "sidecar.json"
+
+    wide = mwc.SessionUnitCache(sidecar, max_units=50, max_bytes=1 << 20)
+    for i in range(20):
+        unit = _unit(f"s-{i}", float(i), "x" * 200)
+        unit["fingerprint"] = mwc.session_fingerprint(_row(f"s-{i}", float(i)))
+        wide.store(unit)
+    wide.flush()
+    assert wide.stats()["units"] == 20
+
+    narrow = mwc.SessionUnitCache(sidecar, max_units=5, max_bytes=1 << 20)
+    stats = narrow.stats()
+    assert stats["units"] <= 5, f"sidecar reload ignored max_units: {stats}"
+    assert narrow.lookup(_row("s-19", 19.0)) is not None, "the most recent unit must survive"
+    assert narrow.lookup(_row("s-0", 0.0)) is None, "the oldest unit must be the one evicted"
+
+
+def test_a_sidecar_written_under_a_bigger_byte_bound_reloads_within_the_current_one(tmp_path, memory_wiki_cache):
+    mwc = memory_wiki_cache
+    sidecar = tmp_path / "sidecar.json"
+
+    wide = mwc.SessionUnitCache(sidecar, max_units=100, max_bytes=1 << 20)
+    for i in range(10):
+        unit = _unit(f"s-{i}", float(i), "x" * 400)
+        unit["fingerprint"] = mwc.session_fingerprint(_row(f"s-{i}", float(i)))
+        wide.store(unit)
+    wide.flush()
+    assert wide.stats()["bytes"] > 4096
+
+    narrow = mwc.SessionUnitCache(sidecar, max_units=100, max_bytes=4096)
+    assert narrow.stats()["bytes"] <= 4096, "sidecar reload ignored max_bytes"

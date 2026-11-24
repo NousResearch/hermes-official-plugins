@@ -431,7 +431,7 @@ class HookTests(unittest.TestCase):
         adapter._relay_settings = lambda: RELAY
         adapter._session_env = lambda name: self.env.get(name, "")
         adapter._activity = lambda: self.tracker
-        adapter._request_watches["live"] = {}
+        adapter._prompt_watches["live"] = {}
         self.adapter = adapter
 
     def test_a_turn_through_its_hooks(self):
@@ -446,12 +446,12 @@ class HookTests(unittest.TestCase):
         self.adapter._on_approval_response(session_id="s1", choice="once")
         self.assertFalse(self.tracker._sessions["s1"]["attention"])
         self.adapter._on_unload()
-        self.assertEqual(self.adapter._request_watches, {})
+        self.assertEqual(self.adapter._prompt_watches, {})
         self.assertEqual(self.tracker._sessions, {})
 
     def test_the_hooks_follow_the_turn_through_a_compression(self):
         kw = {"platform": "ios", "turn_id": "turn-1"}
-        self.adapter._request_watches.clear()
+        self.adapter._prompt_watches.clear()
         self.adapter._on_api_request(session_id="old", **kw)
         self.adapter._on_tool_start(tool_name="terminal", args={}, session_id="old", turn_id="turn-1")
         self.adapter._on_api_request(session_id="new", **kw)

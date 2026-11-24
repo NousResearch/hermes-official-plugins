@@ -793,16 +793,12 @@ async def _standalone_send(
 
 def _on_api_request(*args, **kwargs):
     """``pre_api_request``: an LLM call starts. Show the turn on the Live Activity
-    and watch an app or desktop session for the questions it may put to the user."""
+    and note a gateway session for the prompts it may put to the user."""
     fields = _hook_fields(args, kwargs)
     try:
         _activity_begin(fields)
     except Exception:
         logger.debug("Could not report activity", exc_info=True)
-    try:
-        _watch_requests(fields)
-    except Exception:
-        logger.debug("Could not watch for requests", exc_info=True)
     try:
         _watch_prompts(fields)
     except Exception:
@@ -894,7 +890,6 @@ def _on_approval_response(*args, **kwargs):
 
 
 def _on_unload():
-    _request_watches.clear()
     _prompt_watches.clear()
     _open_prompts.clear()
     _platform_settings.clear()
@@ -929,7 +924,6 @@ def _on_session_end(*args, **kwargs):
     session_id = str(fields.get("session_id") or "")
     if not _delegated_turn(fields):
         # A subagent shares its parent's app session, whose turn is still running.
-        _unwatch_requests(session_id)
         _unwatch_prompts(session_id)
     if not session_id:
         return
@@ -1210,8 +1204,6 @@ def _on_approval_request(*args, **kwargs):
         return
     _report_activity("attention", str(fields.get("session_id") or ""), True)
     session_key = str(fields.get("session_key") or "")
-    if _requests_watched(_session_env("HERMES_UI_SESSION_ID")):
-        return  # Notified from its ``approval`` request, with the id to answer it by.
     description = _approval_preview(fields)
     session_id = str(fields.get("session_id") or "") or _session_env("HERMES_SESSION_ID")
     source = _session_env("HERMES_SESSION_PLATFORM").strip().lower()
@@ -1296,24 +1288,11 @@ def _server_request_payload(method, request_id, params, origin):
     return payload
 
 
-# Questions put to the app and desktop clients. Hermes has no plugin hook for
-# server→client requests (``pre_approval_request`` covers only approvals and
-# carries no request id; an approval transport replaces Hermes' own prompt
-# rather than observing it), but every open one is listed by the public
-# ``tui_gateway.server_requests.open_requests(session_id)`` — what a
-# reconnecting client replays. So while a turn runs in an app or desktop
-# session, a worker polls that session's open requests and notifies once per
-# request, whether or not a client is attached: a backgrounded app has dropped
-# its socket, and the request waits there for it.
-REQUEST_POLL_SECONDS = 1.0
 # A turn whose end was never reported stops being watched after this long.
 REQUEST_WATCH_TTL_SECONDS = 6 * 60 * 60
 
-_request_watches = {}  # live session id -> {"origin", "relay", "session_id", "touched"}
-_notified_requests = {}  # request id -> None, oldest first; bounded
+_notified_requests = {}  # prompt id -> None, oldest first; bounded
 _request_lock = threading.Lock()
-_request_wake = threading.Event()
-_request_worker = None
 
 
 def _session_env(name):
@@ -1322,113 +1301,6 @@ def _session_env(name):
         return str(get_session_env(name, "") or "")
     except Exception:
         return ""
-
-
-def _open_requests_reader():
-    """``open_requests(session_id)``, or ``None`` before server→client requests existed."""
-    try:
-        from tui_gateway.server_requests import open_requests
-    except Exception:
-        return None
-    return open_requests if callable(open_requests) else None
-
-
-def _requests_watched(sid):
-    with _request_lock:
-        return bool(sid) and sid in _request_watches
-
-
-def _watch_requests(fields):
-    """Start watching the current turn's app/desktop session, if it is one.
-
-    Called from the turn's own context, which names the live session and its
-    profile; the worker that later notifies has neither.
-    """
-    sid = _session_env("HERMES_UI_SESSION_ID")
-    if not sid or _open_requests_reader() is None:
-        return
-    stored = _session_env("HERMES_SESSION_KEY") or str(fields.get("session_id") or "") or sid
-    origin = _origin_metadata({
-        "session_id": stored,
-        "profile": _session_env("HERMES_SESSION_PROFILE"),
-        "source": _creation_source(_session_env("HERMES_SESSION_PLATFORM") or str(fields.get("platform") or "")),
-    })
-    relay = _relay_settings()
-    if not all(relay):
-        return
-    global _request_worker
-    with _request_lock:
-        _request_watches[sid] = {"origin": origin, "relay": relay, "session_id": stored,
-                                 "activity_id": str(fields.get("session_id") or stored),
-                                 "touched": time.monotonic()}
-        if _request_worker is None or not _request_worker.is_alive():
-            _request_worker = threading.Thread(target=_poll_requests, daemon=True, name="hermes-push-requests")
-            _request_worker.start()
-        _request_wake.set()
-
-
-def _unwatch_requests(session_id=""):
-    """The turn ended; nothing of it can still be waiting on the user."""
-    sid = _session_env("HERMES_UI_SESSION_ID")
-    with _request_lock:
-        _request_watches.pop(sid, None)
-        for key in [k for k, watch in _request_watches.items() if session_id and watch["session_id"] == session_id]:
-            _request_watches.pop(key, None)
-
-
-def _notify_open_requests(reader):
-    """One pass: notify every request opened since the last pass."""
-    now = time.monotonic()
-    with _request_lock:
-        for sid in [s for s, w in _request_watches.items() if now - w["touched"] > REQUEST_WATCH_TTL_SECONDS]:
-            _request_watches.pop(sid, None)
-        watches = list(_request_watches.items())
-        if not watches:
-            _request_wake.clear()
-    for sid, watch in watches:
-        try:
-            requests = reader(sid)
-        except Exception:
-            logger.debug("Could not read open requests", exc_info=True)
-            continue
-        # An open question for a person puts the turn on hold for the Live
-        # Activity; its answer (the request closing) lets it run again.
-        waiting = any(isinstance(r, dict) and str(r.get("method") or "") in _HUMAN_REQUESTS for r in requests or [])
-        _report_activity("attention", watch.get("activity_id") or watch["session_id"], waiting)
-        for request in requests or []:
-            if not isinstance(request, dict):
-                continue
-            request_id = str(request.get("id") or "")
-            method = str(request.get("method") or "")
-            if method not in _HUMAN_REQUESTS or not request_id:
-                continue
-            with _request_lock:
-                if request_id in _notified_requests:
-                    continue
-                _notified_requests[request_id] = None
-                while len(_notified_requests) > 512:
-                    _notified_requests.pop(next(iter(_notified_requests)))
-            params = request.get("params") if isinstance(request.get("params"), dict) else {}
-            try:
-                payload = _server_request_payload(method, request_id, params, watch["origin"])
-            except Exception:
-                logger.warning("Could not describe a %s request", method, exc_info=True)
-                continue
-            if payload:
-                _deliver_in_background(payload, relay=watch["relay"])
-
-
-def _poll_requests():
-    while True:
-        _request_wake.wait()
-        reader = _open_requests_reader()
-        if reader is None:
-            return
-        try:
-            _notify_open_requests(reader)
-        except Exception:
-            logger.warning("Push request watch failed", exc_info=True)
-        time.sleep(REQUEST_POLL_SECONDS)
 
 
 # Whether this Hermes reports every wait on a person through
@@ -1463,13 +1335,13 @@ _open_prompts = {}  # prompt id -> (the hook's session id, the Live Activity's),
 def _gateway_reports_prompts():
     """Whether the current turn's session is one whose waits the plugin announces from ``on_session_prompt``.
 
-    That is a gateway app session (session platform ``local``, no sidecar ``HERMES_UI_SESSION_ID``) on a
-    Hermes with the session prompt hooks. ``_watch_prompts`` and ``_human_input`` both run in the turn's
-    own context and ask this one question, so exactly one of them announces each wait. The session's
-    platform decides, not ``HERMES_PLATFORM``, which Hermes puts first in ``on_human_input_request``'s
-    ``platform`` and which may name another surface of the same process.
+    That is a gateway app session (session platform ``local``) on a Hermes with the session prompt
+    hooks. ``_watch_prompts`` and ``_human_input`` both run in the turn's own context and ask this
+    one question, so exactly one of them announces each wait. The session's platform decides, not
+    ``HERMES_PLATFORM``, which Hermes puts first in ``on_human_input_request``'s ``platform`` and
+    which may name another surface of the same process.
     """
-    return (_SESSION_PROMPT_HOOKS and not _session_env("HERMES_UI_SESSION_ID")
+    return (_SESSION_PROMPT_HOOKS
             and _session_env("HERMES_SESSION_PLATFORM").strip().lower() == "local")
 
 
@@ -1499,12 +1371,11 @@ def _watch_prompts(fields):
     """Note the current turn of a gateway session for the prompts the gateway opens in it.
 
     Called from the turn's own context; ``on_session_prompt`` may arrive on the
-    gateway's event loop, with none of it. A sidecar session (``HERMES_UI_SESSION_ID``)
-    is the request watch's, and a delegated child shares its parent's session.
+    gateway's event loop, with none of it. A delegated child shares its parent's session.
     Only an app session (platform ``local``) notifies from the prompt: elsewhere the
     person is asked where they already are, and ``on_human_input_request`` notifies.
     """
-    if not _SESSION_PROMPT_HOOKS or _session_env("HERMES_UI_SESSION_ID") or _delegated_turn(fields):
+    if not _SESSION_PROMPT_HOOKS or _delegated_turn(fields):
         return
     stored = str(fields.get("session_id") or "") or _session_env("HERMES_SESSION_ID")
     live = _LOCAL_SESSION_KEY.match(_session_env("HERMES_SESSION_KEY"))
@@ -1589,8 +1460,8 @@ def _on_session_prompt(*args, **kwargs):
         return
     with _request_lock:
         watch = _prompt_watch(session_id)
-        if (watch is not None and not watch["notifies"]) or session_id in _request_watches:
-            return  # Notified from on_human_input_request, or by the request watch.
+        if watch is not None and not watch["notifies"]:
+            return  # Notified from on_human_input_request.
         if prompt_id in _notified_requests:
             return
         _notified_requests[prompt_id] = None
@@ -1627,15 +1498,13 @@ def _human_input(fields):
     """The wait on a person *fields* describe, as ``(kind, session id)``, or
     ``None`` when this hook does not notify it.
 
-    An app or desktop session that is watched notifies from its server→client
-    request, which carries the id that answers it, and a gateway app session on a
-    Hermes with the session prompt hooks from the prompt the gateway opens for it
-    (``_on_session_prompt``). Questions and password prompts
-    notify only in app sessions (platform "local"); elsewhere they are asked where
-    the person already is.
+    A gateway app session on a Hermes with the session prompt hooks notifies from
+    the prompt the gateway opens for it (``_on_session_prompt``), which carries
+    the id that answers it. Questions and password prompts notify only in app
+    sessions (platform "local"); elsewhere they are asked where the person already is.
     """
     kind = str(fields.get("kind") or "")
-    if kind not in ("approval", "clarify", "sudo") or _requests_watched(_session_env("HERMES_UI_SESSION_ID")):
+    if kind not in ("approval", "clarify", "sudo"):
         return None
     platform = str(fields.get("platform") or "").strip().lower()
     if kind != "approval" and platform != "local":

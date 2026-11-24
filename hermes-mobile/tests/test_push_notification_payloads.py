@@ -41,24 +41,18 @@ class ServerRequestNotificationTests(AdapterTestCase):
     def setUp(self):
         self.sent = []
         self.reported = []
-        self.open = {}
         self.env = {
-            "HERMES_UI_SESSION_ID": "live-1", "HERMES_SESSION_KEY": "20261002_101500_abcdef",
+            "HERMES_SESSION_KEY": "20261002_101500_abcdef",
             "HERMES_SESSION_PROFILE": "research", "HERMES_SESSION_PLATFORM": "ios",
         }
         context = types.ModuleType("gateway.session_context")
         context.get_session_env = lambda name, default="": self.env.get(name, default)
-        registry = types.ModuleType("tui_gateway.server_requests")
-        registry.open_requests = lambda sid: list(self.open.get(sid, []))
         modules = patch.dict(sys.modules, {
             "gateway": types.ModuleType("gateway"), "gateway.session_context": context,
-            "tui_gateway": types.ModuleType("tui_gateway"), "tui_gateway.server_requests": registry,
         })
         modules.start()
         self.addCleanup(modules.stop)
-        self.registry = registry
         adapter = self.load_adapter()
-        adapter._request_worker = threading.current_thread()  # Alive: the tests poll themselves.
         adapter._relay_settings = lambda: RELAY
         adapter._deliver_in_background = lambda payload, relay=None: self.sent.append((payload, relay))
         adapter._report_activity = lambda *args: self.reported.append(args)
@@ -67,11 +61,6 @@ class ServerRequestNotificationTests(AdapterTestCase):
 
     def payload(self, method, params, request_id="srq-0123456789ab"):
         return self.adapter._server_request_payload(method, request_id, params, dict(ORIGIN))
-
-    def poll(self):
-        before = len(self.sent)
-        self.adapter._notify_open_requests(self.registry.open_requests)
-        return [payload for payload, _ in self.sent[before:]]
 
     def test_long_description_cannot_displace_command(self):
         result = self.payload("approval", {"request_id": "r", "description": "Why " * 400, "command": "echo " * 300})
@@ -116,87 +105,17 @@ class ServerRequestNotificationTests(AdapterTestCase):
         for method in ["terminal.read", "preview.read", "preview.act", "window.read", "tour"]:
             self.assertIsNone(self.payload(method, {}))
 
-    def test_a_watched_turn_notifies_each_request_once_with_its_turns_relay(self):
-        self.adapter._watch_requests({"session_id": "ignored", "platform": "ignored"})
-        self.assertTrue(self.adapter._requests_watched("live-1"))
-        self.open["live-1"] = [
-            {"id": "srq-1", "method": "clarify", "params": {"session_id": "live-1", "questions": [
-                {"qid": "q1", "question": "Which format?"}]}},
-            {"id": "srq-2", "method": "window.read", "params": {"session_id": "live-1"}},
-        ]
-        pushes = self.poll()
-        self.assertEqual([(p["kind"], p["hermes"]["request_id"]) for p in pushes], [("clarify", "srq-1")])
-        self.assertEqual(pushes[0]["hermes"]["session_id"], "20261002_101500_abcdef")
-        self.assertEqual(self.sent[0][1], RELAY)
-        # Still open on the next pass: not announced twice.
-        self.assertEqual(self.poll(), [])
-        self.open["live-1"].append({"id": "srq-3", "method": "sudo", "params": {"session_id": "live-1"}})
-        self.assertEqual([p["kind"] for p in self.poll()], ["sudo"])
-
-    def test_an_open_question_holds_the_live_activity_until_it_closes(self):
-        self.adapter._watch_requests({"session_id": "20261002_101500_abcdef"})
-        self.poll()
-        self.open["live-1"] = [{"id": "srq-1", "method": "window.read", "params": {}}]
-        self.poll()
-        self.open["live-1"].append({"id": "srq-2", "method": "approval", "params": {"request_id": "a1"}})
-        self.poll()
-        self.open["live-1"] = []
-        self.poll()
-        self.assertEqual(self.reported, [
-            ("attention", "20261002_101500_abcdef", False), ("attention", "20261002_101500_abcdef", False),
-            ("attention", "20261002_101500_abcdef", True), ("attention", "20261002_101500_abcdef", False)])
-
     def test_an_approval_hook_marks_the_turn_waiting_unless_smart_decides(self):
         self.adapter._HUMAN_INPUT_HOOKS = False  # Hermes before 0.22.1
         hook = self.adapter._on_approval_request
-        self.adapter._origin_metadata = lambda fields: {}
-        hook(command="ls", description="List", session_key="x", surface="smart", session_id="s1")
-        hook(command="ls", description="List", session_key="x", surface="gateway", session_id="s1")
-        self.assertEqual(self.reported, [("attention", "s1", True)])
-
-    def test_turn_end_and_staleness_stop_the_watch(self):
-        self.adapter._watch_requests({})
-        self.adapter._unwatch_requests("20261002_101500_abcdef")
-        self.assertFalse(self.adapter._requests_watched("live-1"))
-        self.env["HERMES_UI_SESSION_ID"] = ""
-        self.adapter._watch_requests({})
-        self.assertEqual(self.adapter._request_watches, {})
-        self.env["HERMES_UI_SESSION_ID"] = "live-2"
-        self.adapter._watch_requests({})
-        self.adapter._request_watches["live-2"]["touched"] -= self.adapter.REQUEST_WATCH_TTL_SECONDS + 1
-        self.open["live-2"] = [{"id": "srq-9", "method": "sudo", "params": {}}]
-        self.assertEqual(self.poll(), [])
-        self.assertEqual(self.adapter._request_watches, {})
-
-    def test_messaging_and_old_hermes_sessions_are_not_watched(self):
-        self.adapter._relay_settings = lambda: ("", "")
-        self.adapter._watch_requests({})
-        self.adapter._relay_settings = lambda: RELAY
-        with patch.dict(sys.modules, {"tui_gateway.server_requests": None}):
-            self.assertIsNone(self.adapter._open_requests_reader())
-            self.adapter._watch_requests({})
-        self.assertEqual(self.adapter._request_watches, {})
-
-    def test_a_broken_reader_or_request_never_raises(self):
-        self.adapter._watch_requests({})
-        self.adapter._notify_open_requests(lambda sid: 1 / 0)
-        self.open["live-1"] = ["junk", {"id": "srq-x", "method": "approval", "params": None}]
-        self.assertEqual([p["kind"] for p in self.poll()], ["approval"])
-
-    def test_app_session_approval_hook_defers_to_its_request(self):
-        self.adapter._HUMAN_INPUT_HOOKS = False  # Hermes before 0.22.1
-        hook = self.adapter._on_approval_request
         self.adapter._origin_metadata = lambda fields: {"profile": "research"}
-        self.adapter._watch_requests({})
-        hook(command="rm -rf build", description="Delete", session_key="20261002_101500_abcdef", surface="gateway")
+        hook(command="ls", description="List", session_key="x", surface="smart", session_id="s1")
         self.assertEqual(self.sent, [])
-        # A messaging platform's approval is asked in that platform, not by request.
-        self.env["HERMES_UI_SESSION_ID"] = ""
-        hook(command="rm -rf build", description="Delete", session_key="agent:main:telegram:dm:1", surface="gateway")
+        hook(command="rm -rf build", description="Delete", session_key="agent:main:telegram:dm:1",
+             surface="gateway", session_id="s1")
+        self.assertEqual(self.reported, [("attention", "s1", True)])
         self.assertEqual(self.sent[-1][0]["hermes"], {
             "profile": "research", "kind": "approval", "session_key": "agent:main:telegram:dm:1"})
-        hook(command="ls", description="List", session_key="x", surface="smart")
-        self.assertEqual(len(self.sent), 1)
 
     def privacy(self):
         privacy = load_privacy()
@@ -380,7 +299,6 @@ class CronCompletionTests(AdapterTestCase):
         adapter._deliver_in_background = self.sent.append
         adapter._origin_metadata = lambda fields: {"profile": "research"}
         adapter._cron_job = lambda job_id: self.job if job_id == "job" else None
-        adapter._unwatch_requests = lambda session_id="": None
         adapter._report_activity = lambda *args: self.reported.append(args)
         adapter.MAX_MESSAGE_LENGTH = 400
         adapter.NATIVELY_NOTIFYING = {"telegram"}
@@ -435,69 +353,6 @@ class CronCompletionTests(AdapterTestCase):
         self.complete(completed=False)
         finish_turn(self.adapter, "kanban_job", "Done.", "cli")
         self.assertEqual(self.sent, [])
-
-
-def _hermes_server_requests():
-    try:
-        from tui_gateway import server_requests
-        return server_requests
-    except Exception:
-        return None
-
-
-@unittest.skipUnless(_hermes_server_requests(), "needs a Hermes checkout on PYTHONPATH (run on the test server)")
-class HermesServerRequestTests(unittest.TestCase):
-    """The watch against Hermes' real request registry, contracts and session context."""
-
-    def setUp(self):
-        self.adapter = load_module("adapter.py")
-        self.sent = []
-        self.adapter._deliver_in_background = lambda payload, relay=None: self.sent.append(payload)
-        self.adapter._relay_settings = lambda: RELAY
-        self.registry = _hermes_server_requests()
-        self.registry.reset_for_tests()
-        self.addCleanup(self.registry.reset_for_tests)
-        self.frames = []
-        sinks = patch.multiple(self.registry, _write=self.frames.append, _answerable=lambda sid: True)
-        sinks.start()
-        self.addCleanup(sinks.stop)
-
-    def test_each_human_request_notifies_once_with_its_id(self):
-        from gateway.session_context import clear_session_vars, set_session_vars
-        sid = "live-test"
-        tokens = set_session_vars(session_key="20261002_101500_abcdef", session_id="20261002_101500_abcdef",
-                                  source="ios", profile="research", ui_session_id=sid)
-        try:
-            self.adapter._on_api_request(session_id="20261002_101500_abcdef", platform="ios")
-        finally:
-            clear_session_vars(tokens)
-        self.assertTrue(self.adapter._requests_watched(sid))
-        settles = [
-            self.registry.send_async("clarify", sid, {"questions": [
-                {"qid": "q1", "question": "Which format?", "choices": ["PDF", "Markdown"], "multi_select": False}]},
-                lambda result: None),
-            self.registry.send_async("sudo", sid, {"command": "sudo true"}, lambda result: None),
-            self.registry.send_async("secret", sid, {"env_var": "API_KEY", "prompt": "API key"}, lambda result: None),
-            self.registry.send_async("approval", sid, {
-                "request_id": "queue-1", "command": "rm -rf build", "description": "Delete build",
-                "choices": ["once", "deny"]}, lambda result: None),
-            self.registry.send_async("window.read", sid, {}, lambda result: None),
-        ]
-        self.adapter._notify_open_requests(self.registry.open_requests)
-        self.adapter._notify_open_requests(self.registry.open_requests)
-        for settle in settles:
-            settle("resolved")
-        self.assertEqual([push["kind"] for push in self.sent], ["clarify", "sudo", "secret", "approval"])
-        frame_ids = [frame["id"] for frame in self.frames]
-        self.assertEqual([push["hermes"]["request_id"] for push in self.sent[:3]], frame_ids[:3])
-        self.assertTrue(all(request_id.startswith("srq-") for request_id in frame_ids))
-        self.assertEqual(self.sent[0]["hermes"]["question_id"], "q1")
-        self.assertEqual(self.sent[3]["hermes"]["request_id"], "queue-1")
-        for push in self.sent:
-            self.assertEqual(push["hermes"]["session_id"], "20261002_101500_abcdef")
-            self.assertEqual(push["hermes"]["profile"], "research")
-        self.adapter._on_session_end(session_id="20261002_101500_abcdef", completed=True)
-        self.assertFalse(self.adapter._requests_watched(sid))
 
 
 class PushOriginTests(unittest.TestCase):
@@ -813,16 +668,11 @@ class UnifiedRuntimeTests(AdapterTestCase):
         self.assertEqual(self.reported, [("attention", "local-1", True), ("attention", "local-1", False),
                                          ("attention", "local-1", True)])
 
-    def test_questions_elsewhere_and_watched_sessions_keep_their_own_paths(self):
+    def test_questions_elsewhere_keep_their_own_paths(self):
         base = {"request_id": "r1", "session_id": "s1", "prompt": "?"}
         self.adapter._on_human_input_request(**base, kind="clarify", platform="cli")
         self.adapter._on_human_input_request(**base, kind="clarify", platform="telegram")
         self.adapter._on_human_input_request(**base, kind="vault", platform="local")
-        self.env["HERMES_UI_SESSION_ID"] = "live-1"
-        self.adapter._request_watches["live-1"] = {"session_id": "s1", "touched": time.monotonic()}
-        self.addCleanup(self.adapter._request_watches.clear)
-        for kind in ["approval", "clarify"]:
-            self.adapter._on_human_input_request(**base, kind=kind, platform="local")  # the watch owns it
         self.assertEqual((self.sent, self.reported), ([], []))
 
     def test_the_relay_sees_the_gui_label(self):

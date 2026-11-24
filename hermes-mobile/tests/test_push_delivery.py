@@ -98,7 +98,6 @@ class WebhookSilenceTests(unittest.TestCase):
         self.sent = []
         self.adapter._deliver_in_background = self.sent.append
         self.adapter._origin_metadata = lambda fields: {}
-        self.adapter._unwatch_requests = lambda session_id="": None
         self.adapter._report_activity = lambda *args: None
 
     def end(self, platform, body):

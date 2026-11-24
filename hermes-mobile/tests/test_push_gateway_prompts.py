@@ -41,7 +41,7 @@ class GatewayPromptTestCase(unittest.TestCase):
             "hermes_constants": constants, "gateway": types.ModuleType("gateway"),
             "gateway.session_context": context, "gateway.session_policy": policy,
             "agent": types.ModuleType("agent"), "agent.redact": redactor,
-            "agent.delegation_context": None, "hermes_state": None, "tui_gateway.server_requests": None,
+            "agent.delegation_context": None, "hermes_state": None,
         })
         modules.start()
         self.addCleanup(modules.stop)
@@ -470,25 +470,7 @@ class SessionOwnershipTests(GatewayPromptTestCase):
         self.assertEqual([(p["kind"], p["hermes"].get("request_id"), p["thread_id"]) for p, _ in self.sent],
                          [("approval", None, "tg-1")])
 
-    def test_a_sidecar_session_keeps_its_request_watch(self):
-        self.env["HERMES_UI_SESSION_ID"] = "ui-1"
-        self.turn()
-        self.prompt("approval", "appr-1", APPROVAL, session_id=STORED)
-        self.assertEqual(self.sent[0][0]["hermes"]["session_id"], STORED)
-        self.assertNotIn("source", self.sent[0][0]["hermes"], "a sidecar turn is not recorded for the hook")
-        self.sent.clear()
-        self.reported.clear()
-        # Not watched (no open_requests on this Hermes): the human-input hook still notifies.
-        self.human_input("clarify")
-        self.assertEqual([p["kind"] for p, _ in self.sent], ["clarify"])
-
-    def test_a_watched_sidecar_session_is_not_announced_again_by_the_hook(self):
-        self.adapter._request_watches["ui-1"] = {"session_id": STORED, "touched": time.monotonic()}
-        self.addCleanup(self.adapter._request_watches.clear)
-        self.prompt("approval", "appr-1", APPROVAL, session_id="ui-1")
-        self.assertEqual((self.sent, self.reported), ([], []))
-
-    def test_a_request_the_watch_announced_is_not_announced_again(self):
+    def test_a_previously_announced_prompt_is_not_announced_again(self):
         self.turn()
         self.adapter._notified_requests["srq-seen0000000"] = None
         self.prompt("sudo", "srq-seen0000000", {})

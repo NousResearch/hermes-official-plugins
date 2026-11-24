@@ -194,23 +194,22 @@ class HermesTurnHookTests(unittest.TestCase):
 
     def test_a_finished_subagent_leaves_its_parents_session_watched(self):
         """A delegated child shares its parent's app session (it copies the parent's context);
-        its end must not stop the watch, or the parent's approval notifies a second time."""
+        its end must not stop the prompt watch, or the parent's prompt loses its routing."""
         from agent.delegation_context import delegated_child_context
         from gateway.session_context import clear_session_vars, set_session_vars
-        reader = patch.object(self.adapter, "_open_requests_reader", lambda: (lambda sid: []))
-        reader.start()
-        self.addCleanup(reader.stop)
+        if not self.adapter._SESSION_PROMPT_HOOKS:
+            self.skipTest("needs gateway.session_prompt_hooks")
         tokens = set_session_vars(platform="local", session_id="20261019_090000_parent",
-                                  session_key="agent:main:local:1", ui_session_id="ui-1")
+                                  session_key="agent:main:local:dm:live-1")
         try:
             self.invoke_hook("pre_api_request", session_id="20261019_090000_parent", platform="desktop")
-            self.assertTrue(self.adapter._requests_watched("ui-1"))
+            self.assertIn("live-1", self.adapter._prompt_watches)
             with delegated_child_context():
                 self.invoke_hook("pre_api_request", session_id="20261019_090100_child", platform="subagent")
                 self.finish("20261019_090100_child", "subagent", "Found it.")
-            self.assertTrue(self.adapter._requests_watched("ui-1"))
+            self.assertIn("live-1", self.adapter._prompt_watches)
             self.finish("20261019_090000_parent", "desktop", "Done.")
-            self.assertFalse(self.adapter._requests_watched("ui-1"))
+            self.assertNotIn("live-1", self.adapter._prompt_watches)
         finally:
             clear_session_vars(tokens)
 
@@ -264,12 +263,8 @@ class HermesSessionPromptTests(unittest.TestCase):
         from gateway import session_server_requests
         from gateway.session_authority import LiveSession, SessionAuthority
         from gateway.session_context import clear_session_vars, set_session_vars
-        from hermes_state import SessionDB
-        from hermes_state_runtime import (
-            admit_session_input,
-            begin_runtime_epoch,
-            claim_session_input,
-        )
+        from persistence.conversation.sessions import NewSession
+        from persistence_assembly import open_persistence, profile_scope
         from tools import approval, clarify_gateway
         from tools.approval_gateway_wait import _ApprovalEntry
         from tools.human_input_hooks import human_input_request
@@ -288,16 +283,16 @@ class HermesSessionPromptTests(unittest.TestCase):
         self.assertEqual(self.sent, [])
 
         # The session's owner, as the gateway runs it: a claimed turn of a live session.
-        db = SessionDB(db_path=Path(os.environ["HERMES_HOME"]) / "state.db")
-        self.addCleanup(db.close)
-        db.create_session(live, source="local")
-        epoch = begin_runtime_epoch(db, instance_id="current")
+        persistence = open_persistence(profile_scope())
+        self.addCleanup(persistence.close)
+        persistence.sessions.create(NewSession(session_id=live, source="local"))
+        epoch = persistence.runtime.begin_epoch(instance_id="current")
         authority = SessionAuthority(SimpleNamespace(_draining=False), profile_id="research",
-                                     instance_id="current", db=db, epoch=epoch)
+                                     instance_id="current", epoch=epoch, persistence=persistence)
         authority.sessions[live] = session = LiveSession(None, route)
-        admit_session_input(db, epoch=epoch, principal_id="research:phone", session_id=live,
-                            request_id="turn-1", payload={"text": "go"})
-        generation = claim_session_input(db, epoch=epoch, session_id=live)["generation"]
+        persistence.admissions.admit(epoch=epoch, principal_id="research:phone", session_id=live,
+                                     request_id="turn-1", payload={"text": "go"})
+        generation = persistence.admissions.claim(epoch=epoch, session_id=live).generation
         self.addCleanup(approval._gateway_queues.pop, route, None)
         self.addCleanup(clarify_gateway.clear_session, route)
         viewer = _Viewer()

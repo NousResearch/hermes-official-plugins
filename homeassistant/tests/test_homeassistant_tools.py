@@ -1442,3 +1442,22 @@ class TestLocalTimestampTwins:
         result = asyncio.run(ha_tool._async_get_state("sensor.front_door"))
         assert result["entity_id"] == "sensor.front_door"
         assert result["last_changed"] == UTC_STAMP
+
+    def test_a_failing_config_read_is_not_retried_on_every_call(self, monkeypatch):
+        """Like the registry cache: one failed /api/config must not cost a timeout per state read."""
+        calls = []
+
+        async def fake_api_json(method, path, timeout, payload=None):
+            calls.append(path)
+            if path == "/api/config":
+                raise RuntimeError("boom")
+            if path.startswith("/api/states/"):
+                return _state_payload()
+            raise AssertionError(f"unexpected request {method} {path}")
+
+        monkeypatch.setattr(ha_tool, "_api_json", fake_api_json)
+        monkeypatch.setattr(ha_tool, "_HASS_TIMEZONE", "")
+        monkeypatch.setattr(ha_tool, "_TZ_CACHE", {"ts": 0.0, "name": "", "url": ""})
+        asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        asyncio.run(ha_tool._async_get_state("sensor.front_door"))
+        assert calls.count("/api/config") == 1

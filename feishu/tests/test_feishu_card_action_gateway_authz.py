@@ -28,8 +28,8 @@ def _ensure_feishu_mocks():
 _ensure_feishu_mocks()
 
 from gateway.config import PlatformConfig
-import plugins.platforms.feishu.adapter as feishu_module
-from plugins.platforms.feishu.adapter import FeishuAdapter
+import feishu_plugin.adapter as feishu_module
+from feishu_plugin.adapter import FeishuAdapter
 
 
 class _FakeCallBackCard:
@@ -346,11 +346,11 @@ class TestCachedChatTypeResolution:
         if paired:
             assert store.approve_code("feishu", store.generate_code("feishu", "ou_requester", "R")) is not None
         runner = object.__new__(GatewayRunner)
-        runner.config = GatewayConfig(platforms={Platform.FEISHU: adapter.config})
-        runner.adapters = {Platform.FEISHU: adapter}
+        runner.config = GatewayConfig(platforms={Platform("feishu"): adapter.config})
+        runner.adapters = {Platform("feishu"): adapter}
         runner._profile_adapters = {}
         runner.pairing_store, runner.pairing_stores = store, {}
-        adapter.set_authorization_check(runner._make_adapter_auth_check(Platform.FEISHU))
+        adapter.set_authorization_check(runner._make_adapter_auth_check(Platform("feishu")))
 
         with patch("asyncio.run_coroutine_threadsafe") as submit:
             response = adapter._on_card_action_trigger(_approval_click("ou_requester", user_id="u_tenant"))

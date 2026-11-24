@@ -11,14 +11,14 @@ import asyncio
 import logging
 from types import SimpleNamespace
 
-from tests.gateway.feishu_helpers import (
+from feishu_helpers import (
     install_dedup_state,
     make_adapter_skeleton,
     make_message,
     make_sender,
 )
 
-_LOGGER = "plugins.platforms.feishu.adapter"
+_LOGGER = "feishu_plugin.adapter"
 
 
 def _group_event(message_id: str, chat_id: str = "oc_chat") -> SimpleNamespace:
@@ -59,7 +59,7 @@ def test_configured_group_deny_stays_at_debug(caplog):
 
     ruled = make_adapter_skeleton(group_policy="allowlist")
     install_dedup_state(ruled)
-    from plugins.platforms.feishu.adapter import FeishuGroupRule
+    from feishu_plugin.adapter import FeishuGroupRule
     ruled._group_rules = {"oc_chat": FeishuGroupRule(policy="disabled", allowlist=set(), blacklist=set(), require_mention=None)}
 
     records = _drops(adapter, caplog, _group_event("om_a")) + _drops(ruled, caplog, _group_event("om_b"))

@@ -491,7 +491,7 @@ def _save_session_history(key: str, messages: list[dict[str, Any]]) -> None:
 def _run_comment_agent(prompt: str, client: Any, session_key: str = "") -> str:
     """Create an AIAgent with feishu tools and run the prompt; empty string on failure. *session_key*, if given, loads/saves history for cross-card memory in the same document."""
     from run_agent import AIAgent
-    from tools.feishu_lark import current_client
+    from .lark_client import current_client
     logger.info("[Feishu-Comment] _run_comment_agent: binding lark client for the agent's tool calls")
     client_token = current_client.set(client)
     try:
@@ -615,7 +615,7 @@ async def _handle_drive_comment_event(client: Any, data: Any, *, self_open_id: s
     logger.info("[Feishu-Comment] Event: notice=%s file=%s:%s comment=%s from=%s", notice_type, file_type, file_token, comment_id, from_open_id)
     # Access control. Wiki-hosted docs report their underlying obj token, so when no exact rule
     # matched and the config has wiki: keys, reverse-lookup the wiki node.
-    from plugins.platforms.feishu.feishu_comment_rules import load_config, resolve_rule, is_user_allowed, has_wiki_keys
+    from .feishu_comment_rules import load_config, resolve_rule, is_user_allowed, has_wiki_keys
     comments_cfg = load_config()
     rule = resolve_rule(comments_cfg, file_type, file_token)
     if rule.match_source in {"wildcard", "top"} and has_wiki_keys(comments_cfg) and (wiki_token := await _reverse_lookup_wiki_token(client, file_type, file_token)):

@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from plugins.platforms.feishu.feishu_comment_rules import (
+from feishu_plugin.feishu_comment_rules import (
     CommentsConfig,
     CommentDocumentRule,
     ResolvedCommentRule,
@@ -86,7 +86,7 @@ class TestIsUserAllowed(unittest.TestCase):
     def test_pairing_checks_store(self):
         rule = ResolvedCommentRule(True, "pairing", frozenset(), "top")
         with patch(
-            "plugins.platforms.feishu.feishu_comment_rules._load_pairing_approved",
+            "feishu_plugin.feishu_comment_rules._load_pairing_approved",
             return_value={"ou_approved"},
         ):
             self.assertTrue(is_user_allowed(rule, "ou_approved"))
@@ -114,8 +114,8 @@ class TestLoadConfig(unittest.TestCase):
             json.dump(raw, f)
             path = Path(f.name)
         try:
-            with patch("plugins.platforms.feishu.feishu_comment_rules.RULES_FILE", path):
-                with patch("plugins.platforms.feishu.feishu_comment_rules._rules_cache", _MtimeCache(path)):
+            with patch("feishu_plugin.feishu_comment_rules.RULES_FILE", path):
+                with patch("feishu_plugin.feishu_comment_rules._rules_cache", _MtimeCache(path)):
                     cfg = load_config()
             self.assertTrue(cfg.enabled)
             self.assertEqual(cfg.policy, "allowlist")
@@ -133,9 +133,9 @@ class TestPairingStore(unittest.TestCase):
         self._pairing_file = Path(self._tmpdir) / "pairing.json"
         with open(self._pairing_file, "w") as f:
             json.dump({"approved": {}}, f)
-        self._patcher_file = patch("plugins.platforms.feishu.feishu_comment_rules.PAIRING_FILE", self._pairing_file)
+        self._patcher_file = patch("feishu_plugin.feishu_comment_rules.PAIRING_FILE", self._pairing_file)
         self._patcher_cache = patch(
-            "plugins.platforms.feishu.feishu_comment_rules._pairing_cache",
+            "feishu_plugin.feishu_comment_rules._pairing_cache",
             _MtimeCache(self._pairing_file),
         )
         self._patcher_file.start()
@@ -160,7 +160,7 @@ class TestRulesFollowActiveProfile(unittest.TestCase):
 
     def test_rules_and_pairing_follow_home_override(self):
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override
-        from plugins.platforms.feishu import feishu_comment_rules as fcr
+        from feishu_plugin import feishu_comment_rules as fcr
 
         def under(home, fn):
             token = set_hermes_home_override(str(home))
@@ -194,8 +194,8 @@ import pytest
 def test_pairing_add_refuses_a_deleted_or_renamed_profile_home(tmp_path, monkeypatch, move):
     """An approval on a dead profile is refused, not reported saved, and the home stays gone (#155595 U3)."""
     import hermes_constants
-    from plugins.platforms.feishu import feishu_comment_rules as rules
-    from tests.fixtures.dead_profile_home import dead_named_home
+    from feishu_plugin import feishu_comment_rules as rules
+    from dead_profile_home import dead_named_home
 
     home = dead_named_home(tmp_path, move)
     monkeypatch.setattr(hermes_constants, "get_hermes_home", lambda: home)

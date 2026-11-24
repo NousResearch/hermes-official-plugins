@@ -17,7 +17,7 @@ from gateway.platforms.event import MessageEvent, MessageType
 from .cards import resolve_source_chat_type
 
 if TYPE_CHECKING:
-    from plugins.platforms.feishu.adapter import RejectReason
+    from .adapter import RejectReason
 
 logger = logging.getLogger(__name__)
 

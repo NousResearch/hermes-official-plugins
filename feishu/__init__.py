@@ -1,3 +1,3 @@
-from .adapter import register
+from .register import register
 
 __all__ = ["register"]

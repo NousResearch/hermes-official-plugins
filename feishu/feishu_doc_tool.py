@@ -1,15 +1,18 @@
 """Feishu Document Tool -- read document content via Feishu/Lark API.
 
 Provides ``feishu_doc_read`` for reading document content as plain text.
-Uses the same lazy-import + BaseRequest pattern as feishu_comment.py.
+Uses the same lazy-import + BaseRequest pattern as feishu_comment.py. Registered through the plugin API
+(``register_tools(ctx)`` -> ``ctx.register_tool``), not ``tools.registry``.
 """
 
-from tools.feishu_lark import (
+from .lark_client import (
     _check_feishu,
     build_request,
     get_client,
     raw_body)
-from tools.registry import registry, tool_error, tool_result
+from tools.registry import tool_error, tool_result
+
+TOOLSET = "feishu_doc"
 
 _RAW_CONTENT_URI = "/open-apis/docx/v1/documents/:document_id/raw_content"
 
@@ -63,7 +66,9 @@ def _handle_feishu_doc_read(args: dict, **kwargs) -> str:
     return tool_error("No content returned from document API")
 
 
-registry.register(
-    name="feishu_doc_read", toolset="feishu_doc", schema=FEISHU_DOC_READ_SCHEMA, handler=_handle_feishu_doc_read,
-    check_fn=_check_feishu, requires_env=[], is_async=False, description="Read Feishu document content",
-    emoji="\U0001f4c4")
+def register_tools(ctx) -> None:
+    """Register ``feishu_doc_read`` in the ``feishu_doc`` toolset via the plugin API."""
+    ctx.register_tool(
+        name="feishu_doc_read", toolset=TOOLSET, schema=FEISHU_DOC_READ_SCHEMA, handler=_handle_feishu_doc_read,
+        check_fn=_check_feishu, requires_env=[], is_async=False, description="Read Feishu document content",
+        emoji="\U0001f4c4")

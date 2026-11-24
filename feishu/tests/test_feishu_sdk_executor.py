@@ -15,7 +15,7 @@ import json
 
 import pytest
 
-from plugins.platforms.feishu.adapter import FeishuAdapter
+from feishu_plugin.adapter import FeishuAdapter
 
 
 def _bare_adapter() -> FeishuAdapter:

@@ -1,18 +1,21 @@
 """Feishu Drive Tools -- document comment operations via Feishu/Lark API.
 
 List / reply-to / add document comments through the generic BaseRequest path (lazy SDK
-import), sharing client/request plumbing with feishu_doc_tool via ``tools.feishu_lark``.
-The lark client is injected per-thread by the feishu_comment event handler.
+import), sharing client/request plumbing with feishu_doc_tool via ``lark_client.py``.
+The lark client is injected per-thread by the feishu_comment event handler. Registered through the plugin
+API (``register_tools(ctx)`` -> ``ctx.register_tool``), not ``tools.registry``.
 """
 
 import logging
 
-from tools.feishu_lark import (
+from .lark_client import (
     _check_feishu,
     build_request,
     get_client,
     lark_call)
-from tools.registry import registry, tool_error, tool_result
+from tools.registry import tool_error, tool_result
+
+TOOLSET = "feishu_drive"
 
 logger = logging.getLogger(__name__)
 
@@ -182,12 +185,17 @@ _handle_add_comment = _comment_op(
     flag_success=True)
 
 
-for _schema, _handler, _desc, _emoji in (
+_TOOLS = (
     (FEISHU_DRIVE_LIST_COMMENTS_SCHEMA, _handle_list_comments, "List document comments", "\U0001f4ac"),
     (FEISHU_DRIVE_LIST_REPLIES_SCHEMA, _handle_list_replies, "List comment replies", "\U0001f4ac"),
     (FEISHU_DRIVE_REPLY_SCHEMA, _handle_reply_comment, "Reply to a document comment", "\u2709\ufe0f"),
     (FEISHU_DRIVE_ADD_COMMENT_SCHEMA, _handle_add_comment, "Add a whole-document comment", "\u2709\ufe0f"),
-):
-    registry.register(
-        name=_schema["name"], toolset="feishu_drive", schema=_schema, handler=_handler,
-        check_fn=_check_feishu, requires_env=[], is_async=False, description=_desc, emoji=_emoji)
+)
+
+
+def register_tools(ctx) -> None:
+    """Register the four feishu_drive_* tools in the ``feishu_drive`` toolset via the plugin API."""
+    for schema, handler, desc, emoji in _TOOLS:
+        ctx.register_tool(
+            name=schema["name"], toolset=TOOLSET, schema=schema, handler=handler,
+            check_fn=_check_feishu, requires_env=[], is_async=False, description=desc, emoji=emoji)

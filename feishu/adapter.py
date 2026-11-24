@@ -19,7 +19,6 @@ Session keys prefer union_id (user_id_alt) over open_id (user_id) for stability.
 
 from __future__ import annotations
 
-from pm import install_hint
 import asyncio
 import collections
 import concurrent.futures
@@ -85,7 +84,7 @@ FEISHU_WEBHOOK_AVAILABLE = aiohttp is not None
 
 from gateway.approval_actor import approval_refusal, refusal_text, update_prompt_refusal
 from gateway.config import Platform, PlatformConfig
-from agent.i18n import t
+from ._i18n import t
 from gateway.platforms.base import (
     BasePlatformAdapter, ExecApprovalPrompt, SendResult, describe_proxy_error, env_proxy_for_redaction,
     SUPPORTED_DOCUMENT_TYPES, cache_document_from_bytes_async, cache_image_from_url,
@@ -108,6 +107,10 @@ from gateway.platforms._shared import (
 
 
 logger = logging.getLogger(__name__)
+
+# ``Platform(PLATFORM_NAME)`` is resolved at call time: once core no longer ships Feishu the member exists
+# only after this plugin's PlatformEntry is registered.
+PLATFORM_NAME = "feishu"
 
 # --- Regex patterns ---
 _MARKDOWN_HINT_RE = re.compile(
@@ -1225,25 +1228,25 @@ def feishu_deps_present() -> bool:
     """
     if FEISHU_AVAILABLE:
         return True
+    return _lark_sdk_installed()
+
+
+def _lark_sdk_installed() -> bool:
+    # find_spec checks importability without executing lark_oapi's __init__ (~5s of eager imports).
+    import importlib.util
     try:
-        from pm.extras import available
-        return available("feishu")
-    except Exception:  # pragma: no cover — defensive
+        return importlib.util.find_spec("lark_oapi") is not None
+    except (ImportError, ValueError):
         return False
 
 
 def check_feishu_requirements() -> bool:
-    """Ensure Feishu dependencies are installed without importing the SDK."""
-    if FEISHU_AVAILABLE:
-        return True
+    """``ensure_deps_fn``: are the Feishu dependencies present, without importing the SDK?
 
-    from pm import ensure_import
-
-    try:
-        ensure_import("feishu")
-        return True
-    except Exception:
-        return False
+    Core's version lazy-installed its ``feishu`` extra here. The plugin's dependencies (``lark-oapi``,
+    ``qrcode``) come from its own ``pyproject.toml`` at ``hermes plugins install`` time, so this only
+    reports whether they are there."""
+    return FEISHU_AVAILABLE or _lark_sdk_installed()
 
 
 def _tenant_get_request(uri: str, *, queries: Optional[list[tuple[str, str]]] = None) -> Any:
@@ -1302,7 +1305,7 @@ class FeishuAdapter(FeishuChoiceCardsMixin, FeishuSyntheticEventsMixin, BasePlat
 
     # --- Lifecycle — init / settings / connect / disconnect ---
     def __init__(self, config: PlatformConfig):
-        super().__init__(config, Platform.FEISHU)
+        super().__init__(config, Platform(PLATFORM_NAME))
         self._settings = self._load_settings(config.extra or {})
         self._apply_settings(self._settings)
         self._client: Optional[Any] = None
@@ -2173,13 +2176,13 @@ class FeishuAdapter(FeishuChoiceCardsMixin, FeishuSyntheticEventsMixin, BasePlat
 
     def _on_drive_comment_event(self, data: Any) -> None:
         """drive.notice.comment_add_v1 → feishu_comment.handle_drive_comment_event on the adapter loop."""
-        from plugins.platforms.feishu.feishu_comment import handle_drive_comment_event
+        from .feishu_comment import handle_drive_comment_event
         self._submit_if_ready("drive comment event", lambda: handle_drive_comment_event(
             self._client, data, self_open_id=self._bot_open_id, secondary=bool(getattr(self, "_owner_profile", None))))
 
     def _on_meeting_invited_event(self, data: Any) -> None:
         """vc.bot.meeting_invited_v1 → feishu_meeting_invite.handle_meeting_invited_event."""
-        from plugins.platforms.feishu.feishu_meeting_invite import handle_meeting_invited_event
+        from .feishu_meeting_invite import handle_meeting_invited_event
         self._submit_if_ready("meeting invite event", lambda: handle_meeting_invited_event(self, data))
 
     def _on_reaction_event(self, event_type: str, data: Any) -> None:
@@ -3290,7 +3293,7 @@ class FeishuAdapter(FeishuChoiceCardsMixin, FeishuSyntheticEventsMixin, BasePlat
         """
         if self._warned_empty_allowlist_deny:
             return
-        from plugins.platforms.feishu.feishu_admission_diagnostics import empty_allowlist_drop_warning
+        from .feishu_admission_diagnostics import empty_allowlist_drop_warning
         text = empty_allowlist_drop_warning(
             chat_id=chat_id, group_rules=self._group_rules,
             default_group_policy=self._default_group_policy, allowed_group_users=self._allowed_group_users,
@@ -4045,6 +4048,10 @@ except (ImportError, TypeError):
     _qrcode_mod = None  # type: ignore[assignment]
 
 
+# qrcode is a plugin dependency (pyproject.toml); a home without it reinstalls the plugin.
+_QR_INSTALL_HINT = "reinstall the plugin (hermes plugins install feishu --force)"
+
+
 def _render_qr(url: str) -> bool:
     """Try to render a QR code in the terminal. Returns True if successful."""
     if _qrcode_mod is None:
@@ -4144,9 +4151,7 @@ def _qr_register_inner(*, initial_domain: str, timeout_seconds: int) -> Optional
         print(f"\n  Scan the QR code above, or open this URL directly:\n  {qr_url}")
     else:
         print(f"  Open this URL in Feishu / Lark on your phone:\n\n  {qr_url}\n")
-        print("  Tip: from the Hermes environment, run: "
-              f"{install_hint('messaging')} "
-              "to display a scannable QR code here next time")
+        print(f"  Tip: {_QR_INSTALL_HINT} to display a scannable QR code here next time")
     print()
     result = _poll_registration(
         device_code=begin["device_code"], interval=begin["interval"],
@@ -4160,7 +4165,7 @@ def _qr_register_inner(*, initial_domain: str, timeout_seconds: int) -> Optional
     return result
 
 
-# --- Plugin glue: register(ctx) + the hook fns that replaced the per-platform core touchpoints ---
+# --- Plugin glue: the hook fns register.py hands to ``ctx.register_platform`` ---
 
 # ────────────────────────────────────────────────────────────────────────── Plugin migration glue (#41112 /
 # #3823) Added when the Feishu adapter (+ its feishu_comment / feishu_comment_rules / feishu_meeting_invite
@@ -4212,14 +4217,16 @@ async def _standalone_send(pconfig, chat_id, message, *, thread_id=None, media_f
 
 def interactive_setup() -> None:
     """Interactive setup for Feishu / Lark — scan-to-create or manual creds (CLI helpers lazy-imported)."""
-    from hermes_cli.config import remove_env_value, save_env_value
-    from hermes_cli.setup import prompt_choice
+    from hermes_cli.config import get_env_value, remove_env_value, save_env_value
+    from hermes_cli.setup import prompt_choice, prompt_yes_no
     from hermes_cli.cli_output import prompt, print_header, print_info, print_success, print_warning
-    from hermes_cli.setup_platforms import declines_reconfigure
 
     print_header("Feishu / Lark")
-    if declines_reconfigure("Feishu / Lark", "Reconfigure Feishu / Lark?", "FEISHU_APP_ID"):
-        return
+    # The "already configured? Reconfigure? [y/N]" gate core's wizards share (``setup_platforms``, private).
+    if get_env_value("FEISHU_APP_ID"):
+        print_info("Feishu / Lark: already configured")
+        if not prompt_yes_no("Reconfigure Feishu / Lark?", False):
+            return
 
     method_idx = prompt_choice(
         "How would you like to set up Feishu / Lark?",
@@ -4340,27 +4347,3 @@ def _is_connected(config) -> bool:
     """Feishu counts as connected once app_id is configured."""
     extra = getattr(config, "extra", {}) or {}
     return bool(extra.get("app_id"))
-
-
-def register(ctx) -> None:
-    """Plugin entry point — called by the Hermes plugin system."""
-    from .adapter_hint import PLATFORM_HINT
-    from .send_targets import SEND_ENTRY_KWARGS
-    from .dashboard_card import DASHBOARD_CARD
-    from . import gateway_env  # env -> GatewayConfig bridge (gateway.config_env)
-    ctx.register_platform(
-        **SEND_ENTRY_KWARGS,  # send_message target syntax + routing
-        name="feishu", label="Feishu / Lark", adapter_factory=FeishuAdapter,
-        **DASHBOARD_CARD,
-        check_fn=feishu_deps_present, ensure_deps_fn=check_feishu_requirements,
-        is_connected=_is_connected, validate_config=_is_connected,
-        required_env=["FEISHU_APP_ID", "FEISHU_APP_SECRET"],
-        install_hint="Run `hermes setup` to install Feishu support.", setup_fn=interactive_setup,
-        apply_yaml_config_fn=_apply_yaml_config, cron_deliver_env_var="FEISHU_HOME_CHANNEL",
-        standalone_sender_fn=_standalone_send, max_message_length=8000, emoji="🪽",
-        allow_update_command=True,
-        platform_hint=PLATFORM_HINT,
-        display_tier="medium",
-        env_overrides=gateway_env.ENV_OVERRIDES,
-        env_enable_credentials=gateway_env.ENV_ENABLE_CREDENTIALS, **gateway_env.AUTHZ,
-    )

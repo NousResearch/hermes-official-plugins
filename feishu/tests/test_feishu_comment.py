@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from plugins.platforms.feishu.feishu_comment import (
+from feishu_plugin.feishu_comment import (
     parse_drive_comment_event,
     _ALLOWED_NOTICE_TYPES,
     _resolve_model_and_runtime,
@@ -55,25 +55,25 @@ class TestEventFiltering(unittest.TestCase):
     """Test the filtering logic in handle_drive_comment_event."""
 
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return asyncio.run(coro)
 
-    @patch("plugins.platforms.feishu.feishu_comment_rules.load_config")
-    @patch("plugins.platforms.feishu.feishu_comment_rules.resolve_rule")
-    @patch("plugins.platforms.feishu.feishu_comment_rules.is_user_allowed")
+    @patch("feishu_plugin.feishu_comment_rules.load_config")
+    @patch("feishu_plugin.feishu_comment_rules.resolve_rule")
+    @patch("feishu_plugin.feishu_comment_rules.is_user_allowed")
     def test_self_reply_filtered(self, mock_allowed, mock_resolve, mock_load):
         """Events where from_open_id == self_open_id should be dropped."""
-        from plugins.platforms.feishu.feishu_comment import handle_drive_comment_event
+        from feishu_plugin.feishu_comment import handle_drive_comment_event
 
         evt = _make_event(from_open_id="ou_bot", to_open_id="ou_bot")
         self._run(handle_drive_comment_event(Mock(), evt, self_open_id="ou_bot"))
         mock_load.assert_not_called()
 
-    @patch("plugins.platforms.feishu.feishu_comment_rules.load_config")
-    @patch("plugins.platforms.feishu.feishu_comment_rules.resolve_rule")
-    @patch("plugins.platforms.feishu.feishu_comment_rules.is_user_allowed")
+    @patch("feishu_plugin.feishu_comment_rules.load_config")
+    @patch("feishu_plugin.feishu_comment_rules.resolve_rule")
+    @patch("feishu_plugin.feishu_comment_rules.is_user_allowed")
     def test_wrong_receiver_filtered(self, mock_allowed, mock_resolve, mock_load):
         """Events where to_open_id != self_open_id should be dropped."""
-        from plugins.platforms.feishu.feishu_comment import handle_drive_comment_event
+        from feishu_plugin.feishu_comment import handle_drive_comment_event
 
         evt = _make_event(to_open_id="ou_other_bot")
         self._run(handle_drive_comment_event(Mock(), evt, self_open_id="ou_bot"))
@@ -82,16 +82,16 @@ class TestEventFiltering(unittest.TestCase):
 
 class TestAccessControlIntegration(unittest.TestCase):
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return asyncio.run(coro)
 
-    @patch("plugins.platforms.feishu.feishu_comment_rules.has_wiki_keys", return_value=False)
-    @patch("plugins.platforms.feishu.feishu_comment_rules.is_user_allowed", return_value=False)
-    @patch("plugins.platforms.feishu.feishu_comment_rules.resolve_rule")
-    @patch("plugins.platforms.feishu.feishu_comment_rules.load_config")
+    @patch("feishu_plugin.feishu_comment_rules.has_wiki_keys", return_value=False)
+    @patch("feishu_plugin.feishu_comment_rules.is_user_allowed", return_value=False)
+    @patch("feishu_plugin.feishu_comment_rules.resolve_rule")
+    @patch("feishu_plugin.feishu_comment_rules.load_config")
     def test_denied_user_no_side_effects(self, mock_load, mock_resolve, mock_allowed, mock_wiki_keys):
         """Denied user should not trigger typing reaction or agent."""
-        from plugins.platforms.feishu.feishu_comment import handle_drive_comment_event
-        from plugins.platforms.feishu.feishu_comment_rules import ResolvedCommentRule
+        from feishu_plugin.feishu_comment import handle_drive_comment_event
+        from feishu_plugin.feishu_comment_rules import ResolvedCommentRule
 
         mock_resolve.return_value = ResolvedCommentRule(True, "allowlist", frozenset(), "top")
         mock_load.return_value = Mock()
@@ -120,11 +120,11 @@ class TestSanitizeCommentText(unittest.TestCase):
 
 class TestWikiReverseLookup(unittest.TestCase):
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return asyncio.run(coro)
 
-    @patch("plugins.platforms.feishu.feishu_comment._exec_request")
+    @patch("feishu_plugin.feishu_comment._exec_request")
     def test_reverse_lookup_success(self, mock_exec):
-        from plugins.platforms.feishu.feishu_comment import _reverse_lookup_wiki_token
+        from feishu_plugin.feishu_comment import _reverse_lookup_wiki_token
 
         mock_exec.return_value = (0, "Success", {
             "node": {"node_token": "WIKI_TOKEN_123", "obj_token": "docx_abc"},

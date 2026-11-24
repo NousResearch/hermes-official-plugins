@@ -1,7 +1,7 @@
 """A Feishu plugin load must run the card helpers from the plugin directory it loads.
 
 The directory loader imports a plugin as ``hermes_plugins.<slug>`` and evicts that namespace on
-reload; a module imported by absolute path lands under ``plugins.platforms.feishu.*`` instead, so
+reload; a module imported by absolute path lands under another package name instead, so
 neither a reload nor a plugin copy elsewhere ever reaches its code. Every lane that calls the
 ``cards`` helpers (the adapter itself, clarify/choice cards, synthetic events) is checked.
 """
@@ -18,7 +18,7 @@ from hermes_cli.plugins import PluginManager
 from hermes_cli.plugins_loader import _evict_modules
 from hermes_cli.plugins_manifest import PluginManifest
 
-_FEISHU_DIR = Path(__file__).resolve().parents[4] / "plugins" / "platforms" / "feishu"
+_FEISHU_DIR = Path(__file__).resolve().parents[1]
 # Appended to the copy's cards/authz.py: later definitions win, so the reloaded helpers answer
 # "edited" and record which lane reached them.
 _OVERRIDES = '''
@@ -44,9 +44,9 @@ def validate_card_action(adapter, *, event, state, label, ident):
 @pytest.fixture
 def plugin_copy(tmp_path):
     plugin_dir = tmp_path / "feishu"
-    shutil.copytree(_FEISHU_DIR, plugin_dir, ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(_FEISHU_DIR, plugin_dir, ignore=shutil.ignore_patterns("__pycache__", "tests", ".pytest_cache"))
     manager = PluginManager(scope_key=str(tmp_path / "hermes"))
-    manifest = PluginManifest(name="feishu-platform", key="feishu-platform", kind="platform",
+    manifest = PluginManifest(name="feishu", key="feishu", kind="platform",
                               source="bundled", path=str(plugin_dir))
     loaded: set[str] = set()
 

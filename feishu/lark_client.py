@@ -1,8 +1,7 @@
-"""Shared lark_oapi plumbing for the feishu_doc / feishu_drive tool modules.
+"""Shared lark_oapi plumbing for the feishu_doc / feishu_drive tool modules (core's ``tools/feishu_lark.py``).
 
 Holds the client handle of the comment being answered, the cheap availability probe, and the generic
 ``BaseRequest`` builder + response unpacking (same pattern as feishu_comment.py).
-No ``registry.register`` here on purpose: tool discovery must not import this module.
 """
 
 import contextvars

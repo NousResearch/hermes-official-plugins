@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 def _feishu_adapter_module():
     """Import the adapter with the Windows app-data root available in CI."""
     with patch.dict(os.environ, {"LOCALAPPDATA": tempfile.gettempdir()}):
-        from plugins.platforms.feishu import adapter
+        from feishu_plugin import adapter
 
     return adapter
 
@@ -18,14 +18,18 @@ def test_configured_feishu_dependency_check_does_not_load_sdk():
     """Gateway configuration can validate Feishu without importing its SDK."""
     feishu_adapter = _feishu_adapter_module()
 
+    # The plugin's deps come from its pyproject at install time: the check only probes the spec.
     with (
         patch.object(feishu_adapter, "FEISHU_AVAILABLE", False),
-        patch("pm.ensure_import", autospec=True) as ensure,
+        patch("importlib.util.find_spec", return_value=object()) as find_spec,
     ):
         assert feishu_adapter.check_feishu_requirements() is True
+        assert feishu_adapter.feishu_deps_present() is True
         assert feishu_adapter.FEISHU_AVAILABLE is False
 
-    ensure.assert_called_once_with("feishu")
+    find_spec.assert_called_with("lark_oapi")
+    with patch.object(feishu_adapter, "FEISHU_AVAILABLE", False), patch("importlib.util.find_spec", return_value=None):
+        assert feishu_adapter.check_feishu_requirements() is False
 
 
 def test_feishu_connect_loads_sdk_on_worker_thread():

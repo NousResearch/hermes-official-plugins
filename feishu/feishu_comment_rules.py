@@ -257,7 +257,7 @@ def _main() -> int:
         __import__("hermes_cli.env_loader", fromlist=["load_hermes_dotenv"]).load_hermes_dotenv()
     except Exception:
         pass
-    usage = f"""Usage: python -m gateway.platforms.feishu_comment_rules <command> [args]
+    usage = f"""Usage: python -m feishu.feishu_comment_rules <command> [args]
 
 Commands:
   status                              Show rules config and pairing state

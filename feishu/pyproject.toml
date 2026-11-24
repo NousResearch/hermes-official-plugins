@@ -1,0 +1,17 @@
+[project]
+name = "hermes-feishu"
+version = "2.0.0"
+description = "Feishu / Lark gateway platform and feishu_doc / feishu_drive tools for Hermes Agent"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nous Research" }]
+requires-python = ">=3.11"
+dependencies = [
+  # The official Feishu/Lark SDK (WebSocket client, REST requests). Core's feishu extra pinned 1.7.5.
+  "lark-oapi>=1.7.5,<2",
+  # Terminal QR code for the scan-to-create setup flow. Core's feishu extra pinned 7.4.2.
+  "qrcode>=7.4.2,<8",
+]
+
+[project.urls]
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/feishu"

@@ -3,20 +3,12 @@
 import importlib.util
 import json
 import sys
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agent.i18n import t
-
-# ---------------------------------------------------------------------------
-# Ensure the repo root is importable
-# ---------------------------------------------------------------------------
-_repo = str(Path(__file__).resolve().parents[2])
-if _repo not in sys.path:
-    sys.path.insert(0, _repo)
+from feishu_plugin._i18n import t
 
 
 # ---------------------------------------------------------------------------
@@ -40,8 +32,8 @@ def _ensure_feishu_mocks():
 _ensure_feishu_mocks()
 
 from gateway.config import PlatformConfig
-import plugins.platforms.feishu.adapter as feishu_module
-from plugins.platforms.feishu.adapter import FeishuAdapter
+import feishu_plugin.adapter as feishu_module
+from feishu_plugin.adapter import FeishuAdapter
 
 
 # ---------------------------------------------------------------------------

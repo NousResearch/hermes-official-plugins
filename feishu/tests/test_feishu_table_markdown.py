@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 
-from plugins.platforms.feishu import adapter as _adapter
+from feishu_plugin import adapter as _adapter
 
 
 def _call_build_outbound_payload(content: str) -> tuple[str, str]:

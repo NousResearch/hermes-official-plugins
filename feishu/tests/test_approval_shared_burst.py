@@ -7,8 +7,8 @@ from gateway.config import GatewayConfig, Platform, PlatformConfig
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.run import GatewayRunner
 from gateway.session import SessionSource, build_session_context
-from plugins.platforms.feishu.adapter import FeishuAdapter
-from tests.gateway.test_approval_requester_binding import write_approvers
+from feishu_plugin.adapter import FeishuAdapter
+from approval_helpers import write_approvers
 from tools import approval as approval_mod
 from tools.approval_gateway_wait import _ApprovalEntry
 
@@ -28,7 +28,7 @@ async def test_feishu_shared_batch_mixed_senders_only_admin_can_approve(monkeypa
 
     def incoming(user_id: str, name: str, content: str) -> MessageEvent:
         source = SessionSource(
-            platform=Platform.FEISHU, chat_id="oc_shared", chat_type="group",
+            platform=Platform("feishu"), chat_id="oc_shared", chat_type="group",
             user_id=user_id, user_name=name,
         )
         if kind == "photo":

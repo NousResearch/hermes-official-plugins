@@ -465,6 +465,7 @@ class Request:
         self.admission = None
         self.lock = threading.Lock()
 
+
     def cancel(self):
         self.cancelled.set()
         if self.admission is not None:
@@ -908,6 +909,29 @@ class Client:
         self.timeout = timeout if isinstance(timeout, (int, float)) else 180
         self._lock, self._requests = threading.Lock(), set()
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+
+    def effective_output_cap(self, **kwargs):
+        """The output cap ``create(**kwargs)`` will send, for Hermes' prompt-cache warmer.
+
+        The warmer replays only when this is at most the cap it asked for. We report the
+        ``max_tokens`` copied into the request body and ``CLAUDE_CODE_MAX_OUTPUT_TOKENS``.
+        A call with no cap, a non-positive cap, or both limit fields (which ``create``
+        rejects) reports a value above any replay cap, so warming is skipped instead of
+        paying for an unbounded reply. Adaptive thinking is not given extra headroom here:
+        the cap we write is the cap we report.
+        """
+        cap = kwargs.get("max_tokens")
+        completion = kwargs.get("max_completion_tokens")
+        extra = kwargs.get("extra_body") if isinstance(kwargs.get("extra_body"), dict) else {}
+        if cap is not None and completion is not None:
+            return 2**31
+        if completion is not None:
+            cap = completion
+        elif cap is None and type(extra.get("max_tokens")) is int:
+            cap = extra["max_tokens"]
+        if type(cap) is not int or cap < 1:
+            return 2**31
+        return cap
 
     def cancel(self):
         """Fast cross-thread cancellation: signal owned groups; never close caller-thread FDs."""

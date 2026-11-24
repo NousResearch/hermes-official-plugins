@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import sqlite3
 import threading
 import urllib.request
 from functools import wraps
@@ -122,6 +123,11 @@ def has_paired_device():
     and one short read-only lookup once paired, never creating bridge.db."""
     try:
         return bool(_paired_devices_readonly())
+    except sqlite3.OperationalError:
+        # Busy or locked for longer than the short read wait: the store exists, so a phone may well
+        # be paired. Hermes caches this verdict, and a False here would hide a paired phone's tools
+        # for the cache's lifetime; the bridge answers a request that finds no phone itself.
+        return True
     except Exception:
         logging.getLogger(__name__).exception("Paired device check failed")
         return False

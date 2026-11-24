@@ -138,6 +138,26 @@ def test_readonly_device_check_handles_empty_db_and_does_not_block_on_writer(tmp
         writer.close()
 
 
+def test_a_briefly_locked_store_keeps_a_paired_phones_tools(tmp_path, monkeypatch):
+    plugin = load_device_package("hermes_mobile_gating_locked")
+    bridge = sys.modules["hermes_mobile_gating_locked.bridge"]
+    _stub_hermes_home(monkeypatch, tmp_path)
+    store = bridge.open_store(tmp_path)
+    store.register("phone", "Phone", ["location.read"], TOKEN)
+    store_file = bridge.store_path(tmp_path)
+    holder = sqlite3.connect(store_file, isolation_level=None)
+    try:
+        holder.execute("PRAGMA journal_mode=DELETE")
+        holder.execute("BEGIN EXCLUSIVE")
+        with pytest.raises(sqlite3.OperationalError):
+            bridge.read_devices_readonly(store_file)
+        assert plugin.has_paired_device() is True
+    finally:
+        holder.rollback()
+        holder.close()
+    assert plugin.has_paired_device() is True
+
+
 DISCOVERY_PROBE = """
 import importlib.util, json, os, sys
 from pathlib import Path

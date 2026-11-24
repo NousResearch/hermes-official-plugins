@@ -8,7 +8,7 @@ Official Hermes Agent plugin for paired mobile apps: push notifications (with en
 hermes plugins disable hermes-mobile
 ```
 
-Requires Hermes 0.21.5 or later (`requires_hermes` in `plugin.yaml`).
+Requires Hermes 0.23.3 or later (`requires_hermes` in `plugin.yaml`), the first release with the published storage interface it uses. Features that use plugin seams newer than the running Hermes stay off until Hermes is updated.
 
 ## What it does
 

@@ -3,7 +3,7 @@ label: Hermes Mobile
 kind: platform
 version: "2.0.0"
 manifest_version: 2
-requires_hermes: ">=0.21.5"
+requires_hermes: ">=0.23.3"
 provides_tools:
   - mobile_devices
   - mobile_request_result

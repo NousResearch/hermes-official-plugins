@@ -27,8 +27,10 @@ def _load_sibling(suffix: str, filename: str):
 
 
 push_api = _load_sibling("push", "push_api.py")
+pair_api = _load_sibling("pair", "pair_api.py")
 device_api = _load_sibling("device", "device_api.py")
 
 router = APIRouter()
 router.routes.extend(push_api.router.routes)
+router.routes.extend(pair_api.router.routes)
 router.routes.extend(device_api.router.routes)

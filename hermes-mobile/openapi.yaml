@@ -5,14 +5,104 @@ info:
   description: >
     The routes `dashboard/plugin_api.py` mounts under `/api/plugins/hermes-mobile`, as the mobile app
     calls them. `GET /sessions/silent` is read-only and reports which scheduled and webhook runs ended
-    silently. The device-access routes follow `Store._public` in `device/bridge.py`; the routes that
-    hand requests to a device and take its answers also check the device's pairing token
+    silently. `/pair` pairs, inspects, and clears the profile's push relay configuration and returns
+    the notification preview key over the existing authenticated dashboard connection. The
+    device-access routes follow `Store._public` in `device/bridge.py`; the routes that hand requests
+    to a device and take its answers also check the device's pairing token
     (`X-Hermes-Mobile-Device-Token`). An error answers `{"detail": <reason>}`: 400 for an invalid
-    profile name, 404 for a profile that does not exist, 401 without a pairing token, 403 when the
-    device id and pairing token match no paired device, 409 when the bridge refuses (with its reason)
-    and 503 while the profile's storage is busy or unreadable, which the app retries. A request body
-    FastAPI cannot validate answers 422 with a list of problems in `detail`.
+    profile name or invalid pairing input, 404 for a profile that does not exist, 401 without a
+    pairing token, 403 when the device id and pairing token match no paired device, 409 when the
+    bridge or pairing refuses (with its reason) and 503 while the profile's storage is busy or
+    unreadable, which the app retries. A request body FastAPI cannot validate answers 422 with a list
+    of problems in `detail`.
 paths:
+  /api/plugins/hermes-mobile/pair:
+    get:
+      summary: Current push notification pairing status for the profile (never returns secrets).
+      parameters:
+        - $ref: "#/components/parameters/Profile"
+      responses:
+        "200":
+          description: Whether the profile is paired, where its settings come from, and whether notifications are ready.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushPairStatus"}
+        "400":
+          description: The profile name is not a valid profile name.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+        "404":
+          description: No such profile.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+    post:
+      summary: >
+        Pair push notifications for the profile in one authenticated call: mint or adopt the install
+        key, store plugin-managed values in `pairing.json`, ensure the preview key exists, and return
+        both keys.
+      parameters:
+        - $ref: "#/components/parameters/Profile"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PushPairRequest"}
+      responses:
+        "200":
+          description: The effective install key, install id, preview key, relay URL, source, and readiness.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushPairResult"}
+        "400":
+          description: Invalid profile name, disallowed relay URL (must be https:// or localhost http://), or invalid install key.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+        "404":
+          description: No such profile.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+        "409":
+          description: The profile is already paired with a different install key (never silently rotated).
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+        "422": {$ref: "#/components/responses/InvalidBody"}
+        "503":
+          description: Pairing or preview-key storage could not be read or written.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+    delete:
+      summary: >
+        Remove only the plugin's stored `pairing.json` for the profile. Environment-configured values
+        are left in place and reported in the response; the preview key is never deleted or rotated.
+      parameters:
+        - $ref: "#/components/parameters/Profile"
+      responses:
+        "200":
+          description: Remaining pairing status after removing stored plugin pairing.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushPairStatus"}
+        "400":
+          description: The profile name is not a valid profile name.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+        "404":
+          description: No such profile.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+        "503":
+          description: Stored pairing could not be removed.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
   /api/plugins/hermes-mobile/sessions/silent:
     get:
       summary: >
@@ -211,6 +301,73 @@ components:
       required: [detail]
       properties:
         detail: {type: string}
+    PushPairRequest:
+      type: object
+      additionalProperties: false
+      required: [relay_url]
+      properties:
+        relay_url:
+          type: string
+          description: Base URL of the push relay (`https://`, or `http://` to localhost only).
+        install_key:
+          anyOf:
+            - {type: string}
+            - {type: "null"}
+          description: >
+            Optional capability key to adopt when the profile has no current install key (32 to 256
+            URL-safe characters `[A-Za-z0-9_-]`), or the existing install key. Omit or pass `null`
+            to keep the current key or mint a new one.
+    PushPairResult:
+      type: object
+      additionalProperties: false
+      required: [install_key, install_id, preview_key, relay_url, source, notifications_ready]
+      properties:
+        install_key:
+          type: string
+          description: Effective install key pairing this Hermes profile with the push relay.
+        install_id:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: Lowercase SHA-256 hex digest of `install_key`.
+        preview_key:
+          type: string
+          description: Standard base64 encoding of the 32-byte AES-256-GCM preview key.
+        relay_url:
+          type: string
+          description: Effective push relay base URL (empty string if an environment URL was refused).
+        source:
+          type: string
+          enum: [plugin, environment]
+          description: >
+            `environment` when either the relay URL or install key comes from environment variables
+            or scoped secrets; `plugin` when both come from the plugin's own `pairing.json`.
+        notifications_ready:
+          type: boolean
+          description: Whether a valid relay URL and install key are in effect for notifications.
+    PushPairStatus:
+      type: object
+      additionalProperties: false
+      required: [paired, install_id, relay_url, source, notifications_ready]
+      properties:
+        paired:
+          type: boolean
+        install_id:
+          anyOf:
+            - {type: string, pattern: "^[0-9a-f]{64}$"}
+            - {type: "null"}
+          description: Lowercase SHA-256 hex digest of the effective install key, or `null`.
+        relay_url:
+          anyOf:
+            - {type: string}
+            - {type: "null"}
+          description: Effective push relay base URL, or `null`.
+        source:
+          anyOf:
+            - {type: string, enum: [plugin, environment]}
+            - {type: "null"}
+          description: Where the active settings come from, or `null` when unpaired.
+        notifications_ready:
+          type: boolean
     PushSilentSessions:
       type: object
       additionalProperties: false

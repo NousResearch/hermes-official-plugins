@@ -1,12 +1,15 @@
 """Hermes tool adapter. All Apple operations execute on an explicitly paired device."""
 import asyncio
+import importlib.util
 import json
 import logging
 import sqlite3
+import sys
 import threading
 import urllib.request
 from functools import wraps
-from urllib.parse import quote, urlsplit
+from pathlib import Path
+from urllib.parse import quote
 
 from .bridge import (
     CONTACT_FIELDS,
@@ -45,40 +48,53 @@ def store():
 _default_store = store
 
 
+def _load_pairing():
+    try:
+        from ..push import pairing
+        return pairing
+    except ImportError:
+        mod_name = f"{__name__}_push_pairing"
+        existing = sys.modules.get(mod_name)
+        if existing is not None:
+            return existing
+        path = Path(__file__).resolve().parents[1] / "push" / "pairing.py"
+        spec = importlib.util.spec_from_file_location(mod_name, path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"cannot load push/pairing.py from {path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[mod_name] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            sys.modules.pop(mod_name, None)
+            raise
+        return module
+
+
+_pairing = _load_pairing()
+
+
 def secret(name):
     """A credential of this profile, through Hermes' secret scope."""
-    from agent.secret_scope import get_secret
-    return get_secret(name) or ""
-
-
-# Plain HTTP only to a relay on this machine (a local test relay): the install key rides in
-# the wake's Authorization header. The push adapter applies the same rule to the same URL
-# (`_relay_url_allowed` in push/adapter.py): keep both copies aligned.
-_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+    return _pairing.read_secret(name)
 
 
 def relay_url_allowed(relay_url):
-    try:
-        parts = urlsplit(str(relay_url or "").strip())
-        host = parts.hostname
-    except ValueError:
-        return False
-    return bool(host) and (parts.scheme == "https" or (parts.scheme == "http" and host in _LOOPBACK_HOSTS))
+    return _pairing.relay_url_allowed(relay_url)
 
 
 def wake(device_id):
-    relay = secret("HERMES_MOBILE_PUSH_RELAY_URL").rstrip("/")
-    key = secret("HERMES_MOBILE_PUSH_INSTALL_KEY")
-    if not relay or not key:
+    resolved = _pairing.resolve_relay_settings()
+    if not resolved.raw_relay_url or not resolved.install_key:
         return "Push is not configured; Hermes Agent will fetch this request when opened."
-    if not relay_url_allowed(relay):
+    if resolved.url_refused:
         logging.getLogger(__name__).warning("Device wake skipped: HERMES_MOBILE_PUSH_RELAY_URL must start with https:// "
                                             "(http:// only for localhost), as the install key travels with the request.")
         return ("Background refresh unavailable: the push relay URL must start with https:// (http:// only for "
                 "localhost). Hermes Agent will fetch this request when opened.")
     try:
-        request = urllib.request.Request(f"{relay}/devices/{quote(device_id, safe='')}/wake",
-            data=b"{}", method="POST", headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
+        request = urllib.request.Request(f"{resolved.relay_url}/devices/{quote(device_id, safe='')}/wake",
+            data=b"{}", method="POST", headers={"Authorization": f"Bearer {resolved.install_key}", "Content-Type": "application/json",
                                                 "User-Agent": f"hermes-mobile/{VERSION}"})
         with urllib.request.urlopen(request, timeout=4) as response:
             response.read(1024)
@@ -90,7 +106,8 @@ def wake(device_id):
 
 def can_deliver_followup():
     # The push plugin sends nothing to a relay this rule refuses, so no follow-up would arrive.
-    if not secret("HERMES_MOBILE_PUSH_INSTALL_KEY") or not relay_url_allowed(secret("HERMES_MOBILE_PUSH_RELAY_URL")):
+    relay_url, install_key = _pairing.relay_settings()
+    if not relay_url or not install_key:
         return False
     from gateway.platform_registry import platform_registry
     if not platform_registry.is_registered("push"):

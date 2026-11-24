@@ -23,12 +23,11 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import BasePlatformAdapter, SendResult
 
-from . import activity, privacy
+from . import activity, pairing, privacy
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +53,7 @@ MAX_MESSAGE_LENGTH = 1500
 
 
 def _secret(name, default=""):
-    try:
-        from gateway.platforms._shared import get_scoped_secret
-        return get_scoped_secret(name) or default
-    except ImportError:
-        return os.getenv(name, default)
+    return pairing.read_secret(name, default)
 
 
 def _gate(name):
@@ -70,36 +65,28 @@ def _gate(name):
     return platform_gate_env(name)
 
 
-# Plain HTTP only to a relay on this machine (a local test relay): the install key
-# rides in every request's Authorization header.
-_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
-RELAY_URL_RULE = "The push relay URL must start with https:// (http:// only for localhost)."
+RELAY_URL_RULE = pairing.RELAY_URL_RULE
 _refused_relay_urls = set()
 
 
 def _relay_url_allowed(relay_url):
-    try:
-        parts = urlsplit(str(relay_url or "").strip())
-        host = parts.hostname
-    except ValueError:
-        return False
-    return bool(host) and (parts.scheme == "https" or (parts.scheme == "http" and host in _LOOPBACK_HOSTS))
+    return pairing.relay_url_allowed(relay_url)
+
+
+def _resolve_relay(extra=None):
+    resolved = pairing.resolve_relay_settings(extra)
+    if resolved.url_refused and resolved.raw_relay_url not in _refused_relay_urls:
+        _refused_relay_urls.add(resolved.raw_relay_url)
+        logger.warning("Push disabled: HERMES_MOBILE_PUSH_RELAY_URL must start with https:// "
+                       "(http:// only for localhost), as the install key travels with every request.")
+    return resolved
 
 
 def _relay_settings(extra=None):
-    """The relay URL and install key; no URL when it is not HTTPS, so nothing is sent."""
-    extra = extra or {}
-    relay_url = (
-        extra.get("relay_url") or _secret("HERMES_MOBILE_PUSH_RELAY_URL")
-    ).rstrip("/")
-    install_key = extra.get("install_key") or _secret("HERMES_MOBILE_PUSH_INSTALL_KEY")
-    if relay_url and not _relay_url_allowed(relay_url):
-        if relay_url not in _refused_relay_urls:
-            _refused_relay_urls.add(relay_url)
-            logger.warning("Push disabled: HERMES_MOBILE_PUSH_RELAY_URL must start with https:// "
-                           "(http:// only for localhost), as the install key travels with every request.")
-        relay_url = ""
-    return relay_url, install_key
+    """The relay URL and install key (environment or profile secret first, then the app's
+    pairing); no URL when it is not HTTPS, so nothing is sent."""
+    resolved = _resolve_relay(extra)
+    return resolved.relay_url, resolved.install_key
 
 
 # Notification text is a lock-screen surface, not a transcript: markdown arrives as literal
@@ -640,11 +627,11 @@ class PushAdapter(BasePlatformAdapter):
     def __init__(self, config: PlatformConfig):
         super().__init__(config=config, platform=Platform("push"))
         extra = config.extra or {}
-        self.relay_url, self.install_key = _relay_settings(extra)
+        resolved = _resolve_relay(extra)
+        self.relay_url, self.install_key = resolved.relay_url, resolved.install_key
         _remember_platform_settings(extra)
         # A URL was given but refused, rather than none given.
-        self._relay_url_refused = not self.relay_url and bool(
-            extra.get("relay_url") or _secret("HERMES_MOBILE_PUSH_RELAY_URL"))
+        self._relay_url_refused = resolved.url_refused
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         if self._relay_url_refused:

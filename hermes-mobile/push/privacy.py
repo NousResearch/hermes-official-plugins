@@ -56,17 +56,17 @@ def _home():
 LEGACY_DATA_DIR_NAME = "hermes-mobile-push"
 
 
-def key_path():
-    home = _home()
+def key_path(home=None):
+    home = Path(home) if home is not None else _home()
     root = home.parent.parent if home.parent.name == "profiles" else home
     # Preview keys are installation-wide, including multiplexed profile hooks.
     return root / "plugin-data" / LEGACY_DATA_DIR_NAME / "preview_key"
 
 
-def load_key(create=False):
+def load_key(create=False, home=None):
     # Verify the runtime before creating a key that setup would consider ready.
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: F401 -- fails early without cryptography
-    path = key_path()
+    path = key_path(home)
     legacy = path.parents[2] / "plugins" / LEGACY_DATA_DIR_NAME / "preview_key"
     if create or (not path.exists() and legacy.is_file()):
         path.parent.mkdir(parents=True, exist_ok=True)

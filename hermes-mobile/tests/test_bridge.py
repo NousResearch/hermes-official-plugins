@@ -140,7 +140,7 @@ def test_http_device_flow_uses_the_same_result_as_the_agent(tmp_path, monkeypatc
     assert store.result(request["id"])["result"]["data"]["reminders"][0]["title"] == "Buy milk"
     # The contract has no device listing: the agent reads devices through mobile_devices.
     assert {route.path for route in api.router.routes} == {
-        "/sessions/silent", "/setup", "/devices/{device_id}", "/devices/{device_id}/pending",
+        "/sessions/silent", "/setup", "/pair", "/devices/{device_id}", "/devices/{device_id}/pending",
         "/devices/{device_id}/results/{request_id}", "/requests/{request_id}"}
     assert client.get(base + "/devices").status_code in {404, 405}
 

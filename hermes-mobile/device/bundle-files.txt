@@ -1,6 +1,0 @@
-plugin.yaml
-__init__.py
-bridge.py
-continuation.py
-dashboard/manifest.json
-dashboard/plugin_api.py

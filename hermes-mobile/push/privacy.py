@@ -52,18 +52,22 @@ def _home():
         return Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes")))
 
 
+# Legacy data dir name kept so paired devices keep decrypting notification previews.
+LEGACY_DATA_DIR_NAME = "hermes-mobile-push"
+
+
 def key_path():
     home = _home()
     root = home.parent.parent if home.parent.name == "profiles" else home
     # Preview keys are installation-wide, including multiplexed profile hooks.
-    return root / "plugin-data" / "hermes-mobile-push" / "preview_key"
+    return root / "plugin-data" / LEGACY_DATA_DIR_NAME / "preview_key"
 
 
 def load_key(create=False):
     # Verify the runtime before creating a key that setup would consider ready.
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: F401 -- fails early without cryptography
     path = key_path()
-    legacy = path.parents[2] / "plugins/hermes-mobile-push/preview_key"
+    legacy = path.parents[2] / "plugins" / LEGACY_DATA_DIR_NAME / "preview_key"
     if create or (not path.exists() and legacy.is_file()):
         path.parent.mkdir(parents=True, exist_ok=True)
         # Serialize concurrent profile gateways / two-device setup. Never rotate

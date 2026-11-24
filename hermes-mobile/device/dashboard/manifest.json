@@ -1,9 +1,0 @@
-{
-  "name": "hermes-mobile-device-access",
-  "label": "Device Access",
-  "description": "Paired Hermes Agent device requests",
-  "version": "1.7.2",
-  "icon": "Smartphone",
-  "tab": {"hidden": true},
-  "api": "plugin_api.py"
-}

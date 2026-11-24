@@ -1,18 +1,47 @@
 openapi: 3.1.0
 info:
-  title: hermes-mobile-device-access dashboard API
+  title: hermes-mobile dashboard API
   version: "2"
   description: >
-    The routes `dashboard/plugin_api.py` mounts under `/api/plugins/hermes-mobile-device-access`, as the Hermes Agent app
-    calls them. Request records follow `Store._public` in `bridge.py`. The routes that hand requests
-    to a device and take its answers also check the device's pairing token
+    The routes `dashboard/plugin_api.py` mounts under `/api/plugins/hermes-mobile`, as the mobile app
+    calls them. `GET /sessions/silent` is read-only and reports which scheduled and webhook runs ended
+    silently. The device-access routes follow `Store._public` in `device/bridge.py`; the routes that
+    hand requests to a device and take its answers also check the device's pairing token
     (`X-Hermes-Mobile-Device-Token`). An error answers `{"detail": <reason>}`: 400 for an invalid
-    profile name, 404 for a profile that does not exist, 401 without a pairing token, 403 when
-    the device id and pairing token match no paired device, 409 when the bridge refuses (with its reason) and 503 while the profile's storage is busy, which the
-    app retries. A request body FastAPI cannot validate answers 422 with a list of problems in
-    `detail`.
+    profile name, 404 for a profile that does not exist, 401 without a pairing token, 403 when the
+    device id and pairing token match no paired device, 409 when the bridge refuses (with its reason)
+    and 503 while the profile's storage is busy or unreadable, which the app retries. A request body
+    FastAPI cannot validate answers 422 with a list of problems in `detail`.
 paths:
-  /api/plugins/hermes-mobile-device-access/setup:
+  /api/plugins/hermes-mobile/sessions/silent:
+    get:
+      summary: >
+        The profile's newest scheduled and webhook runs (at most 1,000) whose final reply was a
+        silence marker such as `[SILENT]`, by Hermes' own rule for autonomous runs.
+      parameters:
+        - $ref: "#/components/parameters/Profile"
+      responses:
+        "200":
+          description: The silent runs' session ids.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushSilentSessions"}
+        "400":
+          description: The profile name is not a valid profile name.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+        "404":
+          description: No such profile.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+        "503":
+          description: The profile's session store could not be read; try again.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+  /api/plugins/hermes-mobile/setup:
     get:
       summary: Which protocol the installed plugin speaks and the profiles it serves.
       responses:
@@ -21,7 +50,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/DeviceAccessSetup"}
-  /api/plugins/hermes-mobile-device-access/devices/{device_id}:
+  /api/plugins/hermes-mobile/devices/{device_id}:
     put:
       summary: Saves the device's grants and scope for the profile.
       parameters:
@@ -43,7 +72,7 @@ paths:
         "409": {$ref: "#/components/responses/Refused"}
         "422": {$ref: "#/components/responses/InvalidBody"}
         "503": {$ref: "#/components/responses/Busy"}
-  /api/plugins/hermes-mobile-device-access/devices/{device_id}/pending:
+  /api/plugins/hermes-mobile/devices/{device_id}/pending:
     post:
       summary: Claims up to four requests waiting for the device, each under a new lease.
       parameters:
@@ -62,7 +91,7 @@ paths:
         "404": {$ref: "#/components/responses/UnknownProfile"}
         "409": {$ref: "#/components/responses/Refused"}
         "503": {$ref: "#/components/responses/Busy"}
-  /api/plugins/hermes-mobile-device-access/devices/{device_id}/results/{request_id}:
+  /api/plugins/hermes-mobile/devices/{device_id}/results/{request_id}:
     post:
       summary: Answers a claimed request under the lease it was claimed with. A repeated answer is a no-op.
       parameters:
@@ -91,7 +120,7 @@ paths:
         "409": {$ref: "#/components/responses/Refused"}
         "422": {$ref: "#/components/responses/InvalidBody"}
         "503": {$ref: "#/components/responses/Busy"}
-  /api/plugins/hermes-mobile-device-access/requests/{request_id}:
+  /api/plugins/hermes-mobile/requests/{request_id}:
     get:
       summary: A request's recorded state and result.
       parameters:
@@ -166,9 +195,9 @@ components:
       name: profile
       in: query
       description: >
-        The profile whose devices and requests to use: `default` or a named profile. Omitted, the
-        route serves the profile Hermes binds the request to, else the profile Hermes was launched
-        with; where Hermes binds a profile, that profile wins over this one.
+        The profile to read or act on: `default` or a named profile. Omitted, the route serves the
+        profile Hermes binds the request to, else the profile Hermes was launched with; where Hermes
+        binds a profile on device-access routes, that profile wins over this one.
       schema: {type: string}
     DeviceToken:
       name: X-Hermes-Mobile-Device-Token
@@ -177,6 +206,20 @@ components:
       description: The device's pairing token, as registered.
       schema: {type: string, minLength: 32}
   schemas:
+    PushError:
+      type: object
+      required: [detail]
+      properties:
+        detail: {type: string}
+    PushSilentSessions:
+      type: object
+      additionalProperties: false
+      required: [silent]
+      properties:
+        silent:
+          type: array
+          description: Session ids, newest first.
+          items: {type: string}
     DeviceAccessError:
       type: object
       required: [detail]

@@ -6,10 +6,9 @@ import types
 from pathlib import Path
 
 import pytest
+from push_plugin import load_dashboard_api, load_device_module
 
-spec = importlib.util.spec_from_file_location("device_bridge", Path(__file__).parents[1] / "bridge.py")
-bridge = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(bridge)
+bridge = load_device_module("device_bridge", "bridge.py")
 
 
 def test_request_survives_restart_and_stays_in_its_profiles_store(tmp_path):
@@ -120,15 +119,13 @@ def test_hashes_from_older_plugins_are_adopted_and_expire(tmp_path):
 def test_http_device_flow_uses_the_same_result_as_the_agent(tmp_path, monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    api_spec = importlib.util.spec_from_file_location("device_api", Path(__file__).parents[1] / "dashboard/plugin_api.py")
-    api = importlib.util.module_from_spec(api_spec)
-    api_spec.loader.exec_module(api)
+    api = load_dashboard_api("device_api")
     store = bridge.Store(tmp_path / "bridge.db")
-    monkeypatch.setattr(api, "store", lambda profile=None: store)
+    monkeypatch.setattr(api.device_api, "store", lambda profile=None: store)
     app = FastAPI()
-    app.include_router(api.router, prefix="/api/plugins/hermes-mobile-device-access")
+    app.include_router(api.router, prefix="/api/plugins/hermes-mobile")
     client = TestClient(app)
-    base = "/api/plugins/hermes-mobile-device-access"
+    base = "/api/plugins/hermes-mobile"
     assert client.put(base + "/devices/legacy", json={
         "name": "Old Phone", "grants": ["health.read"], "token": "a" * 32}).status_code == 422
     assert client.put(base + "/devices/phone", params={"profile": "default"}, json={
@@ -143,15 +140,13 @@ def test_http_device_flow_uses_the_same_result_as_the_agent(tmp_path, monkeypatc
     assert store.result(request["id"])["result"]["data"]["reminders"][0]["title"] == "Buy milk"
     # The contract has no device listing: the agent reads devices through mobile_devices.
     assert {route.path for route in api.router.routes} == {
-        "/setup", "/devices/{device_id}", "/devices/{device_id}/pending",
+        "/sessions/silent", "/setup", "/devices/{device_id}", "/devices/{device_id}/pending",
         "/devices/{device_id}/results/{request_id}", "/requests/{request_id}"}
     assert client.get(base + "/devices").status_code in {404, 405}
 
 
 def test_delayed_completion_schedules_one_reply_even_after_registration_failure(tmp_path):
-    module_spec = importlib.util.spec_from_file_location("device_continuation", Path(__file__).parents[1] / "continuation.py")
-    module = importlib.util.module_from_spec(module_spec)
-    module_spec.loader.exec_module(module)
+    module = load_device_module("device_continuation", "continuation.py")
     store = bridge.Store(tmp_path / "bridge.db")
     store.register("phone", "Phone", ["calendar.read"], "a" * 32, {"calendar_ids": ["home"]})
     request = store.request("calendar.events", {})
@@ -178,13 +173,11 @@ def test_the_phones_result_schedules_the_reply_without_router_lifespan(tmp_path,
 
     import httpx
     from fastapi import FastAPI
-    api_spec = importlib.util.spec_from_file_location("device_api_hosted", Path(__file__).parents[1] / "dashboard/plugin_api.py")
-    api = importlib.util.module_from_spec(api_spec)
-    api_spec.loader.exec_module(api)
+    api = load_dashboard_api("device_api_hosted")
     store = bridge.Store(tmp_path / "bridge.db")
-    monkeypatch.setattr(api, "store", lambda profile=None: store)
+    monkeypatch.setattr(api.device_api, "store", lambda profile=None: store)
     scheduled = []
-    monkeypatch.setattr(api._replies, "schedule_reply", lambda item: scheduled.append(item["request_id"]) or "job-1")
+    monkeypatch.setattr(api.device_api._replies, "schedule_reply", lambda item: scheduled.append(item["request_id"]) or "job-1")
     store.register("phone", "Phone", ["location.read"], "a" * 32)
     request = store.request("location.current", {})
     store.defer_reply(request["id"], "Where am I?", str(tmp_path))

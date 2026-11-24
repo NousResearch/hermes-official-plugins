@@ -8,8 +8,7 @@ import types
 from pathlib import Path
 
 import pytest
-
-ROOT = Path(__file__).resolve().parents[1]
+from push_plugin import load_device_module
 
 
 class FakeMsvcrt(types.ModuleType):
@@ -34,10 +33,7 @@ class FakeMsvcrt(types.ModuleType):
 
 
 def load_continuation(name="device_continuation_windows"):
-    spec = importlib.util.spec_from_file_location(name, ROOT / "continuation.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_device_module(name, "continuation.py")
 
 
 class Store:

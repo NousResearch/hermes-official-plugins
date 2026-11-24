@@ -559,7 +559,7 @@ class DeliveryHistoryTests(AdapterTestCase):
 
 
 class PushHardeningTests(AdapterTestCase):
-    """Ported from hermes-mobile-push-relay tests/test_hardening.py when the relay's plugin copy was retired."""
+    """Hardening checks for hook registration, scoped secrets, queue bounds and legacy key migration."""
 
     def setUp(self):
         self.load_adapter()

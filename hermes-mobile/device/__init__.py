@@ -46,9 +46,8 @@ def secret(name):
 
 
 # Plain HTTP only to a relay on this machine (a local test relay): the install key rides in
-# the wake's Authorization header. The push plugin applies the same rule to the same URL
-# (`_relay_url_allowed` in hermes-mobile-push/adapter.py); the plugins install separately,
-# so each keeps its copy: change them together.
+# the wake's Authorization header. The push adapter applies the same rule to the same URL
+# (`_relay_url_allowed` in push/adapter.py): keep both copies aligned.
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
@@ -74,7 +73,7 @@ def wake(device_id):
     try:
         request = urllib.request.Request(f"{relay}/devices/{quote(device_id, safe='')}/wake",
             data=b"{}", method="POST", headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-                                                "User-Agent": f"hermes-mobile-device-access/{VERSION}"})
+                                                "User-Agent": f"hermes-mobile/{VERSION}"})
         with urllib.request.urlopen(request, timeout=4) as response:
             response.read(1024)
         return "Background refresh requested; iOS delivery is best effort."

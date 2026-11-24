@@ -26,7 +26,7 @@ def homes(tmp_path, monkeypatch):
 def test_a_secondary_profiles_plugin_host_reads_its_own_store(homes):
     # Hermes strips `?profile=` before forwarding to the work profile's plugin host,
     # which runs with that profile's home bound.
-    api = load_api()
+    api = load_api().push_api
     _root, work = homes
     token = hermes_constants.set_hermes_home_override(work)
     try:
@@ -37,12 +37,12 @@ def test_a_secondary_profiles_plugin_host_reads_its_own_store(homes):
 
 
 def test_the_launch_profile_reads_the_default_store(homes):
-    api = load_api()
+    api = load_api().push_api
     assert api.silent() == {"silent": ["cron_default"]}
     assert api.silent(profile="default") == {"silent": ["cron_default"]}
 
 
 def test_an_unbound_request_for_another_profile_reads_that_profile(homes):
     # Older Hermes leaves every plugin request in the launch profile's home.
-    api = load_api()
+    api = load_api().push_api
     assert api.silent(profile="work") == {"silent": ["cron_work"]}

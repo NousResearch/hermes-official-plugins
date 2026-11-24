@@ -6,13 +6,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from push_plugin import load_dashboard_api, load_device_package
 
-ROOT = Path(__file__).parents[1]
-spec = importlib.util.spec_from_file_location("hermes_mobile_reminders_plugin", ROOT / "__init__.py",
-                                              submodule_search_locations=[str(ROOT)])
-plugin = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = plugin
-spec.loader.exec_module(plugin)
+plugin = load_device_package("hermes_mobile_reminders_plugin")
 bridge = sys.modules["hermes_mobile_reminders_plugin.bridge"]
 
 TOKEN = "a" * 32
@@ -180,11 +176,9 @@ def test_the_update_tool_is_offered_once_a_supporting_phone_registers(tmp_path, 
 def test_registration_route_accepts_features(tmp_path, monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    api_spec = importlib.util.spec_from_file_location("device_api_features", ROOT / "dashboard/plugin_api.py")
-    api = importlib.util.module_from_spec(api_spec)
-    api_spec.loader.exec_module(api)
+    api = load_dashboard_api("device_api_features")
     store = bridge.Store(tmp_path / "bridge.db")
-    monkeypatch.setattr(api, "store", lambda profile=None: store)
+    monkeypatch.setattr(api.device_api, "store", lambda profile=None: store)
     app = FastAPI()
     app.include_router(api.router)
     client = TestClient(app)

@@ -7,14 +7,11 @@ import types
 from pathlib import Path
 
 import pytest
+from push_plugin import load_device_package
 
-ROOT = Path(__file__).parents[1]
-spec = importlib.util.spec_from_file_location("hermes_mobile_access_refresh", ROOT / "__init__.py",
-                                              submodule_search_locations=[str(ROOT)])
-plugin = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = plugin
-spec.loader.exec_module(plugin)
-bridge = sys.modules[spec.name + ".bridge"]
+plugin = load_device_package("hermes_mobile_access_refresh")
+bridge = sys.modules["hermes_mobile_access_refresh.bridge"]
+spec = types.SimpleNamespace(name="hermes_mobile_access_refresh")
 
 
 @pytest.mark.parametrize("poll", [False, True])

@@ -15,8 +15,10 @@ from pathlib import Path
 _initialized = {}
 _schema_lock = threading.RLock()
 
-NAME = "hermes-mobile-device-access"
-VERSION = "1.7.2"
+# Legacy data dir name kept so existing device pairings and queued requests survive.
+LEGACY_DATA_DIR_NAME = "hermes-mobile-device-access"
+NAME = LEGACY_DATA_DIR_NAME
+VERSION = "2.0.0"
 
 OPERATIONS = {
     "calendar.events": "calendar.read", "calendar.create": "calendar.write",
@@ -29,7 +31,7 @@ OPERATIONS = {
 }
 CONTACT_FIELDS = {"phone", "email", "birthday", "address"}
 WEEKDAYS = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
-# The categories the phone reads (DeviceHealthMetric in the app) and the ones it may also log.
+# The categories the phone reads and the ones it may also log.
 HEALTH_WRITE_METRICS = {"weight", "body_fat", "dietary_energy", "protein", "carbohydrates", "fat", "sugar", "fiber",
                         "sodium", "caffeine", "water", "mindful_minutes"}
 HEALTH_METRICS = HEALTH_WRITE_METRICS | {

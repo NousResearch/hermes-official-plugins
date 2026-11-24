@@ -7,21 +7,11 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from push_plugin import load_dashboard_api, load_device_module, load_device_package
 
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def load(name, path, package=False):
-    spec = importlib.util.spec_from_file_location(name, ROOT / path,
-                                                  submodule_search_locations=[str(ROOT)] if package else None)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-api = load("device_api_profiles", "dashboard/plugin_api.py")
-plugin = load("hermes_mobile_profiles_plugin", "__init__.py", package=True)
+dashboard_api = load_dashboard_api("device_api_profiles")
+api = dashboard_api.device_api
+plugin = load_device_package("hermes_mobile_profiles_plugin")
 
 
 def hermes(monkeypatch, root, home, override=None):
@@ -87,7 +77,7 @@ def test_the_query_names_the_profile_where_hermes_binds_none(monkeypatch, root):
 
 
 def test_a_scheduled_reply_runs_in_its_profiles_secret_scope(monkeypatch, root):
-    continuation = load("device_continuation_secrets", "continuation.py")
+    continuation = load_device_module("device_continuation_secrets", "continuation.py")
     bound = []
     module = types.ModuleType("agent.secret_scope")
     module.build_profile_secret_scope = lambda home: {"HOME_OF": str(home)}
@@ -120,7 +110,7 @@ def test_a_store_busy_on_opening_answers_503(monkeypatch):
     monkeypatch.setattr(api._bridge, "open_store", lambda home: locked())
     monkeypatch.setattr(api, "home", lambda profile=None: Path("/nonexistent"))
     app = FastAPI()
-    app.include_router(api.router)
+    app.include_router(dashboard_api.router)
     client = TestClient(app)
     headers = {"X-Hermes-Mobile-Device-Token": "a" * 32}
     body = {"name": "Phone", "grants": [], "token": "a" * 32, "scope": {}}
@@ -152,7 +142,7 @@ def test_a_wrong_device_token_answers_403_and_a_missing_one_401(monkeypatch, roo
     from fastapi.testclient import TestClient
     hermes(monkeypatch, root, root)
     app = FastAPI()
-    app.include_router(api.router)
+    app.include_router(dashboard_api.router)
     client = TestClient(app)
     body = {"name": "Phone", "grants": ["calendar.read"], "token": "a" * 32, "scope": {}}
     assert client.put("/devices/phone", json=body).status_code == 200

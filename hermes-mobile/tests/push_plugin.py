@@ -1,6 +1,6 @@
-"""Loads the shipped push plugin's modules for the tests, with Hermes' modules stubbed.
+"""Shared test harness for loading hermes-mobile's push, device, and dashboard modules.
 
-Each call imports a fresh copy, so a test's patched attributes and module state
+Each push loader call imports a fresh copy, so a test's patched attributes and module state
 (watches, sessions, the delivery queue) never leak into the next test.
 """
 import importlib.util
@@ -9,21 +9,57 @@ import types
 from pathlib import Path
 from unittest.mock import patch
 
-PUSH = Path(__file__).resolve().parents[1]
-PACKAGE = "hermes_mobile_push_under_test"
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
+PUSH = PLUGIN_ROOT
+PUSH_DIR = PLUGIN_ROOT / "push"
+DEVICE_DIR = PLUGIN_ROOT / "device"
+DASHBOARD_DIR = PLUGIN_ROOT / "dashboard"
+PACKAGE = "hermes_mobile_under_test"
 
 
 def load_module(relative, modules=None):
-    """Import one of the plugin's files as a module of a fresh copy of the plugin package, as
+    """Import one of push/'s files as a module of a fresh copy of the plugin package, as
     Hermes' loader does, so its relative imports load fresh copies of their modules too."""
     with patch.dict(sys.modules, modules or {}):
-        package = types.ModuleType(PACKAGE)
-        package.__path__ = [str(PUSH)]
-        sys.modules[PACKAGE] = package
-        spec = importlib.util.spec_from_file_location(f"{PACKAGE}.{Path(relative).stem}", PUSH / relative)
+        root_pkg = types.ModuleType(PACKAGE)
+        root_pkg.__path__ = [str(PLUGIN_ROOT)]
+        push_pkg = types.ModuleType(f"{PACKAGE}.push")
+        push_pkg.__path__ = [str(PUSH_DIR)]
+        sys.modules[PACKAGE] = root_pkg
+        sys.modules[f"{PACKAGE}.push"] = push_pkg
+        spec = importlib.util.spec_from_file_location(f"{PACKAGE}.push.{Path(relative).stem}", PUSH_DIR / relative)
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
+    return module
+
+
+def load_dashboard_api(module_name="hermes_mobile_dashboard_api"):
+    """Load dashboard/plugin_api.py standalone, as Hermes' web server and plugin host do."""
+    spec = importlib.util.spec_from_file_location(module_name, DASHBOARD_DIR / "plugin_api.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_device_module(module_name, relative):
+    """Load one file from device/ (e.g. 'bridge.py', 'continuation.py')."""
+    spec = importlib.util.spec_from_file_location(module_name, DEVICE_DIR / relative)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_device_package(package_name):
+    """Load device/__init__.py as a package so its relative imports resolve."""
+    spec = importlib.util.spec_from_file_location(
+        package_name, DEVICE_DIR / "__init__.py", submodule_search_locations=[str(DEVICE_DIR)]
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[package_name] = module
+    spec.loader.exec_module(module)
     return module
 
 

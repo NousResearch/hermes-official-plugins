@@ -8,10 +8,10 @@ from pathlib import Path
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
-_spec = importlib.util.spec_from_file_location("hermes_mobile_device_access_store", Path(__file__).parents[1] / "bridge.py")
+_spec = importlib.util.spec_from_file_location("hermes_mobile_device_access_store", Path(__file__).resolve().parents[1] / "device" / "bridge.py")
 _bridge = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_bridge)
-_reply_spec = importlib.util.spec_from_file_location("hermes_mobile_device_access_replies", Path(__file__).parents[1] / "continuation.py")
+_reply_spec = importlib.util.spec_from_file_location("hermes_mobile_device_access_replies", Path(__file__).resolve().parents[1] / "device" / "continuation.py")
 _replies = importlib.util.module_from_spec(_reply_spec)
 _reply_spec.loader.exec_module(_replies)
 

@@ -12,7 +12,8 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-NAME = "hermes-mobile-device-access"
+PLUGIN_NAME = "hermes-mobile"
+DATA_NAME = "hermes-mobile-device-access"
 
 
 def _hermes_dashboard():
@@ -40,7 +41,7 @@ for profile in ("work", "default"):
     answers["put-" + profile] = response.status_code
 # The agent deferred a reply in work; the phone's result through work's plugin host schedules it.
 home = os.environ["HERMES_HOME"]
-spec = importlib.util.spec_from_file_location("bridge_under_test", os.path.join(home, "plugins", name, "bridge.py"))
+spec = importlib.util.spec_from_file_location("bridge_under_test", os.path.join(home, "plugins", name, "device", "bridge.py"))
 bridge = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bridge)
 work = os.path.join(home, "profiles", "work")
@@ -58,7 +59,7 @@ answers["request"] = request["id"]
 with open(sys.argv[1], "w") as file:
     json.dump(answers, file)
 os._exit(0)
-""" % NAME  # noqa: UP031 -- the driver source is full of braces
+""" % PLUGIN_NAME  # noqa: UP031 -- the driver source is full of braces
 
 
 @pytest.mark.skipif(not _hermes_dashboard(), reason="needs a Hermes checkout on PYTHONPATH (run on the test server)")
@@ -67,9 +68,9 @@ def test_a_second_profile_keeps_its_devices_and_replies(tmp_path):
     work = home / "profiles" / "work"
     for profile_home in (home, work):
         profile_home.mkdir(parents=True)
-        (profile_home / "config.yaml").write_text(f"plugins:\n  enabled: [{NAME}]\n")
+        (profile_home / "config.yaml").write_text(f"plugins:\n  enabled: [{PLUGIN_NAME}]\n")
         (profile_home / ".env").write_text("")
-    shutil.copytree(ROOT, home / "plugins" / NAME, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    shutil.copytree(ROOT, home / "plugins" / PLUGIN_NAME, ignore=shutil.ignore_patterns("tests", "__pycache__"))
     env = {**os.environ, "HERMES_HOME": str(home), "PYTHONDONTWRITEBYTECODE": "1"}
     answers = tmp_path / "answers.json"
     done = subprocess.run([sys.executable, "-c", DRIVER, str(answers)], env=env, cwd=tmp_path, capture_output=True, text=True,
@@ -77,7 +78,7 @@ def test_a_second_profile_keeps_its_devices_and_replies(tmp_path):
     assert done.returncode == 0 and answers.exists(), done.stderr[-2000:]
     answers = json.loads(answers.read_text())
     request = answers.pop("request")
-    stores = {"default": home / "plugin-data" / NAME / "bridge.db", "work": work / "plugin-data" / NAME / "bridge.db"}
+    stores = {"default": home / "plugin-data" / DATA_NAME / "bridge.db", "work": work / "plugin-data" / DATA_NAME / "bridge.db"}
     assert answers.pop("store") == [str(stores["work"]), "work"]
     assert answers == {"setup": ["default", "work"], "put-work": 200, "put-default": 200,
                        "claimed-work": True, "result-work": 200}
@@ -99,7 +100,7 @@ def test_a_second_profile_keeps_its_devices_and_replies(tmp_path):
     jobs = json.loads((work / "cron" / "jobs.json").read_text())
     jobs = jobs["jobs"] if isinstance(jobs, dict) else jobs
     assert [(item["id"], item["name"], item["deliver"], item["enabled_toolsets"]) for item in jobs] == [
-        (job, f"{NAME}-{request}", "push", ["mobile_device"])]
+        (job, f"{DATA_NAME}-{request}", "push", ["mobile_device"])]
     assert request in jobs[0]["prompt"] and "Where am I?" in jobs[0]["prompt"]
     assert not (home / "cron" / "jobs.json").exists()
 
@@ -108,7 +109,7 @@ def test_a_second_profile_keeps_its_devices_and_replies(tmp_path):
 @pytest.mark.parametrize("vulnerable, mode", [(True, "delete"), (False, "wal")])
 def test_the_store_uses_wal_only_where_hermes_allows_it(tmp_path, monkeypatch, vulnerable, mode):
     import hermes_state_wal
-    spec = importlib.util.spec_from_file_location("bridge_wal_under_test", ROOT / "bridge.py")
+    spec = importlib.util.spec_from_file_location("bridge_wal_under_test", ROOT / "device" / "bridge.py")
     bridge = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bridge)
     # What Hermes sees on an SQLite build with the WAL-reset bug (3.7.0 to 3.51.2), and on a fixed one.

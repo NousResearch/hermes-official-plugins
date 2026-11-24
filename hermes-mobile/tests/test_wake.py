@@ -5,13 +5,9 @@ import types
 from pathlib import Path
 
 import pytest
+from push_plugin import load_device_package
 
-ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("hermes_mobile_wake_plugin", ROOT / "__init__.py",
-                                              submodule_search_locations=[str(ROOT)])
-plugin = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = plugin
-spec.loader.exec_module(plugin)
+plugin = load_device_package("hermes_mobile_wake_plugin")
 
 SECRETS = {"HERMES_MOBILE_PUSH_RELAY_URL": "https://relay.example/", "HERMES_MOBILE_PUSH_INSTALL_KEY": "install-key"}
 

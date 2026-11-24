@@ -1,7 +1,0 @@
-privacy.py
-plugin.yaml
-adapter.py
-activity.py
-__init__.py
-dashboard/manifest.json
-dashboard/plugin_api.py

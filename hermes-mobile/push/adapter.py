@@ -1,11 +1,11 @@
-"""Push platform adapter for the Hermes Agent apps.
+"""Push platform adapter for the Hermes Agent mobile apps.
 
-Send-only: forwards messages to a self-hosted push relay
-(github.com/NousResearch/hermes-mobile-push-relay), which fans them out to every
-device paired with this install, through APNs to iOS and FCM to Android. There is no inbound side — the app talks
-to Hermes over its own WebSocket. The adapter lets cron jobs and webhook
-routes use `deliver: push`; the hooks below notify when a turn finishes or
-the agent waits on the user (an approval, question, password, secret or other input).
+Send-only: forwards messages to a self-hosted push relay, which fans them out to
+every device paired with this install, through APNs to iOS and FCM to Android.
+There is no inbound side — the mobile app talks to Hermes over its own WebSocket.
+The adapter lets cron jobs and webhook routes use `deliver: push`; the hooks below
+notify when a turn finishes or the agent waits on the user (an approval, question,
+password, secret or other input).
 
 Private previews require cryptography; the HTTP call uses urllib on a worker thread.
 """
@@ -38,9 +38,9 @@ _ctx = None
 REQUEST_TIMEOUT_SECONDS = 15
 # Cloudflare bans bare Python-urllib signatures (error 1010); identify honestly.
 PLUGIN_VERSION = next(line.split(":", 1)[1].strip().strip("\"'")
-                      for line in Path(__file__).with_name("plugin.yaml").read_text().splitlines()
+                      for line in (Path(__file__).resolve().parents[1] / "plugin.yaml").read_text().splitlines()
                       if line.startswith("version:"))
-USER_AGENT = f"hermes-mobile-push/{PLUGIN_VERSION} (+github.com/NousResearch/hermes-mobile-push-relay)"
+USER_AGENT = f"hermes-mobile/{PLUGIN_VERSION}"
 # How much of a message rides in the payload; privacy.py shortens the preview further.
 # Not the platform's chunking limit: a push is never split (register() below).
 MAX_MESSAGE_LENGTH = 1500
@@ -1707,8 +1707,7 @@ _OWN_SURFACES = frozenset({"", "ios", "android", "gui", "web", "desktop", "cli",
 _UNATTENDED_SOURCES = frozenset({"kanban"})
 # Turns an incoming webhook started: no person asked, and a silent run says nothing.
 _WEBHOOK_SURFACES = frozenset({"webhook", "msgraph_webhook"})
-# The app's Show Source switch removes these names again (NotificationDisplayOptions.surfaceNames
-# in HermesMobileKit mirrors this table): change both together.
+# The mobile app's Show Source switch removes these names again: change both together.
 _SURFACE_NAMES = {"whatsapp": "WhatsApp", "imessage": "iMessage", "bluebubbles": "iMessage", "ios": "iOS"}
 
 

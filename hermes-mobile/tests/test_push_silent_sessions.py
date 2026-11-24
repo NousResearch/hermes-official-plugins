@@ -8,15 +8,11 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
-PUSH = Path(__file__).resolve().parents[1]
+from push_plugin import load_dashboard_api
 
 
 def load_api():
-    spec = importlib.util.spec_from_file_location("hermes_mobile_push_dashboard_api", PUSH / "dashboard/plugin_api.py")
-    api = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(api)
-    return api
+    return load_dashboard_api("hermes_mobile_push_dashboard_api")
 
 
 def make_store(path, sessions):
@@ -83,17 +79,17 @@ def test_hermes_rule_decides_which_automated_runs_were_silent(tmp_path, api_with
     make_store(tmp_path / "state.db", RUNS)
     # A marker mid-sentence, a run that stopped on a tool row, a webhook that answered and any
     # chat (silence there is not the autonomous rule) are all left out. Newest first.
-    assert api_with_hermes_rule.silent_sessions(tmp_path / "state.db") == ["cron_bills_1", "cron_bills_2", "webhook_1"]
+    assert api_with_hermes_rule.push_api.silent_sessions(tmp_path / "state.db") == ["cron_bills_1", "cron_bills_2", "webhook_1"]
 
 
 def test_older_hermes_falls_back_to_the_bracketed_sentinel(tmp_path, api_without_hermes):
     make_store(tmp_path / "state.db", RUNS)
-    assert api_without_hermes.silent_sessions(tmp_path / "state.db") == ["cron_bills_1", "cron_bills_2"]
+    assert api_without_hermes.push_api.silent_sessions(tmp_path / "state.db") == ["cron_bills_1", "cron_bills_2"]
 
 
 def test_limit_takes_the_newest_runs(tmp_path, api_with_hermes_rule):
     make_store(tmp_path / "state.db", RUNS)
-    assert api_with_hermes_rule.silent_sessions(tmp_path / "state.db", limit=1) == ["cron_bills_1"]
+    assert api_with_hermes_rule.push_api.silent_sessions(tmp_path / "state.db", limit=1) == ["cron_bills_1"]
 
 
 def test_rewound_rows_do_not_count(tmp_path, api_with_hermes_rule):
@@ -102,11 +98,11 @@ def test_rewound_rows_do_not_count(tmp_path, api_with_hermes_rule):
     connection.execute("INSERT INTO messages (session_id, role, content, timestamp, active) VALUES ('cron_x', 'assistant', 'Found it', 2, 0)")
     connection.commit()
     connection.close()
-    assert api_with_hermes_rule.silent_sessions(tmp_path / "state.db") == ["cron_x"]
+    assert api_with_hermes_rule.push_api.silent_sessions(tmp_path / "state.db") == ["cron_x"]
 
 
 def test_missing_store_is_empty(tmp_path, api_with_hermes_rule):
-    assert api_with_hermes_rule.silent_sessions(tmp_path / "missing.db") == []
+    assert api_with_hermes_rule.push_api.silent_sessions(tmp_path / "missing.db") == []
 
 
 def test_route_validates_the_profile_and_reads_its_store(tmp_path, monkeypatch, api_with_hermes_rule):

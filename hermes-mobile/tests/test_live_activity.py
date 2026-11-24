@@ -9,14 +9,14 @@ import unittest.mock
 import urllib.error
 from pathlib import Path
 
-from push_plugin import PUSH, load_activity, load_push_adapter, registered_hooks
+from push_plugin import load_activity, load_push_adapter, registered_hooks
 
 activity = load_activity()
 
 INSTALL_KEY = "0123456789abcdef0123456789abcdef"
 RELAY = ("https://relay.example", INSTALL_KEY)
 
-# Shared with apps/ios/HermesMobileTests/LiveActivityRelayStateTests.swift (keyVectors):
+# Shared with the mobile app's Live Activity key tests:
 # the app finds a profile and a session by computing the same keys.
 HMAC_VECTORS = [
     ("profile", "default", "610b56904bbba807"),
@@ -484,11 +484,6 @@ class ManifestTests(unittest.TestCase):
 
     def test_every_hook_exists_in_hermes(self):
         self.assertLessEqual(self.registered_hooks(), HERMES_HOOKS)
-
-    def test_activity_ships_with_the_plugin(self):
-        files = (PUSH / "bundle-files.txt").read_text().split()
-        self.assertIn("activity.py", files)
-        self.assertLess(files.index("activity.py"), files.index("__init__.py"))
 
 
 if __name__ == "__main__":

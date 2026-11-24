@@ -62,6 +62,20 @@ def _request_id(value):
     return value if isinstance(value, str) and re.fullmatch(r'req_[A-Za-z0-9_-]{1,124}', value) else None
 
 
+CACHE_WRITE_TIERS = ('ephemeral_5m_input_tokens', 'ephemeral_1h_input_tokens')
+
+
+def cache_write_tiers(usage):
+    """The API's split of a request's cache writes by tier (``usage.cache_creation``), its two counts only.
+
+    A counter native did not report, or reported as anything but a count, stays absent: unknown, never 0.
+    """
+    creation = usage.get('cache_creation')
+    if not isinstance(creation, dict):
+        return {}
+    return {key: n for key in CACHE_WRITE_TIERS if type(n := creation.get(key)) is int and n >= 0}
+
+
 class ClaudeAPIError(RuntimeError):
     """A failed upstream or native-answered request; status_code is None when there is no HTTP equivalent."""
 
@@ -1320,6 +1334,10 @@ class Client:
                 normalized_usage = {'prompt_tokens': inp, 'completion_tokens': usage['output_tokens'], 'total_tokens': inp + usage['output_tokens'], 'prompt_tokens_details': {'cached_tokens': usage.get('cache_read_input_tokens', 0)}, 'cache_creation_input_tokens': usage.get('cache_creation_input_tokens', 0), 'native_usage': usage,
                                     'completion_tokens_details': {'reasoning_tokens': usage.get('output_tokens_details', {}).get('thinking_tokens', 0)},
                                     'native_cost': {'total_cost_usd': final.get('total_cost_usd'), 'modelUsage': final.get('modelUsage')}}
+                # The tier each cache write was granted at, where core reads it: Hermes sends this route no cache marker,
+                # so without it /context can only assume 30 minutes.
+                if tiers := cache_write_tiers(usage):
+                    normalized_usage['cache_creation'] = tiers
                 normalized_usage['native_admission'] = {'upstream_requests': int(admission.used), 'blocked_requests': admission.denied, 'request_id': admission.request_id}
                 if rate_limit:
                     normalized_usage['native_admission']['rate_limit'] = rate_limit

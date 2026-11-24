@@ -543,6 +543,21 @@ def test_operator_relay_url_userinfo_is_hidden_in_responses(monkeypatch, clean_e
         assert "hunter2pass" not in resp.text
 
 
+def test_a_token_in_the_relay_urls_query_is_never_shown(clean_env):
+    """A relay URL may carry a token in its query string or fragment: it is stored and used as given,
+    and every response shows scheme, host and path only."""
+    client, _ = _make_client()
+    url = "https://relay.example/push?token=QueryTokenNeverShown#FragmentNeverShown"
+    posted = client.post(PAIR, json={"relay_url": url})
+    assert posted.status_code == 200
+    status = client.get(PAIR)
+    for resp in (posted, status):
+        assert resp.json()["relay_url"] == "https://relay.example/push"
+        assert "QueryTokenNeverShown" not in resp.text and "FragmentNeverShown" not in resp.text
+    stored = json.loads((clean_env / "plugin-data" / "hermes-mobile-push" / "pairing.json").read_text())
+    assert stored["relay_url"].startswith("https://relay.example/push?token=QueryTokenNeverShown")
+
+
 @pytest.mark.parametrize("secrets_set", [False, True])
 def test_non_ascii_key_is_a_400_never_a_server_error(monkeypatch, clean_env, secrets_set):
     """R5: the supplied key's shape is checked before any comparison."""

@@ -128,14 +128,13 @@ def relay_url_has_userinfo(relay_url) -> bool:
 
 
 def public_relay_url(relay_url: str) -> str:
-    """*relay_url* as shown in responses: any ``user[:password]@`` removed."""
+    """*relay_url* as shown in responses: scheme, host and path only. Any ``user[:password]@``, query
+    string and fragment are removed, since an operator-configured URL can carry a token in either."""
     try:
         parts = urlsplit(relay_url)
     except ValueError:
         return ""
-    if "@" not in parts.netloc:
-        return relay_url
-    return parts._replace(netloc=parts.netloc.rpartition("@")[2]).geturl()
+    return parts._replace(netloc=parts.netloc.rpartition("@")[2], query="", fragment="").geturl()
 
 
 def install_key_valid(install_key) -> bool:
@@ -477,7 +476,7 @@ def pair_install(
                 logger.warning("Could not write push pairing file")
                 raise PairingStorageError("Could not save pairing state.") from None
 
-    final_url = _shown_url(operator_url) if operator_url else requested_url
+    final_url = _shown_url(operator_url) if operator_url else public_relay_url(requested_url)
     return {
         "install_key": final_key,
         "install_id": install_id_for_key(final_key),

@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from push_plugin import PUSH, load_push_adapter
+from push_plugin import PUSH, load_push_adapter, load_yaml
 
 RELAY = {"HERMES_MOBILE_PUSH_RELAY_URL": "https://relay.example", "HERMES_MOBILE_PUSH_INSTALL_KEY": "install-key"}
 STORED = "20261102_101500_abcdef"
@@ -478,8 +478,7 @@ class SessionOwnershipTests(GatewayPromptTestCase):
         self.assertEqual(self.sent, [])
 
     def test_the_new_hooks_are_registered_and_declared(self):
-        import yaml
-        manifest = yaml.safe_load((PUSH / "plugin.yaml").read_text())
+        manifest = load_yaml(PUSH / "plugin.yaml")
         for hook in ["on_session_prompt", "on_session_prompt_settled"]:
             self.assertIn(hook, self.hooks)
             self.assertIn(hook, manifest["provides_hooks"])

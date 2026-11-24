@@ -17,6 +17,22 @@ DASHBOARD_DIR = PLUGIN_ROOT / "dashboard"
 PACKAGE = "hermes_mobile_under_test"
 
 
+def load_yaml(path):
+    """Parse a YAML file with PyYAML, or with ruamel.yaml, which Hermes core ships instead."""
+    text = Path(path).read_text(encoding="utf-8")
+    try:
+        import yaml
+    except ImportError:
+        try:
+            from ruamel.yaml import YAML
+        except ImportError:
+            import pytest
+
+            pytest.skip("needs PyYAML or ruamel.yaml")
+        return YAML(typ="safe", pure=True).load(text)
+    return yaml.safe_load(text)
+
+
 def load_module(relative, modules=None):
     """Import one of push/'s files as a module of a fresh copy of the plugin package, as
     Hermes' loader does, so its relative imports load fresh copies of their modules too."""

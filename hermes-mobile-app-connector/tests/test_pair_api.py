@@ -15,14 +15,25 @@ import types
 from pathlib import Path
 
 import pytest
-import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from jsonschema import Draft202012Validator
-from push_plugin import load_dashboard_api, load_device_package, load_push_adapter
+from push_plugin import (
+    load_dashboard_api,
+    load_device_package,
+    load_push_adapter,
+    load_yaml,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_NAME = "hermes-mobile-app-connector"
+
+
+def _openapi_tools():
+    """jsonschema checks the documented schemas. It is not a plugin or core dependency, so the two
+    schema tests skip where it is not installed."""
+    jsonschema = pytest.importorskip("jsonschema")
+    spec = load_yaml(ROOT / "openapi.yaml")
+    return spec, jsonschema.Draft202012Validator
 
 
 def _make_hermes_stubs(monkeypatch, root: Path, home: Path, override: Path | None = None, secrets: dict | None = None):
@@ -361,7 +372,7 @@ def test_settings_reader_order_across_push_adapter_and_device_wake(monkeypatch, 
 
 
 def test_openapi_schemas_match_pair_responses(clean_env):
-    spec = yaml.safe_load((ROOT / "openapi.yaml").read_text(encoding="utf-8"))
+    spec, Draft202012Validator = _openapi_tools()
     schemas = spec["components"]["schemas"]
     assert "/api/plugins/hermes-mobile-app-connector/pair" in spec["paths"]
     ops = spec["paths"]["/api/plugins/hermes-mobile-app-connector/pair"]
@@ -592,7 +603,7 @@ def test_environment_values_keep_their_bytes(monkeypatch, clean_env):
 
 def test_openapi_documents_config_source_and_400s(monkeypatch, clean_env):
     """R7: the documented schemas accept a config-sourced pairing, and POST answers no 422."""
-    spec = yaml.safe_load((ROOT / "openapi.yaml").read_text(encoding="utf-8"))
+    spec, Draft202012Validator = _openapi_tools()
     schemas = spec["components"]["schemas"]
     _stub_gateway_config(monkeypatch, {"relay_url": "https://operator.example", "install_key": "C" * 43})
     client, _ = _make_client()

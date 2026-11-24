@@ -576,8 +576,9 @@ async def _async_list_entities(
 # platforms.homeassistant.extra.timezone in config.yaml overrides it, and an unknown zone falls back
 # to the machine's local time.
 _HASS_TIMEZONE: str = ""
-_TZ_CACHE: Dict[str, Any] = {"ts": 0.0, "name": "", "url": ""}
+_TZ_CACHE: Dict[str, Any] = {"ts": 0.0, "name": "", "url": "", "failed_at": 0.0}
 _TZ_TTL = 3600.0  # the instance's zone changes with its configuration, not with the minute
+_TZ_FAILURE_TTL = 60.0  # a failed /api/config is not retried on every state read (see _REGISTRY_FAILURE_TTL)
 
 
 def _get_timezone_config() -> str:
@@ -609,12 +610,17 @@ async def _instance_timezone() -> str:
     now = _time.time()
     # Keyed by instance, like the registry cache above: two profiles pointing at different Home
     # Assistants must not see each other's zone.
-    if _TZ_CACHE.get("url") == hass_url and now - _TZ_CACHE.get("ts", 0.0) < _TZ_TTL:
-        return _TZ_CACHE["name"]
+    if _TZ_CACHE.get("url") == hass_url:
+        if now - _TZ_CACHE.get("ts", 0.0) < _TZ_TTL:
+            return _TZ_CACHE["name"]
+        # A stalled or refusing instance must cost one timeout per window, not one per read.
+        if now - _TZ_CACHE.get("failed_at", 0.0) < _TZ_FAILURE_TTL:
+            return ""
     try:
         config = await _api_json("GET", "/api/config", 10)
     except Exception:  # the zone is a nicety: a failed call must not fail the read
         logger.debug("homeassistant: could not read the instance time zone", exc_info=True)
+        _TZ_CACHE.update(name=_TZ_CACHE.get("name", ""), ts=0.0, failed_at=now, url=hass_url)
         return ""
     name = config.get("time_zone") if isinstance(config, dict) else ""
     if not isinstance(name, str) or not name.strip():

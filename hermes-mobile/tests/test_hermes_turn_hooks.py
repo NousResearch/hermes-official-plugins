@@ -288,6 +288,37 @@ class HermesTurnHookTests(unittest.TestCase):
         self.assertIn("curl", self.sent[0]["body"])
         self.assertNotIn(token, self.sent[0]["body"])
 
+    def test_storage_interface_reads_writes_and_resolves_lineage(self):
+        from persistence.conversation.sessions import NewSession
+        from persistence_assembly import open_persistence, open_persistence_reader, profile_scope
+
+        # _store_delivery creates a session, appends the assistant message, sets its title,
+        # and keeps working even when a second delivery reuses the same title (TitleConflict).
+        first = self.adapter._store_delivery("First report body", {"job_id": "j1", "job_name": "Daily brief"})
+        second = self.adapter._store_delivery("Second report body", {"job_id": "j1", "job_name": "Daily brief"})
+        self.assertEqual((first["source"], second["source"]), ("cron", "cron"))
+        self.assertNotEqual(first["session_id"], second["session_id"])
+
+        with open_persistence_reader(profile_scope().profile_dir) as reader:
+            rec1 = reader.sessions.get(first["session_id"])
+            self.assertIsNotNone(rec1)
+            self.assertEqual((rec1.source, rec1.title), ("cron", "Daily brief"))
+            rows1 = reader.messages.read_transcript(first["session_id"])
+            self.assertEqual([(r.role, r.content) for r in rows1], [("assistant", "First report body")])
+
+        # _origin_metadata reads a session's stored source read-only when the hook omits one.
+        with open_persistence(profile_scope()) as store:
+            store.sessions.create(NewSession(session_id="tg-root", source="telegram"))
+            store.sessions.create(NewSession(session_id="tg-tip", source="telegram", parent_session_id="tg-root"))
+            store.sessions.end("tg-root", "compression")
+        origin = self.adapter._origin_metadata({"session_id": "tg-root"})
+        self.assertEqual(origin["source"], "telegram")
+        # _lineage_root walks the compression chain to its root, returns itself for an uncompressed
+        # session, and "" for an unknown session.
+        self.assertEqual(self.adapter._lineage_root("tg-tip"), "tg-root")
+        self.assertEqual(self.adapter._lineage_root("tg-root"), "tg-root")
+        self.assertEqual(self.adapter._lineage_root("does-not-exist"), "")
+
 
 class _Viewer:
     """A gateway viewer's transport: the frames the session owner writes it."""

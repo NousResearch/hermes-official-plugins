@@ -39,7 +39,7 @@ class GatewayPromptTestCase(unittest.TestCase):
             "hermes_constants": constants, "gateway": types.ModuleType("gateway"),
             "gateway.session_context": context,
             "agent": types.ModuleType("agent"), "agent.redact": redactor,
-            "hermes_state": None,
+            "persistence_assembly": None,
         })
         modules.start()
         self.addCleanup(modules.stop)
@@ -422,23 +422,23 @@ class SessionOwnershipTests(GatewayPromptTestCase):
 
     def test_a_compressed_messaging_turn_is_found_by_its_lineage_root(self):
         """The gateway names a messaging session's prompts by the root of its compression lineage."""
-        lineages = {"tg-tip": ["tg-root", "tg-tip"]}
+        from contextlib import contextmanager
+        lineages = {"tg-tip": ("tg-root", "tg-tip")}
 
-        class SessionDB:
-            def __init__(self, read_only=False):
-                assert read_only
+        class FakeLineage:
+            def lineage(self, session_id):
+                return lineages.get(session_id, ())
 
-            def get_compression_lineage(self, session_id):
-                return lineages.get(session_id, [])
+        @contextmanager
+        def open_reader(target):
+            yield types.SimpleNamespace(lineage=FakeLineage())
 
-            def close(self):
-                pass
-
-        state = types.ModuleType("hermes_state")
-        state.SessionDB = SessionDB
+        assembly = types.ModuleType("persistence_assembly")
+        assembly.profile_scope = lambda: types.SimpleNamespace(profile_dir=self.home)
+        assembly.open_persistence_reader = open_reader
         self.env["HERMES_SESSION_PLATFORM"] = "telegram"
         self.env["HERMES_SESSION_KEY"] = "agent:main:telegram:dm:42"
-        with patch.dict(sys.modules, {"hermes_state": state}):
+        with patch.dict(sys.modules, {"persistence_assembly": assembly}):
             self.turn("tg-tip", platform="telegram")
             self.prompt("approval", "appr-tg", APPROVAL, session_id="tg-root")
         self.assertEqual((self.sent, self.reported), ([], []))

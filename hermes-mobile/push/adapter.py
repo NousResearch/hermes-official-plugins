@@ -499,15 +499,13 @@ def _origin_metadata(fields, *, use_context=False):
         source = _creation_source(source)
     if source in ("", "local") and session_id:
         # Attention hooks may supply only an id. Read the current profile's
-        # durable session record; read_only prevents plugin-triggered migrations.
+        # durable session record; open_persistence_reader never creates or migrates.
         try:
-            from hermes_state import SessionDB
-            db = SessionDB(read_only=True)
-            try:
-                row = db.get_session(session_id) or {}
-                source = str(row.get("source") or "").strip().lower() or source
-            finally:
-                db.close()
+            from persistence_assembly import open_persistence_reader, profile_scope
+            with open_persistence_reader(profile_scope().profile_dir) as store:
+                record = store.sessions.get(session_id)
+                if record is not None and record.source:
+                    source = str(record.source).strip().lower() or source
         except Exception:  # noqa: S110 -- a best-effort lookup
             pass  # Older servers/missing rows remain unknown, hence eligible.
     origin = {}
@@ -540,22 +538,22 @@ def _store_delivery(content, metadata):
     """
     from uuid import uuid4
 
-    from hermes_state import SessionDB
+    from persistence.conversation.messages import NewMessage
+    from persistence.conversation.sessions import NewSession
+    from persistence_assembly import open_persistence, profile_scope
+
     is_cron = bool(metadata.get("job_id")) or str(content).startswith("Cronjob Response:")
     source = "cron" if is_cron else "push"
     session_id = "push_delivery_" + uuid4().hex
-    db = SessionDB()
-    try:
-        db.create_session(session_id, source=source)
-        db.append_message(session_id, role="assistant", content=str(content))
+    with open_persistence(profile_scope()) as store:
+        store.sessions.create(NewSession(session_id=session_id, source=source))
+        store.messages.append(session_id, NewMessage(role="assistant", content=str(content)))
         title = _first_string(metadata, ("subtitle", "job_name", "job", "name"))
         try:
-            db.set_session_title(session_id, title or ("Scheduled delivery" if is_cron else "Push delivery"))
+            store.sessions.set_title(session_id, title or ("Scheduled delivery" if is_cron else "Push delivery"))
         except Exception:
-            # Duplicate/invalid titles must not discard a saved route.
+            # Duplicate/invalid titles (e.g. TitleConflict) must not discard a saved route.
             logger.debug("Push delivery title unavailable", exc_info=True)
-    finally:
-        db.close()
     return {"session_id": session_id, "source": source}
 
 
@@ -1383,12 +1381,9 @@ def _watch_prompts(fields):
 def _lineage_root(session_id):
     """The first id of *session_id*'s compression lineage, or "" when it has none or it cannot be read."""
     try:
-        from hermes_state import SessionDB
-        db = SessionDB(read_only=True)
-        try:
-            lineage = db.get_compression_lineage(session_id)
-        finally:
-            db.close()
+        from persistence_assembly import open_persistence_reader, profile_scope
+        with open_persistence_reader(profile_scope().profile_dir) as store:
+            lineage = store.lineage.lineage(session_id)
     except Exception:
         return ""
     return str(lineage[0]) if lineage else ""

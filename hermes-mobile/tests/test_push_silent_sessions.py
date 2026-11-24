@@ -1,6 +1,7 @@
 """The push plugin's `GET /sessions/silent`: which automated runs ended on a silence marker."""
-import importlib.util
-import sqlite3
+from contextlib import contextmanager
+import os
+import re
 import sys
 import types
 from pathlib import Path
@@ -15,25 +16,6 @@ def load_api():
     return load_dashboard_api("hermes_mobile_push_dashboard_api")
 
 
-def make_store(path, sessions):
-    """`sessions` maps an id to `(source, [(role, content), …], recency)`."""
-    connection = sqlite3.connect(path)
-    connection.executescript("""
-        CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, started_at REAL NOT NULL,
-                               last_activity_at REAL);
-        CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
-                               role TEXT NOT NULL, content TEXT, timestamp REAL NOT NULL,
-                               active INTEGER NOT NULL DEFAULT 1);
-    """)
-    for session_id, (source, messages, recency) in sessions.items():
-        connection.execute("INSERT INTO sessions VALUES (?, ?, ?, ?)", (session_id, source, recency, recency))
-        for role, content in messages:
-            connection.execute("INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
-                               (session_id, role, content, recency))
-    connection.commit()
-    connection.close()
-
-
 RUNS = {
     "cron_bills_1": ("cron", [("user", "Sort bills"), ("assistant", "[SILENT]")], 10),
     "cron_bills_2": ("cron", [("user", "Sort bills"), ("assistant", "[SILENT] nothing new")], 9),
@@ -42,12 +24,132 @@ RUNS = {
     "webhook_1": ("webhook", [("user", "Event"), ("assistant", "NO_REPLY")], 6),
     "graph_1": ("msgraph_webhook", [("user", "Event"), ("assistant", "Mail from Bob")], 5),
     "chat_1": ("web", [("user", "Say nothing"), ("assistant", "NO_REPLY")], 4),
-    "cron_empty": ("cron:daily", [], 3),
+    "cron_blank": ("cron", [("user", "Run"), ("assistant", "[SILENT]"), ("assistant", "   ")], 3),
+    "cron_empty": ("cron", [], 2),
 }
 
 
+class _FakePersistenceError(Exception):
+    pass
+
+
+class _FakeStoreRegistry:
+    """In-memory stand-in for Hermes' published storage interface (runs in stubbed mode too)."""
+
+    def __init__(self, root: Path):
+        self.root = root.resolve()
+        self.stores: dict[Path, dict] = {}
+        self.broken: dict[Path, Exception] = {}
+
+    def seed(self, home: Path, sessions: dict):
+        """`sessions` maps an id to `(source, [(role, content[, active]), ...], recency)`."""
+        self.stores[Path(home).resolve()] = sessions
+
+    def break_store(self, home: Path, exc: Exception):
+        key = Path(home).resolve()
+        self.stores.setdefault(key, {})
+        self.broken[key] = exc
+
+    def _resolve_scope(self, profile=None, *, home=None):
+        if home is not None:
+            target = Path(home)
+        elif profile is not None and profile != "default":
+            target = self.root / "profiles" / profile
+        else:
+            target = self.root
+        return types.SimpleNamespace(profile_dir=target.resolve())
+
+    def store_exists(self, scope):
+        return Path(scope.profile_dir).resolve() in self.stores
+
+    @contextmanager
+    def open_reader(self, target):
+        key = Path(target).resolve()
+        if key in self.broken:
+            raise self.broken[key]
+        sessions_map = self.stores.get(key)
+        if sessions_map is None:
+            raise _FakePersistenceError("unable to open database file")
+
+        class _SessionsRepo:
+            def search_sessions(self, *, sources=None, window=None):
+                wanted = set(sources) if sources is not None else None
+                rows = [
+                    (recency, sid, source)
+                    for sid, (source, _msgs, recency) in sessions_map.items()
+                    if wanted is None or source in wanted
+                ]
+                rows.sort(key=lambda item: item[0], reverse=True)
+                if window is not None and window.limit is not None:
+                    rows = rows[: window.limit]
+                return [
+                    types.SimpleNamespace(session=types.SimpleNamespace(session_id=sid, source=source))
+                    for _recency, sid, source in rows
+                ]
+
+        class _MessagesRepo:
+            def read_transcript(self, session_id, read=None):
+                _source, msgs, _recency = sessions_map[session_id]
+                active_rows = []
+                for entry in msgs:
+                    if len(entry) == 3:
+                        role, content, active = entry
+                    else:
+                        role, content, active = entry[0], entry[1], True
+                    if active:
+                        active_rows.append(types.SimpleNamespace(role=role, content=content))
+                if read is None:
+                    return active_rows
+                if read.latest:
+                    desc = list(reversed(active_rows))
+                    sliced = desc[read.offset : read.offset + read.limit]
+                    return list(reversed(sliced))
+                return active_rows[read.offset : read.offset + read.limit]
+
+        yield types.SimpleNamespace(sessions=_SessionsRepo(), messages=_MessagesRepo())
+
+
 @pytest.fixture
-def api_without_hermes(monkeypatch):
+def fake_storage(tmp_path, monkeypatch):
+    registry = _FakeStoreRegistry(tmp_path)
+
+    persistence_mod = types.ModuleType("persistence")
+    persistence_mod.PersistenceError = _FakePersistenceError
+
+    conv_mod = types.ModuleType("persistence.conversation")
+    sessions_mod = types.ModuleType("persistence.conversation.sessions")
+    sessions_mod.SessionWindow = lambda *, limit=None, offset=0: types.SimpleNamespace(limit=limit, offset=offset)
+    messages_mod = types.ModuleType("persistence.conversation.messages")
+    messages_mod.TranscriptRead = lambda *, limit=None, offset=0, latest=False: types.SimpleNamespace(
+        limit=limit, offset=offset, latest=latest,
+    )
+
+    assembly_mod = types.ModuleType("persistence_assembly")
+    assembly_mod.profile_scope = registry._resolve_scope
+    assembly_mod.store_exists = registry.store_exists
+    assembly_mod.open_persistence_reader = registry.open_reader
+
+    constants_mod = types.ModuleType("hermes_constants")
+    constants_mod.PROFILE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    constants_mod.get_default_hermes_root = lambda: tmp_path
+    constants_mod.get_hermes_home = lambda: Path(os.getenv("HERMES_HOME", str(tmp_path)))
+    constants_mod.named_profile_home = lambda p: Path(p) if Path(p).parent.name == "profiles" else None
+    constants_mod.profile_name_for_home = lambda p: (
+        Path(p).name if Path(p).parent.name == "profiles" else "default"
+    )
+    constants_mod.named_profile_is_live = lambda p: (Path(p) / "config.yaml").is_file()
+
+    monkeypatch.setitem(sys.modules, "persistence", persistence_mod)
+    monkeypatch.setitem(sys.modules, "persistence.conversation", conv_mod)
+    monkeypatch.setitem(sys.modules, "persistence.conversation.sessions", sessions_mod)
+    monkeypatch.setitem(sys.modules, "persistence.conversation.messages", messages_mod)
+    monkeypatch.setitem(sys.modules, "persistence_assembly", assembly_mod)
+    monkeypatch.setitem(sys.modules, "hermes_constants", constants_mod)
+    return registry
+
+
+@pytest.fixture
+def api_without_hermes(monkeypatch, fake_storage):
     # No `gateway` package: the plugin falls back to the original sentinel.
     monkeypatch.setitem(sys.modules, "gateway", None)
     monkeypatch.setitem(sys.modules, "gateway.response_filters", None)
@@ -55,7 +157,7 @@ def api_without_hermes(monkeypatch):
 
 
 @pytest.fixture
-def api_with_hermes_rule(monkeypatch):
+def api_with_hermes_rule(monkeypatch, fake_storage):
     filters = types.ModuleType("gateway.response_filters")
     markers = ("[SILENT]", "SILENT", "NO_REPLY", "NO REPLY")
 
@@ -75,52 +177,46 @@ def api_with_hermes_rule(monkeypatch):
     return load_api()
 
 
-def test_hermes_rule_decides_which_automated_runs_were_silent(tmp_path, api_with_hermes_rule):
-    make_store(tmp_path / "state.db", RUNS)
-    # A marker mid-sentence, a run that stopped on a tool row, a webhook that answered and any
-    # chat (silence there is not the autonomous rule) are all left out. Newest first.
-    assert api_with_hermes_rule.push_api.silent_sessions(tmp_path / "state.db") == ["cron_bills_1", "cron_bills_2", "webhook_1"]
+def test_hermes_rule_decides_which_automated_runs_were_silent(tmp_path, fake_storage, api_with_hermes_rule):
+    fake_storage.seed(tmp_path, RUNS)
+    # A marker mid-sentence, a run that stopped on a tool row, a blank trailing assistant row,
+    # a webhook that answered and any chat (silence there is not the autonomous rule) are all left out.
+    assert api_with_hermes_rule.push_api.silent_sessions(tmp_path) == ["cron_bills_1", "cron_bills_2", "webhook_1"]
 
 
-def test_older_hermes_falls_back_to_the_bracketed_sentinel(tmp_path, api_without_hermes):
-    make_store(tmp_path / "state.db", RUNS)
-    assert api_without_hermes.push_api.silent_sessions(tmp_path / "state.db") == ["cron_bills_1", "cron_bills_2"]
+def test_older_hermes_falls_back_to_the_bracketed_sentinel(tmp_path, fake_storage, api_without_hermes):
+    fake_storage.seed(tmp_path, RUNS)
+    assert api_without_hermes.push_api.silent_sessions(tmp_path) == ["cron_bills_1", "cron_bills_2"]
 
 
-def test_limit_takes_the_newest_runs(tmp_path, api_with_hermes_rule):
-    make_store(tmp_path / "state.db", RUNS)
-    assert api_with_hermes_rule.push_api.silent_sessions(tmp_path / "state.db", limit=1) == ["cron_bills_1"]
+def test_limit_takes_the_newest_runs(tmp_path, fake_storage, api_with_hermes_rule):
+    fake_storage.seed(tmp_path, RUNS)
+    assert api_with_hermes_rule.push_api.silent_sessions(tmp_path, limit=1) == ["cron_bills_1"]
 
 
-def test_rewound_rows_do_not_count(tmp_path, api_with_hermes_rule):
-    make_store(tmp_path / "state.db", {"cron_x": ("cron", [("user", "Run"), ("assistant", "[SILENT]")], 1)})
-    connection = sqlite3.connect(tmp_path / "state.db")
-    connection.execute("INSERT INTO messages (session_id, role, content, timestamp, active) VALUES ('cron_x', 'assistant', 'Found it', 2, 0)")
-    connection.commit()
-    connection.close()
-    assert api_with_hermes_rule.push_api.silent_sessions(tmp_path / "state.db") == ["cron_x"]
+def test_rewound_rows_do_not_count(tmp_path, fake_storage, api_with_hermes_rule):
+    fake_storage.seed(tmp_path, {
+        "cron_x": ("cron", [("user", "Run", True), ("assistant", "[SILENT]", True), ("assistant", "Found it", False)], 1),
+    })
+    assert api_with_hermes_rule.push_api.silent_sessions(tmp_path) == ["cron_x"]
 
 
-def test_missing_store_is_empty(tmp_path, api_with_hermes_rule):
-    assert api_with_hermes_rule.push_api.silent_sessions(tmp_path / "missing.db") == []
+def test_trailing_system_rows_page_back_to_last_conversation_row(tmp_path, fake_storage, api_with_hermes_rule):
+    # Six trailing system rows force a second page (page size = 4) before reaching [SILENT].
+    messages = [("user", "Run"), ("assistant", "[SILENT]")] + [("system", f"note {i}") for i in range(6)]
+    fake_storage.seed(tmp_path, {"cron_paged": ("cron", messages, 1)})
+    assert api_with_hermes_rule.push_api.silent_sessions(tmp_path) == ["cron_paged"]
 
 
-def test_route_validates_the_profile_and_reads_its_store(tmp_path, monkeypatch, api_with_hermes_rule):
-    profiles = types.ModuleType("hermes_cli.profiles")
+def test_missing_store_is_empty(tmp_path, fake_storage, api_with_hermes_rule):
+    assert api_with_hermes_rule.push_api.silent_sessions(tmp_path / "missing") == []
 
-    def validate_profile_name(name):
-        if "/" in name or name.startswith("."):
-            raise ValueError(f"Invalid profile name: {name}")
 
-    profiles.validate_profile_name = validate_profile_name
-    profiles.profile_exists = lambda name: name in ("default", "aria")
-    profiles.get_profile_dir = lambda name: tmp_path if name == "default" else tmp_path / "profiles" / name
-    package = types.ModuleType("hermes_cli")
-    package.profiles = profiles
-    monkeypatch.setitem(sys.modules, "hermes_cli", package)
-    monkeypatch.setitem(sys.modules, "hermes_cli.profiles", profiles)
-    (tmp_path / "profiles/aria").mkdir(parents=True)
-    make_store(tmp_path / "state.db", RUNS)
+def test_route_validates_the_profile_and_reads_its_store(tmp_path, monkeypatch, fake_storage, api_with_hermes_rule):
+    aria = tmp_path / "profiles" / "aria"
+    aria.mkdir(parents=True)
+    (aria / "config.yaml").write_text("{}\n")
+    fake_storage.seed(tmp_path, RUNS)
     # The request is bound to the default profile; `?profile=` asks for another (older Hermes).
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
@@ -132,12 +228,14 @@ def test_route_validates_the_profile_and_reads_its_store(tmp_path, monkeypatch, 
     assert client.get("/sessions/silent", params={"profile": "aria"}).json() == {"silent": []}
     assert client.get("/sessions/silent", params={"profile": "missing"}).status_code == 404
     assert client.get("/sessions/silent", params={"profile": "../escape"}).status_code == 400
+    assert client.get("/sessions/silent", params={"profile": "root"}).status_code == 400
 
 
-def test_an_unreadable_store_answers_503_without_sqlites_text(tmp_path, monkeypatch, caplog, api_with_hermes_rule):
-    (tmp_path / "state.db").write_bytes(b"not a database " * 100)
+def test_an_unreadable_store_answers_503_without_store_error_text(
+    tmp_path, monkeypatch, caplog, fake_storage, api_with_hermes_rule,
+):
+    fake_storage.break_store(tmp_path, _FakePersistenceError("file is not a database"))
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    monkeypatch.setitem(sys.modules, "hermes_constants", None)
     app = FastAPI()
     app.include_router(api_with_hermes_rule.router)
     response = TestClient(app).get("/sessions/silent")

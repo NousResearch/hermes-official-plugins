@@ -392,19 +392,45 @@ class DeliveryHistoryTests(AdapterTestCase):
         self.rows = {}
         self.closed = False
         owner = self
-        class DB:
-            def create_session(self, session_id, source):
-                owner.rows[session_id] = {"source": source}
-            def append_message(self, session_id, role, content):
-                owner.rows[session_id].update(role=role, content=content)
-            def set_session_title(self, session_id, title):
-                # A rejected title still leaves a usable saved transcript.
+
+        class FakeSessions:
+            def create(self, new_session):
+                owner.rows[new_session.session_id] = {"source": new_session.source}
+
+            def set_title(self, session_id, title):
+                # A rejected title (e.g. TitleConflict) still leaves a usable saved transcript.
                 raise ValueError("duplicate title")
-            def close(self):
+
+        class FakeMessages:
+            def append(self, session_id, new_message):
+                owner.rows[session_id].update(role=new_message.role, content=new_message.content)
+
+        class FakeStore:
+            sessions = FakeSessions()
+            messages = FakeMessages()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
                 owner.closed = True
-        state = types.ModuleType("hermes_state")
-        state.SessionDB = DB
-        modules = patch.dict(sys.modules, {"hermes_state": state})
+
+        sessions_mod = types.ModuleType("persistence.conversation.sessions")
+        sessions_mod.NewSession = lambda *, session_id, source: types.SimpleNamespace(
+            session_id=session_id, source=source)
+        messages_mod = types.ModuleType("persistence.conversation.messages")
+        messages_mod.NewMessage = lambda *, role, content: types.SimpleNamespace(
+            role=role, content=content)
+        assembly_mod = types.ModuleType("persistence_assembly")
+        assembly_mod.profile_scope = lambda *args, **kwargs: types.SimpleNamespace(profile_dir=owner.home)
+        assembly_mod.open_persistence = lambda scope: FakeStore()
+        modules = patch.dict(sys.modules, {
+            "persistence": types.ModuleType("persistence"),
+            "persistence.conversation": types.ModuleType("persistence.conversation"),
+            "persistence.conversation.sessions": sessions_mod,
+            "persistence.conversation.messages": messages_mod,
+            "persistence_assembly": assembly_mod,
+        })
         modules.start()
         self.addCleanup(modules.stop)
         adapter = self.load_adapter()
@@ -506,7 +532,7 @@ class UnifiedRuntimeTests(AdapterTestCase):
         modules = patch.dict(sys.modules, {
             "hermes_constants": self.constants, "gateway": types.ModuleType("gateway"),
             "gateway.session_context": context,
-            "hermes_state": None, "tools": None, "agent": None,
+            "persistence_assembly": None, "tools": None, "agent": None,
         })
         modules.start()
         self.addCleanup(modules.stop)

@@ -50,7 +50,7 @@ class PresenceTestCase(unittest.TestCase):
         modules = patch.dict(sys.modules, {
             "hermes_constants": self.constants, "gateway": types.ModuleType("gateway"),
             "gateway.session_context": context,
-            "hermes_state": None, "tools": None, "agent": None,
+            "persistence_assembly": None, "tools": None, "agent": None,
             "gateway.response_filters": None, "cron": None,
         })
         modules.start()

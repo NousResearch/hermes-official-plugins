@@ -1,13 +1,17 @@
-name: wecom-platform
+name: wecom
 label: WeCom (Enterprise WeChat)
 kind: platform
-version: 1.0.0
+version: 2.0.0
+author: NousResearch
+homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/wecom
 description: >
   WeCom / Enterprise WeChat gateway adapter for Hermes Agent. Registers two
-  platforms: ``wecom`` (Smart Robot over WebSocket) and ``wecom_callback``
+  platforms: ``wecom`` (AI Bot over the WeCom WebSocket gateway, with native
+  streaming replies, media and a QR-scan setup) and ``wecom_callback``
   (self-built apps over an HTTP callback endpoint with AES message crypto).
-  Relays messages between WeCom chats and the Hermes agent.
-author: NousResearch
+  Relays messages between WeCom chats and the Hermes agent; cron
+  deliver=wecom goes to WECOM_HOME_CHANNEL. Formerly built into Hermes core.
+requires_hermes: ">=0.23.2"
 requires_env:
   - name: WECOM_BOT_ID
     description: "WeCom Smart Robot bot ID"
@@ -50,3 +54,35 @@ optional_env:
     description: "WeCom callback EncodingAESKey for message crypto"
     prompt: "WeCom callback EncodingAESKey"
     password: true
+  - name: WECOM_CALLBACK_HOST
+    description: "Bind address for the callback HTTP endpoint (default: dual-stack all interfaces)"
+    prompt: "WeCom callback bind host"
+    password: false
+  - name: WECOM_CALLBACK_PORT
+    description: "Port for the callback HTTP endpoint (default: 8645)"
+    prompt: "WeCom callback port"
+    password: false
+  - name: WECOM_HOME_CHANNEL_NAME
+    description: "Display name of the home channel"
+    prompt: "Home channel name"
+    password: false
+  - name: WECOM_ALLOW_ALL_USERS
+    description: "Set to true to let any WeCom user talk to the bot"
+    prompt: "Allow all WeCom users (true/false)"
+    password: false
+  - name: WECOM_DM_POLICY
+    description: "Direct-message policy: open, allowlist, pairing (default) or disabled"
+    prompt: "WeCom DM policy"
+    password: false
+  - name: WECOM_GROUP_POLICY
+    description: "Group-chat policy: open, allowlist, pairing (default) or disabled"
+    prompt: "WeCom group policy"
+    password: false
+  - name: WECOM_CALLBACK_ALLOWED_USERS
+    description: "Comma-separated WeCom user IDs allowed to talk to the callback app"
+    prompt: "Callback allowed users (comma-separated)"
+    password: false
+  - name: WECOM_CALLBACK_ALLOW_ALL_USERS
+    description: "Set to true to let any WeCom user talk to the callback app"
+    prompt: "Allow all callback-app users (true/false)"
+    password: false

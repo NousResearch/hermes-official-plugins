@@ -3,7 +3,6 @@ native send (image/video/voice/file)."""
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import hashlib
 import logging
@@ -11,11 +10,12 @@ import mimetypes
 import re
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 from urllib.parse import unquote, urlparse
 
-from agent.i18n import t
 from gateway.platforms.base import SendResult, cache_document_from_bytes_async, cache_image_from_bytes_async
+
+from ._i18n import t
 
 logger = logging.getLogger("plugins.platforms.wecom.adapter")
 
@@ -37,7 +37,7 @@ _IMAGE_MAGIC = ((b"\x89PNG\r\n\x1a\n", ".png"), (b"\xff\xd8\xff", ".jpg"), ((b"G
 _MIME_PREFIX_KINDS = (("image/", "image"), ("video/", "video"), ("audio/", "voice"))
 # type -> (max bytes, catalog key of the kind label, human cap) for the "downgrade to file" notice;
 # the label resolves through ``t()`` at verdict time. Notices shipped in Chinese before i18n
-# (zh.yaml keeps that text).
+# (the ``zh`` table in ``_i18n.py`` keeps that text).
 _TYPE_LIMITS = {"image": (IMAGE_MAX_BYTES, "platform.wecom.media.kind_image", "10MB"),
                 "video": (VIDEO_MAX_BYTES, "platform.wecom.media.kind_video", "10MB"),
                 "voice": (VOICE_MAX_BYTES, "platform.wecom.media.kind_voice", "2MB")}
@@ -181,7 +181,7 @@ class WeComMediaMixin:
     async def _download_remote_bytes(self, url: str, max_bytes: int) -> tuple[bytes, dict[str, str]]:
         from gateway.platforms.base import ssrf_redirect_guard
         from tools.url_safety import create_ssrf_safe_async_client, is_safe_url
-        from plugins.platforms.wecom import adapter as _adapter_mod
+        from . import adapter as _adapter_mod
         if not is_safe_url(url):
             raise ValueError(f"Blocked unsafe URL (SSRF protection): {url[:80]}")
         if not _adapter_mod.HTTPX_AVAILABLE:

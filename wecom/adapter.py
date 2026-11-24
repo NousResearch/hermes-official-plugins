@@ -6,15 +6,15 @@ Config (``platforms.wecom.extra``): ``bot_id``/``secret`` (or WECOM_BOT_ID / WEC
 
 from __future__ import annotations
 
-from pm import install_hint
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 import uuid
-from datetime import datetime, timezone, UTC
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, UTC
+from typing import Any, Optional
 
 try:
     import aiohttp
@@ -32,21 +32,21 @@ from gateway.platforms.helpers import MessageDeduplicator, bounded_put, send_chu
 from gateway.platforms.access_policy_mixin import OwnAccessPolicyMixin
 from gateway.platforms.base import gateway_trust_env, BasePlatformAdapter, SendResult, describe_proxy_error, env_proxy_for_redaction
 from gateway.platforms.event import MessageEvent, MessageType
-from utils import env_float
 
 from gateway.platforms._shared import get_scoped_secret as _get_scoped_secret, send_error
-from gateway.platforms.send_targets import StandaloneSendPolicy, parse_nonempty
-from plugins.platforms.wecom.send_queue import ChatSendQueueMixin
-from plugins.platforms.wecom.media import WeComMediaMixin, APP_CMD_SEND
-from plugins.platforms.wecom.streaming import (
+from .send_queue import ChatSendQueueMixin
+from .media import WeComMediaMixin, APP_CMD_SEND
+from .streaming import (
     WeComStreamMixin, ReplyQueue, StreamTurn, APP_CMD_RESPONSE,
     STREAM_NOT_SUBSCRIBED_ERRCODE, MAX_STREAM_CONTENT_LENGTH,
     STREAM_SAFE_DURATION_SECONDS, STREAM_KEEPALIVE_INTERVAL_SECONDS, STREAM_KEEPALIVE_ENABLED_DEFAULT,
 )
 
 
-logger = logging.getLogger(__name__)
+# Stable logger name: media/streaming/send_queue log under it too, and operators filter on it.
+logger = logging.getLogger("plugins.platforms.wecom.adapter")
 
+PLATFORM_NAME = "wecom"
 DEFAULT_WS_URL = "wss://openws.work.weixin.qq.com"
 
 APP_CMD_SUBSCRIBE = "aibot_subscribe"
@@ -65,6 +65,15 @@ HEARTBEAT_INTERVAL_SECONDS = 30.0
 RECONNECT_BACKOFF = [2, 5, 10, 30, 60]
 
 DEDUP_MAX_SIZE = 1000
+
+
+def _env_float(key: str, default: float) -> float:
+    """Float env override (tuning knobs only), *default* when blank or malformed."""
+    raw = os.getenv(key, "").strip()
+    try:
+        return float(raw) if raw else default
+    except ValueError:
+        return default
 
 
 def check_wecom_requirements() -> bool:
@@ -113,7 +122,7 @@ class WeComAdapter(WeComStreamMixin, WeComMediaMixin, ChatSendQueueMixin, OwnAcc
     serial_receive_loop = True  # _read_events awaits each frame before reading the next
 
     def __init__(self, config: PlatformConfig):
-        super().__init__(config, Platform.WECOM)
+        super().__init__(config, Platform(PLATFORM_NAME))
         extra = config.extra or {}
 
         def _extra_float(key: str, default: float) -> float:
@@ -140,8 +149,8 @@ class WeComAdapter(WeComStreamMixin, WeComMediaMixin, ChatSendQueueMixin, OwnAcc
         self._dedup, self._reply_req_ids = MessageDeduplicator(max_size=DEDUP_MAX_SIZE), {}
         # Text batching (clients split long messages ~4000 chars); attachment-only frames are held
         # for the merge window so the trailing text callback joins the same event (official: 800ms).
-        self._text_batch_delay_seconds = env_float("HERMES_WECOM_TEXT_BATCH_DELAY_SECONDS", 0.6)
-        self._text_batch_split_delay_seconds = env_float("HERMES_WECOM_TEXT_BATCH_SPLIT_DELAY_SECONDS", 2.0)
+        self._text_batch_delay_seconds = _env_float("HERMES_WECOM_TEXT_BATCH_DELAY_SECONDS", 0.6)
+        self._text_batch_split_delay_seconds = _env_float("HERMES_WECOM_TEXT_BATCH_SPLIT_DELAY_SECONDS", 2.0)
         self._attachment_text_merge_delay_seconds = _extra_float("attachment_text_merge_delay_seconds", 0.8)
         # Stream keep-alive config (see streaming.py STREAM_* constants).
         self._stream_safe_duration_seconds = _extra_float("stream_safe_duration_seconds", STREAM_SAFE_DURATION_SECONDS)
@@ -678,7 +687,7 @@ def qr_scan_for_bot_info(*, timeout_seconds: int = _QR_POLL_TIMEOUT) -> Optional
     except Exception:
         print(f"  Open this URL in WeCom on your phone:\n\n  {page_url}\n")
         print("  Tip: from the Hermes environment, run: "
-              f"{install_hint('messaging')} "
+              "hermes pm install --extra messaging "
               "to display a scannable QR code here next time")
     print("\n  Fetching configuration results...", end="", flush=True)
     deadline = time.monotonic() + timeout_seconds
@@ -723,7 +732,7 @@ async def _standalone_send(pconfig, chat_id, message, *, thread_id=None, media_f
     multiplex, so a secondary profile's send would leave with the wrong identity."""
     from gateway.outbound.senders import _live_adapter
     try:
-        _, adapter = _live_adapter(Platform.WECOM, chat_id, thread_id)
+        _, adapter = _live_adapter(Platform(PLATFORM_NAME), chat_id, thread_id)
     except PermissionError as e:  # SharedBotTargetRefused: not a routed target for this profile
         return send_error(str(e))
     except Exception:
@@ -817,73 +826,3 @@ def interactive_setup() -> None:
     elif remove_env_value("WECOM_HOME_CHANNEL"):
         print_info("Home channel cleared.")
     print_success("💬 WeCom configured!")
-
-
-def _is_connected(config) -> bool:
-    return bool((getattr(config, "extra", {}) or {}).get("bot_id"))
-
-
-def _callback_is_connected(config) -> bool:
-    """Callback mode: corp_id or a multi-app `apps` block."""
-    extra = getattr(config, "extra", {}) or {}
-    return bool(extra.get("corp_id") or extra.get("apps"))
-
-
-
-def _build_callback_adapter(config):
-    from plugins.platforms.wecom.callback_adapter import WecomCallbackAdapter
-    return WecomCallbackAdapter(config)
-
-
-# System-prompt platform hint (PlatformEntry.platform_hint); cached-prompt bytes, keep stable.
-_WECOM_PLATFORM_HINT = (
-    "You are on WeCom (\u4f01\u4e1a\u5fae\u4fe1). Markdown is supported. "
-    "You can send files natively: write MEDIA:/absolute/path/to/file in your response. "
-    "Images (.jpg, .png, .webp) send as photos (\u226410 MB), other files as documents (\u226420 MB), videos "
-    "(.mp4) play inline. Voice messages must be AMR \u2014 other audio formats send as file attachments. Image "
-    "URLs via ![alt](url) are downloaded and sent as photos. Never claim you lack file-sending."
-)
-
-
-def register(ctx) -> None:
-    common = dict(install_hint="Run `hermes setup` to install WeCom support.", emoji="💼", allow_update_command=True)
-    from . import gateway_env  # env -> GatewayConfig bridge (gateway.config_env)
-    ctx.register_platform(
-        target_ref_syntax_fn=parse_nonempty,
-        standalone_send=StandaloneSendPolicy(text_direct=True),
-        name="wecom", label="WeCom (Enterprise WeChat)", adapter_factory=WeComAdapter, check_fn=check_wecom_requirements,
-        dashboard_label="WeCom (group bot)",
-        dashboard_description="Send-only WeCom group bot via webhook.",
-        docs_url="https://developer.work.weixin.qq.com/document/path/91770",
-        dashboard_env_vars=("WECOM_BOT_ID", "WECOM_SECRET"),
-        dashboard_required_env=("WECOM_BOT_ID",),
-        is_connected=_is_connected, validate_config=_is_connected, required_env=["WECOM_BOT_ID", "WECOM_SECRET"],
-        setup_fn=interactive_setup,
-        cron_deliver_env_var="WECOM_HOME_CHANNEL", standalone_sender_fn=_standalone_send, max_message_length=4000, **common,
-        platform_hint=_WECOM_PLATFORM_HINT,
-        display_tier="low",
-        # Non-editable, but its native "stream" msgtype gives a typing animation + cumulative updates.
-        display_overrides={"streaming": True},
-        env_overrides=gateway_env.ENV_OVERRIDES,
-        env_enable_credentials=gateway_env.ENV_ENABLE_CREDENTIALS, **gateway_env.AUTHZ,
-    )
-    from plugins.platforms.wecom.callback_adapter import check_wecom_callback_requirements, ensure_wecom_callback_requirements
-    ctx.register_platform(
-        name="wecom_callback", label="WeCom Callback (self-built apps)", adapter_factory=_build_callback_adapter,
-        dashboard_label="WeCom (app)",
-        dashboard_description="Two-way WeCom integration via callback app.",
-        docs_url="https://developer.work.weixin.qq.com/document/path/90930",
-        dashboard_env_vars=(
-            "WECOM_CALLBACK_CORP_ID", "WECOM_CALLBACK_CORP_SECRET", "WECOM_CALLBACK_AGENT_ID",
-            "WECOM_CALLBACK_TOKEN", "WECOM_CALLBACK_ENCODING_AES_KEY",
-        ),
-        dashboard_required_env=(
-            "WECOM_CALLBACK_CORP_ID", "WECOM_CALLBACK_CORP_SECRET", "WECOM_CALLBACK_AGENT_ID",
-        ),
-        check_fn=check_wecom_callback_requirements, ensure_deps_fn=ensure_wecom_callback_requirements,
-        is_connected=_callback_is_connected, validate_config=_callback_is_connected,
-        required_env=["WECOM_CALLBACK_CORP_ID", "WECOM_CALLBACK_CORP_SECRET"], **common,
-        display_tier="low",
-        env_overrides=gateway_env.CALLBACK_ENV_OVERRIDES,
-        env_enable_credentials=gateway_env.CALLBACK_ENV_ENABLE_CREDENTIALS, **gateway_env.CALLBACK_AUTHZ,
-    )

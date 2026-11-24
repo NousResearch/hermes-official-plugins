@@ -7,9 +7,9 @@ from xml.etree import ElementTree as ET
 import pytest
 
 from gateway.config import PlatformConfig
-from plugins.platforms.wecom import callback_adapter as _callback_mod
-from plugins.platforms.wecom.callback_adapter import WecomCallbackAdapter
-from plugins.platforms.wecom.wecom_crypto import WXBizMsgCrypt
+from wecom_plugin import callback_adapter as _callback_mod
+from wecom_plugin.callback_adapter import WecomCallbackAdapter
+from wecom_plugin.wecom_crypto import WXBizMsgCrypt
 
 # ``_build_event`` parses inbound XML with defusedxml, which ships with the
 # ``wecom`` extra (and transitively with ``youtube``, hence ``[all]`` in CI). A
@@ -205,7 +205,7 @@ class TestWecomCallbackBodySizeLimit:
 
     @pytest.mark.asyncio
     async def test_oversized_body_rejected_with_413(self):
-        from plugins.platforms.wecom.callback_adapter import _MAX_BODY
+        from wecom_plugin.callback_adapter import _MAX_BODY
 
         adapter = WecomCallbackAdapter(_config())
         oversized = b"<xml>" + b"A" * (_MAX_BODY + 1) + b"</xml>"
@@ -243,7 +243,7 @@ def test_callback_signature_is_compared_in_constant_time(monkeypatch):
     """A forged msg_signature is rejected through hmac.compare_digest, not a short-circuiting ``!=``."""
     import hmac
 
-    from plugins.platforms.wecom.wecom_crypto import SignatureError
+    from wecom_plugin.wecom_crypto import SignatureError
 
     compared = []
     real_compare = hmac.compare_digest

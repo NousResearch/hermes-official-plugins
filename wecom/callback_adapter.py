@@ -7,7 +7,7 @@ import asyncio
 import logging
 import socket as _socket
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 # Untrusted pre-auth bodies are parsed with defusedxml (billion-laughs / XXE).
 try:
@@ -35,10 +35,11 @@ from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import BasePlatformAdapter, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.platforms.helpers import MessageDeduplicator, send_chunks
-from plugins.platforms.wecom.wecom_crypto import WXBizMsgCrypt, WeComCryptoError
+from .wecom_crypto import WXBizMsgCrypt, WeComCryptoError
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("plugins.platforms.wecom.callback_adapter")
 
+PLATFORM_NAME = "wecom_callback"
 DEFAULT_HOST = None  # dual-stack bind ("0.0.0.0" broke IPv6-only); pin via extra.host
 DEFAULT_PORT = 8645
 DEFAULT_PATH = "/wecom/callback"
@@ -59,27 +60,20 @@ def check_wecom_callback_requirements() -> bool:
 
 
 def ensure_wecom_callback_requirements() -> bool:
-    """ACTIVE lazy-installer (``ensure_deps_fn``): installs ``defusedxml`` and rebinds globals.
+    """``ensure_deps_fn``: re-import ``defusedxml`` and rebind the module globals.
 
-    Registered as ``ensure_deps_fn``: the registry's ``create_adapter()`` runs it when the passive probe
-    fails, right before the gateway connects the platform (#79812). Installs ``defusedxml`` (the only
-    non-core dep; aiohttp/httpx ship with every messaging install) and rebinds the module globals. Before
-    this hook existed, the passive ``check_fn`` returned False forever on installs without the ``wecom``
-    extra and the ``platform.wecom_callback`` LAZY_DEPS entry was never exercised.
+    The plugin's own ``pyproject.toml`` lists ``defusedxml``, so ``hermes plugins install`` brings it; this
+    picks it up when it landed after this module was first imported (core's lazy ``wecom`` extra is gone).
     """
+    global ET, DEFUSEDXML_AVAILABLE
     if check_wecom_callback_requirements():
         return True
-
-    def _import() -> dict:
-        import defusedxml.ElementTree as _ET
-        return {"ET": _ET, "DEFUSEDXML_AVAILABLE": True}
-
     try:
-        from pm.extras import ensure_and_bind
-    except Exception:  # pragma: no cover — defensive
+        import defusedxml.ElementTree as _ET
+    except ImportError:
+        logger.warning("[WecomCallback] defusedxml is missing; reinstall the plugin: hermes plugins install wecom --force")
         return False
-    if not ensure_and_bind("wecom", _import, globals()):
-        return False
+    ET, DEFUSEDXML_AVAILABLE = _ET, True
     return check_wecom_callback_requirements()
 
 
@@ -94,7 +88,7 @@ class WecomCallbackAdapter(BasePlatformAdapter):
     MAX_MESSAGE_LENGTH = 2048
     splits_long_messages = True  # send() chunks via truncate_message(MAX_MESSAGE_LENGTH, _utf8_len)
     def __init__(self, config: PlatformConfig):
-        super().__init__(config, Platform.WECOM_CALLBACK)
+        super().__init__(config, Platform(PLATFORM_NAME))
         extra = config.extra or {}
         _raw_host = extra.get("host") or DEFAULT_HOST
         self._host = str(_raw_host) if _raw_host else None

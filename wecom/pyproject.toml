@@ -1,0 +1,22 @@
+[project]
+name = "hermes-wecom"
+version = "2.0.0"
+description = "WeCom (Enterprise WeChat) gateway platform for Hermes Agent: AI Bot and callback-app modes (official plugin)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nous Research" }]
+requires-python = ">=3.11"
+dependencies = [
+  # WebSocket transport (AI Bot) and the callback HTTP server.
+  "aiohttp>=3.9,<4",
+  # Media download/upload and the callback app's message/send API.
+  "httpx>=0.28.1,<1",
+  # Untrusted pre-auth callback XML is parsed with defusedxml (billion laughs / XXE). Formerly core's
+  # ``wecom`` extra.
+  "defusedxml>=0.7.1,<0.8",
+  # AES-CBC for callback message crypto and inbound media decryption. Core's patched floor.
+  "cryptography>=50.0.0,<51",
+]
+
+[project.urls]
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/wecom"

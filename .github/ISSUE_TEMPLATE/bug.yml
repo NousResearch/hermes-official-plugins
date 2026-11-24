@@ -10,6 +10,7 @@ body:
       options:
         - homeassistant
         - spotify
+        - wecom
     validations:
       required: true
   - type: textarea

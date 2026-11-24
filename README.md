@@ -229,6 +229,15 @@ Catalog entries come in two tiers:
 <p><code>security_scan_start</code> and 8 more · <code>/security</code> · <code>hermes security-review</code></p>
 </td>
 <td width="50%" valign="top">
+<a href="wecom/"><img src="assets/wecom.jpg" alt="WeCom plugin"></a>
+<h3><a href="wecom/">WeCom</a></h3>
+<code>hermes plugins install wecom</code>
+<p>WeCom (Enterprise WeChat) as a gateway platform, in two modes. <code>wecom</code> connects an AI Bot over WeCom's WebSocket gateway with native streaming replies, media and QR-scan setup; <code>wecom_callback</code> serves self-built apps over an encrypted HTTP callback. Cron jobs deliver with <code>deliver=wecom</code>. Formerly built into Hermes core; installed by default.</p>
+<p><code>wecom</code> · <code>wecom_callback</code></p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 <h3>More on the way</h3>
 <p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
 </td>
@@ -238,9 +247,9 @@ Catalog entries come in two tiers:
 
 ### Already used one of these?
 
-Most plugins here used to live somewhere else: Home Assistant and Spotify were built into Hermes core and then briefly had their own repos, Langfuse shipped bundled with core as `observability/langfuse`, the Singularity/Apptainer terminal backend and the Camofox browser backend were built into core, MCP Serve was core's `hermes mcp serve`, and the rest each had a standalone `NousResearch/hermes-*` repo. **Except for MCP Serve, you don't need to do anything.**
+Most plugins here used to live somewhere else: Home Assistant and Spotify were built into Hermes core and then briefly had their own repos, Langfuse shipped bundled with core as `observability/langfuse`, WeCom was a built-in gateway platform, the Singularity/Apptainer terminal backend and the Camofox browser backend were built into core, MCP Serve was core's `hermes mcp serve`, and the rest each had a standalone `NousResearch/hermes-*` repo. **Except for MCP Serve, you don't need to do anything.**
 
-- **You used the built-in Home Assistant, Spotify, Langfuse, Singularity or Camofox backend:** `hermes update`, or the first start after updating, installs the plugin from the catalog with your existing config, env vars and login.
+- **You used the built-in Home Assistant, Spotify, WeCom, Langfuse, Singularity or Camofox backend:** `hermes update`, or the first start after updating, installs the plugin from the catalog with your existing config, env vars and login.
 - **You installed it from the catalog:** the catalog now points here, so `hermes plugins update <name>` moves your install to this repo and keeps your files.
 - **You used the built-in `hermes import-agent`:** profiles that registered an import for `--sync` get the `agent-importers` plugin on update; anywhere else, running `hermes import-agent` prints the one-line install (`hermes plugins install agent-importers`).
 - **You used `hermes claw migrate` (OpenClaw):** it now comes with the same plugin. After `hermes plugins install agent-importers`, both `hermes import-agent openclaw` and the old `hermes claw migrate` / `hermes claw cleanup` work with the same flags.

@@ -21,6 +21,7 @@ from hermes_cli.config import cfg_get, read_raw_config
 from tools.registry import tool_error
 
 from . import camofox_client as client
+from .camofox_vault import secret_transport_ok
 from . import camofox_policy as policy
 
 logger = logging.getLogger(__name__)
@@ -432,6 +433,9 @@ def browser_import_cookies(cookies_path: str, domain_suffix: Optional[str] = Non
     if not client._env("CAMOFOX_API_KEY"):
         return _fail("CAMOFOX_API_KEY is not set. Cookie import is disabled unless you set "
                      "CAMOFOX_API_KEY on both the Camofox server and Hermes.")
+    if not secret_transport_ok(client.get_camofox_url() or ""):
+        return _fail("Cookie import refuses a plain-HTTP Camofox URL on a remote host; use HTTPS "
+                     "or set browser.camofox.allow_insecure_transport: true.")
     try:
         cookies = _read_cookie_file(cookies_path, domain_suffix)
     except (ValueError, OSError) as exc:
@@ -461,7 +465,8 @@ def browser_import_cookies(cookies_path: str, domain_suffix: Optional[str] = Non
 
 def check_cookie_import_available() -> bool:
     """Cookie import needs the server URL and the bearer token the server's cookie route checks."""
-    return bool(client.get_camofox_url()) and bool(client._env("CAMOFOX_API_KEY"))
+    url = client.get_camofox_url()
+    return bool(url) and bool(client._env("CAMOFOX_API_KEY")) and secret_transport_ok(url)
 
 
 def check_camofox_configured() -> bool:

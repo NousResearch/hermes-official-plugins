@@ -1,3 +1,5 @@
+<p align="center"><img src="../assets/qqbot.jpg" alt="QQ Bot, a Hermes Labs plugin" width="100%"></p>
+
 # QQ Bot
 
 > **Labs plugin: works, but unsupported.** QQ Bot is now a Hermes Labs plugin: built by Nous Research, not supported, and likely not maintained going forward. Fixes from the community are welcome. See [what "labs" means](../README.md#what-labs-means).

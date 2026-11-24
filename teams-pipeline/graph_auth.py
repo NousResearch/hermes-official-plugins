@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -16,6 +15,14 @@ DEFAULT_GRAPH_AUTHORITY_URL = "https://login.microsoftonline.com"
 DEFAULT_TOKEN_SKEW_SECONDS = 120
 
 _REQUIRED_ENV = ("MSGRAPH_TENANT_ID", "MSGRAPH_CLIENT_ID", "MSGRAPH_CLIENT_SECRET")
+
+
+class _ScopedEnv:
+    """``env.get(name)`` through Hermes' per-profile secret scope."""
+
+    def get(self, name: str, default: str | None = None) -> str | None:
+        from agent.secret_scope import get_secret
+        return get_secret(name, default)
 
 
 class MicrosoftGraphAuthError(RuntimeError):
@@ -57,7 +64,9 @@ class GraphCredentials:
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None, *, required: bool = True) -> GraphCredentials | None:
-        env = environ if environ is not None else os.environ
+        # The active profile's secrets, not os.environ: a multiplexed secondary profile's MSGRAPH_* live
+        # only in its own .env (os.environ holds the launch profile's).
+        env = environ if environ is not None else _ScopedEnv()
         values = [(env.get(name) or "").strip() for name in _REQUIRED_ENV]
         missing = [name for name, value in zip(_REQUIRED_ENV, values) if not value]
         if missing and not required:

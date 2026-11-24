@@ -18,6 +18,21 @@ from teams_pipeline_plugin.graph_auth import (
 
 
 class TestGraphCredentials:
+    def test_from_env_reads_the_active_profile_secret_scope(self, monkeypatch):
+        """A multiplexed secondary profile's MSGRAPH_* live only in its own .env, never in os.environ."""
+        from agent.secret_scope import reset_secret_scope, set_multiplex_active, set_secret_scope
+
+        for name in ("MSGRAPH_TENANT_ID", "MSGRAPH_CLIENT_ID", "MSGRAPH_CLIENT_SECRET"):
+            monkeypatch.setenv(name, "launch-profile")
+        set_multiplex_active(True)
+        token = set_secret_scope({"MSGRAPH_TENANT_ID": "t-b", "MSGRAPH_CLIENT_ID": "c-b", "MSGRAPH_CLIENT_SECRET": "s-b"})
+        try:
+            creds = GraphCredentials.from_env()
+        finally:
+            reset_secret_scope(token)
+            set_multiplex_active(False)
+        assert (creds.tenant_id, creds.client_id, creds.client_secret) == ("t-b", "c-b", "s-b")
+
     def test_from_env_raises_for_missing_required_values(self):
         with pytest.raises(MicrosoftGraphConfigError) as exc:
             GraphCredentials.from_env({})

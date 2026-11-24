@@ -5,11 +5,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 from typing import Any, Callable
 
 from hermes_constants import display_hermes_home
 from gateway.config import Platform, load_gateway_config
+from agent.secret_scope import get_secret
+
 from .meetings import (
     enrich_meeting_with_call_record, fetch_preferred_transcript_text, list_recording_artifacts, resolve_meeting_reference)
 from .pipeline import TeamsMeetingPipeline
@@ -117,7 +118,7 @@ def _cmd_validate(args) -> None:
     gateway_config = load_gateway_config()
     webhook_config = gateway_config.platforms.get(Platform.MSGRAPH_WEBHOOK)
     teams_config = gateway_config.platforms.get(Platform("teams"))
-    graph = {key: bool(os.environ.get(f"MSGRAPH_{key.upper()}")) for key in ("tenant_id", "client_id", "client_secret")}
+    graph = {key: bool(get_secret(f"MSGRAPH_{key.upper()}")) for key in ("tenant_id", "client_id", "client_secret")}
     webhook_enabled = bool(webhook_config and webhook_config.enabled)
     teams_enabled = bool(teams_config and teams_config.enabled)
     teams_extra = dict((teams_config.extra or {}) if teams_config else {})

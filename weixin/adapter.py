@@ -1283,6 +1283,27 @@ _INSTALL_HINT = "Weixin: aiohttp/cryptography not installed"
 _env_configured = env_is_connected("WEIXIN_ACCOUNT_ID", "WEIXIN_TOKEN")
 
 
+# Core's placeholder rule for platform tokens (``hermes_cli.auth.has_usable_secret(min_length=4)``, applied
+# by ``gateway.config._validate_gateway_config`` while Weixin was a core platform): a copied example value
+# never starts the adapter.
+_PLACEHOLDER_SECRET_VALUES = frozenset({
+    "*", "**", "***", "changeme", "your_api_key", "your_api_key_here", "your-api-key",
+    "placeholder", "example", "dummy", "null", "none"})
+
+
+def usable_token(value: Any) -> bool:
+    """False for an empty, too-short (< 4 chars) or placeholder-shaped token."""
+    if not isinstance(value, str):
+        return False
+    cleaned = value.strip()
+    lowered = cleaned.lower()
+    if len(cleaned) < 4 or lowered in _PLACEHOLDER_SECRET_VALUES:
+        return False
+    if lowered.startswith("your_") and lowered.endswith("_here"):
+        return False
+    return not any(lowered.startswith(prefix) and set(lowered[len(prefix):]) == {"x"} for prefix in ("sk-", "ghp_", "hf_"))
+
+
 def _config_connected(config: Any) -> bool:
     """``config_connected_fn``: account_id AND token in the merged PlatformConfig; a token alone is
     not enough, so this platform opts out of the generic ``token or api_key`` shortcut."""
@@ -1437,6 +1458,16 @@ _PLATFORM_HINT = (
 _SEND_TARGET_RE = re.compile(r"^\s*((?:wxid|gh|v\d+|wm|wb)_[A-Za-z0-9_-]+|[A-Za-z0-9._-]+@chatroom|filehelper)\s*$")
 
 
+def _standalone_send_policy() -> StandaloneSendPolicy:
+    """Every send through the native sender; and, as core's outbound router did for Weixin, a send-only
+    home (credentials, ``platforms.weixin.enabled: false``) still delivers. ``sends_while_disabled`` is
+    passed only on a core whose policy has it."""
+    import dataclasses
+    fields = {f.name for f in dataclasses.fields(StandaloneSendPolicy)}
+    extra = {"sends_while_disabled": True} if "sends_while_disabled" in fields else {}
+    return StandaloneSendPolicy(label="Weixin", media=True, all_sends=True, **extra)
+
+
 def core_ships_weixin() -> bool:
     """True on a Hermes core that still bundles Weixin (``plugins/platforms/weixin``). Looks only inside the
     imported package's own ``__path__`` (a plain ``find_spec`` also consults meta-path finders, e.g. an
@@ -1458,7 +1489,7 @@ def platform_kwargs() -> dict[str, Any]:
         target_ref_syntax_fn=regex_groups_parser(_SEND_TARGET_RE, thread_group=False),
         # Every send goes through the native standalone sender, as core routed Weixin first: no other
         # plugin's optional import can block it, and a running gateway's adapter is reused there.
-        standalone_send=StandaloneSendPolicy(label="Weixin", media=True, all_sends=True),
+        standalone_send=_standalone_send_policy(),
         name=PLATFORM_NAME, label="Weixin / WeChat", adapter_factory=WeixinAdapter, check_fn=check_weixin_requirements,
         dashboard_label="Weixin / WeChat (Personal)",
         dashboard_description="Connect a personal WeChat account through Tencent's iLink Bot API.",

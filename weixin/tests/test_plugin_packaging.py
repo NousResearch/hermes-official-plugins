@@ -53,11 +53,11 @@ def test_core_ships_weixin_ignores_a_leftover_pycache_only_dir(monkeypatch, tmp_
 @pytest.mark.plugin_registry
 def test_env_credentials_enable_weixin_with_its_extras_and_home_channel(monkeypatch):
     from gateway.config import Platform, load_gateway_config
-    for name, value in (("WEIXIN_ACCOUNT_ID", "acc@im.bot"), ("WEIXIN_TOKEN", "tok"), ("WEIXIN_DM_POLICY", "Open"),
+    for name, value in (("WEIXIN_ACCOUNT_ID", "acc@im.bot"), ("WEIXIN_TOKEN", "tok-1234"), ("WEIXIN_DM_POLICY", "Open"),
                         ("WEIXIN_BASE_URL", "https://ilink.example/"), ("WEIXIN_HOME_CHANNEL", " wxid_home ")):
         monkeypatch.setenv(name, value)  # the gateway loads the profile's .env into its environment
     cfg = load_gateway_config().platforms[Platform("weixin")]
-    assert cfg.enabled and cfg.token == "tok"
+    assert cfg.enabled and cfg.token == "tok-1234"
     assert cfg.extra["account_id"] == "acc@im.bot" and cfg.extra["dm_policy"] == "open"
     assert cfg.extra["base_url"] == "https://ilink.example"
     assert cfg.home_channel is not None and cfg.home_channel.chat_id == "wxid_home"
@@ -114,3 +114,27 @@ def test_gateway_setup_runs_the_qr_login_and_saves_core_s_env_names(monkeypatch,
     assert get_env_value("WEIXIN_BASE_URL") == "https://ilink.example"
     assert get_env_value("WEIXIN_DM_POLICY") == "pairing"
     assert get_env_value("WEIXIN_GROUP_POLICY") == "disabled"
+
+
+@pytest.mark.plugin_registry
+@pytest.mark.parametrize(("token", "enabled"), [("tok", False), ("changeme", False), ("tokprobe1234", True)])
+def test_a_placeholder_token_never_starts_the_adapter(monkeypatch, token, enabled):
+    """Core refused a WEIXIN_TOKEN under 4 characters or of a placeholder shape at gateway start; so does
+    the plugin's env bridge."""
+    from gateway.config import Platform, load_gateway_config
+    monkeypatch.setenv("WEIXIN_ACCOUNT_ID", "acc@im.bot")
+    monkeypatch.setenv("WEIXIN_TOKEN", token)
+    config = load_gateway_config()
+    cfg = config.platforms.get(Platform("weixin"))
+    assert bool(cfg and cfg.enabled) is enabled
+    assert (Platform("weixin") in config.get_connected_platforms()) is enabled
+
+
+def test_send_only_homes_keep_delivering_on_a_core_with_the_seam(monkeypatch):
+    """Core delivered Weixin from credentials with ``platforms.weixin.enabled: false``; the policy asks for
+    the same wherever the running core's StandaloneSendPolicy offers ``sends_while_disabled``."""
+    import dataclasses
+    from gateway.platforms.send_targets import StandaloneSendPolicy
+    policy = adapter.platform_kwargs()["standalone_send"]
+    has_seam = "sends_while_disabled" in {f.name for f in dataclasses.fields(StandaloneSendPolicy)}
+    assert getattr(policy, "sends_while_disabled", False) is has_seam

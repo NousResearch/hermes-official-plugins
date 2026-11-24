@@ -21,7 +21,7 @@ external_dependencies:
     install: "npm install -g @anthropic-ai/claude-code"
     # Session mode keeps a process only on these Claude Code versions (the session tests passed on each, the CI pin
     # first); any other version runs per-call. Add a version after evals/ci.sh passes with CLAUDE_CODE_VERSION set to it.
-    session_versions: [2.1.292, 2.1.322, 2.1.323, 2.1.324, 2.1.325, 2.1.326, 2.1.327, 2.1.328, 2.1.329, 2.1.330]
+    session_versions: [2.1.292, 2.1.322, 2.1.323, 2.1.324, 2.1.325, 2.1.326, 2.1.327, 2.1.328, 2.1.329, 2.1.330, 2.1.331]
 config_schema:
   claude_config_dir:
     type: string

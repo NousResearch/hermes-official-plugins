@@ -56,6 +56,76 @@ async def test_ws_connect_failed_connect_closes_local_session():
 
 
 @pytest.mark.asyncio
+async def test_connect_and_disconnect_publish_profile_status(monkeypatch):
+    adapter = _make_adapter()
+    adapter._runtime_status_platform_key = "secondary:homeassistant"
+    adapter._ws_connect = AsyncMock(return_value=True)
+    rest_session = MagicMock(closed=False)
+    rest_session.close = AsyncMock()
+    adapter._new_session = MagicMock(return_value=rest_session)
+    publish_status = MagicMock()
+    monkeypatch.setattr("gateway.status.publish_runtime_status", publish_status)
+
+    assert await adapter.connect()
+    await adapter.disconnect()
+
+    assert [call.kwargs["platform_state"] for call in publish_status.call_args_list] == [
+        "connected", "disconnected"]
+    assert all(call.kwargs["platform"] == "secondary:homeassistant"
+               for call in publish_status.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_reconnect_publishes_retrying_then_connected(monkeypatch):
+    adapter = _make_adapter()
+    adapter._runtime_status_platform_key = "secondary:homeassistant"
+    adapter._running = True
+    read_count = 0
+
+    async def read_events():
+        nonlocal read_count
+        read_count += 1
+        if read_count == 2:
+            adapter._running = False
+
+    async def no_wait(_delay):
+        return None
+
+    adapter._read_events = read_events
+    adapter._cleanup_ws = AsyncMock()
+    adapter._ws_connect = AsyncMock(return_value=True)
+    publish_status = MagicMock()
+    monkeypatch.setattr("gateway.status.publish_runtime_status", publish_status)
+    monkeypatch.setattr(ha_adapter.asyncio, "sleep", no_wait)
+
+    await adapter._listen_loop()
+
+    assert [call.kwargs["platform_state"] for call in publish_status.call_args_list] == [
+        "retrying", "connected"]
+    assert all(call.kwargs["platform"] == "secondary:homeassistant"
+               for call in publish_status.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_stop_during_reconnect_backoff_does_not_reconnect(monkeypatch):
+    adapter = _make_adapter()
+    adapter._running = True
+    adapter._read_events = AsyncMock()
+    adapter._cleanup_ws = AsyncMock()
+    adapter._ws_connect = AsyncMock(return_value=True)
+
+    async def stop_during_backoff(_delay):
+        adapter._running = False
+
+    monkeypatch.setattr(ha_adapter.asyncio, "sleep", stop_during_backoff)
+
+    await adapter._listen_loop()
+
+    adapter._ws_connect.assert_not_awaited()
+    adapter._cleanup_ws.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_cleanup_ws_bounds_hanging_close_and_nulls_both(monkeypatch):
     """A wedged WS close cannot prevent the session close."""
     adapter = _make_adapter()

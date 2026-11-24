@@ -509,10 +509,26 @@ def save_env_file(path: Path, data: dict[str, str]) -> None:
     path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
+def _backup_relative_name(path: Path) -> Path:
+    """A short name under ``backups/`` for *path*: its tail, disambiguated by a digest.
+
+    Mirroring the absolute path (``path.parts[1:]``) turned a normal install into
+    ``backups/Users/<name>/AppData/Local/...``, long enough on Windows to fail with
+    ``WinError 206`` before the migration wrote anything. Two parts plus a digest of
+    the full path keep the tree shallow and still separate same-named files.
+    """
+    parts = [part for part in path.parts if part not in (path.anchor, "")]
+    tail = parts[-2:] if len(parts) >= 2 else parts
+    digest = hashlib.sha256(str(path).encode("utf-8", "surrogatepass")).hexdigest()[:8]
+    head = tail[0] if len(tail) == 2 else digest
+    leaf = tail[-1]
+    return Path(f"{digest}-{head}") / leaf if len(tail) == 2 else Path(f"{digest}-{leaf}")
+
+
 def backup_existing(path: Path, backup_root: Path) -> Optional[Path]:
     if not path.exists():
         return None
-    rel = Path(*path.parts[1:]) if path.is_absolute() and len(path.parts) > 1 else path
+    rel = _backup_relative_name(path)
     dest = backup_root / rel
     ensure_parent(dest)
     if path.is_dir():

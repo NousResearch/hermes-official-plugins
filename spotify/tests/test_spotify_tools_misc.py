@@ -118,6 +118,8 @@ def test_nonempty_playback_reads_pass_through(client):
 
 def test_recently_played_cursors(client):
     assert _error(spotify_tools._handle_spotify_playback({"action": "recently_played", "after": 1, "before": 2})) == "Provide only one of 'after' or 'before'"
+    # 0 is a valid epoch cursor, not an absent value
+    assert _error(spotify_tools._handle_spotify_playback({"action": "recently_played", "after": 0, "before": 2})) == "Provide only one of 'after' or 'before'"
     spotify_tools._handle_spotify_playback({"action": "recently_played", "after": "150", "limit": "abc"})
     assert client.calls[-1] == ("GET", "/me/player/recently-played",
                                 {"limit": 20, "after": 150, "before": None}, None)

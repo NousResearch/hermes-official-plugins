@@ -270,7 +270,7 @@ def _pb_repeat_state(args: dict) -> str:
 
 def _pb_recently_played(client: SpotifyClient, args: dict, action: str) -> str:
     after, before = args.get("after"), args.get("before")
-    if after and before:
+    if after is not None and before is not None:
         return tool_error("Provide only one of 'after' or 'before'")
     params = {"limit": _limit(args), "after": int(after) if after is not None else None, "before": int(before) if before is not None else None}
     return tool_result(client.request("GET", "/me/player/recently-played", params=params))

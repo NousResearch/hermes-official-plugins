@@ -30,7 +30,8 @@ def _core_ships_teams_pipeline() -> bool:
 
 
 def _bind_msgraph(native, adapter) -> None:
-    runtime.bind_adapter(adapter)
+    if runtime.bind_adapter(adapter):
+        logger.info("Teams pipeline runtime bound to msgraph webhook ingress")
 
 
 def register(ctx) -> None:

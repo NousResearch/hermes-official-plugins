@@ -112,6 +112,9 @@ def usage_percent(value, fraction=False):
 def reserve_percent(setting):
     """The opt-in early-stop threshold as a percent in (0, 100]; unset or invalid means 100 (#398)."""
     value = setting(RESERVE_SETTING, "") if setting else ""
+    if isinstance(value, bool):
+        # Unquoted YAML `true`/`false` are bools; float(True) would silently mean a 1% reserve.
+        return 100.0
     try:
         percent = float(value)
     except (TypeError, ValueError):

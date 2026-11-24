@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.abc
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -22,9 +23,11 @@ _ROOT = Path(__file__).resolve().parents[1]
 # shadow core packages when core is imported.
 sys.path[:] = [p for p in sys.path if Path(p or ".").resolve() != _ROOT]
 
-# The plugin declares ``platforms: [linux, macos]``; nothing here is meant to run on Windows.
-if sys.platform == "win32":
-    collect_ignore_glob = ["test_*.py"]
+# Host specs for ``@pytest.mark.platforms(...)``, as Hermes core's test suite reads them. The plugin only
+# registers on Linux/macOS, but its pure logic (URL gating, node protocol, transcript parsing) is tested
+# everywhere, as it was in core; tests that need a POSIX host carry the marker.
+_HOST_SPECS = {"any", "posix" if os.name == "posix" else "windows",
+               {"linux": "linux", "darwin": "macos", "win32": "windows"}.get(sys.platform, sys.platform)}
 
 
 class _PluginFinder(importlib.abc.MetaPathFinder):
@@ -60,6 +63,15 @@ class _RepoRootIsNotATestPackage:
         return None
 
 
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        marker = item.get_closest_marker("platforms")
+        if marker is not None and not _HOST_SPECS & set(marker.args):
+            item.add_marker(pytest.mark.skip(reason=f"needs a {'/'.join(marker.args)} host"))
+
+
 def pytest_configure(config):
+    config.addinivalue_line("markers", "platforms(*specs): run only on hosts matching a spec "
+                                       "(linux/macos/windows/posix/any)")
     if not config.pluginmanager.has_plugin("google-meet-repo-root"):
         config.pluginmanager.register(_RepoRootIsNotATestPackage(), "google-meet-repo-root")

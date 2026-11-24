@@ -67,8 +67,8 @@ def _make_qq_runner():
         _dm_policy="open",
         _group_policy="open",
     )
-    runner.adapters = {Platform.QQBOT: default_adapter}
-    runner._profile_adapters = {"coder": {Platform.QQBOT: secondary_adapter}}
+    runner.adapters = {Platform("qqbot"): default_adapter}
+    runner._profile_adapters = {"coder": {Platform("qqbot"): secondary_adapter}}
     runner.pairing_store = MagicMock()
     runner.pairing_store.is_approved.return_value = False
     return runner
@@ -76,7 +76,7 @@ def _make_qq_runner():
 
 def _qq_dm_source(profile="coder"):
     return SessionSource(
-        platform=Platform.QQBOT,
+        platform=Platform("qqbot"),
         user_id="user-1",
         chat_id="dm-chat",
         user_name="user-1",
@@ -180,7 +180,7 @@ class TestStartupValidatorScope:
     def _open_dm_config():
         return GatewayConfig(
             platforms={
-                Platform.QQBOT: PlatformConfig(
+                Platform("qqbot"): PlatformConfig(
                     enabled=True, extra={"dm_policy": "open"}
                 )
             }
@@ -251,7 +251,7 @@ class TestDirectSendScope:
 
     @pytest.mark.asyncio
     async def test_scoped_credentials_win_over_environ(self, monkeypatch):
-        from plugins.platforms.qqbot.send import send_qqbot as _send_qqbot
+        from qqbot_plugin.send import send_qqbot as _send_qqbot
 
         captured = []
         monkeypatch.setitem(sys.modules, "httpx", self._fake_httpx(captured))
@@ -273,7 +273,7 @@ class TestDirectSendScope:
 
     @pytest.mark.asyncio
     async def test_unscoped_falls_back_to_environ(self, monkeypatch):
-        from plugins.platforms.qqbot.send import send_qqbot as _send_qqbot
+        from qqbot_plugin.send import send_qqbot as _send_qqbot
 
         captured = []
         monkeypatch.setitem(sys.modules, "httpx", self._fake_httpx(captured))

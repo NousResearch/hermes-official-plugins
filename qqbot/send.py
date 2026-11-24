@@ -9,11 +9,27 @@ import logging
 import os
 import time
 
-from gateway.platforms._shared import request_never_left
+from gateway.platforms._shared import request_never_left, send_error
 from gateway.platforms.base import describe_proxy_error, env_proxy_for_redaction  # httpx reads HTTPS_PROXY itself
-from gateway.outbound.senders import _AUDIO_EXTS, _IMAGE_EXTS, _VIDEO_EXTS, _VOICE_EXTS, _error, _success
+
+# Core's send_message media routing tables (gateway.outbound.senders), kept identical.
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+_VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp"}
+_AUDIO_EXTS = {".ogg", ".opus", ".mp3", ".m2a", ".wav", ".m4a", ".flac"}
+_VOICE_EXTS = {".ogg", ".opus"}
 
 logger = logging.getLogger("tools.send_message_tool")
+
+
+def _error(message: str) -> dict:
+    """Failure envelope with vendor text redacted (``send_error``: the same helper send_message uses)."""
+    return send_error(message)
+
+
+def _success(platform: str, chat_id, warnings=None, **fields) -> dict:
+    """Standard success payload; ``warnings`` is only included when non-empty."""
+    return {"success": True, "platform": platform, "chat_id": chat_id, **fields,
+            **({"warnings": warnings} if warnings else {})}
 
 
 def _qqbot_media_file_type(media_path: str, is_voice: bool) -> int:

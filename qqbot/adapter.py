@@ -15,13 +15,14 @@ import asyncio
 import contextlib
 import json
 import logging
+import mimetypes
 import os
 import re
 import time
 import uuid
-from datetime import datetime, timezone, UTC
+from datetime import datetime, UTC
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import urlparse
 
 try:
@@ -47,20 +48,6 @@ from gateway.platforms.event import MessageEvent, MessageType
 from gateway.platforms.helpers import strip_markdown
 from gateway.platforms.helpers import MessageDeduplicator, cancel_task, platform_http_client
 from gateway.platforms.access_policy_mixin import OwnAccessPolicyMixin
-from gateway.platforms.media_cache import ext_for_mime
-
-logger = logging.getLogger(__name__)
-
-
-class QQCloseError(Exception):
-    """Raised when the QQ WebSocket closes; carries code + reason for the reconnect loop."""
-
-    def __init__(self, code, reason=""):
-        self.code = int(code) if code else None
-        self.reason = str(reason) if reason else ""
-        super().__init__(f"WebSocket closed (code={self.code}, reason={self.reason})")
-
-
 from .constants import (
     API_BASE, TOKEN_URL, GATEWAY_URL_PATH, DEFAULT_API_TIMEOUT, FILE_UPLOAD_TIMEOUT,
     CONNECT_TIMEOUT_SECONDS, RECONNECT_BACKOFF, MAX_RECONNECT_ATTEMPTS, RATE_LIMIT_DELAY,
@@ -75,6 +62,35 @@ from .keyboards import (
     build_update_prompt_keyboard, parse_approval_button_data, parse_interaction_event,
     parse_update_prompt_button_data)
 from gateway.platforms._shared import get_scoped_secret as _resolve_qq_secret
+
+logger = logging.getLogger(__name__)
+
+# The registry name. ``Platform(PLATFORM_NAME)`` resolves only once the plugin registered it (core has
+# no ``Platform.QQBOT`` member any more), so it is looked up at call time, never at import.
+PLATFORM_NAME = "qqbot"
+
+# Shared STT client default (seconds), the value core's ``tools.transcription_common`` uses: a
+# self-hosted model's cold start is not cut off at 30s (#112939).
+DEFAULT_STT_TIMEOUT = 60.0
+
+
+def _config_number(cfg: dict, key: str, default, cast=float):
+    """Read ``cfg[key]`` through *cast*, falling back to *default* on bad values."""
+    try:
+        return cast(cfg.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+class QQCloseError(Exception):
+    """Raised when the QQ WebSocket closes; carries code + reason for the reconnect loop."""
+
+    def __init__(self, code, reason=""):
+        self.code = int(code) if code else None
+        self.reason = str(reason) if reason else ""
+        super().__init__(f"WebSocket closed (code={self.code}, reason={self.reason})")
+
+
 
 
 def check_qq_requirements() -> bool:
@@ -147,7 +163,7 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         return bool(self._running and self._ws and not self._ws.closed)
 
     def __init__(self, config: PlatformConfig):
-        super().__init__(config, Platform.QQBOT)
+        super().__init__(config, Platform(PLATFORM_NAME))
 
         extra = config.extra or {}
         self._app_id = str(extra.get("app_id") or _resolve_qq_secret("QQ_APP_ID", "")).strip()
@@ -995,7 +1011,7 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
 
         if content_type.startswith("image/"):
             # Historical qqbot mapping: trust mimetypes' guess (never the shared table), fall back to .jpg.
-            ext = ext_for_mime(content_type, use_defaults=False, use_mimetypes=True, fallback=".jpg") or ".jpg"
+            ext = mimetypes.guess_extension(content_type.split(";")[0].strip().lower()) or ".jpg"
             return await cache_image_from_bytes_async(data, ext)
         if content_type == "voice" or content_type.startswith("audio/"):
             # QQ voice is usually .amr/.silk — convert to .wav for STT engines.
@@ -1212,7 +1228,6 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         vars; None when unconfigured (QQ's built-in ASR still works). ``timeout`` (seconds,
         default 60) follows the shared STT client default so a self-hosted model's cold start
         is not cut off at 30s (#112939)."""
-        from tools.transcription_common import DEFAULT_STT_TIMEOUT, _config_number  # lazy: keep adapter light
         stt_cfg = (self.config.extra or {}).get("stt")
         if isinstance(stt_cfg, dict) and stt_cfg.get("enabled") is not False:
             base_url = stt_cfg.get("baseUrl") or stt_cfg.get("base_url", "")

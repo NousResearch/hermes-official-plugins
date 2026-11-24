@@ -13,12 +13,17 @@ def _clear_qq(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
 
-def test_register_shape():
+def test_register_shape(monkeypatch):
     """The plugin registers the same identity/env/routing the core table carried."""
+    import importlib
+
     from gateway.platform_registry import PlatformEntry
-    from plugins.platforms.qqbot import register
-    from plugins.platforms.qqbot.adapter import QQAdapter, check_qq_requirements
-    from plugins.platforms.qqbot.register import setup_qqbot, standalone_send
+    from qqbot_plugin import register
+
+    # ``qqbot_plugin.register`` the attribute is the entry function; the module is in sys.modules.
+    monkeypatch.setattr(importlib.import_module("qqbot_plugin.register"), "core_ships_qqbot", lambda: False)
+    from qqbot_plugin.adapter import QQAdapter, check_qq_requirements
+    from qqbot_plugin.register import setup_qqbot, standalone_send
 
     captured = {}
 
@@ -43,7 +48,7 @@ def test_is_connected_needs_both_credentials(monkeypatch):
     import hermes_cli.gateway as gateway_mod
     monkeypatch.setattr(gateway_mod, "get_env_value", lambda name: None)
     from gateway.config import PlatformConfig
-    from plugins.platforms.qqbot.register import is_connected
+    from qqbot_plugin.register import is_connected
 
     assert is_connected(PlatformConfig(enabled=True, extra={"app_id": "a"})) is False
     assert is_connected(PlatformConfig(enabled=True, extra={"app_id": "a", "client_secret": "s"})) is True
@@ -63,16 +68,14 @@ def test_qqbot_platform_hint_comes_from_its_platform_entry():
     assert _default_platform_hint("qqbot") == hint
 
 
-def test_qqbot_is_a_builtin_deliver_target():
-    """Webhook and cron treat qqbot as a shipped platform before any plugin load."""
-    from cron.scheduler_delivery import (
-        _is_known_delivery_platform,
-        _resolve_home_env_var,
-        _home_env_lookup,
-    )
-    from gateway.platforms.webhook import _is_known_platform
+@pytest.mark.plugin_registry
+def test_qqbot_is_a_deliver_target_once_registered():
+    """Webhook and cron accept qqbot as a delivery target through the plugin's registry entry (core no
+    longer lists it in its builtin tables)."""
+    from cron.scheduler_delivery import _is_known_delivery_platform, _resolve_home_env_var
+    from gateway.webhook_targets import is_dispatchable_target, is_known_platform
 
-    assert _is_known_platform("qqbot") is True
+    assert is_known_platform("qqbot") is True and is_dispatchable_target("qqbot") is True
     assert _is_known_delivery_platform("qqbot") is True
     assert _resolve_home_env_var("qqbot") == "QQBOT_HOME_CHANNEL"
 
@@ -98,7 +101,7 @@ def test_cron_deliver_qqbot_without_a_live_gateway():
 async def test_standalone_sender_reports_missing_credentials(monkeypatch):
     _clear_qq(monkeypatch)
     from gateway.config import PlatformConfig
-    from plugins.platforms.qqbot.register import standalone_send
+    from qqbot_plugin.register import standalone_send
 
     result = await standalone_send(PlatformConfig(enabled=True, extra={}), "chat-1", "hi")
     assert "QQ_APP_ID" in result["error"]
@@ -111,7 +114,7 @@ async def test_qq_c2c_attachment_metadata_stays_out_of_info(caplog, monkeypatch)
     from unittest.mock import AsyncMock
 
     from gateway.config import PlatformConfig
-    from plugins.platforms.qqbot.adapter import QQAdapter
+    from qqbot_plugin.adapter import QQAdapter
 
     adapter = QQAdapter(PlatformConfig(enabled=True, extra={}))
     ingest = AsyncMock()
@@ -121,14 +124,14 @@ async def test_qq_c2c_attachment_metadata_stays_out_of_info(caplog, monkeypatch)
         "url": "https://files.example.test/attachment?signature=private-sentinel",
         "filename": "Private medical report for Alice.pdf",
     }
-    caplog.set_level(logging.DEBUG, logger="plugins.platforms.qqbot.adapter")
+    caplog.set_level(logging.DEBUG, logger="qqbot_plugin.adapter")
     await adapter._handle_c2c_message(
         {"attachments": [attachment]}, "msg-1", "hello", {"user_openid": "qq-user-1"}, "2026-11-12T18:00:00Z",
     )
     ingest.assert_awaited_once()
     messages = [
         r.getMessage() for r in caplog.records
-        if r.name == "plugins.platforms.qqbot.adapter" and r.levelno >= logging.INFO
+        if r.name == "qqbot_plugin.adapter" and r.levelno >= logging.INFO
     ]
     assert any("attachment[0]" in line for line in messages), messages
     assert all(
@@ -138,7 +141,7 @@ async def test_qq_c2c_attachment_metadata_stays_out_of_info(caplog, monkeypatch)
     assert any(
         attachment["filename"] in r.getMessage()
         for r in caplog.records
-        if r.name == "plugins.platforms.qqbot.adapter" and r.levelno == logging.DEBUG
+        if r.name == "qqbot_plugin.adapter" and r.levelno == logging.DEBUG
     )
 
 
@@ -149,17 +152,17 @@ async def test_qq_voice_stt_failure_keeps_the_attachment_url_out_of_info(caplog,
     from unittest.mock import AsyncMock
 
     from gateway.config import PlatformConfig
-    from plugins.platforms.qqbot.adapter import QQAdapter
+    from qqbot_plugin.adapter import QQAdapter
 
     adapter = QQAdapter(PlatformConfig(enabled=True, extra={}))
     monkeypatch.setattr(adapter, "_stt_voice_attachment", AsyncMock(return_value=None))
     url = "https://files.example.test/v?sig=private-sentinel"
-    caplog.set_level(logging.DEBUG, logger="plugins.platforms.qqbot.adapter")
+    caplog.set_level(logging.DEBUG, logger="qqbot_plugin.adapter")
     result = await adapter._process_attachments([{"content_type": "voice", "url": url, "filename": "a.silk"}])
     assert result["voice_transcripts"]
     info = [
         r.getMessage() for r in caplog.records
-        if r.name == "plugins.platforms.qqbot.adapter" and r.levelno >= logging.INFO
+        if r.name == "qqbot_plugin.adapter" and r.levelno >= logging.INFO
     ]
     assert any("Voice STT failed" in line for line in info), info
     assert all("private-sentinel" not in line and "files.example.test" not in line for line in info), info
@@ -173,17 +176,17 @@ async def test_qq_voice_download_http_error_keeps_the_url_out_of_warning(caplog,
     import httpx
 
     from gateway.config import PlatformConfig
-    from plugins.platforms.qqbot.adapter import QQAdapter
+    from qqbot_plugin.adapter import QQAdapter
 
     adapter = QQAdapter(PlatformConfig(enabled=True, extra={}))
     adapter._http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(lambda request: httpx.Response(403, request=request)))
     monkeypatch.setattr("tools.url_safety.is_safe_url", lambda _url: True)
-    caplog.set_level(logging.DEBUG, logger="plugins.platforms.qqbot.adapter")
+    caplog.set_level(logging.DEBUG, logger="qqbot_plugin.adapter")
     assert await adapter._stt_voice_attachment("https://files.example.test/v?sig=private-sentinel", "voice", "a.silk") is None
     info = [
         r.getMessage() for r in caplog.records
-        if r.name == "plugins.platforms.qqbot.adapter" and r.levelno >= logging.INFO
+        if r.name == "qqbot_plugin.adapter" and r.levelno >= logging.INFO
     ]
     assert any("status=403" in line for line in info), info
     assert all("private-sentinel" not in line for line in info), info

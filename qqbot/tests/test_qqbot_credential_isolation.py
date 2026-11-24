@@ -17,7 +17,7 @@ import pytest
 
 from agent import secret_scope as ss
 from gateway.config import PlatformConfig
-from plugins.platforms.qqbot.adapter import QQAdapter
+from qqbot_plugin.adapter import QQAdapter
 
 
 @pytest.fixture(autouse=True)

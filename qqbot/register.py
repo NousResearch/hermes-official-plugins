@@ -7,11 +7,20 @@ connection.
 
 from __future__ import annotations
 
-from gateway.platforms._shared import env_is_connected
-from gateway.platforms._shared import config_connected_extra
-from gateway.platforms.send_targets import StandaloneSendPolicy
+import dataclasses
+import importlib
+import importlib.machinery
+import logging
+from typing import Any
 
-from .adapter import QQAdapter, check_qq_requirements
+from gateway.platforms._shared import config_connected_extra, env_is_connected
+
+# Relative imports: the loader runs this package as ``hermes_plugins.<slug>``, so ``.adapter`` is the one
+# module (and the one ``QQAdapter`` class object) the registry and the standalone sender share.
+from . import gateway_env
+from .adapter import PLATFORM_NAME, QQAdapter, check_qq_requirements
+
+logger = logging.getLogger(__name__)
 
 
 _env_configured = env_is_connected("QQ_APP_ID", "QQ_CLIENT_SECRET")
@@ -132,27 +141,75 @@ _PLATFORM_HINT = (
 )
 
 
-def register(ctx) -> None:
-    from . import gateway_env  # env -> GatewayConfig bridge (gateway.config_env)
-    ctx.register_platform(
-        standalone_send=StandaloneSendPolicy(label="QQ Bot", media=True, captionable=True, text_direct=True),
-        name="qqbot",
-        dashboard_description="Connect Hermes to a QQ Bot from the QQ Open Platform.",
-        docs_url="https://q.qq.com",
-        dashboard_env_vars=("QQ_APP_ID", "QQ_CLIENT_SECRET", "QQ_ALLOWED_USERS"),
-        label="QQ Bot",
-        adapter_factory=QQAdapter,
-        check_fn=check_qq_requirements,
-        is_connected=is_connected,
-        config_connected_fn=config_connected_extra("app_id", "client_secret"),
+def _send_target_kwargs(supported: set) -> dict[str, Any]:
+    """send_message wiring: text and media go through ``standalone_send`` (REST, no live gateway needed).
+    ``gateway.platforms.send_targets`` is core's send-contract module for platform plugins."""
+    if "standalone_send" not in supported:
+        return {}
+    from gateway.platforms.send_targets import StandaloneSendPolicy
+    return {"standalone_send": StandaloneSendPolicy(label="QQ Bot", media=True, captionable=True, text_direct=True)}
+
+
+# PlatformEntry fields newer than some cores this plugin may load on (PlatformEntry raises TypeError on
+# unknown keys), so each is passed only when the running core has it.
+_OPTIONAL_ENTRY_KWARGS: dict[str, Any] = {
+    "dashboard_description": "Connect Hermes to a QQ Bot from the QQ Open Platform.",
+    "docs_url": "https://q.qq.com",
+    "dashboard_env_vars": ("QQ_APP_ID", "QQ_CLIENT_SECRET", "QQ_ALLOWED_USERS"),
+    "config_connected_fn": config_connected_extra("app_id", "client_secret"),
+    "env_enable_credentials": gateway_env.ENV_ENABLE_CREDENTIALS,
+    **gateway_env.AUTHZ,
+}
+
+
+def _supported_entry_fields() -> set:
+    from gateway.platform_registry import PlatformEntry
+    return {f.name for f in dataclasses.fields(PlatformEntry)}
+
+
+def platform_kwargs() -> dict[str, Any]:
+    kwargs: dict[str, Any] = dict(
+        name=PLATFORM_NAME, label="QQ Bot", adapter_factory=QQAdapter,
+        check_fn=check_qq_requirements, is_connected=is_connected,
         required_env=["QQ_APP_ID", "QQ_CLIENT_SECRET"],
         install_hint="QQBot: aiohttp/httpx missing or QQ_APP_ID/QQ_CLIENT_SECRET not configured",
-        setup_fn=setup_qqbot,
-        emoji="🐧",
-        cron_deliver_env_var="QQBOT_HOME_CHANNEL",
+        setup_fn=setup_qqbot, emoji="🐧", cron_deliver_env_var="QQBOT_HOME_CHANNEL",
         standalone_sender_fn=standalone_send,
-        # QQ's dm/group policy is YAML-only (no env var); QQ_ALLOW_ALL_USERS is still the opt-in.
-        platform_hint=_PLATFORM_HINT,
-        env_overrides=gateway_env.ENV_OVERRIDES,
-        env_enable_credentials=gateway_env.ENV_ENABLE_CREDENTIALS, **gateway_env.AUTHZ,
+        # Core listed QQ Bot in the gateway's /update allow-list; a plugin platform opts in here.
+        allow_update_command=True,
+        platform_hint=_PLATFORM_HINT, env_enablement_fn=gateway_env.env_enablement,
     )
+    supported = _supported_entry_fields()
+    kwargs.update(_send_target_kwargs(supported))
+    for key, value in _OPTIONAL_ENTRY_KWARGS.items():
+        if key in supported:
+            kwargs[key] = value
+        else:
+            logger.debug("qqbot: core PlatformEntry has no %r field; not passing it", key)
+    return kwargs
+
+
+def core_ships_qqbot() -> bool:
+    """True on a Hermes core that still bundles QQ Bot (``plugins/platforms/qqbot``).
+
+    Looks only inside the imported package's own ``__path__``: a plain ``find_spec`` also consults meta-path
+    finders (e.g. an editable install of a different checkout) and can report a module the running core
+    does not have."""
+    try:
+        search = list(getattr(importlib.import_module("plugins.platforms"), "__path__", None) or ())
+    except ImportError:
+        return False
+    spec = importlib.machinery.PathFinder.find_spec("plugins.platforms.qqbot", search) if search else None
+    # ``origin`` is None for a namespace match: a directory left behind holding only ``__pycache__``
+    # after an update deleted the bundled files is not a core that ships QQ Bot.
+    return spec is not None and spec.origin is not None
+
+
+def register(ctx) -> None:
+    """Plugin entry point — called by the Hermes plugin loader."""
+    if core_ships_qqbot():
+        # Registering on top of the built-in would replace core's adapter with a second copy.
+        logger.info("qqbot: this Hermes core still ships QQ Bot built in; "
+                    "the plugin stays inactive until core drops it")
+        return
+    ctx.register_platform(**platform_kwargs())

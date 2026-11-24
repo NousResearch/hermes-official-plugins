@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 import sys
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 
 def _load_push_module(suffix: str, filename: str):
@@ -75,9 +76,27 @@ def home(requested=None):
     return root / "profiles" / requested
 
 
-class PairRequest(BaseModel):
-    relay_url: str
-    install_key: str | None = None
+def _invalid(field: str, rule: str = "") -> HTTPException:
+    """A 400 naming the offending field and its rule, never the value sent."""
+    return HTTPException(400, f"Invalid {field}." + (f" {rule}" if rule else ""))
+
+
+def _pair_fields(raw: bytes) -> tuple[str, str | None]:
+    """``relay_url`` and ``install_key`` from a JSON object body, validated here rather than by
+    FastAPI, whose 422 answer would echo the request body (and so the install key) back."""
+    try:
+        body = json.loads(raw) if raw else None
+    except (ValueError, UnicodeDecodeError):
+        body = None
+    if not isinstance(body, dict):
+        raise HTTPException(400, "The request body must be a JSON object.")
+    relay_url = body.get("relay_url")
+    if not isinstance(relay_url, str):
+        raise _invalid("relay_url", "A string is required.")
+    install_key = body.get("install_key")
+    if install_key is not None and not isinstance(install_key, str):
+        raise _invalid("install_key", "A string or null is required.")
+    return relay_url, install_key
 
 
 @router.get("/pair")
@@ -86,17 +105,19 @@ def get_pair(profile: str | None = None):
 
 
 @router.post("/pair")
-def post_pair(body: PairRequest, profile: str | None = None):
+async def post_pair(request: Request, profile: str | None = None):
     target_home = home(profile)
+    relay_url, install_key = _pair_fields(await request.body())
     try:
-        return _pairing.pair_install(
-            body.relay_url,
-            body.install_key,
+        return await run_in_threadpool(
+            _pairing.pair_install,
+            relay_url,
+            install_key,
             home=target_home,
             load_preview_key=_privacy.load_key,
         )
     except _pairing.PairingInvalidError as error:
-        raise HTTPException(400, str(error)) from None
+        raise _invalid(error.field or "pairing input", str(error)) from None
     except _pairing.PairingConflictError as error:
         raise HTTPException(409, str(error)) from None
     except _pairing.PairingStorageError as error:

@@ -45,6 +45,7 @@ INSTALL_KEY_ENV = "HERMES_MOBILE_PUSH_INSTALL_KEY"
 # rides in every request's Authorization header.
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 RELAY_URL_RULE = "The push relay URL must start with https:// (http:// only for localhost)."
+RELAY_URL_USERINFO_RULE = "The push relay URL must not carry a user name or password (user:pass@)."
 
 # URL-safe capability token (secrets.token_urlsafe(32) is 43 chars of [A-Za-z0-9_-]).
 _INSTALL_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{32,256}\Z")
@@ -58,7 +59,13 @@ class PairingError(Exception):
 
 
 class PairingInvalidError(PairingError):
-    """Caller supplied an invalid relay URL or install key (HTTP 400)."""
+    """Caller supplied an invalid relay URL or install key (HTTP 400).
+
+    ``field`` names the offending request field; the message never carries its value."""
+
+    def __init__(self, message: str, field: str | None = None):
+        super().__init__(message)
+        self.field = field
 
 
 class PairingConflictError(PairingError):
@@ -110,6 +117,25 @@ def relay_url_allowed(relay_url) -> bool:
     except ValueError:
         return False
     return bool(host) and (parts.scheme == "https" or (parts.scheme == "http" and host in _LOOPBACK_HOSTS))
+
+
+def relay_url_has_userinfo(relay_url) -> bool:
+    """Whether *relay_url* carries ``user[:password]@`` credentials in its authority."""
+    try:
+        return "@" in urlsplit(str(relay_url or "").strip()).netloc
+    except ValueError:
+        return False
+
+
+def public_relay_url(relay_url: str) -> str:
+    """*relay_url* as shown in responses: any ``user[:password]@`` removed."""
+    try:
+        parts = urlsplit(relay_url)
+    except ValueError:
+        return ""
+    if "@" not in parts.netloc:
+        return relay_url
+    return parts._replace(netloc=parts.netloc.rpartition("@")[2]).geturl()
 
 
 def install_key_valid(install_key) -> bool:
@@ -235,13 +261,15 @@ def _write_json_atomic(path: Path, data: dict[str, str]) -> None:
 
 
 def resolve_relay_settings(extra=None, home=None) -> RelaySettings:
-    """Resolve relay URL and install key from extra, env/secret scope, then pairing.json."""
+    """Resolve relay URL and install key from extra, env/secret scope, then pairing.json.
+
+    Operator values (extra, env, secrets) keep their bytes: only a URL's trailing ``/`` is dropped."""
     extra = extra or {}
-    extra_url = str(extra.get("relay_url") or "").strip()
-    extra_key = str(extra.get("install_key") or "").strip()
+    extra_url = _operator_value(extra.get("relay_url"))
+    extra_key = _operator_value(extra.get("install_key"))
     # An explicit value wins outright: read the secret scope only for what extra lacks.
-    env_url = "" if extra_url else read_secret(RELAY_URL_ENV).strip()
-    env_key = "" if extra_key else read_secret(INSTALL_KEY_ENV).strip()
+    env_url = "" if extra_url else read_secret(RELAY_URL_ENV)
+    env_key = "" if extra_key else read_secret(INSTALL_KEY_ENV)
 
     stored: dict[str, str] = {}
     if not ((extra_url or env_url) and (extra_key or env_key)):
@@ -278,6 +306,13 @@ def relay_settings(extra=None, home=None) -> tuple[str, str]:
     return resolved.relay_url, resolved.install_key
 
 
+def _operator_value(value) -> str:
+    """An operator-set value as text, bytes unchanged; "" when unset (as ``value or ...`` reads it)."""
+    if not value:
+        return ""
+    return value if isinstance(value, str) else str(value)
+
+
 def _same_home(home) -> bool:
     try:
         return Path(home).resolve() == active_home().resolve()
@@ -307,10 +342,10 @@ def configured_extra(home=None) -> dict[str, str]:
     extra = getattr(platform_config, "extra", None) or {}
     result: dict[str, str] = {}
     for field, env_name in (("relay_url", RELAY_URL_ENV), ("install_key", INSTALL_KEY_ENV)):
-        value = str(extra.get(field) or "").strip()
+        value = _operator_value(extra.get(field))
         if not value:
             continue
-        env_value = read_secret(env_name).strip()
+        env_value = read_secret(env_name)
         seeded = env_value.rstrip("/") if field == "relay_url" else env_value
         if env_value and value == seeded:
             continue
@@ -337,10 +372,15 @@ def pairing_status(home=None) -> dict:
     return {
         "paired": ready,
         "install_id": install_id_for_key(resolved.install_key) if resolved.install_key else None,
-        "relay_url": resolved.relay_url or None,
+        "relay_url": public_relay_url(resolved.relay_url) or None,
         "source": source,
         "notifications_ready": ready,
     }
+
+
+def _keys_match(supplied: str, current: str) -> bool:
+    """Constant-time comparison; *supplied* is a valid ASCII key, *current* may be any operator text."""
+    return hmac.compare_digest(supplied.encode("utf-8"), current.encode("utf-8"))
 
 
 def pair_install(
@@ -355,22 +395,27 @@ def pair_install(
     Values the operator set (``platforms.push`` in config.yaml, environment, scoped secrets) win:
     they are returned as they are, never written to pairing.json, and a different supplied key is a
     conflict."""
-    requested_url = str(relay_url or "").strip().rstrip("/")
+    if not isinstance(relay_url, str):
+        raise PairingInvalidError(RELAY_URL_RULE, field="relay_url")
+    requested_url = relay_url.strip().rstrip("/")
     if not requested_url or not relay_url_allowed(requested_url):
-        raise PairingInvalidError(RELAY_URL_RULE)
+        raise PairingInvalidError(RELAY_URL_RULE, field="relay_url")
+    if relay_url_has_userinfo(requested_url):
+        raise PairingInvalidError(RELAY_URL_USERINFO_RULE, field="relay_url")
 
     provided_key: str | None = None
     if install_key is not None:
-        if not isinstance(install_key, str) or not install_key:
-            raise PairingInvalidError(INSTALL_KEY_RULE)
+        # The key's shape first: only a valid ASCII key is ever compared.
+        if not install_key_valid(install_key):
+            raise PairingInvalidError(INSTALL_KEY_RULE, field="install_key")
         provided_key = install_key
 
     target_home = Path(home) if home is not None else active_home()
     config = configured_extra(target_home)
     config_url = config.get("relay_url", "")
     config_key = config.get("install_key", "")
-    env_url = "" if config_url else read_secret(RELAY_URL_ENV).strip().rstrip("/")
-    env_key = "" if config_key else read_secret(INSTALL_KEY_ENV).strip()
+    env_url = "" if config_url else read_secret(RELAY_URL_ENV)
+    env_key = "" if config_key else read_secret(INSTALL_KEY_ENV)
     operator_url = (config_url or env_url).rstrip("/")
     operator_key = config_key or env_key
     source = _source(config, env_url, env_key) or "plugin"
@@ -387,10 +432,10 @@ def pair_install(
             ) from None
 
     def _shown_url(url: str) -> str:
-        return url if relay_url_allowed(url) else ""
+        return public_relay_url(url) if relay_url_allowed(url) else ""
 
     if operator_url and operator_key:
-        if provided_key is not None and not hmac.compare_digest(provided_key, operator_key):
+        if provided_key is not None and not _keys_match(provided_key, operator_key):
             raise PairingConflictError("This install is already paired with another install key.")
         preview_bytes = _ensure_preview_key()
         final_url = _shown_url(operator_url)
@@ -410,12 +455,10 @@ def pair_install(
         current_key = operator_key or stored.get("install_key") or ""
         if provided_key is not None:
             if current_key:
-                if not hmac.compare_digest(provided_key, current_key):
+                if not _keys_match(provided_key, current_key):
                     raise PairingConflictError("This install is already paired with another install key.")
                 final_key = current_key
             else:
-                if not install_key_valid(provided_key):
-                    raise PairingInvalidError(INSTALL_KEY_RULE)
                 final_key = provided_key
         else:
             final_key = current_key or secrets.token_urlsafe(32)

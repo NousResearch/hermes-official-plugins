@@ -493,6 +493,88 @@ def test_config_values_seeded_from_environment_still_report_environment(monkeypa
     assert client.post(PAIR, json={"relay_url": "https://phone.example"}).json()["source"] == "environment"
 
 
+@pytest.mark.parametrize("label,body,field", [
+    ("missing relay_url", {"install_key": "SecretKeyValue_0123456789abcdefghijklmn"}, "relay_url"),
+    ("typed key", {"relay_url": "https://relay.example", "install_key": ["SecretKeyValue_0123456789abcdefghijklmn"]}, "install_key"),
+    ("typed url", {"relay_url": ["https://SecretKeyValue_0123456789abcdefghijklmn.example"]}, "relay_url"),
+])
+def test_invalid_body_answers_400_naming_the_field_only(clean_env, label, body, field):
+    """R3: no request value comes back in an error, and the answer is a 400."""
+    client, _ = _make_client()
+    resp = client.post(PAIR, json=body)
+    assert resp.status_code == 400, label
+    assert field in resp.json()["detail"]
+    assert "SecretKeyValue_0123456789abcdefghijklmn" not in resp.text
+
+
+@pytest.mark.parametrize("raw", [b"[1, 2]", b"not json SecretKeyValue_0123456789abcdefghijklmn", b'"text"', b""])
+def test_body_that_is_not_a_json_object_is_a_400(clean_env, raw):
+    client, _ = _make_client()
+    resp = client.post(PAIR, content=raw, headers={"Content-Type": "application/json"})
+    assert resp.status_code == 400
+    assert "SecretKeyValue" not in resp.text
+
+
+def test_relay_url_with_userinfo_is_refused(clean_env):
+    """R4: a relay URL carrying user:pass@ is refused at POST and its credentials never echoed."""
+    client, _ = _make_client()
+    for url in ("https://user:hunter2pass@relay.example", "https://tokenonly@relay.example"):
+        resp = client.post(PAIR, json={"relay_url": url})
+        assert resp.status_code == 400
+        assert "relay_url" in resp.json()["detail"]
+        assert "hunter2pass" not in resp.text and "tokenonly" not in resp.text
+    assert not (clean_env / "plugin-data" / "hermes-mobile-push" / "pairing.json").exists()
+
+
+def test_operator_relay_url_userinfo_is_hidden_in_responses(monkeypatch, clean_env):
+    """R4: an operator URL with userinfo is used as configured but shown without it."""
+    env_key = "EnvConfiguredKey_0123456789abcdefghijklmno"
+    _make_hermes_stubs(monkeypatch, clean_env, clean_env, secrets={
+        "HERMES_MOBILE_PUSH_RELAY_URL": "https://user:hunter2pass@relay.example/base/",
+        "HERMES_MOBILE_PUSH_INSTALL_KEY": env_key,
+    })
+    client, _ = _make_client()
+    status = client.get(PAIR)
+    assert status.json()["relay_url"] == "https://relay.example/base"
+    posted = client.post(PAIR, json={"relay_url": "https://phone.example"})
+    assert posted.json()["relay_url"] == "https://relay.example/base"
+    deleted = client.delete(PAIR)
+    for resp in (status, posted, deleted):
+        assert "hunter2pass" not in resp.text
+
+
+@pytest.mark.parametrize("secrets_set", [False, True])
+def test_non_ascii_key_is_a_400_never_a_server_error(monkeypatch, clean_env, secrets_set):
+    """R5: the supplied key's shape is checked before any comparison."""
+    if secrets_set:
+        _make_hermes_stubs(monkeypatch, clean_env, clean_env, secrets={
+            "HERMES_MOBILE_PUSH_RELAY_URL": "https://env-relay.example",
+            "HERMES_MOBILE_PUSH_INSTALL_KEY": "EnvConfiguredKey_0123456789abcdefghijklmno",
+        })
+    else:
+        client, _ = _make_client()
+        assert client.post(PAIR, json={"relay_url": "https://relay.example"}).status_code == 200
+    client, _ = _make_client()
+    resp = client.post(PAIR, json={"relay_url": "https://relay.example", "install_key": "\u00e9" * 32})
+    assert resp.status_code == 400
+    assert "install_key" in resp.json()["detail"]
+
+
+def test_environment_values_keep_their_bytes(monkeypatch, clean_env):
+    """R6: padded environment values reach the relay and the app exactly as set."""
+    padded_key = " EnvConfiguredKey_0123456789abcdefghijklmno "
+    _make_hermes_stubs(monkeypatch, clean_env, clean_env, secrets={
+        "HERMES_MOBILE_PUSH_RELAY_URL": "https://env-relay.example/",
+        "HERMES_MOBILE_PUSH_INSTALL_KEY": padded_key,
+    })
+    adapter_mod, _ = load_push_adapter(clean_env)
+    assert adapter_mod._relay_settings() == ("https://env-relay.example", padded_key)
+    assert adapter_mod._env_enablement()["install_key"] == padded_key
+    assert adapter_mod._relay_settings({"install_key": " extra-key "}) == ("https://env-relay.example", " extra-key ")
+    client, _ = _make_client()
+    assert client.post(PAIR, json={"relay_url": "https://phone.example"}).json()["install_key"] == padded_key
+
+
 def _hermes_available():
     try:
         return (

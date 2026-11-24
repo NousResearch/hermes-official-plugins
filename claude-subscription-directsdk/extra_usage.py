@@ -145,6 +145,8 @@ def observe_usage(key, limits, threshold=100.0):
 def _parse(value):
     if isinstance(value, datetime):  # an unquoted timestamp in config.yaml loads as a datetime
         return (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).timestamp()
+    if isinstance(value, (int, float)):  # native/core also emit numeric epochs (seconds or ms)
+        return _epoch(value)
     if not isinstance(value, str) or not value.strip():
         return None
     try:

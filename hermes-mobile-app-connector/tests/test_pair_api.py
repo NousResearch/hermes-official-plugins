@@ -575,6 +575,19 @@ def test_environment_values_keep_their_bytes(monkeypatch, clean_env):
     assert client.post(PAIR, json={"relay_url": "https://phone.example"}).json()["install_key"] == padded_key
 
 
+def test_openapi_documents_config_source_and_400s(monkeypatch, clean_env):
+    """R7: the documented schemas accept a config-sourced pairing, and POST answers no 422."""
+    spec = yaml.safe_load((ROOT / "openapi.yaml").read_text(encoding="utf-8"))
+    schemas = spec["components"]["schemas"]
+    _stub_gateway_config(monkeypatch, {"relay_url": "https://operator.example", "install_key": "C" * 43})
+    client, _ = _make_client()
+    Draft202012Validator(schemas["PushPairStatus"]).validate(client.get(PAIR).json())
+    Draft202012Validator(schemas["PushPairResult"]).validate(client.post(PAIR, json={"relay_url": "https://phone.example"}).json())
+    post = spec["paths"][PAIR]["post"]
+    assert "422" not in post["responses"]
+    assert "userinfo" in post["responses"]["400"]["description"]
+
+
 def _hermes_available():
     try:
         return (

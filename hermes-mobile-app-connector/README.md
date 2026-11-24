@@ -2,7 +2,7 @@
 
 Official Hermes Agent plugin for paired mobile apps: push notifications (with encrypted previews and Live Activity snapshots) and device capabilities (Calendar, Reminders, Health, Contacts, location, alarms and timers).
 
-`hermes-mobile-app-connector` is installed by default and loads quietly when no phone is paired and no push relay is configured. If you do not use the mobile app and want it turned off:
+`hermes-mobile-app-connector` is installed from the official catalog (`hermes plugins install hermes-mobile-app-connector`) or by the mobile app, and loads quietly when no phone is paired and no push relay is configured. To turn it off:
 
 ```bash
 hermes plugins disable hermes-mobile-app-connector
@@ -63,7 +63,11 @@ Pair your Hermes install from the mobile app's notification and Device Access se
 3. Notifications, device wakes, and `deliver: push` cron deliveries work immediately without restarting the gateway.
 4. For Device Access, the app registers per-profile device grants and scopes via `PUT /api/plugins/hermes-mobile-app-connector/devices/{device_id}` (every agent starts with no device access).
 
-Environment variables (or Hermes profile scoped secrets) still take precedence over stored pairing and are the way to configure push without the app. When the operator sets a value in the environment, `POST /pair` leaves it untouched, does not write it to `pairing.json`, and reports `"source": "environment"`. `DELETE /pair` removes only the plugin's stored `pairing.json` and leaves environment values and the preview key intact.
+Values the operator configured always win over stored pairing and are the way to configure push without the app: `relay_url` and `install_key` under `platforms.push` in the profile's `config.yaml` first, then environment variables (or Hermes profile scoped secrets). `POST /pair` leaves operator values untouched and never writes them to `pairing.json`; it returns the configured install key, its `install_id`, and URL, and reports `"source": "config"` (from `platforms.push`) or `"source": "environment"`. A supplied `install_key` that differs from the configured one answers `409`. `GET /pair` reports the same settings without the key. `DELETE /pair` removes only the plugin's stored `pairing.json` and leaves configured values and the preview key intact.
+
+A running gateway reads the effective settings on every send, so a re-pair to a new relay URL or a `DELETE /pair` takes effect without a restart; after an unpair (with nothing configured) a send reports push as not configured and makes no request.
+
+`POST /pair` validates its body itself and answers `400` naming the offending field only (`relay_url` or `install_key`), never echoing the value; a body that is not a JSON object is also a `400`. The supplied `install_key` must be 32 to 256 URL-safe ASCII characters, checked before any comparison. A `relay_url` carrying a user name or password (`https://user:pass@host`) is refused with `400`; an operator-configured URL that carries one is used as configured but shown without it in every response.
 
 | Env var | Purpose |
 |---|---|

@@ -14,7 +14,9 @@ info:
     pairing token, 403 when the device id and pairing token match no paired device, 409 when the
     bridge or pairing refuses (with its reason) and 503 while the profile's storage is busy or
     unreadable, which the app retries. A request body FastAPI cannot validate answers 422 with a list
-    of problems in `detail`.
+    of problems in `detail`, except on `POST /pair`, which validates its own body and answers 400
+    naming the offending field only, never echoing a value. A running gateway follows a `/pair`
+    re-pair or unpair on its next send, without a restart.
 paths:
   /api/plugins/hermes-mobile-app-connector/pair:
     get:
@@ -41,7 +43,9 @@ paths:
       summary: >
         Pair push notifications for the profile in one authenticated call: mint or adopt the install
         key, store plugin-managed values in `pairing.json`, ensure the preview key exists, and return
-        both keys.
+        both keys. Values the operator configured (`platforms.push` in config.yaml, then environment
+        variables or scoped secrets) win: they are returned as they are and never written. A running
+        gateway sends with the new settings without a restart.
       parameters:
         - $ref: "#/components/parameters/Profile"
       requestBody:
@@ -56,7 +60,11 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/PushPairResult"}
         "400":
-          description: Invalid profile name, disallowed relay URL (must be https:// or localhost http://), or invalid install key.
+          description: >
+            Invalid profile name, a body that is not a JSON object, a missing or non-string
+            `relay_url`, a disallowed relay URL (must be https:// or localhost http://, with no
+            userinfo such as `user:pass@`), or an install key that is not a string of 32 to 256
+            URL-safe ASCII characters. `detail` names the offending field, never its value.
           content:
             application/json:
               schema: {$ref: "#/components/schemas/PushError"}
@@ -70,7 +78,6 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/PushError"}
-        "422": {$ref: "#/components/responses/InvalidBody"}
         "503":
           description: Pairing or preview-key storage could not be read or written.
           content:
@@ -78,8 +85,10 @@ paths:
               schema: {$ref: "#/components/schemas/PushError"}
     delete:
       summary: >
-        Remove only the plugin's stored `pairing.json` for the profile. Environment-configured values
-        are left in place and reported in the response; the preview key is never deleted or rotated.
+        Remove only the plugin's stored `pairing.json` for the profile. Values configured in
+        `platforms.push` or the environment are left in place and reported in the response; the
+        preview key is never deleted or rotated. A running gateway stops sending with the removed
+        pairing on its next send.
       parameters:
         - $ref: "#/components/parameters/Profile"
       responses:
@@ -308,7 +317,9 @@ components:
       properties:
         relay_url:
           type: string
-          description: Base URL of the push relay (`https://`, or `http://` to localhost only).
+          description: >
+            Base URL of the push relay (`https://`, or `http://` to localhost only), with no
+            userinfo (`user:pass@`).
         install_key:
           anyOf:
             - {type: string}
@@ -334,13 +345,16 @@ components:
           description: Standard base64 encoding of the 32-byte AES-256-GCM preview key.
         relay_url:
           type: string
-          description: Effective push relay base URL (empty string if an environment URL was refused).
+          description: >
+            Effective push relay base URL, any userinfo removed (empty string if a configured URL
+            was refused).
         source:
           type: string
-          enum: [plugin, environment]
+          enum: [plugin, environment, config]
           description: >
-            `environment` when either the relay URL or install key comes from environment variables
-            or scoped secrets; `plugin` when both come from the plugin's own `pairing.json`.
+            `config` when the relay URL or install key comes from `platforms.push` in the profile's
+            config.yaml; otherwise `environment` when either comes from environment variables or
+            scoped secrets; `plugin` when both come from the plugin's own `pairing.json`.
         notifications_ready:
           type: boolean
           description: Whether a valid relay URL and install key are in effect for notifications.
@@ -360,12 +374,14 @@ components:
           anyOf:
             - {type: string}
             - {type: "null"}
-          description: Effective push relay base URL, or `null`.
+          description: Effective push relay base URL with any userinfo removed, or `null`.
         source:
           anyOf:
-            - {type: string, enum: [plugin, environment]}
+            - {type: string, enum: [plugin, environment, config]}
             - {type: "null"}
-          description: Where the active settings come from, or `null` when unpaired.
+          description: >
+            Where the active settings come from (`config`, `environment` or `plugin`, as in
+            `PushPairResult`), or `null` when unpaired.
         notifications_ready:
           type: boolean
     PushSilentSessions:

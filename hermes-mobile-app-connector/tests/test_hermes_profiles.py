@@ -92,7 +92,8 @@ def _run_driver(tmp_path):
     journal_mode = "delete" if sqlite_support.is_sqlite_wal_reset_vulnerable() else "wal"
     replies = {}
     for profile, path in stores.items():
-        assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700 and stat.S_IMODE(path.stat().st_mode) == 0o600
+        if os.name != "nt":  # Windows has no POSIX modes: chmod sets only the read-only bit.
+            assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700 and stat.S_IMODE(path.stat().st_mode) == 0o600
         db = sqlite3.connect(path)
         try:
             assert db.execute("PRAGMA journal_mode").fetchone()[0] == journal_mode

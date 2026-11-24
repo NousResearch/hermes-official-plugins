@@ -1,5 +1,6 @@
 """Contract tests: agent requests and device results share durable storage."""
 import importlib.util
+import os
 import stat
 import sys
 import types
@@ -37,8 +38,9 @@ def test_the_store_is_private_and_takes_its_journal_mode_from_hermes(tmp_path, m
     wal.apply_wal_with_fallback = lambda db, *, db_label: labels.append(db_label) or "delete"
     monkeypatch.setitem(sys.modules, "sqlite_support", wal)
     store = bridge.Store(tmp_path / "data" / "bridge.db")
-    assert stat.S_IMODE(store.path.parent.stat().st_mode) == 0o700
-    assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
+    if os.name != "nt":  # Windows has no POSIX modes: chmod sets only the read-only bit.
+        assert stat.S_IMODE(store.path.parent.stat().st_mode) == 0o700
+        assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
     assert labels == ["plugin-data/hermes-mobile-device-access/bridge.db"]
     with store.db() as db:
         assert db.execute("PRAGMA journal_mode").fetchone()[0] == "delete"

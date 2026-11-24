@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -186,6 +187,7 @@ class PreviewKeyLockTests(unittest.TestCase):
             self.assertEqual(calls, [(1, 1), (0, 1)])
             self.assertEqual(privacy.load_key(create=True), key)
 
+    @unittest.skipIf(os.name == "nt", "fcntl is POSIX-only; Windows takes the msvcrt path tested above")
     def test_posix_keeps_flock(self):
         with tempfile.TemporaryDirectory() as root:
             privacy = self.load_privacy({}, Path(root))

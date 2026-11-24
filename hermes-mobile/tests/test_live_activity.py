@@ -405,17 +405,22 @@ class LifetimeTests(unittest.TestCase):
         self.assertEqual((t._sessions["s1"]["started_at"], t._sessions["s1"]["tool_calls"]), (1_791_633_600, 1))
 
     def test_a_detached_fork_does_not_count(self):
-        # A background memory/skill review or a /btw side question runs a copy of the
+        # A background memory/skill review, /btw side question or plugin fork runs a copy of the
         # agent under the parent's session id after the turn ended, and never ends.
-        self.assertTrue(activity.counts("s1", "ios"))
-        for origin in ("background_review", "side_question"):
+        self.assertTrue(activity.counts("s1", "ios", ctx=unittest.mock.Mock(fork_origin=lambda: "")))
+        for origin in ("background_review", "side_question", "plugin_fork:reviewer"):
             with self.subTest(origin=origin):
-                original = activity.write_origin
-                activity.write_origin = lambda origin=origin: origin
-                try:
-                    self.assertFalse(activity.counts("s1", "ios"))
-                finally:
-                    activity.write_origin = original
+                ctx = unittest.mock.Mock(fork_origin=lambda origin=origin: origin)
+                self.assertFalse(activity.counts("s1", "ios", ctx=ctx))
+
+    def test_missing_fork_origin_seam_leaves_filtering_off_and_logs_once(self):
+        fresh = load_activity()
+        ctx_without_seam = object()
+        with self.assertLogs(fresh.logger, logging.DEBUG) as logs:
+            self.assertTrue(fresh.counts("s1", "ios", ctx=ctx_without_seam))
+            self.assertTrue(fresh.counts("s2", "ios", ctx=ctx_without_seam))
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("fork_origin", logs.output[0])
 
 
 class HookTests(unittest.TestCase):

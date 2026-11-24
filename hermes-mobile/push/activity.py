@@ -85,17 +85,30 @@ THINKING, TOOL, WRITING, WAITING = "thinking", "tool", "writing", "waiting"
 # the adapter passes its NATIVELY_NOTIFYING set in.
 UNATTENDED_PLATFORMS = frozenset({"cron", "kanban", "msgraph_webhook", "subagent", "webhook"})
 UNATTENDED_PREFIXES = ("cron_", "kanban_", "subagent_")
-# Write origins of the detached forks that share a turn's session id after it ended
-# (agent/background_review.py build_cache_parity_fork): never ended, never watched.
+# Detached forks that share a turn's session id after it ended: never ended, never watched.
 DETACHED_ORIGINS = frozenset({"background_review", "side_question"})
+_missing_fork_origin_logged = False
 
 
-def write_origin():
-    """The running agent's write origin (``tools.skill_provenance``), or "" without one."""
+def fork_origin(ctx=None):
+    """The running detached fork's label (``ctx.fork_origin()`` / ``hermes_cli.plugin_session.fork_origin``), or ""."""
+    global _missing_fork_origin_logged
+    if ctx is not None:
+        accessor = getattr(ctx, "fork_origin", None)
+    else:
+        try:
+            from hermes_cli.plugin_session import fork_origin as accessor
+        except ImportError:
+            accessor = None
+    if not callable(accessor):
+        if not _missing_fork_origin_logged:
+            _missing_fork_origin_logged = True
+            logger.debug("Hermes does not expose fork_origin(); detached-fork filtering is off")
+        return ""
     try:
-        from tools.skill_provenance import get_current_write_origin
-        return str(get_current_write_origin() or "")
+        return str(accessor() or "")
     except Exception:
+        logger.debug("Could not read fork_origin() for the turn", exc_info=True)
         return ""
 
 
@@ -105,13 +118,13 @@ def opaque_key(install_key, kind, value):
     return digest.hexdigest()[:16]
 
 
-def counts(session_id, platform, *, natively_notifying=(), kanban_worker=False):
+def counts(session_id, platform, *, natively_notifying=(), kanban_worker=False, ctx=None):
     """Whether a turn in this session belongs on the activity."""
     session_id = str(session_id or "")
     platform = str(platform or "").strip().lower()
     if not session_id or kanban_worker:
         return False
-    if session_id.startswith(UNATTENDED_PREFIXES) or write_origin() in DETACHED_ORIGINS:
+    if session_id.startswith(UNATTENDED_PREFIXES) or bool(fork_origin(ctx)):
         return False
     return platform not in UNATTENDED_PLATFORMS and platform not in natively_notifying
 

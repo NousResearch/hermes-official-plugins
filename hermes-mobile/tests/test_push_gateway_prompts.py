@@ -32,16 +32,14 @@ class GatewayPromptTestCase(unittest.TestCase):
                     "HERMES_SESSION_KEY": ROUTE, "HERMES_SESSION_PROFILE": "research"}
         context = types.ModuleType("gateway.session_context")
         context.get_session_env = lambda name, default="": self.env.get(name, default)
-        policy = types.ModuleType("gateway.session_policy")
-        policy.active_policy = lambda: types.SimpleNamespace(source="gui", platform="desktop")
         redactor = types.ModuleType("agent.redact")
         redactor.redact_sensitive_text = lambda text, *, force: text.replace("sk-live-123", "[REDACTED]")
         self.adapter, constants = load_push_adapter(self.home)
         modules = patch.dict(sys.modules, {
             "hermes_constants": constants, "gateway": types.ModuleType("gateway"),
-            "gateway.session_context": context, "gateway.session_policy": policy,
+            "gateway.session_context": context,
             "agent": types.ModuleType("agent"), "agent.redact": redactor,
-            "agent.delegation_context": None, "hermes_state": None,
+            "hermes_state": None,
         })
         modules.start()
         self.addCleanup(modules.stop)
@@ -61,7 +59,10 @@ class GatewayPromptTestCase(unittest.TestCase):
         self.hooks = {}
         ctx = types.SimpleNamespace(register_platform=lambda **kwargs: None,
                                     on_unload=lambda callback: self.hooks.setdefault("unload", callback),
-                                    register_hook=lambda name, callback: self.hooks.setdefault(name, callback))
+                                    register_hook=lambda name, callback: self.hooks.setdefault(name, callback),
+                                    session_source=lambda: "gui",
+                                    session_surface=lambda: "desktop",
+                                    in_delegated_child=lambda include_subprocesses=False: False)
         self.adapter.register(ctx)
 
     def fire(self, name, **kwargs):

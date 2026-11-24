@@ -32,8 +32,15 @@ from . import activity, privacy
 
 logger = logging.getLogger(__name__)
 
-# The PluginContext register() was given: which cron run a hook fires in.
+# The PluginContext register() was given: session facts, cron execution and delivery seams.
 _ctx = None
+_missing_seams_logged = set()
+
+
+def _log_missing_seam_once(name, detail):
+    if name not in _missing_seams_logged:
+        _missing_seams_logged.add(name)
+        logger.debug("Hermes does not expose %s; %s", name, detail)
 
 REQUEST_TIMEOUT_SECONDS = 15
 # Cloudflare bans bare Python-urllib signatures (error 1010); identify honestly.
@@ -193,7 +200,7 @@ NATIVELY_NOTIFYING = {
 _UNATTENDED_SESSION_PREFIXES = ("kanban_",)
 
 def _cron_run(session_id):
-    """The cron job this turn runs for, as ``(job id, job name)``.
+    """The cron job this turn runs for, as ``(job id, job name, from_execution)``.
 
     ``ctx.current_cron_execution()`` names it on Hermes 0.21.6+. Before, Hermes
     names a cron run's session cron_<job id>_<YYYYMMDD>_<HHMMSS>, optionally
@@ -205,101 +212,43 @@ def _cron_run(session_id):
     except Exception:
         run = None
     if run is not None:
-        return str(run.job_id), str(run.job_name or "")
+        return str(run.job_id), str(run.job_name or ""), True
     match = re.match(r"^cron_(.+)_\d{8}_\d{6}(?:_|$)", session_id)
-    return (match.group(1), "") if match else ("", "")
+    return (match.group(1), "", False) if match else ("", "", False)
 
 
-def _cron_job(job_id):
-    """The stored job, for its ``deliver`` targets, which no plugin API names."""
-    if not job_id:
+def _cron_delivery_platforms(job_id="", *, from_execution=False):
+    """The platforms cron delivers this job's output to, or ``None`` when the seam is absent.
+
+    Prefers ``ctx.cron_delivery_platforms`` (which also works under host isolation) and
+    falls back to ``cron.plugin_api.delivery_platforms`` only when no ``ctx`` is bound.
+    Inside a firing cron run, reads the firing run's own delivery settings first.
+    """
+    if _ctx is not None:
+        accessor = getattr(_ctx, "cron_delivery_platforms", None)
+    else:
+        try:
+            from cron.plugin_api import delivery_platforms as accessor
+        except ImportError:
+            accessor = None
+    if not callable(accessor):
+        _log_missing_seam_once(
+            "cron_delivery_platforms",
+            "cron duplicate-delivery suppression is off",
+        )
         return None
     try:
-        from cron.jobs import get_job
-        return get_job(job_id)
+        if from_execution:
+            platforms = accessor()
+            if platforms is not None or not job_id:
+                return platforms
+        if job_id:
+            return accessor(job_id)
+        return accessor()
     except Exception:
+        logger.debug("Could not read cron delivery platforms", exc_info=True)
         return None
 
-
-def _cron_delivers_to_push(job):
-    """Whether cron delivers this job's output through push, which then notifies.
-
-    Besides ``push``, cron resolves two routing tokens at fire time: ``all`` reaches
-    every platform with a home channel, and ``origin`` without an origin falls
-    back to the first platform with one (``cron/scheduler_delivery.py``). Push
-    has one whenever it is configured. If cron's helpers cannot be asked, only
-    ``all`` and an origin on push count, and the run notifies rather than not.
-    """
-    if not isinstance(job, dict):
-        return False
-    delivery = job.get("deliver")
-    tokens = delivery if isinstance(delivery, (list, tuple)) else str(delivery or "").split(",")
-    for raw in tokens:
-        raw = str(raw).strip()
-        token = raw.lower()
-        if token == "push" or token.startswith("push:"):
-            return True
-        if token not in ("all", "origin") or (token == "origin" and raw != "origin"):
-            continue  # Cron matches "origin" exactly and "all" in any case.
-        try:
-            if _cron_routing_platform(job, token) == "push":
-                return True
-        except Exception:
-            origin = job.get("origin")
-            if token == "all" or (isinstance(origin, dict) and str(origin.get("platform") or "").lower() == "push"):
-                return True
-    return False
-
-
-
-def _cron_delivers_to_bot_chat(job):
-    """Whether cron delivers this job's output to a Bot Chat.
-
-    That delivery runs a full turn in the Bot Chat, which notifies on its own.
-    ``all`` never expands to ``bot-chat``, so only the explicit token counts.
-    """
-    if not isinstance(job, dict):
-        return False
-    delivery = job.get("deliver")
-    tokens = delivery if isinstance(delivery, (list, tuple)) else str(delivery or "").split(",")
-    for raw in tokens:
-        token = str(raw).strip().lower()
-        if token == "bot-chat" or token.startswith("bot-chat:"):
-            return True
-    return False
-
-def _cron_routing_platform(job, token):
-    """The platform cron's ``all`` (when it includes push) or ``origin`` delivers to, else ``""``.
-
-    Cron's own resolver loads the gateway config once per platform it tries;
-    this asks the same helpers but loads it at most once, as it runs at a turn's end.
-    """
-    from cron import scheduler_delivery as cron_delivery
-    if token == "origin":
-        origin = cron_delivery._resolve_origin(job)
-        if origin:
-            return str(origin.get("platform") or "").lower()
-    config = []
-
-    def home_chat(platform):
-        chat_id = cron_delivery._env_home_target_chat_id(platform)
-        if chat_id:
-            return chat_id
-        if not config:
-            try:
-                from gateway.config import load_gateway_config
-                config.append(load_gateway_config())
-            except Exception:
-                config.append(None)
-        try:
-            home = config[0].get_home_channel(Platform(platform.lower()))
-        except Exception:
-            return ""
-        return str(home.chat_id) if home is not None and home.chat_id else ""
-
-    if token == "all":
-        return "push" if "push" in cron_delivery._iter_home_target_platforms() and home_chat("push") else ""
-    return next((str(p).lower() for p in cron_delivery._iter_home_target_platforms() if home_chat(p)), "")
 
 # Each turn's final reply, from ``post_llm_call`` to the ``on_session_end`` that
 # follows it in the same turn finalization and says whether the turn completed:
@@ -308,44 +257,62 @@ _replies = {}
 _replies_lock = threading.Lock()
 
 
+def _session_source():
+    """The creation label of the calling session (``ctx.session_source()``), or ``""``."""
+    accessor = getattr(_ctx, "session_source", None)
+    if not callable(accessor):
+        _log_missing_seam_once(
+            "session_source",
+            "launch-policy session source mapping is off",
+        )
+        return ""
+    try:
+        return str(accessor() or "").strip().lower()
+    except Exception:
+        logger.debug("Could not read session_source() for the turn", exc_info=True)
+        return ""
+
+
+def _session_surface():
+    """The calling session's client surface (``ctx.session_surface()``), or ``""``."""
+    accessor = getattr(_ctx, "session_surface", None)
+    if not callable(accessor):
+        return ""
+    try:
+        return str(accessor() or "").strip().lower()
+    except Exception:
+        logger.debug("Could not read session_surface() for the turn", exc_info=True)
+        return ""
+
+
 def _creation_source(platform):
     """The label the session of the turn running here was created with, else *platform*.
 
     The unified runtime (Hermes 0.22.1+) runs app and Desktop sessions through
     the gateway, which calls them "local"; their agents run as "desktop", and
-    only the session's launch policy keeps the label they were created with,
-    "gui". That label is what the relay sees: its Desktop filter matches
-    "desktop", which would silence the phone's own sessions. No plugin API names
-    it (``ctx.session_surface()`` is the client, "desktop"). An agent that is not
-    the session's own (a delegated child, "subagent") keeps *platform*.
+    ``ctx.session_source()`` keeps the label they were created with, "gui". That
+    label is what the relay sees: its Desktop filter matches "desktop", which
+    would silence the phone's own sessions. An agent that is not the session's
+    own (a delegated child, "subagent") keeps *platform*.
     """
     platform = str(platform or "").strip().lower()
-    try:
-        from gateway.session_policy import active_policy
-        policy = active_policy()
-    except Exception:
-        return platform
-    label = str(getattr(policy, "source", "") or "").strip().lower()
-    if label and platform in {"local", label, str(getattr(policy, "platform", "") or "").strip().lower()}:
+    label = _session_source()
+    if label and platform in {"local", label, _session_surface()}:
         return label
     return platform
 
 
 # What a Hermes with the plugin session accessors says about the running turn:
-# ``hermes_cli.plugin_session.turn_client()`` names the client that submitted it,
-# ``session_viewers()`` the clients attached to its session. A Hermes without them,
-# or an accessor that fails, leaves the fact unknown.
+# ``ctx.turn_client()`` names the client that submitted it, ``ctx.session_viewers()``
+# the clients attached to its session. A Hermes without them, or an accessor that
+# fails, leaves the fact unknown.
 _UNKNOWN = object()
 
 
 def _plugin_session_fact(name):
-    """``hermes_cli.plugin_session.<name>()`` for the running turn, or ``_UNKNOWN`` when this
-    Hermes has no such accessor (found by attribute, never by version) or it raised."""
-    try:
-        from hermes_cli import plugin_session
-    except Exception:
-        return _UNKNOWN
-    accessor = getattr(plugin_session, name, None)
+    """``ctx.<name>()`` for the running turn, or ``_UNKNOWN`` when this Hermes has no such
+    accessor (found by attribute, never by version) or it raised."""
+    accessor = getattr(_ctx, name, None)
     if not callable(accessor):
         return _UNKNOWN
     try:
@@ -526,12 +493,8 @@ def _origin_metadata(fields, *, use_context=False):
         # A child can inherit the parent's messaging platform in its tool
         # context. Hermes' task-local/subprocess marker identifies the actual
         # caller without mutating the parent's environment.
-        try:
-            from agent.delegation_context import is_delegated_child_process_context
-            if is_delegated_child_process_context():
-                source = "subagent"
-        except (ImportError, AttributeError):
-            pass
+        if _in_delegated_child(include_subprocesses=True):
+            source = "subagent"
     if source == "local":
         source = _creation_source(source)
     if source in ("", "local") and session_id:
@@ -840,7 +803,7 @@ def _activity_begin(fields):
     platform = str(fields.get("platform") or "").lower()  # "subagent" for a delegated child
     tracker = _activity()
     if not tracker.counts(session_id, platform, natively_notifying=NATIVELY_NOTIFYING,
-                          kanban_worker=bool(os.getenv("HERMES_KANBAN_TASK"))):
+                          kanban_worker=bool(os.getenv("HERMES_KANBAN_TASK")), ctx=_ctx):
         return
     tracker.begin(session_id, profile=_activity_profile(), relay=_relay_settings(),
                   turn_id=str(fields.get("turn_id") or ""))
@@ -895,6 +858,7 @@ def _on_unload():
     _platform_settings.clear()
     _unconfigured_homes_logged.clear()
     _unusable_active_seconds_warned.clear()
+    _missing_seams_logged.clear()
     _report_activity("unload")
 
 
@@ -937,15 +901,17 @@ def _on_session_end(*args, **kwargs):
 
     platform = str(fields.get("platform") or "").lower()
     if platform == "cron" or session_id.startswith("cron_"):
-        job_id, job_name = _cron_run(session_id)
-        job = _cron_job(job_id)
-        if _cron_delivers_to_push(job):
-            return  # The addressed delivery emits this job's notification.
-        if _cron_delivers_to_bot_chat(job):
-            return  # The Bot Chat turn emits this job's notification.
+        job_id, job_name, from_execution = _cron_run(session_id)
+        platforms = _cron_delivery_platforms(job_id, from_execution=from_execution)
+        if platforms is not None:
+            lowered = {str(p).strip().lower() for p in platforms}
+            if "push" in lowered:
+                return  # The addressed delivery emits this job's notification.
+            if "bot-chat" in lowered:
+                return  # The Bot Chat turn emits this job's notification.
         if _autonomous_silence(body):
             return
-        subtitle = job_name or str((job or {}).get("name") or "") or "Scheduled task"
+        subtitle = job_name or "Scheduled task"
         try:
             # Match the scheduler's outward-delivery policy, even when
             # transcript redaction is disabled in the user's config.
@@ -1070,15 +1036,27 @@ def _webhook_subscriptions(home):
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
+def _in_delegated_child(*, include_subprocesses=False):
+    """Whether the calling code runs for a ``delegate_task`` child, or ``False`` without the seam."""
+    accessor = getattr(_ctx, "in_delegated_child", None)
+    if not callable(accessor):
+        _log_missing_seam_once(
+            "in_delegated_child",
+            "delegated-child context detection is off",
+        )
+        return False
+    try:
+        return bool(accessor(include_subprocesses=include_subprocesses))
+    except Exception:
+        logger.debug("Could not read in_delegated_child() for the turn", exc_info=True)
+        return False
+
+
 def _delegated_turn(fields):
     """Whether the hook fires for a delegated child (``delegate_task``), not the session's own turn."""
     if str(fields.get("platform") or "").strip().lower() == "subagent":
         return True
-    try:
-        from agent.delegation_context import is_delegated_child_context
-        return bool(is_delegated_child_context())
-    except (ImportError, AttributeError):
-        return False
+    return _in_delegated_child()
 
 
 def _gateway_platform_notifies(platform):

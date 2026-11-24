@@ -28,6 +28,22 @@ def _hermes_plugins():
         return None
 
 
+def _has_plugin_session_seam(name):
+    try:
+        from hermes_cli import plugin_session
+    except Exception:
+        return False
+    return callable(getattr(plugin_session, name, None))
+
+
+def _has_cron_delivery_seam():
+    try:
+        from cron import plugin_api
+    except Exception:
+        return False
+    return callable(getattr(plugin_api, "delivery_platforms", None))
+
+
 @unittest.skipUnless(_hermes_plugins(), "needs a Hermes checkout on PYTHONPATH (run on the test server)")
 class HermesTurnHookTests(unittest.TestCase):
     def setUp(self):
@@ -65,24 +81,25 @@ class HermesTurnHookTests(unittest.TestCase):
                          turn_exit_reason="text_response(stop)", model="test/model", platform=platform)
         self.adapter._delivery_queue.join()
 
-    def test_the_live_activity_lets_go_of_compressed_turns_and_review_forks(self):
-        from tools.skill_provenance import (
-            reset_current_write_origin,
-            set_current_write_origin,
-        )
+    def test_the_live_activity_lets_go_of_compressed_turns(self):
         tracker = self.adapter._activity()
         tracker._kick = lambda: None
         self.invoke_hook("pre_api_request", session_id="20261019_090000_abcdef", turn_id="turn-1", platform="desktop")
         # Compression rotates the session id mid-turn; the turn ends under the new one.
         self.finish("20261019_091500_fedcba", "desktop", "Done.")
         self.assertEqual(tracker._sessions, {})
+
+    @unittest.skipUnless(_has_plugin_session_seam("fork_origin"), "needs hermes-agent PR 159657")
+    def test_the_live_activity_skips_detached_review_forks(self):
+        from types import SimpleNamespace
+
+        from agent.turn_facade import bind_detached_fork_origin
+        tracker = self.adapter._activity()
+        tracker._kick = lambda: None
         # The background review fork runs under the parent's session id and never ends.
-        token = set_current_write_origin("background_review")
-        try:
+        with bind_detached_fork_origin(SimpleNamespace(_turn_origin="background_review")):
             self.invoke_hook("pre_api_request", session_id="20261019_091500_fedcba", turn_id="review",
                              platform="desktop")
-        finally:
-            reset_current_write_origin(token)
         self.assertEqual(tracker._sessions, {})
 
     def test_an_app_turn_notifies_its_reply_once(self):
@@ -101,6 +118,19 @@ class HermesTurnHookTests(unittest.TestCase):
         self.finish("20261019_090000_abcdef", "desktop", "The build passed.\n\n[SILENT]")
         self.assertEqual([p["body"] for p in self.sent], ["The build passed."])
 
+    def test_a_local_cron_run_notifies_with_its_job_name(self):
+        from cron.execution_identity import enter_cron_execution, exit_cron_execution
+        from cron.jobs import create_job
+        job = create_job("Write the brief", "every 1h", name="Morning brief", deliver="local")
+        run = enter_cron_execution(job, "execution-1", {"source": "builtin"})
+        try:
+            self.finish("local-local", "cron", "The brief is ready.")
+        finally:
+            exit_cron_execution(run)
+        self.assertEqual([(p["kind"], p["subtitle"], p["body"]) for p in self.sent],
+                         [("delivery", "Morning brief", "The brief is ready.")])
+
+    @unittest.skipUnless(_has_cron_delivery_seam(), "needs hermes-agent PR 159657")
     def test_a_cron_run_notifies_unless_it_delivers_to_push(self):
         from cron.execution_identity import enter_cron_execution, exit_cron_execution
         from cron.jobs import create_job
@@ -129,12 +159,20 @@ class HermesTurnHookTests(unittest.TestCase):
             exit_cron_execution(run)
         return [p["kind"] for p in self.sent]
 
+    @unittest.skipUnless(_has_cron_delivery_seam(), "needs hermes-agent PR 159657")
     def test_a_cron_run_delivered_to_a_bot_chat_notifies_through_that_chat_only(self):
         # The Bot Chat delivery runs its own turn there, and that turn notifies.
+        # Cron resolves bot-chat:<profile> only for an existing local profile.
+        work = Path(os.environ["HERMES_HOME"]) / "profiles" / "work"
+        work.mkdir(parents=True)
+        (work / "config.yaml").write_text("{}\n")
         for deliver in ("bot-chat", "Bot-Chat:work", "local,bot-chat"):
             self.assertEqual(self.cron_notifications(deliver), [], deliver)
+        # Missing bot-chat profile is skipped by cron's resolver, so the hook still notifies.
+        self.assertEqual(self.cron_notifications("Bot-Chat:missing"), ["delivery"])
         self.assertEqual(self.cron_notifications("local"), ["delivery"])
 
+    @unittest.skipUnless(_has_cron_delivery_seam(), "needs hermes-agent PR 159657")
     def test_a_cron_run_that_cron_delivers_to_push_by_a_routing_token_notifies_once(self):
         from cron.scheduler_delivery import _resolve_delivery_targets
         # "all" reaches every platform with a home channel, and push always has one; "origin"
@@ -192,6 +230,7 @@ class HermesTurnHookTests(unittest.TestCase):
         subscriptions.write_text("{not json")
         self.assertEqual(notifications("alerts"), ["reply"])  # Unreadable: notify rather than not.
 
+    @unittest.skipUnless(_has_plugin_session_seam("in_delegated_child"), "needs hermes-agent PR 159657")
     def test_a_finished_subagent_leaves_its_parents_session_watched(self):
         """A delegated child shares its parent's app session (it copies the parent's context);
         its end must not stop the prompt watch, or the parent's prompt loses its routing."""
@@ -205,13 +244,29 @@ class HermesTurnHookTests(unittest.TestCase):
             self.invoke_hook("pre_api_request", session_id="20261019_090000_parent", platform="desktop")
             self.assertIn("live-1", self.adapter._prompt_watches)
             with delegated_child_context():
-                self.invoke_hook("pre_api_request", session_id="20261019_090100_child", platform="subagent")
-                self.finish("20261019_090100_child", "subagent", "Found it.")
+                # Even when platform is "desktop", in_delegated_child() identifies the child.
+                self.invoke_hook("pre_api_request", session_id="20261019_090100_child", platform="desktop")
+                self.finish("20261019_090100_child", "desktop", "Found it.")
+                origin = self.adapter._origin_metadata({}, use_context=True)
+                self.assertEqual(origin.get("source"), "subagent")
+                self.assertIs(origin.get("is_subagent"), True)
             self.assertIn("live-1", self.adapter._prompt_watches)
             self.finish("20261019_090000_parent", "desktop", "Done.")
             self.assertNotIn("live-1", self.adapter._prompt_watches)
         finally:
             clear_session_vars(tokens)
+
+    @unittest.skipUnless(_has_plugin_session_seam("session_source"), "needs hermes-agent PR 159657")
+    def test_a_local_session_creation_source_is_read_through_the_seam(self):
+        from types import SimpleNamespace
+
+        from gateway import session_policy
+        token = session_policy._ACTIVE_POLICY.set(SimpleNamespace(source="gui", platform="desktop"))
+        try:
+            self.finish("20261019_090000_local", "desktop", "Hello from app.")
+        finally:
+            session_policy._ACTIVE_POLICY.reset(token)
+        self.assertEqual(self.sent[-1]["hermes"]["source"], "gui")
 
     def test_an_approval_a_person_is_asked_notifies_once_with_the_command_redacted(self):
         from gateway.session_context import clear_session_vars, set_session_vars

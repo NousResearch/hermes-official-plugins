@@ -21,7 +21,7 @@ ANDROID = {"name": "hermes-mobile-android", "kind": "mobile"}
 
 
 class PresenceTestCase(unittest.TestCase):
-    """A fresh adapter on a Hermes whose ``hermes_cli.plugin_session`` has the accessors, in an app or
+    """A fresh adapter on a Hermes whose ``ctx`` has the session accessors, in an app or
     Desktop session the unified runtime created as ``gui``."""
 
     def setUp(self):
@@ -34,19 +34,24 @@ class PresenceTestCase(unittest.TestCase):
         self.failing = set()
         self.reads = []
         self.policy = types.SimpleNamespace(source="gui", platform="desktop")
-        self.plugin_session = types.ModuleType("hermes_cli.plugin_session")
-        self.plugin_session.turn_client = lambda: self.read("turn_client", self.client)
-        self.plugin_session.session_viewers = lambda: self.read("session_viewers", self.viewers)
-        session_policy = types.ModuleType("gateway.session_policy")
-        session_policy.active_policy = lambda: self.policy
+        self.delegated = False
+        self.ctx = types.SimpleNamespace(
+            turn_client=lambda: self.read("turn_client", self.client),
+            session_viewers=lambda: self.read("session_viewers", self.viewers),
+            session_source=lambda: getattr(self.policy, "source", "") if self.policy is not None else "",
+            session_surface=lambda: getattr(self.policy, "platform", "") if self.policy is not None else "",
+            in_delegated_child=lambda include_subprocesses=False: self.delegated,
+            current_cron_execution=lambda: None,
+            cron_delivery_platforms=lambda job_id=None: (),
+        )
+        self.adapter._ctx = self.ctx
         context = types.ModuleType("gateway.session_context")
         context.get_session_env = lambda name, default="": default
         modules = patch.dict(sys.modules, {
             "hermes_constants": self.constants, "gateway": types.ModuleType("gateway"),
-            "gateway.session_policy": session_policy, "gateway.session_context": context,
-            "hermes_cli": types.ModuleType("hermes_cli"), "hermes_cli.plugin_session": self.plugin_session,
-            "hermes_state": None, "tools": None, "agent": None, "agent.delegation_context": None,
-            "gateway.response_filters": None, "cron": None, "cron.jobs": None,
+            "gateway.session_context": context,
+            "hermes_state": None, "tools": None, "agent": None,
+            "gateway.response_filters": None, "cron": None,
         })
         modules.start()
         self.addCleanup(modules.stop)
@@ -96,22 +101,24 @@ class TurnSourceTests(PresenceTestCase):
             self.assertEqual(self.reply()["hermes"]["source"], "gui", "the push still goes, with today's label")
         self.assertEqual([record.levelname for record in logs.records], ["DEBUG"])
         self.failing.clear()
-        del self.plugin_session.turn_client  # A Hermes whose plugin_session predates the accessor.
+        del self.ctx.turn_client  # A Hermes whose PluginContext predates the accessor.
         with self.assertNoLogs(self.adapter.logger, "DEBUG"):
             self.assertEqual(self.reply()["hermes"]["source"], "gui")
-            self.plugin_session.turn_client = "not callable"
+            self.ctx.turn_client = "not callable"
             self.assertEqual(self.reply()["hermes"]["source"], "gui")
-            with patch.dict(sys.modules, {"hermes_cli.plugin_session": None}):
-                self.assertEqual(self.reply()["hermes"]["source"], "gui")
+            del self.ctx.turn_client
+            del self.ctx.session_viewers
+            self.assertEqual(self.reply()["hermes"]["source"], "gui")
 
     def test_a_delegated_child_keeps_its_own_label(self):
         self.client = DESKTOP
         payload = self.reply("subagent_1", "subagent")
         self.assertEqual((payload["hermes"]["source"], payload["hermes"]["is_subagent"]), ("subagent", True))
-        delegation = types.ModuleType("agent.delegation_context")
-        delegation.is_delegated_child_context = lambda: True
-        with patch.dict(sys.modules, {"agent": types.ModuleType("agent"), "agent.delegation_context": delegation}):
+        self.delegated = True
+        try:
             self.assertEqual(self.reply("local-1", "desktop")["hermes"]["source"], "gui")
+        finally:
+            self.delegated = False
 
     def test_messaging_turns_keep_their_platform(self):
         self.policy = None
@@ -134,17 +141,19 @@ class TurnSourceTests(PresenceTestCase):
         self.client = DESKTOP
         self.viewers = [{"name": "hermes-desktop", "kind": "desktop", "idle_seconds": 1.0, "basis": "system",
                          "can_alert": True}]
-        delegation = types.ModuleType("agent.delegation_context")
-        delegation.is_delegated_child_context = lambda: True
-        delegated = {"agent": types.ModuleType("agent"), "agent.delegation_context": delegation}
-        cases = [("s-hook", "webhook", {}), ("s-graph", "msgraph_webhook", {}), ("subagent_1", "subagent", {}),
-                 ("local-1", "desktop", delegated)]
+        cases = [("s-hook", "webhook", False), ("s-graph", "msgraph_webhook", False),
+                 ("subagent_1", "subagent", False), ("local-1", "desktop", True)]
         with patch.object(self.adapter, "_webhook_route_delivers_to_push", lambda: False):
-            for session_id, platform, modules in cases:
-                with self.subTest(platform=platform, delegated=bool(modules)), patch.dict(sys.modules, modules):
-                    with patch.dict(sys.modules, {"hermes_cli.plugin_session": None}):
-                        control = self.reply(session_id, platform)
-                    self.assertEqual(self.reply(session_id, platform), control)
+            for session_id, platform, delegated in cases:
+                with self.subTest(platform=platform, delegated=delegated):
+                    self.delegated = delegated
+                    try:
+                        with patch.object(self.ctx, "turn_client", None), \
+                                patch.object(self.ctx, "session_viewers", None):
+                            control = self.reply(session_id, platform)
+                        self.assertEqual(self.reply(session_id, platform), control)
+                    finally:
+                        self.delegated = False
 
     def test_the_notification_text_is_the_same_whichever_client_sent_the_turn(self):
         shown = set()
@@ -180,8 +189,8 @@ class TurnSourceTests(PresenceTestCase):
                                              session_key="agent:main:local:dm:local-1", platform="local",
                                              prompt="rm -rf build")
         self.assertEqual((self.sent[-1]["kind"], self.sent[-1]["hermes"]["source"]), ("approval", "gui"))
-        self.adapter._cron_run = lambda session_id: ("job-1", "Morning brief")
-        self.adapter._cron_job = lambda job_id: {"name": "Morning brief", "deliver": "local"}
+        self.ctx.current_cron_execution = lambda: types.SimpleNamespace(job_id="job-1", job_name="Morning brief")
+        self.ctx.cron_delivery_platforms = lambda job_id=None: ()
         redactor = types.ModuleType("agent.redact")
         redactor.redact_sensitive_text = lambda text, *, force: text
         with patch.dict(sys.modules, {"agent": types.ModuleType("agent"), "agent.redact": redactor}):
@@ -213,6 +222,14 @@ class HermesPresenceAccessorTests(unittest.TestCase):
 
     def setUp(self):
         self.adapter = load_module("adapter.py")
+        ps = _hermes_presence_accessors()
+        self.adapter._ctx = types.SimpleNamespace(
+            turn_client=ps.turn_client,
+            session_viewers=ps.session_viewers,
+            session_surface=ps.session_surface,
+            **({"session_source": ps.session_source} if callable(getattr(ps, "session_source", None)) else {}),
+            **({"in_delegated_child": ps.in_delegated_child} if callable(getattr(ps, "in_delegated_child", None)) else {}),
+        )
         self.sent = []
         self.adapter._deliver_in_background = lambda payload, relay=None: self.sent.append(payload)
         self.adapter._report_activity = lambda *args: None
@@ -326,17 +343,17 @@ class DesktopActiveTests(PresenceTestCase):
         self.viewers = None  # Not an answer the accessor gives.
         self.assertEqual(self.active(), "omitted")
         self.viewers = [viewer()]
-        del self.plugin_session.session_viewers
+        del self.ctx.session_viewers
         self.assertEqual(self.active(), "omitted")
         self.assertEqual(self.reply()["hermes"]["source"], "gui")
-        self.plugin_session.session_viewers = lambda: self.viewers
-        del self.plugin_session.turn_client
+        self.ctx.session_viewers = lambda: self.viewers
+        del self.ctx.turn_client
         self.assertEqual(self.active(), "omitted")
 
     def test_an_answer_hermes_does_not_give_means_todays_payload(self):
         """Both facts or neither: a missing, failing or malformed accessor answer sends exactly the push
         a Hermes without the accessors sends."""
-        with patch.dict(sys.modules, {"hermes_cli.plugin_session": None}):
+        with patch.object(self.ctx, "turn_client", None), patch.object(self.ctx, "session_viewers", None):
             control = self.reply()
         self.assertEqual((control["hermes"]["source"], "desktop_active" in control["hermes"]), ("gui", False))
         clients = [{"kind": []}, {"kind": {}}, {"kind": "desktop", "name": 5}, {"kind": "webapp", "name": []},
@@ -356,11 +373,11 @@ class DesktopActiveTests(PresenceTestCase):
                 self.assertEqual(self.reply(), control)
         self.failing = set()
         for missing in ["turn_client", "session_viewers"]:
-            with self.subTest(missing=missing), patch.object(self.plugin_session, missing, None):
+            with self.subTest(missing=missing), patch.object(self.ctx, missing, None):
                 self.assertEqual(self.reply(), control)
         # A Desktop session labelled "desktop" by its platform on such a Hermes says nothing either.
         self.policy = None
-        with patch.dict(sys.modules, {"hermes_cli.plugin_session": None}):
+        with patch.object(self.ctx, "turn_client", None), patch.object(self.ctx, "session_viewers", None):
             payload = self.reply()
         self.assertEqual((payload["hermes"]["source"], "desktop_active" in payload["hermes"]), ("desktop", False))
 
@@ -399,14 +416,15 @@ class DesktopActiveTests(PresenceTestCase):
 
     def test_webhook_and_delegated_replies_never_read_the_accessors(self):
         self.client, self.viewers = DESKTOP, [viewer()]
-        delegation = types.ModuleType("agent.delegation_context")
-        delegation.is_delegated_child_context = lambda: True
         with patch.object(self.adapter, "_webhook_route_delivers_to_push", lambda: False):
             self.reply("s-hook", "webhook")
             self.reply("s-graph", "msgraph_webhook")
         self.reply("subagent_1", "subagent")
-        with patch.dict(sys.modules, {"agent": types.ModuleType("agent"), "agent.delegation_context": delegation}):
+        self.delegated = True
+        try:
             self.reply()
+        finally:
+            self.delegated = False
         self.assertEqual(self.reads, [])
         self.reply()
         self.assertEqual(self.reads, ["turn_client", "session_viewers"])
@@ -465,10 +483,11 @@ class DesktopActiveTests(PresenceTestCase):
         self.viewers = [viewer()]
         child = self.reply("subagent_1", "subagent")
         self.assertNotIn("desktop_active", child["hermes"])
-        delegation = types.ModuleType("agent.delegation_context")
-        delegation.is_delegated_child_context = lambda: True
-        with patch.dict(sys.modules, {"agent": types.ModuleType("agent"), "agent.delegation_context": delegation}):
+        self.delegated = True
+        try:
             self.assertNotIn("desktop_active", self.reply()["hermes"])
+        finally:
+            self.delegated = False
         with patch.object(self.adapter, "_webhook_route_delivers_to_push", lambda: False):
             for platform in ["webhook", "msgraph_webhook"]:
                 self.assertNotIn("desktop_active", self.reply("s-hook", platform)["hermes"])
@@ -478,8 +497,8 @@ class DesktopActiveTests(PresenceTestCase):
         self.adapter._on_human_input_request(kind="clarify", request_id="r2", session_id="local-1",
                                              session_key="route", platform="local", prompt="Which?")
         payload = self.adapter._server_request_payload("sudo", "srq-1", {}, {"session_id": "local-1", "source": "gui"})
-        self.adapter._cron_run = lambda session_id: ("job-1", "Morning brief")
-        self.adapter._cron_job = lambda job_id: {"name": "Morning brief", "deliver": "local"}
+        self.ctx.current_cron_execution = lambda: types.SimpleNamespace(job_id="job-1", job_name="Morning brief")
+        self.ctx.cron_delivery_platforms = lambda job_id=None: ()
         redactor = types.ModuleType("agent.redact")
         redactor.redact_sensitive_text = lambda text, *, force: text
         with patch.dict(sys.modules, {"agent": types.ModuleType("agent"), "agent.redact": redactor}):
@@ -543,7 +562,7 @@ class DesktopActiveTests(PresenceTestCase):
         privacy.load_key = lambda: bytes(range(32))
         self.client = DESKTOP
         self.viewers = [viewer(idle_seconds=8.0)]
-        with patch.dict(sys.modules, {"hermes_cli.plugin_session": None}):
+        with patch.object(self.ctx, "turn_client", None), patch.object(self.ctx, "session_viewers", None):
             before = self.reply()
         after = self.reply()
         sealed = [privacy.protect(push, "ab" * 32) for push in (before, after)]
@@ -768,7 +787,7 @@ class QuietWhileActiveTests(PresenceTestCase):
                 self.assertEqual([p["kind"] for p in pushes], ["reply"])
         self.failing = set()
         self.client, self.viewers = DESKTOP, [viewer(idle_seconds=5)]
-        with patch.dict(sys.modules, {"hermes_cli.plugin_session": None}):
+        with patch.object(self.ctx, "turn_client", None), patch.object(self.ctx, "session_viewers", None):
             pushes, _ = self.end()
         self.assertEqual([("desktop_active" in p["hermes"]) for p in pushes], [False])
 

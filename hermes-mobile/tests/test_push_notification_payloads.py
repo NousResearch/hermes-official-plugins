@@ -283,7 +283,8 @@ class TurnReplyTests(AdapterTestCase):
 class CronCompletionTests(AdapterTestCase):
     def setUp(self):
         self.sent = []
-        self.job = {"name": "Daily report", "deliver": "telegram"}
+        self.cron_name = "Daily report"
+        self.delivery_platforms = ("telegram",)
         self.redactor = types.ModuleType("agent.redact")
         self.redactor.redact_sensitive_text = lambda text, *, force: text.replace("secret-token", "[REDACTED]")
         self.filters = types.ModuleType("gateway.response_filters")
@@ -296,9 +297,13 @@ class CronCompletionTests(AdapterTestCase):
         self.addCleanup(modules.stop)
         self.reported = []
         adapter = self.load_adapter()
+        adapter._ctx = types.SimpleNamespace(
+            current_cron_execution=lambda: types.SimpleNamespace(job_id="job", job_name=self.cron_name),
+            cron_delivery_platforms=lambda job_id=None: self.delivery_platforms,
+            in_delegated_child=lambda include_subprocesses=False: False,
+        )
         adapter._deliver_in_background = self.sent.append
         adapter._origin_metadata = lambda fields: {"profile": "research"}
-        adapter._cron_job = lambda job_id: self.job if job_id == "job" else None
         adapter._report_activity = lambda *args: self.reported.append(args)
         adapter.MAX_MESSAGE_LENGTH = 400
         adapter.NATIVELY_NOTIFYING = {"telegram"}
@@ -316,19 +321,36 @@ class CronCompletionTests(AdapterTestCase):
             "session_id": "cron_job_20260921_090000",
         })
 
-    def test_addressed_push_delivery_is_not_duplicated(self):
-        for delivery in ["push", "telegram,push:device", ["telegram", "push"], "origin"]:
-            with self.subTest(delivery=delivery):
-                self.job = {"deliver": delivery, "origin": {"platform": "push", "chat_id": "device"}}
+    def test_addressed_push_and_bot_chat_delivery_are_not_duplicated(self):
+        for platforms in [("push",), ("telegram", "push"), ("bot-chat",), ("telegram", "bot-chat")]:
+            with self.subTest(platforms=platforms):
+                self.delivery_platforms = platforms
                 self.complete()
         self.assertEqual(self.sent, [])
+
+    def test_missing_cron_delivery_seam_leaves_suppression_off_and_logs_once(self):
+        self.adapter._ctx = types.SimpleNamespace(
+            current_cron_execution=lambda: types.SimpleNamespace(job_id="job", job_name="Daily report"),
+            in_delegated_child=lambda include_subprocesses=False: False,
+        )
+        with self.assertLogs(self.adapter.logger, "DEBUG") as logs:
+            self.complete()
+            self.complete()
+        self.assertEqual(len(self.sent), 2)
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("cron_delivery_platforms", logs.output[0])
+
+    def test_outside_cron_execution_falls_back_to_generic_subtitle(self):
+        self.adapter._ctx.current_cron_execution = lambda: None
+        self.complete()
+        self.assertEqual(self.sent[0]["subtitle"], "Scheduled task")
 
     def test_intentionally_silent_cron_does_not_notify(self):
         self.complete(body="NO_REPLY")
         self.assertEqual(self.sent, [])
 
     def test_cron_redacts_body_and_job_name_before_truncation(self):
-        self.job["name"] = "Report secret-token"
+        self.cron_name = "Report secret-token"
         self.complete(body="x" * 390 + "secret-token")
         self.assertEqual(self.sent[0]["subtitle"], "Report [REDACTED]")
         self.assertEqual(self.sent[0]["body"], "x" * 390 + "[REDACTED]")
@@ -337,7 +359,7 @@ class CronCompletionTests(AdapterTestCase):
         def fail(text, *, force):
             raise RuntimeError("redactor unavailable")
         self.redactor.redact_sensitive_text = fail
-        self.job["name"] = "secret-token"
+        self.cron_name = "secret-token"
         self.complete(body="secret-token")
         self.assertEqual(self.sent[0]["body"], "[REDACTED - redaction failed]")
         self.assertEqual(self.sent[0]["subtitle"], "Scheduled task")
@@ -468,35 +490,39 @@ class PushHardeningTests(AdapterTestCase):
 
 class UnifiedRuntimeTests(AdapterTestCase):
     """Hermes 0.22.1+ runs app sessions through the gateway: the store says "local", the agent
-    "desktop" and only the launch policy keeps the creation label ("gui"); the plugin context
-    names the cron run a turn belongs to (``ctx.current_cron_execution()``)."""
+    "desktop" and ``ctx.session_source()`` keeps the creation label ("gui"); the plugin context
+    names the cron run and its delivery platforms (``ctx.current_cron_execution()``,
+    ``ctx.cron_delivery_platforms()``)."""
 
     def setUp(self):
         self.load_adapter()
         self.cron = None
-        self.jobs = {}
+        self.cron_platforms = {}
         self.policy = None
         self.env = {}
-        session_policy = types.ModuleType("gateway.session_policy")
-        session_policy.active_policy = lambda: self.policy
+        self.delegated = False
         context = types.ModuleType("gateway.session_context")
         context.get_session_env = lambda name, default="": self.env.get(name, default)
-        jobs = types.ModuleType("cron.jobs")
-        jobs.get_job = self.jobs.get
         modules = patch.dict(sys.modules, {
             "hermes_constants": self.constants, "gateway": types.ModuleType("gateway"),
-            "gateway.session_policy": session_policy, "gateway.session_context": context,
-            "cron": types.ModuleType("cron"), "cron.jobs": jobs,
-            "hermes_state": None, "tools": None, "agent": None, "agent.delegation_context": None,
+            "gateway.session_context": context,
+            "hermes_state": None, "tools": None, "agent": None,
         })
         modules.start()
         self.addCleanup(modules.stop)
         self.sent = []
         self.reported = []
-        context = types.SimpleNamespace(current_cron_execution=lambda: self.cron)
+        self.ctx = types.SimpleNamespace(
+            current_cron_execution=lambda: self.cron,
+            cron_delivery_platforms=lambda job_id=None: self.cron_platforms.get(
+                job_id if job_id is not None else getattr(self.cron, "job_id", None), ()),
+            session_source=lambda: getattr(self.policy, "source", "") if self.policy is not None else "",
+            session_surface=lambda: getattr(self.policy, "platform", "") if self.policy is not None else "",
+            in_delegated_child=lambda include_subprocesses=False: self.delegated,
+        )
         for name, value in {"_deliver_in_background": lambda payload, relay=None: self.sent.append(payload),
                             "_report_activity": lambda *args: self.reported.append(args),
-                            "_HUMAN_INPUT_HOOKS": True, "_ctx": context,
+                            "_HUMAN_INPUT_HOOKS": True, "_ctx": self.ctx,
                             # A Hermes without the session prompt hooks, whichever Hermes is importable;
                             # ``with_prompt_hooks`` turns them on.
                             "_SESSION_PROMPT_HOOKS": False}.items():
@@ -555,7 +581,7 @@ class UnifiedRuntimeTests(AdapterTestCase):
 
     def test_an_unaddressed_cron_run_notifies_with_the_name_of_its_run(self):
         self.cron = types.SimpleNamespace(job_id="job-1", job_name="Morning brief")
-        self.jobs["job-1"] = {"name": "Stored name", "deliver": "local"}
+        self.cron_platforms["job-1"] = ()
         redactor = types.ModuleType("agent.redact")
         redactor.redact_sensitive_text = lambda text, *, force: text
         with patch.dict(sys.modules, {"agent.redact": redactor, "gateway.response_filters": None}):
@@ -566,9 +592,25 @@ class UnifiedRuntimeTests(AdapterTestCase):
 
     def test_a_cron_run_that_delivers_to_push_is_not_announced_twice(self):
         self.cron = types.SimpleNamespace(job_id="job-1", job_name="Morning brief")
-        self.jobs["job-1"] = {"name": "Morning brief", "deliver": "push"}
+        self.cron_platforms["job-1"] = ("push",)
         self.end("local-cron", "cron")
         self.assertEqual(self.sent, [])
+
+    def test_missing_session_source_and_delegation_seams_stay_off_and_log_once(self):
+        self.adapter._ctx = types.SimpleNamespace(session_surface=lambda: "desktop")
+        self.env = {"HERMES_SESSION_PLATFORM": "telegram", "HERMES_SESSION_ID": "s-env"}
+        with self.assertLogs(self.adapter.logger, "DEBUG") as logs:
+            self.assertEqual(self.adapter._creation_source("desktop"), "desktop")
+            self.assertEqual(self.adapter._creation_source("desktop"), "desktop")
+            self.assertFalse(self.adapter._delegated_turn({"platform": "desktop"}))
+            self.assertFalse(self.adapter._delegated_turn({"platform": "desktop"}))
+            origin = self.adapter._origin_metadata({}, use_context=True)
+            self.assertEqual(origin["source"], "telegram")
+            self.assertNotIn("is_subagent", origin)
+        messages = [record.getMessage() for record in logs.records]
+        self.assertEqual(len(messages), 2)
+        self.assertTrue(any("session_source" in m for m in messages))
+        self.assertTrue(any("in_delegated_child" in m for m in messages))
 
     def test_kanban_workers_are_unattended(self):
         with patch.dict("os.environ", {"HERMES_KANBAN_TASK": "task-1"}):
@@ -684,17 +726,14 @@ class UnifiedRuntimeTests(AdapterTestCase):
 
 class OlderHermesPayloadTests(AdapterTestCase):
     """On a Hermes without the plugin session accessors (``turn_client``, ``session_viewers``) every push
-    is the one the plugin has always sent, byte for byte: whether ``hermes_cli.plugin_session`` is missing
-    or predates them."""
+    is the one the plugin has always sent, byte for byte: whether ``ctx`` omits them or they are unset."""
 
     setUp, launch, end = UnifiedRuntimeTests.setUp, UnifiedRuntimeTests.launch, UnifiedRuntimeTests.end
 
     def older_hermes(self):
-        session = types.ModuleType("hermes_cli.plugin_session")
-        session.session_surface = lambda: "desktop"
-        session.session_client = lambda: {"name": "hermes-desktop"}
-        yield {"hermes_cli": types.ModuleType("hermes_cli"), "hermes_cli.plugin_session": session}
-        yield {"hermes_cli": None, "hermes_cli.plugin_session": None}
+        # Context lacking turn_client / session_viewers, and one with them explicitly None.
+        yield {"turn_client": None, "session_viewers": None}
+        yield {}
 
     def pushes(self):
         """A Desktop or app reply, a delegated child's, a messaging platform's and a wait on the person."""
@@ -729,8 +768,14 @@ class OlderHermesPayloadTests(AdapterTestCase):
                         "session_key": "agent:main:local:dm:local-1"},
              "thread_id": "local-1"},
         ]
-        for modules in self.older_hermes():
-            with self.subTest(plugin_session=modules["hermes_cli.plugin_session"]), patch.dict(sys.modules, modules):
+        for extra in self.older_hermes():
+            ctx = types.SimpleNamespace(
+                session_source=self.ctx.session_source,
+                session_surface=self.ctx.session_surface,
+                in_delegated_child=self.ctx.in_delegated_child,
+                **extra,
+            )
+            with self.subTest(extra=extra), patch.object(self.adapter, "_ctx", ctx):
                 pushes = self.pushes()
                 self.assertEqual(pushes, expected)
                 self.assertEqual([json.dumps(p) for p in pushes], [json.dumps(p) for p in expected])
@@ -739,8 +784,14 @@ class OlderHermesPayloadTests(AdapterTestCase):
         privacy = load_privacy()
         privacy._home = lambda: self.home
         privacy.load_key = lambda: bytes(range(32))
-        for modules in self.older_hermes():
-            with self.subTest(plugin_session=modules["hermes_cli.plugin_session"]), patch.dict(sys.modules, modules):
+        for extra in self.older_hermes():
+            ctx = types.SimpleNamespace(
+                session_source=self.ctx.session_source,
+                session_surface=self.ctx.session_surface,
+                in_delegated_child=self.ctx.in_delegated_child,
+                **extra,
+            )
+            with self.subTest(extra=extra), patch.object(self.adapter, "_ctx", ctx):
                 public = [privacy.protect(push, "ab" * 32) for push in self.pushes()]
                 self.assertEqual([sorted(p["hermes"]) for p in public], [
                     ["event_id", "sealed", "session_id", "source"],

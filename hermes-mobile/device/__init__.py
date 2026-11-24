@@ -19,6 +19,8 @@ from .bridge import (
     AccessUnavailable,
     BridgeError,
     open_store,
+    read_devices_readonly,
+    store_path,
 )
 from .continuation import cron_api_available, reconcile
 
@@ -37,6 +39,9 @@ def store():
     """The store of the profile this tool call runs for: Hermes binds each call to its profile's home."""
     from hermes_constants import get_hermes_home
     return open_store(get_hermes_home())
+
+
+_default_store = store
 
 
 def secret(name):
@@ -101,6 +106,27 @@ async def await_result(value, request_id, seconds):
         await asyncio.sleep(0.25)
 
 
+def _paired_devices_readonly():
+    """Paired devices for the active profile without creating bridge.db on disk."""
+    if store is not _default_store:
+        return store().devices()
+    from hermes_constants import get_hermes_home
+    return read_devices_readonly(store_path(get_hermes_home()))
+
+
+def has_paired_device():
+    """Whether at least one mobile device is paired with this profile.
+
+    Hermes caches check_fn verdicts (~30s) and memoizes per tool-definition pass, so
+    sharing this function across the device tools costs one stat on an unpaired home
+    and one short read-only lookup once paired, never creating bridge.db."""
+    try:
+        return bool(_paired_devices_readonly())
+    except Exception:
+        logging.getLogger(__name__).exception("Paired device check failed")
+        return False
+
+
 def can_update_reminders():
     """Whether a phone whose app can edit reminders shares them with this profile.
 
@@ -108,7 +134,7 @@ def can_update_reminders():
     the bridge still refuses the request when no such phone is there."""
     try:
         return any("reminders.update" in device.get("features", []) and "reminders.write" in device["grants"]
-                   for device in store().devices())
+                   for device in _paired_devices_readonly())
     except Exception:
         logging.getLogger(__name__).exception("Device feature check failed")
         return False
@@ -206,9 +232,9 @@ def register(ctx):
         except (BridgeError, ValueError, KeyError) as error:
             return dumps(with_current_access(value, {"status": "failed", "error": str(error)}))
 
-    add("mobile_devices", "List current devices, selected calendars (IDs/names), Health categories shared with this Hermes profile (health_metrics to read, health_write_metrics to log). Refresh this after the user changes sharing and before claiming which calendars are accessible; earlier conversation may be stale. Enable individual access in Hermes Agent Settings → Device Access.", {}, [], list_devices)
+    add("mobile_devices", "List current devices, selected calendars (IDs/names), Health categories shared with this Hermes profile (health_metrics to read, health_write_metrics to log). Refresh this after the user changes sharing and before claiming which calendars are accessible; earlier conversation may be stale. Enable individual access in Hermes Agent Settings → Device Access.", {}, [], list_devices, check_fn=has_paired_device)
     add("mobile_request_result", "Read a previous device request. Pending is not success. Check status and observed_at before using results.",
-        {"request_id": {"type": "string"}, "wait_seconds": {"type": "number", "minimum": 0, "maximum": 20}}, ["request_id"], get_result)
+        {"request_id": {"type": "string"}, "wait_seconds": {"type": "number", "minimum": 0, "maximum": 20}}, ["request_id"], get_result, check_fn=has_paired_device)
 
     text = {"type": "string"}
     date = {"type": "string", "description": "ISO 8601 date and time with timezone"}
@@ -306,4 +332,4 @@ def register(ctx):
                     return dumps(with_current_access(value, {"status": "failed", "error": str(error)}))
             return handle
         add(name, description, fields, required, make_handler(operation),
-            check_fn=can_update_reminders if operation == "reminders.update" else None)
+            check_fn=can_update_reminders if operation == "reminders.update" else has_paired_device)

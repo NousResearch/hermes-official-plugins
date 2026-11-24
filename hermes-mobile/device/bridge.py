@@ -107,6 +107,35 @@ def _day(value, name):
     raise BridgeError(f"{name} is a date as YYYY-MM-DD")
 
 
+def store_path(home):
+    """Expected bridge.db path for *home* without creating any directory or file."""
+    return Path(home).expanduser() / "plugin-data" / NAME / "bridge.db"
+
+
+def read_devices_readonly(path):
+    """Read paired devices' grants and features from an existing bridge.db without creating
+    the file or waiting long on a write lock. Returns [] when bridge.db does not exist."""
+    path = Path(path)
+    if not path.is_file():
+        return []
+    try:
+        from sqlite_support import read_only_db_uri
+        uri = read_only_db_uri(path)
+    except ImportError:
+        uri = path.resolve().as_uri() + "?mode=ro"
+    db = sqlite3.connect(uri, uri=True, timeout=0.05)
+    try:
+        db.row_factory = sqlite3.Row
+        rows = db.execute("SELECT grants, features FROM devices").fetchall()
+        return [{"grants": json.loads(r["grants"]), "features": json.loads(r["features"])} for r in rows]
+    except sqlite3.OperationalError as error:
+        if "no such table" in str(error).lower():
+            return []
+        raise
+    finally:
+        db.close()
+
+
 def open_store(home):
     """The store of the profile whose Hermes home is home, in Hermes' per-plugin storage
     (<home>/plugin-data/<plugin>/bridge.db)."""

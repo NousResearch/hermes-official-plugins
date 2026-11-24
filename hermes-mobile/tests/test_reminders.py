@@ -155,10 +155,12 @@ def test_the_update_tool_is_offered_once_a_supporting_phone_registers(tmp_path, 
     monkeypatch.setattr(plugin, "wake", lambda _: None)
     update = tools["mobile_reminder_update"]
     assert set(update["schema"]["parameters"]["required"]) == {"id", "idempotency_key"}
-    assert "check_fn" not in tools["mobile_reminder_create"]
+    assert tools["mobile_reminder_create"]["check_fn"] is plugin.has_paired_device
+    assert tools["mobile_reminder_create"]["check_fn"]() is False
     check = update["check_fn"]
     assert check() is False
     store.register("phone", "Phone", ["reminders.read", "reminders.write"], TOKEN)
+    assert tools["mobile_reminder_create"]["check_fn"]() is True
     assert check() is False
     # The tool's own answer for an older app tells the agent to stop.
     reply = json.loads(asyncio.run(update["handler"]({"id": "r1", "title": "x", "idempotency_key": "k", "wait_seconds": 0})))

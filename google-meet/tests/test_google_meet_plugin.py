@@ -436,6 +436,7 @@ def test_realtime_session_cancel_response_when_disconnected():
 
 
 
+@pytest.mark.platforms("linux", "macos")
 def test_cmd_install_checks_plugin_dependencies_and_ensures_pm_chromium(monkeypatch, capsys):
     """playwright/websockets come with the plugin install; ``hermes meet install`` only checks them."""
     import importlib.util
@@ -455,6 +456,7 @@ def test_cmd_install_checks_plugin_dependencies_and_ensures_pm_chromium(monkeypa
     assert "hermes meet setup" in capsys.readouterr().out
 
 
+@pytest.mark.platforms("linux", "macos")
 def test_cmd_install_reports_missing_plugin_dependencies(monkeypatch, capsys):
     import importlib.util
 

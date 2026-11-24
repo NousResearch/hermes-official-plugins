@@ -62,6 +62,7 @@ def test_registry_add_get_roundtrip_persists(tmp_path):
     assert "added_at" in entry
 
 
+@pytest.mark.platforms("posix")
 def test_registry_update_tightens_permissive_token_file(tmp_path):
     """A nodes.json left 0644 (older Hermes, hand-made) must not keep that mode on rewrite."""
     import os

@@ -153,7 +153,7 @@ class Store:
             # Hermes decides whether it may, as for its own plugin databases: it keeps new files
             # out of WAL on SQLite builds with the WAL-reset bug and on network filesystems.
             try:
-                from hermes_state_wal import apply_wal_with_fallback
+                from sqlite_support import apply_wal_with_fallback
             except ImportError:  # outside Hermes: SQLite's rollback journal
                 pass
             else:

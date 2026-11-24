@@ -76,19 +76,32 @@ def test_the_query_names_the_profile_where_hermes_binds_none(monkeypatch, root):
     assert invalid.value.status_code == 400
 
 
-def test_a_scheduled_reply_runs_in_its_profiles_secret_scope(monkeypatch, root):
-    continuation = load_device_module("device_continuation_secrets", "continuation.py")
-    bound = []
-    module = types.ModuleType("agent.secret_scope")
-    module.build_profile_secret_scope = lambda home: {"HOME_OF": str(home)}
-    module.set_secret_scope = lambda secrets, profile_home=None: bound.append((secrets, profile_home)) or len(bound)
-    module.reset_secret_scope = lambda token: bound.append(("reset", token))
-    monkeypatch.setitem(sys.modules, "agent", types.ModuleType("agent"))
-    monkeypatch.setitem(sys.modules, "agent.secret_scope", module)
+def test_a_scheduled_reply_targets_its_profiles_home_via_cron_plugin_api(monkeypatch, root):
+    continuation = load_device_module("device_continuation_profile_home", "continuation.py")
+    calls = []
+    cron_pkg = types.ModuleType("cron")
+    cron_api = types.ModuleType("cron.plugin_api")
+
+    def ensure_named_job(name, **kwargs):
+        calls.append((name, kwargs))
+        return {"id": "job-work-1", "name": name}
+
+    cron_api.ensure_named_job = ensure_named_job
+    cron_pkg.plugin_api = cron_api
+    monkeypatch.setitem(sys.modules, "cron", cron_pkg)
+    monkeypatch.setitem(sys.modules, "cron.plugin_api", cron_api)
     work = root / "profiles" / "work"
-    with continuation.profile_secrets(work):
-        assert bound == [({"HOME_OF": str(work)}, str(work))]
-    assert bound[-1] == ("reset", 1)
+    job_id = continuation.schedule_reply({"request_id": "req-42", "home": str(work), "prompt": "Where am I?"})
+    assert job_id == "job-work-1"
+    assert len(calls) == 1
+    name, kwargs = calls[0]
+    assert name == "hermes-mobile-device-access-req-42"
+    assert kwargs["home"] == work
+    assert kwargs["schedule"] == "in 1m"
+    assert kwargs["repeat"] == 1
+    assert kwargs["deliver"] == "push"
+    assert kwargs["enabled_toolsets"] == ["mobile_device"]
+    assert "req-42" in kwargs["prompt"] and "Where am I?" in kwargs["prompt"]
 
 
 def test_a_busy_database_answers_503():

@@ -33,9 +33,9 @@ def test_the_store_is_private_and_takes_its_journal_mode_from_hermes(tmp_path, m
     # Hermes decides whether a database may use WAL (not on SQLite builds with the WAL-reset
     # bug or on network filesystems); the store asks it instead of setting WAL itself.
     labels = []
-    wal = types.ModuleType("hermes_state_wal")
+    wal = types.ModuleType("sqlite_support")
     wal.apply_wal_with_fallback = lambda db, *, db_label: labels.append(db_label) or "delete"
-    monkeypatch.setitem(sys.modules, "hermes_state_wal", wal)
+    monkeypatch.setitem(sys.modules, "sqlite_support", wal)
     store = bridge.Store(tmp_path / "data" / "bridge.db")
     assert stat.S_IMODE(store.path.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
@@ -43,7 +43,7 @@ def test_the_store_is_private_and_takes_its_journal_mode_from_hermes(tmp_path, m
     with store.db() as db:
         assert db.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
     # Without Hermes the store keeps SQLite's rollback journal.
-    monkeypatch.setitem(sys.modules, "hermes_state_wal", None)
+    monkeypatch.setitem(sys.modules, "sqlite_support", None)
     store = bridge.Store(tmp_path / "bare" / "bridge.db")
     with store.db() as db:
         assert db.execute("PRAGMA journal_mode").fetchone()[0] == "delete"

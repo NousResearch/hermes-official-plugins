@@ -20,7 +20,7 @@ from .bridge import (
     BridgeError,
     open_store,
 )
-from .continuation import reconcile
+from .continuation import cron_api_available, reconcile
 
 
 def dumps(value):
@@ -87,7 +87,9 @@ def can_deliver_followup():
     if not secret("HERMES_MOBILE_PUSH_INSTALL_KEY") or not relay_url_allowed(secret("HERMES_MOBILE_PUSH_RELAY_URL")):
         return False
     from gateway.platform_registry import platform_registry
-    return platform_registry.is_registered("push")
+    if not platform_registry.is_registered("push"):
+        return False
+    return cron_api_available()
 
 
 async def await_result(value, request_id, seconds):

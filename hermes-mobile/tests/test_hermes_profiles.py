@@ -23,6 +23,13 @@ def _hermes_dashboard():
         return False
 
 
+def _has_cron_plugin_api():
+    try:
+        return importlib.util.find_spec("cron.plugin_api") is not None
+    except Exception:
+        return False
+
+
 # Runs in its own process: Hermes reads HERMES_HOME at import, keeps process-wide state and
 # takes over stdout, so the answers go to the file named by argv[1].
 DRIVER = """
@@ -62,8 +69,7 @@ os._exit(0)
 """ % PLUGIN_NAME  # noqa: UP031 -- the driver source is full of braces
 
 
-@pytest.mark.skipif(not _hermes_dashboard(), reason="needs a Hermes checkout on PYTHONPATH (run on the test server)")
-def test_a_second_profile_keeps_its_devices_and_replies(tmp_path):
+def _run_driver(tmp_path):
     home = tmp_path / "home"
     work = home / "profiles" / "work"
     for profile_home in (home, work):
@@ -72,18 +78,18 @@ def test_a_second_profile_keeps_its_devices_and_replies(tmp_path):
         (profile_home / ".env").write_text("")
     shutil.copytree(ROOT, home / "plugins" / PLUGIN_NAME, ignore=shutil.ignore_patterns("tests", "__pycache__"))
     env = {**os.environ, "HERMES_HOME": str(home), "PYTHONDONTWRITEBYTECODE": "1"}
-    answers = tmp_path / "answers.json"
-    done = subprocess.run([sys.executable, "-c", DRIVER, str(answers)], env=env, cwd=tmp_path, capture_output=True, text=True,
+    answers_path = tmp_path / "answers.json"
+    done = subprocess.run([sys.executable, "-c", DRIVER, str(answers_path)], env=env, cwd=tmp_path, capture_output=True, text=True,
                           timeout=180, check=False)
-    assert done.returncode == 0 and answers.exists(), done.stderr[-2000:]
-    answers = json.loads(answers.read_text())
+    assert done.returncode == 0 and answers_path.exists(), done.stderr[-2000:]
+    answers = json.loads(answers_path.read_text())
     request = answers.pop("request")
     stores = {"default": home / "plugin-data" / DATA_NAME / "bridge.db", "work": work / "plugin-data" / DATA_NAME / "bridge.db"}
     assert answers.pop("store") == [str(stores["work"]), "work"]
     assert answers == {"setup": ["default", "work"], "put-work": 200, "put-default": 200,
                        "claimed-work": True, "result-work": 200}
-    import hermes_state_wal
-    journal_mode = "delete" if hermes_state_wal.is_sqlite_wal_reset_vulnerable() else "wal"
+    import sqlite_support
+    journal_mode = "delete" if sqlite_support.is_sqlite_wal_reset_vulnerable() else "wal"
     replies = {}
     for profile, path in stores.items():
         assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700 and stat.S_IMODE(path.stat().st_mode) == 0o600
@@ -96,6 +102,22 @@ def test_a_second_profile_keeps_its_devices_and_replies(tmp_path):
             db.close()
     [(reply, job)] = replies.pop("work")
     assert reply == request and replies == {"default": []}
+    return home, work, request, job
+
+
+@pytest.mark.skipif(not _hermes_dashboard(), reason="needs a Hermes checkout on PYTHONPATH (run on the test server)")
+def test_a_second_profile_keeps_its_devices_and_store_permissions(tmp_path):
+    home, work, _request, job = _run_driver(tmp_path)
+    assert not (home / "cron" / "jobs.json").exists()
+    if not _has_cron_plugin_api():
+        assert job is None
+        assert not (work / "cron" / "jobs.json").exists()
+
+
+@pytest.mark.skipif(not _hermes_dashboard(), reason="needs a Hermes checkout on PYTHONPATH (run on the test server)")
+@pytest.mark.skipif(not _has_cron_plugin_api(), reason="needs hermes-agent PR 159657")
+def test_a_second_profile_keeps_its_devices_and_replies(tmp_path):
+    home, work, request, job = _run_driver(tmp_path)
     # The phone's result scheduled one push reply in work's own cron, none in the launch profile's.
     jobs = json.loads((work / "cron" / "jobs.json").read_text())
     jobs = jobs["jobs"] if isinstance(jobs, dict) else jobs
@@ -108,12 +130,12 @@ def test_a_second_profile_keeps_its_devices_and_replies(tmp_path):
 @pytest.mark.skipif(not _hermes_dashboard(), reason="needs a Hermes checkout on PYTHONPATH (run on the test server)")
 @pytest.mark.parametrize("vulnerable, mode", [(True, "delete"), (False, "wal")])
 def test_the_store_uses_wal_only_where_hermes_allows_it(tmp_path, monkeypatch, vulnerable, mode):
-    import hermes_state_wal
+    import sqlite_support
     spec = importlib.util.spec_from_file_location("bridge_wal_under_test", ROOT / "device" / "bridge.py")
     bridge = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bridge)
     # What Hermes sees on an SQLite build with the WAL-reset bug (3.7.0 to 3.51.2), and on a fixed one.
-    monkeypatch.setattr(hermes_state_wal, "is_sqlite_wal_reset_vulnerable", lambda *args, **kwargs: vulnerable)
+    monkeypatch.setattr(sqlite_support, "is_sqlite_wal_reset_vulnerable", lambda *args, **kwargs: vulnerable)
     store = bridge.Store(tmp_path / "bridge.db")
     db = sqlite3.connect(store.path)
     try:

@@ -373,6 +373,17 @@ def test_a_served_profile_cannot_switch_isolation_for_itself(profile, tmp_path, 
         assert _apply({"UNRELATED": "kept"}) == {"UNRELATED": "kept"}
 
 
+def test_refusal_names_both_owner_config_locations(profile, tmp_path):
+    import directsdk_setup
+
+    launch = _profile_home(tmp_path, "named-launch", isolate_profile_logins=True)
+    served = _profile_home(tmp_path, "served")
+    with _process_started_for(launch), _served_turn(served):
+        with pytest.raises(directsdk_setup.ClaudeCodeLoggedOut) as raised:
+            _apply({})
+    assert "the install's default profile and the profile Hermes was started for" in str(raised.value)
+
+
 def test_the_profile_the_process_was_started_for_can_isolate(profile, tmp_path, monkeypatch):
     """A gateway started for profile X (``hermes -p X gateway``) reads X's switch as well as the root's: X's owner can
     isolate the profiles X serves. X's own tasks still keep X's login."""

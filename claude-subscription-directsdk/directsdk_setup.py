@@ -357,7 +357,8 @@ PROFILE_LOGIN_HINT = (f"This profile has no Claude login of its own, and this He
                       f"was started for. Give it one: put {{0}} (from `claude setup-token`) in this profile's .env, or set "
                       f"this profile's {CONFIG_DIR_SETTING} plugin setting to a directory logged in with "
                       f"`CLAUDE_CONFIG_DIR=<dir> claude auth login`. To let profiles share that login, turn "
-                      f"{ISOLATE_LOGINS_SETTING} off in the install's default profile.")
+                      f"{ISOLATE_LOGINS_SETTING} off in the install's default profile and the profile Hermes was started for "
+                      f"(and update any managed setting).")
 
 
 def apply_profile_credential(env):

@@ -31,8 +31,8 @@ HERMES_HOOKS = {
     "post_approval_response", "pre_tool_call", "post_tool_call", "on_stream_start",
     # tools/human_input_hooks.py, Hermes 0.22.1+ (VALID_HOOKS in hermes_cli/plugins.py).
     "on_human_input_request", "on_human_input_resolved",
-    # gateway/session_prompt_hooks.py, on a Hermes with the session prompt hooks; an older Hermes
-    # warns that it does not know them, stores them and never fires them.
+    # gateway/session_prompt_hooks.py: registered only on a Hermes that has it (an older one would
+    # warn at every start that it does not know them).
     "on_session_prompt", "on_session_prompt_settled",
 }
 
@@ -489,6 +489,16 @@ class ManifestTests(unittest.TestCase):
 
     def test_every_hook_exists_in_hermes(self):
         self.assertLessEqual(self.registered_hooks(), HERMES_HOOKS)
+
+    def test_the_session_prompt_hooks_are_registered_only_where_hermes_fires_them(self):
+        prompt_hooks = {"on_session_prompt", "on_session_prompt_settled"}
+        for fired in (True, False):
+            with self.subTest(fired=fired), tempfile.TemporaryDirectory() as home:
+                adapter, constants = load_push_adapter(Path(home))
+                adapter._SESSION_PROMPT_HOOKS = fired
+                hooks = set(registered_hooks(adapter, constants))
+                self.assertEqual(prompt_hooks <= hooks, fired)
+                self.assertIn("on_human_input_request", hooks)
 
 
 if __name__ == "__main__":

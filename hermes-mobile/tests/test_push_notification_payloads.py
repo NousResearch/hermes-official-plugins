@@ -473,6 +473,7 @@ class PushHardeningTests(AdapterTestCase):
     def test_registered_hooks_match_the_manifest_on_old_and_new_hook_registries(self):
         import yaml
         manifest = yaml.safe_load((PUSH / "plugin.yaml").read_text())
+        self.adapter._SESSION_PROMPT_HOOKS = True  # a Hermes that fires every hook the manifest lists
         for extra in [set(), {"gateway_client_event"}]:
             with self.subTest(extra=extra):
                 hooks = registered_hooks(self.adapter, self.constants, set(manifest["provides_hooks"]) | extra)

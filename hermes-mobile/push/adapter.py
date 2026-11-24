@@ -1708,5 +1708,8 @@ def register(ctx):
         ctx.register_hook("on_human_input_resolved", _on_human_input_resolved)
         # The prompts a gateway opens for a person, with the id that answers each
         # (Hermes with gateway.session_prompt_hooks): a gateway app session's waits.
-        ctx.register_hook("on_session_prompt", _on_session_prompt)
-        ctx.register_hook("on_session_prompt_settled", _on_session_prompt_settled)
+        # Registered only where Hermes fires them: an older Hermes warns about an
+        # unknown hook at every start, on every home this plugin is installed on.
+        if _SESSION_PROMPT_HOOKS:
+            ctx.register_hook("on_session_prompt", _on_session_prompt)
+            ctx.register_hook("on_session_prompt_settled", _on_session_prompt_settled)

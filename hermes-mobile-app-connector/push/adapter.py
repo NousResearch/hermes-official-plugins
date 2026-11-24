@@ -46,7 +46,7 @@ REQUEST_TIMEOUT_SECONDS = 15
 PLUGIN_VERSION = next(line.split(":", 1)[1].strip().strip("\"'")
                       for line in (Path(__file__).resolve().parents[1] / "plugin.yaml").read_text().splitlines()
                       if line.startswith("version:"))
-USER_AGENT = f"hermes-mobile/{PLUGIN_VERSION}"
+USER_AGENT = f"hermes-mobile-app-connector/{PLUGIN_VERSION}"
 # How much of a message rides in the payload; privacy.py shortens the preview further.
 # Not the platform's chunking limit: a push is never split (register() below).
 MAX_MESSAGE_LENGTH = 1500

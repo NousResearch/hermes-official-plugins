@@ -1,5 +1,5 @@
 [project]
-name = "hermes-mobile"
+name = "hermes-mobile-app-connector"
 version = "2.0.0"
 description = "Push notifications and paired mobile device capabilities for Hermes Agent (official plugin)"
 readme = "README.md"
@@ -11,4 +11,4 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/hermes-mobile"
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/hermes-mobile-app-connector"

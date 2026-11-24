@@ -2,10 +2,10 @@
 
 Official Hermes Agent plugin for paired mobile apps: push notifications (with encrypted previews and Live Activity snapshots) and device capabilities (Calendar, Reminders, Health, Contacts, location, alarms and timers).
 
-`hermes-mobile` is installed by default and loads quietly when no phone is paired and no push relay is configured. If you do not use the mobile app and want it turned off:
+`hermes-mobile-app-connector` is installed by default and loads quietly when no phone is paired and no push relay is configured. If you do not use the mobile app and want it turned off:
 
 ```bash
-hermes plugins disable hermes-mobile
+hermes plugins disable hermes-mobile-app-connector
 ```
 
 Requires Hermes 0.23.3 or later (`requires_hermes` in `plugin.yaml`), the first release with the published storage interface it uses. Features that use plugin seams newer than the running Hermes stay off until Hermes is updated.
@@ -58,10 +58,10 @@ A tool waits up to 20 seconds (`wait_seconds`) for the phone, then returns a pen
 
 Pair your Hermes install from the mobile app's notification and Device Access settings over the existing authenticated dashboard connection:
 
-1. The app calls `POST /api/plugins/hermes-mobile/pair` (with optional `?profile=<name>`) passing `relay_url` and an optional `install_key`.
+1. The app calls `POST /api/plugins/hermes-mobile-app-connector/pair` (with optional `?profile=<name>`) passing `relay_url` and an optional `install_key`.
 2. Hermes mints a fresh install key (or adopts the one supplied when unpaired, returning `409` rather than rotating an existing key), stores the plugin-managed values in `<profile>/plugin-data/hermes-mobile-push/pairing.json` (`0600`), ensures the preview key exists, and returns the install key, `install_id`, and `preview_key` in one response.
 3. Notifications, device wakes, and `deliver: push` cron deliveries work immediately without restarting the gateway.
-4. For Device Access, the app registers per-profile device grants and scopes via `PUT /api/plugins/hermes-mobile/devices/{device_id}` (every agent starts with no device access).
+4. For Device Access, the app registers per-profile device grants and scopes via `PUT /api/plugins/hermes-mobile-app-connector/devices/{device_id}` (every agent starts with no device access).
 
 Environment variables (or Hermes profile scoped secrets) still take precedence over stored pairing and are the way to configure push without the app. When the operator sets a value in the environment, `POST /pair` leaves it untouched, does not write it to `pairing.json`, and reports `"source": "environment"`. `DELETE /pair` removes only the plugin's stored `pairing.json` and leaves environment values and the preview key intact.
 
@@ -97,21 +97,21 @@ Approvals, questions, password/secret prompts, failed turns, cron and webhook de
 
 ## Dashboard routes
 
-Mounted under `/api/plugins/hermes-mobile/` (see `openapi.yaml` for the full contract):
+Mounted under `/api/plugins/hermes-mobile-app-connector/` (see `openapi.yaml` for the full contract):
 
-- `GET /api/plugins/hermes-mobile/pair` — push pairing status for a profile (never returns the install key or preview key).
-- `POST /api/plugins/hermes-mobile/pair` — pair push notifications for a profile in one call (mint or adopt install key, persist plugin-managed values, return `install_key`, `install_id`, and `preview_key`).
-- `DELETE /api/plugins/hermes-mobile/pair` — remove the plugin's stored `pairing.json` without touching environment values or the preview key.
-- `GET /api/plugins/hermes-mobile/sessions/silent` — newest scheduled and webhook runs (up to 1,000) whose final reply was a silence marker.
-- `GET /api/plugins/hermes-mobile/setup` — protocol version, plugin version, readiness state, and live profile names.
-- `PUT /api/plugins/hermes-mobile/devices/{device_id}` — register or update a device's grants, scope, token, and features for a profile.
-- `POST /api/plugins/hermes-mobile/devices/{device_id}/pending` — claim up to four waiting requests under a 35-second lease (requires `X-Hermes-Mobile-Device-Token`).
-- `POST /api/plugins/hermes-mobile/devices/{device_id}/results/{request_id}` — submit the result for a claimed request (requires `X-Hermes-Mobile-Device-Token`).
-- `GET /api/plugins/hermes-mobile/requests/{request_id}` — inspect a request's recorded state and result.
+- `GET /api/plugins/hermes-mobile-app-connector/pair` — push pairing status for a profile (never returns the install key or preview key).
+- `POST /api/plugins/hermes-mobile-app-connector/pair` — pair push notifications for a profile in one call (mint or adopt install key, persist plugin-managed values, return `install_key`, `install_id`, and `preview_key`).
+- `DELETE /api/plugins/hermes-mobile-app-connector/pair` — remove the plugin's stored `pairing.json` without touching environment values or the preview key.
+- `GET /api/plugins/hermes-mobile-app-connector/sessions/silent` — newest scheduled and webhook runs (up to 1,000) whose final reply was a silence marker.
+- `GET /api/plugins/hermes-mobile-app-connector/setup` — protocol version, plugin version, readiness state, and live profile names.
+- `PUT /api/plugins/hermes-mobile-app-connector/devices/{device_id}` — register or update a device's grants, scope, token, and features for a profile.
+- `POST /api/plugins/hermes-mobile-app-connector/devices/{device_id}/pending` — claim up to four waiting requests under a 35-second lease (requires `X-Hermes-Mobile-Device-Token`).
+- `POST /api/plugins/hermes-mobile-app-connector/devices/{device_id}/results/{request_id}` — submit the result for a claimed request (requires `X-Hermes-Mobile-Device-Token`).
+- `GET /api/plugins/hermes-mobile-app-connector/requests/{request_id}` — inspect a request's recorded state and result.
 
 ## Tests
 
-From `hermes-mobile/`:
+From `hermes-mobile-app-connector/`:
 
 ```bash
 python -m pytest -q

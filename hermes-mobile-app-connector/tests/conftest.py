@@ -1,4 +1,4 @@
-"""Shared pytest bootstrap for the hermes-mobile plugin suite."""
+"""Shared pytest bootstrap for the hermes-mobile-app-connector plugin suite."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ if str(TESTS_DIR) not in sys.path:
 
 
 class _PluginRootIsNotATestPackage:
-    """Prevent pytest from importing hermes-mobile/__init__.py as a test package."""
+    """Prevent pytest from importing hermes-mobile-app-connector/__init__.py as a test package."""
 
     @pytest.hookimpl(tryfirst=True)
     def pytest_collect_directory(self, path, parent):
@@ -28,5 +28,5 @@ class _PluginRootIsNotATestPackage:
 
 
 def pytest_configure(config):
-    if not config.pluginmanager.has_plugin("hermes-mobile-root"):
-        config.pluginmanager.register(_PluginRootIsNotATestPackage(), "hermes-mobile-root")
+    if not config.pluginmanager.has_plugin("hermes-mobile-app-connector-root"):
+        config.pluginmanager.register(_PluginRootIsNotATestPackage(), "hermes-mobile-app-connector-root")

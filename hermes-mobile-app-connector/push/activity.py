@@ -145,7 +145,7 @@ class Tracker:
 
     counts = staticmethod(counts)
 
-    def __init__(self, *, clock=time.monotonic, wall=time.time, post=None, user_agent="hermes-mobile"):
+    def __init__(self, *, clock=time.monotonic, wall=time.time, post=None, user_agent="hermes-mobile-app-connector"):
         self._clock = clock
         self._wall = wall
         self._post = post or self._post_http

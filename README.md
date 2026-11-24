@@ -229,9 +229,9 @@ Catalog entries come in two tiers:
 <p><code>security_scan_start</code> and 8 more · <code>/security</code> · <code>hermes security-review</code></p>
 </td>
 <td width="50%" valign="top">
-<a href="hermes-mobile/"><img src="assets/hermes-mobile.jpg" alt="Hermes Mobile plugin"></a>
-<h3><a href="hermes-mobile/">Hermes Mobile</a></h3>
-<code>hermes plugins install hermes-mobile</code>
+<a href="hermes-mobile-app-connector/"><img src="assets/hermes-mobile-app-connector.jpg" alt="Hermes Mobile plugin"></a>
+<h3><a href="hermes-mobile-app-connector/">Hermes Mobile</a></h3>
+<code>hermes plugins install hermes-mobile-app-connector</code>
 <p>Push notifications and paired device capabilities for the Hermes Agent mobile apps. Delivers encrypted turn replies, approval and input prompts, cron/webhook deliveries (<code>deliver: push</code>) and Live Activity snapshots through a push relay, and exposes permitted Calendar, Reminders, Health, Contacts, location, alarms and timers from a paired phone. Loads quietly with no phone or relay configured.</p>
 <p>Platform <code>push</code> · 12 hooks · 16 <code>mobile_*</code> tools</p>
 </td>

@@ -1,4 +1,4 @@
-"""Single relay-settings reader and per-profile pairing store for hermes-mobile.
+"""Single relay-settings reader and per-profile pairing store for hermes-mobile-app-connector.
 
 Precedence everywhere relay settings are read:
   1. Explicit PlatformConfig.extra values (when supplied by the gateway adapter).

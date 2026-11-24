@@ -1,4 +1,4 @@
-"""Combined dashboard API for hermes-mobile (push silent sessions + paired device access)."""
+"""Combined dashboard API for hermes-mobile-app-connector (push silent sessions + paired device access)."""
 
 from __future__ import annotations
 

@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
-  title: hermes-mobile dashboard API
+  title: hermes-mobile-app-connector dashboard API
   version: "2"
   description: >
-    The routes `dashboard/plugin_api.py` mounts under `/api/plugins/hermes-mobile`, as the mobile app
+    The routes `dashboard/plugin_api.py` mounts under `/api/plugins/hermes-mobile-app-connector`, as the mobile app
     calls them. `GET /sessions/silent` is read-only and reports which scheduled and webhook runs ended
     silently. `/pair` pairs, inspects, and clears the profile's push relay configuration and returns
     the notification preview key over the existing authenticated dashboard connection. The
@@ -16,7 +16,7 @@ info:
     unreadable, which the app retries. A request body FastAPI cannot validate answers 422 with a list
     of problems in `detail`.
 paths:
-  /api/plugins/hermes-mobile/pair:
+  /api/plugins/hermes-mobile-app-connector/pair:
     get:
       summary: Current push notification pairing status for the profile (never returns secrets).
       parameters:
@@ -103,7 +103,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/PushError"}
-  /api/plugins/hermes-mobile/sessions/silent:
+  /api/plugins/hermes-mobile-app-connector/sessions/silent:
     get:
       summary: >
         The profile's newest scheduled and webhook runs (at most 1,000) whose final reply was a
@@ -131,7 +131,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/PushError"}
-  /api/plugins/hermes-mobile/setup:
+  /api/plugins/hermes-mobile-app-connector/setup:
     get:
       summary: Which protocol the installed plugin speaks and the profiles it serves.
       responses:
@@ -140,7 +140,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/DeviceAccessSetup"}
-  /api/plugins/hermes-mobile/devices/{device_id}:
+  /api/plugins/hermes-mobile-app-connector/devices/{device_id}:
     put:
       summary: Saves the device's grants and scope for the profile.
       parameters:
@@ -162,7 +162,7 @@ paths:
         "409": {$ref: "#/components/responses/Refused"}
         "422": {$ref: "#/components/responses/InvalidBody"}
         "503": {$ref: "#/components/responses/Busy"}
-  /api/plugins/hermes-mobile/devices/{device_id}/pending:
+  /api/plugins/hermes-mobile-app-connector/devices/{device_id}/pending:
     post:
       summary: Claims up to four requests waiting for the device, each under a new lease.
       parameters:
@@ -181,7 +181,7 @@ paths:
         "404": {$ref: "#/components/responses/UnknownProfile"}
         "409": {$ref: "#/components/responses/Refused"}
         "503": {$ref: "#/components/responses/Busy"}
-  /api/plugins/hermes-mobile/devices/{device_id}/results/{request_id}:
+  /api/plugins/hermes-mobile-app-connector/devices/{device_id}/results/{request_id}:
     post:
       summary: Answers a claimed request under the lease it was claimed with. A repeated answer is a no-op.
       parameters:
@@ -210,7 +210,7 @@ paths:
         "409": {$ref: "#/components/responses/Refused"}
         "422": {$ref: "#/components/responses/InvalidBody"}
         "503": {$ref: "#/components/responses/Busy"}
-  /api/plugins/hermes-mobile/requests/{request_id}:
+  /api/plugins/hermes-mobile-app-connector/requests/{request_id}:
     get:
       summary: A request's recorded state and result.
       parameters:

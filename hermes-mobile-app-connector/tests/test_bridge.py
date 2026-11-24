@@ -123,9 +123,9 @@ def test_http_device_flow_uses_the_same_result_as_the_agent(tmp_path, monkeypatc
     store = bridge.Store(tmp_path / "bridge.db")
     monkeypatch.setattr(api.device_api, "store", lambda profile=None: store)
     app = FastAPI()
-    app.include_router(api.router, prefix="/api/plugins/hermes-mobile")
+    app.include_router(api.router, prefix="/api/plugins/hermes-mobile-app-connector")
     client = TestClient(app)
-    base = "/api/plugins/hermes-mobile"
+    base = "/api/plugins/hermes-mobile-app-connector"
     assert client.put(base + "/devices/legacy", json={
         "name": "Old Phone", "grants": ["health.read"], "token": "a" * 32}).status_code == 422
     assert client.put(base + "/devices/phone", params={"profile": "default"}, json={

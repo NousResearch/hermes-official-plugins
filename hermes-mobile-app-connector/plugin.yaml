@@ -1,4 +1,4 @@
-name: hermes-mobile
+name: hermes-mobile-app-connector
 label: Hermes Mobile
 kind: platform
 version: "2.0.0"

@@ -95,7 +95,7 @@ def wake(device_id):
     try:
         request = urllib.request.Request(f"{resolved.relay_url}/devices/{quote(device_id, safe='')}/wake",
             data=b"{}", method="POST", headers={"Authorization": f"Bearer {resolved.install_key}", "Content-Type": "application/json",
-                                                "User-Agent": f"hermes-mobile/{VERSION}"})
+                                                "User-Agent": f"hermes-mobile-app-connector/{VERSION}"})
         with urllib.request.urlopen(request, timeout=4) as response:
             response.read(1024)
         return "Background refresh requested; iOS delivery is best effort."

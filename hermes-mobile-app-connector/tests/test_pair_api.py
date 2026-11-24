@@ -22,7 +22,7 @@ from jsonschema import Draft202012Validator
 from push_plugin import load_dashboard_api, load_device_package, load_push_adapter
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_NAME = "hermes-mobile"
+PLUGIN_NAME = "hermes-mobile-app-connector"
 
 
 def _make_hermes_stubs(monkeypatch, root: Path, home: Path, override: Path | None = None, secrets: dict | None = None):
@@ -57,7 +57,7 @@ def _make_hermes_stubs(monkeypatch, root: Path, home: Path, override: Path | Non
 def _make_client():
     api = load_dashboard_api("hermes_mobile_pair_api_test")
     app = FastAPI()
-    app.include_router(api.router, prefix="/api/plugins/hermes-mobile")
+    app.include_router(api.router, prefix="/api/plugins/hermes-mobile-app-connector")
     return TestClient(app), api
 
 
@@ -75,7 +75,7 @@ def clean_env(monkeypatch, tmp_path):
 
 def test_post_pair_mints_key_stores_0600_and_get_hides_secrets(clean_env):
     client, _ = _make_client()
-    before = client.get("/api/plugins/hermes-mobile/pair")
+    before = client.get("/api/plugins/hermes-mobile-app-connector/pair")
     assert before.status_code == 200
     assert before.json() == {
         "paired": False,
@@ -86,7 +86,7 @@ def test_post_pair_mints_key_stores_0600_and_get_hides_secrets(clean_env):
     }
     assert "install_key" not in before.json() and "preview_key" not in before.json()
 
-    resp = client.post("/api/plugins/hermes-mobile/pair", json={"relay_url": "https://relay.example/", "install_key": None})
+    resp = client.post("/api/plugins/hermes-mobile-app-connector/pair", json={"relay_url": "https://relay.example/", "install_key": None})
     assert resp.status_code == 200
     data = resp.json()
     key = data["install_key"]
@@ -106,7 +106,7 @@ def test_post_pair_mints_key_stores_0600_and_get_hides_secrets(clean_env):
     assert saved == {"install_key": key, "relay_url": "https://relay.example"}
 
     # GET never returns secrets.
-    after = client.get("/api/plugins/hermes-mobile/pair")
+    after = client.get("/api/plugins/hermes-mobile-app-connector/pair")
     assert after.status_code == 200
     assert after.json() == {
         "paired": True,
@@ -122,11 +122,11 @@ def test_post_pair_mints_key_stores_0600_and_get_hides_secrets(clean_env):
 def test_post_pair_adopts_valid_key_and_rejects_bad_key_with_400(clean_env):
     client, _ = _make_client()
     for bad_key in ("", "too-short", "a" * 31, "has spaces " + "a" * 32, "bad/char+" + "a" * 32, "a" * 32 + "\n"):
-        bad = client.post("/api/plugins/hermes-mobile/pair", json={"relay_url": "https://relay.example", "install_key": bad_key})
+        bad = client.post("/api/plugins/hermes-mobile-app-connector/pair", json={"relay_url": "https://relay.example", "install_key": bad_key})
         assert bad.status_code == 400, f"expected 400 for {bad_key!r}, got {bad.status_code}"
 
     adopted_key = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-"
-    resp = client.post("/api/plugins/hermes-mobile/pair", json={"relay_url": "https://relay.example", "install_key": adopted_key})
+    resp = client.post("/api/plugins/hermes-mobile-app-connector/pair", json={"relay_url": "https://relay.example", "install_key": adopted_key})
     assert resp.status_code == 200
     data = resp.json()
     assert data["install_key"] == adopted_key
@@ -135,13 +135,13 @@ def test_post_pair_adopts_valid_key_and_rejects_bad_key_with_400(clean_env):
     assert data["notifications_ready"] is True
 
     # Re-pairing with the same key or null keeps the key without rotating it.
-    same = client.post("/api/plugins/hermes-mobile/pair", json={"relay_url": "https://relay2.example", "install_key": adopted_key})
+    same = client.post("/api/plugins/hermes-mobile-app-connector/pair", json={"relay_url": "https://relay2.example", "install_key": adopted_key})
     assert same.status_code == 200
     assert same.json()["install_key"] == adopted_key
     assert same.json()["relay_url"] == "https://relay2.example"
     assert same.json()["preview_key"] == data["preview_key"]
 
-    keep = client.post("/api/plugins/hermes-mobile/pair", json={"relay_url": "https://relay3.example", "install_key": None})
+    keep = client.post("/api/plugins/hermes-mobile-app-connector/pair", json={"relay_url": "https://relay3.example", "install_key": None})
     assert keep.status_code == 200
     assert keep.json()["install_key"] == adopted_key
     assert keep.json()["relay_url"] == "https://relay3.example"
@@ -149,12 +149,12 @@ def test_post_pair_adopts_valid_key_and_rejects_bad_key_with_400(clean_env):
 
 def test_post_pair_returns_409_on_different_install_key_and_never_rotates(clean_env):
     client, _ = _make_client()
-    first = client.post("/api/plugins/hermes-mobile/pair", json={"relay_url": "https://relay.example", "install_key": None})
+    first = client.post("/api/plugins/hermes-mobile-app-connector/pair", json={"relay_url": "https://relay.example", "install_key": None})
     assert first.status_code == 200
     original_key = first.json()["install_key"]
 
     other_key = "Z" * 43
-    conflict = client.post("/api/plugins/hermes-mobile/pair", json={"relay_url": "https://relay.example", "install_key": other_key})
+    conflict = client.post("/api/plugins/hermes-mobile-app-connector/pair", json={"relay_url": "https://relay.example", "install_key": other_key})
     assert conflict.status_code == 409
     assert "already paired" in conflict.json()["detail"].lower()
 
@@ -173,14 +173,14 @@ def test_post_pair_returns_409_on_different_install_key_and_never_rotates(clean_
 ])
 def test_post_pair_rejects_disallowed_relay_url_with_400(clean_env, bad_url):
     client, _ = _make_client()
-    resp = client.post("/api/plugins/hermes-mobile/pair", json={"relay_url": bad_url, "install_key": None})
+    resp = client.post("/api/plugins/hermes-mobile-app-connector/pair", json={"relay_url": bad_url, "install_key": None})
     assert resp.status_code == 400
     assert not (clean_env / "plugin-data" / "hermes-mobile-push" / "pairing.json").exists()
 
 
 def test_post_pair_allows_localhost_http(clean_env):
     client, _ = _make_client()
-    resp = client.post("/api/plugins/hermes-mobile/pair", json={"relay_url": "http://127.0.0.1:8787/", "install_key": None})
+    resp = client.post("/api/plugins/hermes-mobile-app-connector/pair", json={"relay_url": "http://127.0.0.1:8787/", "install_key": None})
     assert resp.status_code == 200
     assert resp.json()["relay_url"] == "http://127.0.0.1:8787"
     assert resp.json()["notifications_ready"] is True
@@ -195,10 +195,10 @@ def test_env_wins_nothing_written_and_conflict_checked_against_env_key(monkeypat
     client, _ = _make_client()
 
     # Different key -> 409 even when configured by env.
-    conflict = client.post("/api/plugins/hermes-mobile/pair", json={"relay_url": "https://other.example", "install_key": "X" * 43})
+    conflict = client.post("/api/plugins/hermes-mobile-app-connector/pair", json={"relay_url": "https://other.example", "install_key": "X" * 43})
     assert conflict.status_code == 409
 
-    resp = client.post("/api/plugins/hermes-mobile/pair", json={"relay_url": "https://app-relay.example", "install_key": None})
+    resp = client.post("/api/plugins/hermes-mobile-app-connector/pair", json={"relay_url": "https://app-relay.example", "install_key": None})
     assert resp.status_code == 200
     data = resp.json()
     assert data["install_key"] == env_key
@@ -215,7 +215,7 @@ def test_partial_env_only_writes_non_env_field_and_reports_environment_source(mo
         "HERMES_MOBILE_PUSH_RELAY_URL": "https://env-only-url.example/",
     })
     client, _ = _make_client()
-    resp = client.post("/api/plugins/hermes-mobile/pair", json={"relay_url": "https://ignored.example", "install_key": None})
+    resp = client.post("/api/plugins/hermes-mobile-app-connector/pair", json={"relay_url": "https://ignored.example", "install_key": None})
     assert resp.status_code == 200
     data = resp.json()
     assert data["relay_url"] == "https://env-only-url.example"
@@ -228,14 +228,14 @@ def test_partial_env_only_writes_non_env_field_and_reports_environment_source(mo
 
 def test_delete_pair_removes_only_pairing_json_keeps_preview_key_and_env(monkeypatch, clean_env):
     client, _ = _make_client()
-    assert client.post("/api/plugins/hermes-mobile/pair", json={"relay_url": "https://relay.example", "install_key": None}).status_code == 200
+    assert client.post("/api/plugins/hermes-mobile-app-connector/pair", json={"relay_url": "https://relay.example", "install_key": None}).status_code == 200
     pairing_file = clean_env / "plugin-data" / "hermes-mobile-push" / "pairing.json"
     preview_file = clean_env / "plugin-data" / "hermes-mobile-push" / "preview_key"
     preview_before = preview_file.read_bytes()
     assert pairing_file.is_file()
 
     # Delete when plugin-managed: clears pairing, keeps preview key untouched.
-    deleted = client.delete("/api/plugins/hermes-mobile/pair")
+    deleted = client.delete("/api/plugins/hermes-mobile-app-connector/pair")
     assert deleted.status_code == 200
     assert deleted.json() == {
         "paired": False,
@@ -254,7 +254,7 @@ def test_delete_pair_removes_only_pairing_json_keeps_preview_key_and_env(monkeyp
         "HERMES_MOBILE_PUSH_RELAY_URL": "https://env.example",
         "HERMES_MOBILE_PUSH_INSTALL_KEY": env_key,
     })
-    deleted_env = client.delete("/api/plugins/hermes-mobile/pair")
+    deleted_env = client.delete("/api/plugins/hermes-mobile-app-connector/pair")
     assert deleted_env.status_code == 200
     assert deleted_env.json() == {
         "paired": True,
@@ -270,26 +270,26 @@ def test_delete_pair_removes_only_pairing_json_keeps_preview_key_and_env(monkeyp
 
 def test_profile_query_and_bound_override_match_device_api(monkeypatch, clean_env):
     client, _ = _make_client()
-    work_resp = client.post("/api/plugins/hermes-mobile/pair", params={"profile": "work"}, json={"relay_url": "https://work.example"})
+    work_resp = client.post("/api/plugins/hermes-mobile-app-connector/pair", params={"profile": "work"}, json={"relay_url": "https://work.example"})
     assert work_resp.status_code == 200
     assert (clean_env / "profiles" / "work" / "plugin-data" / "hermes-mobile-push" / "pairing.json").is_file()
     assert not (clean_env / "plugin-data" / "hermes-mobile-push" / "pairing.json").exists()
     # Preview key stays shared at the installation root.
     assert (clean_env / "plugin-data" / "hermes-mobile-push" / "preview_key").is_file()
 
-    assert client.get("/api/plugins/hermes-mobile/pair", params={"profile": "../bad"}).status_code == 400
-    assert client.get("/api/plugins/hermes-mobile/pair", params={"profile": "missing"}).status_code == 404
+    assert client.get("/api/plugins/hermes-mobile-app-connector/pair", params={"profile": "../bad"}).status_code == 400
+    assert client.get("/api/plugins/hermes-mobile-app-connector/pair", params={"profile": "missing"}).status_code == 404
 
     # Bound home override wins over ?profile=, as in device_api.py.
     _make_hermes_stubs(monkeypatch, clean_env, clean_env, override=clean_env / "profiles" / "work")
-    bound_status = client.get("/api/plugins/hermes-mobile/pair", params={"profile": "default"})
+    bound_status = client.get("/api/plugins/hermes-mobile-app-connector/pair", params={"profile": "default"})
     assert bound_status.status_code == 200
     assert bound_status.json()["relay_url"] == "https://work.example"
 
 
 def test_settings_reader_order_across_push_adapter_and_device_wake(monkeypatch, clean_env):
     client, _ = _make_client()
-    paired = client.post("/api/plugins/hermes-mobile/pair", json={"relay_url": "https://stored.example", "install_key": None}).json()
+    paired = client.post("/api/plugins/hermes-mobile-app-connector/pair", json={"relay_url": "https://stored.example", "install_key": None}).json()
     stored_key = paired["install_key"]
 
     # 1. push/adapter.py reads stored pairing when env is unset.
@@ -348,20 +348,20 @@ def test_settings_reader_order_across_push_adapter_and_device_wake(monkeypatch, 
 def test_openapi_schemas_match_pair_responses(clean_env):
     spec = yaml.safe_load((ROOT / "openapi.yaml").read_text(encoding="utf-8"))
     schemas = spec["components"]["schemas"]
-    assert "/api/plugins/hermes-mobile/pair" in spec["paths"]
-    ops = spec["paths"]["/api/plugins/hermes-mobile/pair"]
+    assert "/api/plugins/hermes-mobile-app-connector/pair" in spec["paths"]
+    ops = spec["paths"]["/api/plugins/hermes-mobile-app-connector/pair"]
     assert set(ops.keys()) >= {"get", "post", "delete"}
 
     status_validator = Draft202012Validator(schemas["PushPairStatus"])
     result_validator = Draft202012Validator(schemas["PushPairResult"])
 
     client, _ = _make_client()
-    status_validator.validate(client.get("/api/plugins/hermes-mobile/pair").json())
+    status_validator.validate(client.get("/api/plugins/hermes-mobile-app-connector/pair").json())
     result_validator.validate(
-        client.post("/api/plugins/hermes-mobile/pair", json={"relay_url": "https://relay.example", "install_key": None}).json()
+        client.post("/api/plugins/hermes-mobile-app-connector/pair", json={"relay_url": "https://relay.example", "install_key": None}).json()
     )
-    status_validator.validate(client.get("/api/plugins/hermes-mobile/pair").json())
-    status_validator.validate(client.delete("/api/plugins/hermes-mobile/pair").json())
+    status_validator.validate(client.get("/api/plugins/hermes-mobile-app-connector/pair").json())
+    status_validator.validate(client.delete("/api/plugins/hermes-mobile-app-connector/pair").json())
 
 
 def _hermes_available():
@@ -421,11 +421,11 @@ client = TestClient(server.app)
 client.__enter__()
 headers = {"Authorization": f"Bearer {server._SESSION_TOKEN}", "Host": "127.0.0.1"}
 
-get_before = client.get("/api/plugins/hermes-mobile/pair", headers=headers).json()
-post_resp = client.post("/api/plugins/hermes-mobile/pair", headers=headers, json={"relay_url": relay_url, "install_key": None})
+get_before = client.get("/api/plugins/hermes-mobile-app-connector/pair", headers=headers).json()
+post_resp = client.post("/api/plugins/hermes-mobile-app-connector/pair", headers=headers, json={"relay_url": relay_url, "install_key": None})
 assert post_resp.status_code == 200, post_resp.text
 pair_data = post_resp.json()
-get_after = client.get("/api/plugins/hermes-mobile/pair", headers=headers).json()
+get_after = client.get("/api/plugins/hermes-mobile-app-connector/pair", headers=headers).json()
 
 cfg_after = load_gateway_config()
 after_enabled = bool((cfg_after.platforms.get(Platform("push")) or None) and cfg_after.platforms[Platform("push")].enabled)
@@ -438,7 +438,7 @@ invoke_hook("post_llm_call", session_id="real-turn-1", turn_id="t1", assistant_r
 invoke_hook("on_session_end", session_id="real-turn-1", turn_id="t1", completed=True, failed=False, interrupted=False, platform="gui")
 hook_delivered = record_event.wait(timeout=5.0)
 
-del_after = client.delete("/api/plugins/hermes-mobile/pair", headers=headers).json()
+del_after = client.delete("/api/plugins/hermes-mobile-app-connector/pair", headers=headers).json()
 cfg_deleted = load_gateway_config()
 deleted_enabled = bool((cfg_deleted.platforms.get(Platform("push")) or None) and cfg_deleted.platforms[Platform("push")].enabled)
 

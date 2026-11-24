@@ -14,7 +14,7 @@ import pytest
 from push_plugin import load_device_package
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_NAME = "hermes-mobile"
+PLUGIN_NAME = "hermes-mobile-app-connector"
 DATA_NAME = "hermes-mobile-device-access"
 TOKEN = "a" * 32
 
@@ -173,7 +173,7 @@ bridge_path = home / "plugin-data" / "hermes-mobile-device-access" / "bridge.db"
 before = mobile_names()
 before_db_exists = bridge_path.exists()
 
-spec = importlib.util.spec_from_file_location("probe_bridge", home / "plugins" / "hermes-mobile" / "device" / "bridge.py")
+spec = importlib.util.spec_from_file_location("probe_bridge", home / "plugins" / "hermes-mobile-app-connector" / "device" / "bridge.py")
 bridge = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bridge)
 

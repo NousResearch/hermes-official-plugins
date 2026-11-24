@@ -1,4 +1,4 @@
-"""Shared test harness for loading hermes-mobile's push, device, and dashboard modules.
+"""Shared test harness for loading hermes-mobile-app-connector's push, device, and dashboard modules.
 
 Each push loader call imports a fresh copy, so a test's patched attributes and module state
 (watches, sessions, the delivery queue) never leak into the next test.

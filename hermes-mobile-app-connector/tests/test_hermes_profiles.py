@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_NAME = "hermes-mobile"
+PLUGIN_NAME = "hermes-mobile-app-connector"
 DATA_NAME = "hermes-mobile-device-access"
 
 

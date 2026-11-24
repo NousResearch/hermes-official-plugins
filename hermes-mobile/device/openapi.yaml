@@ -1,0 +1,353 @@
+openapi: 3.1.0
+info:
+  title: hermes-mobile-device-access dashboard API
+  version: "2"
+  description: >
+    The routes `dashboard/plugin_api.py` mounts under `/api/plugins/hermes-mobile-device-access`, as the Hermes Agent app
+    calls them. Request records follow `Store._public` in `bridge.py`. The routes that hand requests
+    to a device and take its answers also check the device's pairing token
+    (`X-Hermes-Mobile-Device-Token`). An error answers `{"detail": <reason>}`: 400 for an invalid
+    profile name, 404 for a profile that does not exist, 401 without a pairing token, 403 when
+    the device id and pairing token match no paired device, 409 when the bridge refuses (with its reason) and 503 while the profile's storage is busy, which the
+    app retries. A request body FastAPI cannot validate answers 422 with a list of problems in
+    `detail`.
+paths:
+  /api/plugins/hermes-mobile-device-access/setup:
+    get:
+      summary: Which protocol the installed plugin speaks and the profiles it serves.
+      responses:
+        "200":
+          description: The plugin's protocol, version and profiles.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DeviceAccessSetup"}
+  /api/plugins/hermes-mobile-device-access/devices/{device_id}:
+    put:
+      summary: Saves the device's grants and scope for the profile.
+      parameters:
+        - $ref: "#/components/parameters/DeviceID"
+        - $ref: "#/components/parameters/Profile"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/DeviceRegistration"}
+      responses:
+        "200":
+          description: The device is registered with these grants and scope.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DeviceRegistered"}
+        "400": {$ref: "#/components/responses/InvalidProfile"}
+        "404": {$ref: "#/components/responses/UnknownProfile"}
+        "409": {$ref: "#/components/responses/Refused"}
+        "422": {$ref: "#/components/responses/InvalidBody"}
+        "503": {$ref: "#/components/responses/Busy"}
+  /api/plugins/hermes-mobile-device-access/devices/{device_id}/pending:
+    post:
+      summary: Claims up to four requests waiting for the device, each under a new lease.
+      parameters:
+        - $ref: "#/components/parameters/DeviceID"
+        - $ref: "#/components/parameters/Profile"
+        - $ref: "#/components/parameters/DeviceToken"
+      responses:
+        "200":
+          description: The claimed requests; empty when none is waiting.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DevicePending"}
+        "400": {$ref: "#/components/responses/InvalidProfile"}
+        "401": {$ref: "#/components/responses/TokenRequired"}
+        "403": {$ref: "#/components/responses/DeviceNotPaired"}
+        "404": {$ref: "#/components/responses/UnknownProfile"}
+        "409": {$ref: "#/components/responses/Refused"}
+        "503": {$ref: "#/components/responses/Busy"}
+  /api/plugins/hermes-mobile-device-access/devices/{device_id}/results/{request_id}:
+    post:
+      summary: Answers a claimed request under the lease it was claimed with. A repeated answer is a no-op.
+      parameters:
+        - $ref: "#/components/parameters/DeviceID"
+        - name: request_id
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/Profile"
+        - $ref: "#/components/parameters/DeviceToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/DeviceCompletion"}
+      responses:
+        "200":
+          description: The request as recorded with its answer.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DeviceRequestRecord"}
+        "400": {$ref: "#/components/responses/InvalidProfile"}
+        "401": {$ref: "#/components/responses/TokenRequired"}
+        "403": {$ref: "#/components/responses/DeviceNotPaired"}
+        "404": {$ref: "#/components/responses/UnknownProfile"}
+        "409": {$ref: "#/components/responses/Refused"}
+        "422": {$ref: "#/components/responses/InvalidBody"}
+        "503": {$ref: "#/components/responses/Busy"}
+  /api/plugins/hermes-mobile-device-access/requests/{request_id}:
+    get:
+      summary: A request's recorded state and result.
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/Profile"
+      responses:
+        "200":
+          description: The request's recorded state and result.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DeviceRequestRecord"}
+        "400": {$ref: "#/components/responses/InvalidProfile"}
+        "404": {$ref: "#/components/responses/UnknownProfile"}
+        "409": {$ref: "#/components/responses/RequestNotFound"}
+        "503": {$ref: "#/components/responses/Busy"}
+components:
+  responses:
+    InvalidProfile:
+      description: The profile name is not a valid profile name.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/DeviceAccessError"}
+    UnknownProfile:
+      description: No such profile.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/DeviceAccessError"}
+    TokenRequired:
+      description: The device pairing token is missing or too short.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/DeviceAccessError"}
+    DeviceNotPaired:
+      description: No device with this id is paired under this pairing token in this profile.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/DeviceAccessError"}
+    Refused:
+      description: >
+        The bridge refused, with its reason: the request is unavailable, expired, revoked or under
+        another lease, or the registration is invalid.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/DeviceAccessError"}
+    RequestNotFound:
+      description: No such request in this profile.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/DeviceAccessError"}
+    Busy:
+      description: Another process held the profile's storage past the busy timeout; try again.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/DeviceAccessError"}
+    InvalidBody:
+      description: >
+        FastAPI rejected the request body before the route ran: a field is missing, has the wrong
+        type or breaks a limit. `detail` lists each problem.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/DeviceAccessValidationError"}
+  parameters:
+    DeviceID:
+      name: device_id
+      in: path
+      required: true
+      schema: {type: string}
+    Profile:
+      name: profile
+      in: query
+      description: >
+        The profile whose devices and requests to use: `default` or a named profile. Omitted, the
+        route serves the profile Hermes binds the request to, else the profile Hermes was launched
+        with; where Hermes binds a profile, that profile wins over this one.
+      schema: {type: string}
+    DeviceToken:
+      name: X-Hermes-Mobile-Device-Token
+      in: header
+      required: true
+      description: The device's pairing token, as registered.
+      schema: {type: string, minLength: 32}
+  schemas:
+    DeviceAccessError:
+      type: object
+      required: [detail]
+      properties:
+        detail: {type: string}
+    DeviceAccessValidationError:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            required: [loc, msg, type]
+            properties:
+              loc:
+                type: array
+                description: Where the problem is, such as `body`, `scope`, `calendars`, `0`.
+                items: {}
+              msg: {type: string}
+              type: {type: string}
+    DeviceAccessSetup:
+      type: object
+      additionalProperties: false
+      properties:
+        protocol_version: {type: integer}
+        plugin_version: {type: string}
+        state: {type: string}
+        profiles:
+          type: array
+          items: {type: string}
+          description: Absent from older plugins.
+    DeviceCalendarScope:
+      type: object
+      additionalProperties: false
+      required: [id, title, writable]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        writable: {type: boolean}
+    DeviceScope:
+      type: object
+      additionalProperties: false
+      required: [calendar_ids, calendars, health_metrics, contact_fields]
+      properties:
+        calendar_ids:
+          type: array
+          maxItems: 128
+          items: {type: string}
+        calendars:
+          type: array
+          maxItems: 128
+          items: {$ref: "#/components/schemas/DeviceCalendarScope"}
+        health_metrics:
+          type: array
+          description: The Health categories the agent may read.
+          items: {type: string, enum: [active_energy, blood_glucose, blood_oxygen, blood_pressure, body_fat, body_mass_index, caffeine, carbohydrates, cycling_distance, dietary_energy, exercise_minutes, fat, fiber, flights_climbed, heart_rate, heart_rate_variability, height, lean_body_mass, mindful_minutes, protein, respiratory_rate, resting_energy, resting_heart_rate, sleep, sodium, stand_minutes, steps, sugar, vo2_max, walking_heart_rate, walking_running_distance, water, weight, workouts, wrist_temperature]}
+        health_write_metrics:
+          type: array
+          description: The Health categories the agent may log. Absent from older apps, which log nothing.
+          items: {type: string, enum: [body_fat, caffeine, carbohydrates, dietary_energy, fat, fiber, mindful_minutes, protein, sodium, sugar, water, weight]}
+        contact_fields:
+          type: array
+          items: {type: string}
+    DeviceRegistration:
+      type: object
+      additionalProperties: false
+      required: [name, grants, token, scope]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 128}
+        grants:
+          type: array
+          maxItems: 16
+          items: {type: string}
+          description: Permission names such as `calendar.read`.
+        token: {type: string, minLength: 32, maxLength: 128}
+        scope: {$ref: "#/components/schemas/DeviceScope"}
+        features:
+          type: array
+          maxItems: 64
+          items: {type: string}
+          description: >
+            What this app version can do beyond its grants, such as `reminders.update` and
+            `reminders.query`. Absent from older apps, which have none of them; unknown names are ignored.
+    DeviceRegistered:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          description: "`registered`."
+    DeviceRequestRecord:
+      type: object
+      additionalProperties: false
+      required: [id, profile, device_id, operation, arguments, status, created_at, expires_at, result]
+      properties:
+        id: {type: string}
+        profile: {type: string}
+        device_id:
+          anyOf:
+            - {type: string}
+            - {type: "null"}
+        operation:
+          type: string
+          description: Such as `calendar.events` or `reminders.create`.
+        arguments:
+          type: object
+          additionalProperties: true
+        status:
+          type: string
+          description: >
+            `pending`, `running`, `succeeded`, `unavailable`, `failed`, `expired` or `cancelled`
+            (the device withdrew the permission or data the request needs).
+        created_at:
+          type: number
+          description: Seconds since 1970.
+        expires_at:
+          type: number
+          description: >
+            Seconds since 1970. A pending request expires then; a claimed one stays open until its
+            lease lapses, if that is later.
+        result:
+          anyOf:
+            - {type: object, additionalProperties: true}
+            - {type: "null"}
+    DeviceClaimedRequest:
+      type: object
+      additionalProperties: false
+      required: [id, profile, device_id, operation, arguments, status, created_at, expires_at, result, lease]
+      properties:
+        id: {type: string}
+        profile: {type: string}
+        device_id: {type: string}
+        operation: {type: string}
+        arguments:
+          type: object
+          additionalProperties: true
+        status: {type: string}
+        created_at: {type: number}
+        expires_at: {type: number}
+        result:
+          anyOf:
+            - {type: object, additionalProperties: true}
+            - {type: "null"}
+        lease:
+          type: string
+          description: Answers must carry it; it lapses after 35 seconds.
+    DevicePending:
+      type: object
+      additionalProperties: false
+      required: [requests]
+      properties:
+        requests:
+          type: array
+          items: {$ref: "#/components/schemas/DeviceClaimedRequest"}
+    DeviceResult:
+      type: object
+      additionalProperties: false
+      required: [status, observed_at]
+      properties:
+        status: {type: string, enum: [succeeded, unavailable, failed]}
+        data:
+          description: The operation's answer.
+        error: {type: string}
+        observed_at: {type: string, format: date-time}
+    DeviceCompletion:
+      type: object
+      additionalProperties: false
+      required: [lease, result]
+      properties:
+        lease: {type: string, minLength: 32, maxLength: 32}
+        result: {$ref: "#/components/schemas/DeviceResult"}

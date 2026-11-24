@@ -1,0 +1,9 @@
+{
+  "name": "hermes-mobile-push",
+  "label": "Push (Hermes Agent)",
+  "description": "Which scheduled and webhook runs ended silently",
+  "version": "1.11.0",
+  "icon": "Bell",
+  "tab": {"hidden": true},
+  "api": "plugin_api.py"
+}

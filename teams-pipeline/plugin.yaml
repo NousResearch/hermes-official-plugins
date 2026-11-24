@@ -16,7 +16,7 @@ platforms:
   - linux
   - macos
   - windows
-optional_env:
+requires_env:
   - name: MSGRAPH_TENANT_ID
     description: "Microsoft Entra tenant ID of the app registration that reads meeting artifacts"
     prompt: "Microsoft Graph tenant ID"

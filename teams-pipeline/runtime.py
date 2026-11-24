@@ -112,15 +112,20 @@ def bind_adapter(adapter: Any) -> bool:
     """Attach the Teams pipeline runtime to a msgraph webhook adapter.
 
     Called from the adapter's ``connect()`` (the ``msgraph_webhook`` platform handler), which runs
-    inside the owning profile's scope, so ``load_gateway_config()`` and the store path resolve that
-    profile. A reconnect builds a new aiohttp app and re-runs the factory: reuse the runtime and only
+    inside the owning profile's scope. The primary adapter's runner holds the config the gateway was
+    started with (``gateway run --config <file>`` included), so that one names the Teams delivery
+    target; a multiplex secondary shares the primary's runner, so it reads its own scoped config
+    instead. A reconnect builds a new aiohttp app and re-runs the factory: reuse the runtime and only
     re-install the scheduler."""
     runtime = getattr(adapter, "_teams_pipeline_runtime", None)
     if runtime is not None:
         _install_scheduler(adapter, runtime)
         return True
+    runner = getattr(adapter, "gateway_runner", None)
+    # A multiplex secondary's runner is shared; keep reading its own scoped config.
+    runner_config = None if getattr(adapter, "_owner_profile", None) else getattr(runner, "config", None)
     try:
-        runtime = build_pipeline_runtime(load_gateway_config())
+        runtime = build_pipeline_runtime(runner_config if runner_config is not None else load_gateway_config())
     except Exception as exc:
         # Without a runtime, notifications must still be acked (and dropped) so Graph does not retry-storm.
         adapter._teams_pipeline_runtime_error = str(exc)

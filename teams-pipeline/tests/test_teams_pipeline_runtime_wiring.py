@@ -144,3 +144,27 @@ def test_build_pipeline_runtime_skips_sender_when_adapter_layer_is_unavailable(m
     assert runtime.teams_sender is None
 
 
+
+
+def _teams_config(chat_id):
+    return GatewayConfig(platforms={Platform("teams"): PlatformConfig(
+        enabled=True, extra={"delivery_mode": "graph", "chat_id": chat_id})})
+
+
+@pytest.mark.parametrize(("owner_profile", "expected_chat"), [(None, "from-runner"), ("b", "from-profile")])
+def test_summary_target_comes_from_the_config_the_adapter_runs_under(monkeypatch, owner_profile, expected_chat):
+    """The primary uses the runner's config (``gateway run --config <file>`` names the target there);
+    a multiplex secondary shares that runner, so it keeps its own scoped profile config."""
+    from teams_pipeline_plugin import runtime as runtime_module
+
+    built = []
+    monkeypatch.setattr(runtime_module, "load_gateway_config", lambda: _teams_config("from-profile"))
+    monkeypatch.setattr(runtime_module, "build_pipeline_runtime",
+                        lambda gateway_config: built.append(gateway_config) or object())
+    adapter = _Adapter()
+    adapter.gateway_runner = SimpleNamespace(config=_teams_config("from-runner"))
+    adapter._owner_profile = owner_profile
+    assert runtime_module.bind_adapter(adapter) is True
+    [gateway_config] = built
+    delivery = runtime_module.build_pipeline_runtime_config(gateway_config)["teams_delivery"]
+    assert delivery["chat_id"] == expected_chat

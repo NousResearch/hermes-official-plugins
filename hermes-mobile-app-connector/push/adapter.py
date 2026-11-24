@@ -626,33 +626,60 @@ class PushAdapter(BasePlatformAdapter):
 
     def __init__(self, config: PlatformConfig):
         super().__init__(config=config, platform=Platform("push"))
-        extra = config.extra or {}
-        resolved = _resolve_relay(extra)
-        self.relay_url, self.install_key = resolved.relay_url, resolved.install_key
-        _remember_platform_settings(extra)
-        # A URL was given but refused, rather than none given.
-        self._relay_url_refused = resolved.url_refused
+        # The operator's platforms.push values (and the environment's, which Hermes seeds into
+        # them); never the plugin's own pairing, which _env_enablement leaves out so a re-pair
+        # or unpair reaches this adapter while it runs.
+        self._relay_extra = config.extra or {}
+        _resolve_relay(self._relay_extra)  # a refused URL is logged once, at construction
+        _remember_platform_settings(self._relay_extra)
+        self._live = False
+
+    def _relay(self):
+        """The effective relay settings now: re-read on every use, so a running gateway follows
+        a re-pair or unpair without a restart."""
+        return _resolve_relay(self._relay_extra)
+
+    @property
+    def relay_url(self):
+        return self._relay().relay_url
+
+    @property
+    def install_key(self):
+        return self._relay().install_key
+
+    @property
+    def _relay_url_refused(self):
+        """A URL was given but refused, rather than none given."""
+        return self._relay().url_refused
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
-        if self._relay_url_refused:
+        resolved = self._relay()
+        if resolved.url_refused:
             logger.warning("push adapter not connected: %s The install key travels with every request.", RELAY_URL_RULE)
             return False
-        if not self.relay_url or not self.install_key:
+        if not resolved.relay_url or not resolved.install_key:
             logger.warning(
                 "push adapter not configured: HERMES_MOBILE_PUSH_RELAY_URL and "
                 "HERMES_MOBILE_PUSH_INSTALL_KEY are required"
             )
             return False
         self._mark_connected()
+        self._live = True
         return True
 
     async def disconnect(self) -> None:
         self._mark_disconnected()
 
     async def send(self, chat_id, content, reply_to=None, metadata=None):
+        resolved = self._relay()
+        relay_url, install_key = resolved.relay_url, resolved.install_key
+        if self._live and not (relay_url and install_key):
+            # Unpaired (or the settings removed) since connecting: nothing to send with.
+            logger.warning("push adapter not configured: no relay URL / install key; notification not sent")
+            return SendResult(success=False, error="push relay URL / install key not configured")
         try:
             status, response = await asyncio.to_thread(
-                _send_message, self.relay_url, self.install_key, content, chat_id=chat_id, metadata=metadata
+                _send_message, relay_url, install_key, content, chat_id=chat_id, metadata=metadata
             )
         except urllib.error.HTTPError as exc:
             detail = ""
@@ -696,16 +723,22 @@ def _env_enablement():
     without a config file. Returns ``None`` when not configured — the caller
     skips auto-enabling. ``home_channel`` is lifted onto the config by the
     core hook; any value works, send() fans out to all paired devices.
+
+    Only environment / secret values are seeded. A value from the plugin's own
+    pairing is left out: Hermes would commit it into the platform config, where it
+    would outrank (and so freeze) a later re-pair or unpair in a running gateway.
     """
-    relay_url, install_key = _relay_settings()
-    if not relay_url or not install_key:
+    resolved = _resolve_relay()
+    if not resolved.relay_url or not resolved.install_key:
         return None
     home = _secret("HERMES_MOBILE_PUSH_HOME_CHANNEL").strip() or "device"
-    return {
-        "relay_url": relay_url,
-        "install_key": install_key,
-        "home_channel": {"chat_id": home, "name": "Push"},
-    }
+    seed = {}
+    if resolved.env_has_url:
+        seed["relay_url"] = resolved.relay_url
+    if resolved.env_has_key:
+        seed["install_key"] = resolved.install_key
+    seed["home_channel"] = {"chat_id": home, "name": "Push"}
+    return seed
 
 
 async def _standalone_send(

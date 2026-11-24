@@ -1,11 +1,13 @@
 """Single relay-settings reader and per-profile pairing store for hermes-mobile-app-connector.
 
 Precedence everywhere relay settings are read:
-  1. Explicit PlatformConfig.extra values (when supplied by the gateway adapter).
+  1. Explicit PlatformConfig.extra values (the operator's ``platforms.push`` in config.yaml).
   2. Operator-configured environment / Hermes profile secret scope
      (HERMES_MOBILE_PUSH_RELAY_URL, HERMES_MOBILE_PUSH_INSTALL_KEY).
   3. The plugin's own stored pairing in
      <profile_home>/plugin-data/hermes-mobile-push/pairing.json (mode 0600).
+
+Operator values (1 and 2) are used exactly as set and never replaced by pairing.
 """
 from __future__ import annotations
 
@@ -276,15 +278,67 @@ def relay_settings(extra=None, home=None) -> tuple[str, str]:
     return resolved.relay_url, resolved.install_key
 
 
+def _same_home(home) -> bool:
+    try:
+        return Path(home).resolve() == active_home().resolve()
+    except Exception:
+        return False
+
+
+def configured_extra(home=None) -> dict[str, str]:
+    """The relay fields the operator set in ``platforms.push`` of the profile's config.yaml.
+
+    Read with Hermes' own gateway config loader, the one the push adapter's config comes from.
+    Values that loader seeded from the environment (``_env_enablement`` in adapter.py) are the
+    environment's, so they are left out here. Empty outside Hermes, or when *home* is not the
+    profile Hermes is serving (its config is not this request's to read)."""
+    if home is not None and not _same_home(home):
+        return {}
+    try:
+        from gateway.config import Platform, load_gateway_config
+    except Exception:
+        return {}
+    try:
+        platform_config = load_gateway_config().platforms.get(Platform("push"))
+    except Exception:
+        # Never log the exception text: a config error may quote the values it read.
+        logger.debug("Could not read platforms.push from the gateway config")
+        return {}
+    extra = getattr(platform_config, "extra", None) or {}
+    result: dict[str, str] = {}
+    for field, env_name in (("relay_url", RELAY_URL_ENV), ("install_key", INSTALL_KEY_ENV)):
+        value = str(extra.get(field) or "").strip()
+        if not value:
+            continue
+        env_value = read_secret(env_name).strip()
+        seeded = env_value.rstrip("/") if field == "relay_url" else env_value
+        if env_value and value == seeded:
+            continue
+        result[field] = value
+    return result
+
+
+def _source(config: dict, env_url: str, env_key: str, stored_url: str = "", stored_key: str = "") -> str | None:
+    if config:
+        return "config"
+    if env_url or env_key:
+        return "environment"
+    if stored_url or stored_key:
+        return "plugin"
+    return None
+
+
 def pairing_status(home=None) -> dict:
     """Public pairing status for GET /pair and DELETE /pair (never includes secrets)."""
-    resolved = resolve_relay_settings(home=home)
+    config = configured_extra(home)
+    resolved = resolve_relay_settings(extra=config, home=home)
     ready = bool(resolved.relay_url and resolved.install_key)
+    source = "config" if config else resolved.source
     return {
         "paired": ready,
         "install_id": install_id_for_key(resolved.install_key) if resolved.install_key else None,
         "relay_url": resolved.relay_url or None,
-        "source": resolved.source,
+        "source": source,
         "notifications_ready": ready,
     }
 
@@ -296,7 +350,11 @@ def pair_install(
     home=None,
     load_preview_key=None,
 ) -> dict:
-    """Pair this profile with the push relay, minting or adopting an install key as needed."""
+    """Pair this profile with the push relay, minting or adopting an install key as needed.
+
+    Values the operator set (``platforms.push`` in config.yaml, environment, scoped secrets) win:
+    they are returned as they are, never written to pairing.json, and a different supplied key is a
+    conflict."""
     requested_url = str(relay_url or "").strip().rstrip("/")
     if not requested_url or not relay_url_allowed(requested_url):
         raise PairingInvalidError(RELAY_URL_RULE)
@@ -308,8 +366,14 @@ def pair_install(
         provided_key = install_key
 
     target_home = Path(home) if home is not None else active_home()
-    env_url = read_secret(RELAY_URL_ENV).strip().rstrip("/")
-    env_key = read_secret(INSTALL_KEY_ENV).strip()
+    config = configured_extra(target_home)
+    config_url = config.get("relay_url", "")
+    config_key = config.get("install_key", "")
+    env_url = "" if config_url else read_secret(RELAY_URL_ENV).strip().rstrip("/")
+    env_key = "" if config_key else read_secret(INSTALL_KEY_ENV).strip()
+    operator_url = (config_url or env_url).rstrip("/")
+    operator_key = config_key or env_key
+    source = _source(config, env_url, env_key) or "plugin"
 
     def _ensure_preview_key() -> bytes:
         if load_preview_key is None:
@@ -322,25 +386,28 @@ def pair_install(
                 "Notification preview key could not be created or read; check cryptography and key file permissions."
             ) from None
 
-    if env_url and env_key:
-        if provided_key is not None and not hmac.compare_digest(provided_key, env_key):
+    def _shown_url(url: str) -> str:
+        return url if relay_url_allowed(url) else ""
+
+    if operator_url and operator_key:
+        if provided_key is not None and not hmac.compare_digest(provided_key, operator_key):
             raise PairingConflictError("This install is already paired with another install key.")
         preview_bytes = _ensure_preview_key()
-        final_url = env_url if relay_url_allowed(env_url) else ""
+        final_url = _shown_url(operator_url)
         return {
-            "install_key": env_key,
-            "install_id": install_id_for_key(env_key),
+            "install_key": operator_key,
+            "install_id": install_id_for_key(operator_key),
             "preview_key": base64.b64encode(preview_bytes).decode("ascii"),
             "relay_url": final_url,
-            "source": "environment",
-            "notifications_ready": bool(final_url and env_key),
+            "source": source,
+            "notifications_ready": bool(final_url and operator_key),
         }
 
     path = pairing_path(target_home)
     path.parent.mkdir(parents=True, exist_ok=True)
     with _exclusive_lock(str(path) + ".lock"):
         stored = read_stored_pairing(target_home, strict=True)
-        current_key = env_key or stored.get("install_key") or ""
+        current_key = operator_key or stored.get("install_key") or ""
         if provided_key is not None:
             if current_key:
                 if not hmac.compare_digest(provided_key, current_key):
@@ -356,9 +423,9 @@ def pair_install(
         preview_bytes = _ensure_preview_key()
 
         to_write: dict[str, str] = {}
-        if not env_url:
+        if not operator_url:
             to_write["relay_url"] = requested_url
-        if not env_key:
+        if not operator_key:
             to_write["install_key"] = final_key
         if to_write:
             try:
@@ -367,8 +434,7 @@ def pair_install(
                 logger.warning("Could not write push pairing file")
                 raise PairingStorageError("Could not save pairing state.") from None
 
-    final_url = (env_url if relay_url_allowed(env_url) else "") if env_url else requested_url
-    source = "environment" if (env_url or env_key) else "plugin"
+    final_url = _shown_url(operator_url) if operator_url else requested_url
     return {
         "install_key": final_key,
         "install_id": install_id_for_key(final_key),

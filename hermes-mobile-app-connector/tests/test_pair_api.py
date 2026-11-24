@@ -54,11 +54,24 @@ def _make_hermes_stubs(monkeypatch, root: Path, home: Path, override: Path | Non
     return constants
 
 
+def _stub_gateway_config(monkeypatch, push_extra=None):
+    """Hermes' gateway config loader, answering *push_extra* as ``platforms.push`` extras
+    (``None``: no push block), so no test reads a real config.yaml."""
+    config_mod = types.ModuleType("gateway.config")
+    config_mod.Platform = str
+    platforms = {} if push_extra is None else {"push": types.SimpleNamespace(extra=dict(push_extra))}
+    config_mod.load_gateway_config = lambda **kwargs: types.SimpleNamespace(platforms=platforms)
+    if "gateway" not in sys.modules:
+        monkeypatch.setitem(sys.modules, "gateway", types.ModuleType("gateway"))
+    monkeypatch.setitem(sys.modules, "gateway.config", config_mod)
+    return config_mod
+
+
 def _make_client():
     api = load_dashboard_api("hermes_mobile_pair_api_test")
     app = FastAPI()
     app.include_router(api.router, prefix="/api/plugins/hermes-mobile-app-connector")
-    return TestClient(app), api
+    return TestClient(app, raise_server_exceptions=False), api
 
 
 @pytest.fixture
@@ -70,6 +83,7 @@ def clean_env(monkeypatch, tmp_path):
     work.mkdir(parents=True)
     (work / "config.yaml").write_text("")
     _make_hermes_stubs(monkeypatch, tmp_path, tmp_path)
+    _stub_gateway_config(monkeypatch)
     return tmp_path
 
 
@@ -298,9 +312,10 @@ def test_settings_reader_order_across_push_adapter_and_device_wake(monkeypatch, 
     assert adapter.check_requirements() is True
     assert adapter.is_connected(types.SimpleNamespace(extra={})) is True
     assert adapter.validate_config(types.SimpleNamespace(extra={})) is True
+    # The enablement seed turns push on but never copies the stored pairing into the gateway's
+    # config, where it would outrank a later re-pair or unpair.
     env_seed = adapter._env_enablement()
-    assert env_seed["relay_url"] == "https://stored.example"
-    assert env_seed["install_key"] == stored_key
+    assert set(env_seed) == {"home_channel"}
     assert env_seed["home_channel"]["chat_id"] == "device"
 
     # 2. device/__init__.py wake() and can_deliver_followup() use stored pairing.
@@ -362,6 +377,120 @@ def test_openapi_schemas_match_pair_responses(clean_env):
     )
     status_validator.validate(client.get("/api/plugins/hermes-mobile-app-connector/pair").json())
     status_validator.validate(client.delete("/api/plugins/hermes-mobile-app-connector/pair").json())
+
+
+PAIR = "/api/plugins/hermes-mobile-app-connector/pair"
+
+
+def _live_adapter(home, extra):
+    """A connected PushAdapter built from *extra*, with sends recorded instead of posted."""
+    import asyncio
+
+    adapter_mod, _ = load_push_adapter(home)
+    adapter_mod.SendResult = lambda **kwargs: types.SimpleNamespace(**kwargs)
+    sent = []
+    adapter_mod._send_message = lambda url, key, content, **kwargs: sent.append((url, key)) or (200, '{"delivered":1}')
+    live = adapter_mod.PushAdapter(types.SimpleNamespace(extra=extra))
+    live._mark_connected = lambda: None  # the stubbed base adapter has no runtime status to publish
+    assert asyncio.run(live.connect()) is True
+
+    def send(text):
+        return asyncio.run(live.send("device", text))
+
+    return adapter_mod, live, sent, send
+
+
+def test_live_adapter_follows_repair_and_unpair(clean_env):
+    """R1: a connected adapter built from the gateway's seeded config sends with the current pairing."""
+    client, _ = _make_client()
+    first = client.post(PAIR, json={"relay_url": "https://first.example"}).json()
+    key = first["install_key"]
+    adapter_mod, _ = load_push_adapter(clean_env)
+    seed = adapter_mod._env_enablement()
+    # The extras Hermes commits for an env-enabled platform: the seed minus its home channel.
+    extra = {name: value for name, value in seed.items() if name != "home_channel"}
+    _, _, sent, send = _live_adapter(clean_env, extra)
+
+    assert send("one").success is True
+    assert sent[-1] == ("https://first.example", key)
+
+    assert client.post(PAIR, json={"relay_url": "https://second.example"}).status_code == 200
+    assert send("two").success is True
+    assert sent[-1] == ("https://second.example", key)
+
+    assert client.delete(PAIR).json()["paired"] is False
+    count = len(sent)
+    result = send("three")
+    assert result.success is False
+    assert "not configured" in result.error
+    assert len(sent) == count
+
+
+def test_live_adapter_keeps_operator_values_over_pairing(clean_env):
+    """R1: values the operator put in platforms.push outrank a stored pairing, live."""
+    operator_key = "OperatorKey_0123456789abcdefghijklmnopqrs"
+    _, _, sent, send = _live_adapter(clean_env, {"relay_url": "https://operator.example", "install_key": operator_key})
+    client, _ = _make_client()
+    assert client.post(PAIR, json={"relay_url": "https://phone.example"}).status_code == 200
+    assert send("x").success is True
+    assert sent[-1] == ("https://operator.example", operator_key)
+
+
+def test_pair_respects_platforms_push_config(monkeypatch, clean_env):
+    """R2: an install key and URL in platforms.push are reported, returned and never replaced."""
+    config_key = "ConfigKey_0123456789abcdefghijklmnopqrstuv"
+    _stub_gateway_config(monkeypatch, {"enabled": True, "relay_url": "https://operator.example/", "install_key": config_key})
+    client, _ = _make_client()
+    pairing_file = clean_env / "plugin-data" / "hermes-mobile-push" / "pairing.json"
+
+    status = client.get(PAIR)
+    assert status.json() == {
+        "paired": True,
+        "install_id": hashlib.sha256(config_key.encode("utf-8")).hexdigest(),
+        "relay_url": "https://operator.example",
+        "source": "config",
+        "notifications_ready": True,
+    }
+    assert config_key not in status.text
+
+    resp = client.post(PAIR, json={"relay_url": "https://phone.example"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["install_key"] == config_key
+    assert data["install_id"] == hashlib.sha256(config_key.encode("utf-8")).hexdigest()
+    assert data["relay_url"] == "https://operator.example"
+    assert data["source"] == "config"
+    assert not pairing_file.exists()
+
+    assert client.post(PAIR, json={"relay_url": "https://phone.example", "install_key": config_key}).status_code == 200
+    conflict = client.post(PAIR, json={"relay_url": "https://phone.example", "install_key": "Q" * 43})
+    assert conflict.status_code == 409
+    assert config_key not in conflict.text
+    assert not pairing_file.exists()
+
+
+def test_pair_with_config_url_only_stores_just_the_key(monkeypatch, clean_env):
+    """R2: a configured URL alone is the operator's; the plugin keeps only the key it mints."""
+    _stub_gateway_config(monkeypatch, {"relay_url": "https://operator.example"})
+    client, _ = _make_client()
+    data = client.post(PAIR, json={"relay_url": "https://phone.example"}).json()
+    assert data["relay_url"] == "https://operator.example"
+    assert data["source"] == "config"
+    saved = json.loads((clean_env / "plugin-data" / "hermes-mobile-push" / "pairing.json").read_text(encoding="utf-8"))
+    assert saved == {"install_key": data["install_key"]}
+
+
+def test_config_values_seeded_from_environment_still_report_environment(monkeypatch, clean_env):
+    """R2: extras Hermes seeded from the environment are the environment's, not config's."""
+    env_key = "EnvConfiguredKey_0123456789abcdefghijklmno"
+    _make_hermes_stubs(monkeypatch, clean_env, clean_env, secrets={
+        "HERMES_MOBILE_PUSH_RELAY_URL": "https://env-relay.example/",
+        "HERMES_MOBILE_PUSH_INSTALL_KEY": env_key,
+    })
+    _stub_gateway_config(monkeypatch, {"relay_url": "https://env-relay.example", "install_key": env_key})
+    client, _ = _make_client()
+    assert client.get(PAIR).json()["source"] == "environment"
+    assert client.post(PAIR, json={"relay_url": "https://phone.example"}).json()["source"] == "environment"
 
 
 def _hermes_available():

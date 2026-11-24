@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from gateway.config import PlatformConfig
-from plugins.platforms.weixin import adapter as wx
+from weixin_plugin import adapter as wx
 
 
 @pytest.mark.asyncio

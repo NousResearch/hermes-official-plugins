@@ -1,13 +1,18 @@
-name: weixin-platform
+name: weixin
 label: Weixin / WeChat
 kind: platform
-version: 1.0.0
+version: 2.0.0
 description: >
   Weixin (personal WeChat) gateway adapter for Hermes Agent over Tencent's
   iLink Bot API. Long-polls getupdates for inbound messages, echoes each
   peer's context_token on replies, and moves media through the AES-128-ECB
-  encrypted CDN. `hermes gateway setup` performs the iLink QR login.
+  encrypted CDN. `hermes gateway setup` performs the iLink QR login. Formerly
+  built into Hermes core.
 author: NousResearch
+homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/weixin
+requires_hermes: ">=0.22.3"
+provides_tools: []
+provides_hooks: []
 requires_env:
   - name: WEIXIN_ACCOUNT_ID
     description: "iLink Bot account ID obtained through QR login in hermes gateway setup"

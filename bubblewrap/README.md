@@ -301,6 +301,20 @@ writable mount.
 A source may be a directory, a file, a Unix socket (a service or agent socket you choose to share), a
 FIFO or a device node.
 
+Sharing a socket is not enough on its own. `/run/user/<uid>` inside the sandbox is an empty tmpfs, and
+the command prefix unsets `SSH_AUTH_SOCK`, `GPG_AGENT_INFO` and `DBUS_SESSION_BUS_ADDRESS` after the
+shell snapshot is built, so `env_passthrough` cannot put the bus address back. A compositor socket works
+when the bind and the variable that names it are both present (`HYPRLAND_INSTANCE_SIGNATURE` is not
+unset). The session bus needs the address set in the command itself:
+
+```bash
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus
+systemctl --user status
+```
+
+`hyprctl dispatch exec` and `systemctl --user start` run outside the sandbox. A command that knows the
+socket path can use it. Binding a socket does not widen what the prefix unsets.
+
 A read-write bind (or a writable working directory) that contains a credential path which does not
 exist on the host is refused when the backend starts: the backend hides a credential path by mounting
 over it, a path that is not there cannot be mounted over, and a command could then create it. A

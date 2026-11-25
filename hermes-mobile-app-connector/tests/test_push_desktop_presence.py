@@ -282,12 +282,15 @@ class DesktopActiveTests(PresenceTestCase):
 
     def test_a_turn_a_phone_sent_is_not_the_computers_even_while_the_computer_is_active(self):
         self.viewers = [viewer(idle_seconds=2)]
-        for client in [IPHONE, ANDROID, None, {"name": "hermes-tui", "kind": "tui"}]:
+        for client in [IPHONE, ANDROID, {"name": "hermes-tui", "kind": "tui"}]:
             with self.subTest(client=client):
                 self.client = client
                 self.assertEqual(self.active(), "omitted")
-        self.policy = None  # A session no client created: "desktop" is the platform's own label.
+        # A turn no client sent while nobody is active (UnattributedTurnTests covers the rest).
+        self.viewers = [viewer(idle_seconds=900)]
         self.client = None
+        self.assertEqual(self.active(), "omitted")
+        self.policy = None  # A session no client created: "desktop" is the platform's own label.
         self.assertIs(self.active(), False)
 
     def test_only_a_reply_labelled_desktop_carries_it(self):
@@ -296,12 +299,13 @@ class DesktopActiveTests(PresenceTestCase):
         privacy = load_privacy()
         privacy._home = lambda: self.home
         privacy.load_key = lambda: bytes(range(32))
-        self.viewers = [viewer(idle_seconds=2)]
-        turns = [("iphone", IPHONE, "desktop"), ("android", ANDROID, "desktop"), ("no client", None, "desktop"),
-                 ("cli", None, "cli"), ("messaging", None, "homeassistant")]
-        for name, client, platform in turns:
+        active, idle = [viewer(idle_seconds=2)], [viewer(idle_seconds=900)]
+        turns = [("iphone", IPHONE, "desktop", active), ("android", ANDROID, "desktop", active),
+                 ("no client, nobody active", None, "desktop", idle), ("cli, nobody active", None, "cli", idle),
+                 ("messaging", None, "homeassistant", active)]
+        for name, client, platform, viewers in turns:
             with self.subTest(name):
-                self.client = client
+                self.client, self.viewers = client, viewers
                 if platform != "desktop":
                     self.policy = None
                 payload = self.reply(session_id="s1", platform=platform)
@@ -384,7 +388,8 @@ class DesktopActiveTests(PresenceTestCase):
     def test_no_client_and_an_unknown_kind_are_answers(self):
         # Well formed, naming no computer: today's label, and no Desktop reply to say it of.
         self.viewers = [viewer()]
-        for client in [None, {}, {"kind": None, "name": None}, {"name": "hermes-cli", "kind": "cli"},
+        # (A turn with no client at all is UnattributedTurnTests'.)
+        for client in [{}, {"kind": None, "name": None}, {"name": "hermes-cli", "kind": "cli"},
                        {"kind": "Desktop"}]:
             with self.subTest(client=client):
                 self.client = client
@@ -573,6 +578,173 @@ class DesktopActiveTests(PresenceTestCase):
             {"session_id": "local-1", "source": "desktop", "desktop_active": True, "sealed": {"v": 1, "data": "…"},
              "event_id": "…"}])
         self.assertEqual({k: v for k, v in after.items() if k != "hermes"}, {k: v for k, v in before.items() if k != "hermes"})
+
+
+class UnattributedTurnTests(PresenceTestCase):
+    """A turn no client submitted (``turn_client()`` is ``None``: an async delegation's result, a
+    finished background process, any wake Hermes starts itself) in a session of Hermes' own surfaces:
+    its reply reads as a Desktop reply with ``desktop_active: true`` only while a Desktop or Webapp
+    attached to the session is active; on anything less it is exactly today's push."""
+
+    def setUp(self):
+        super().setUp()
+        self.client = None
+        self.viewers = [viewer(idle_seconds=5)]
+
+    def today(self, session_id="local-1", platform="desktop"):
+        """The push a Hermes without the accessors sends for the same turn."""
+        with patch.object(self.ctx, "turn_client", None), patch.object(self.ctx, "session_viewers", None):
+            return self.reply(session_id, platform)
+
+    def test_the_reply_reads_as_a_desktop_reply_while_a_computer_is_active(self):
+        policies = [("gui", types.SimpleNamespace(source="gui", platform="desktop")),
+                    ("tui", types.SimpleNamespace(source="tui", platform="tui")), ("no policy", None)]
+        for name, policy in policies:
+            for platform in ["desktop", "local", "gui", "tui", "cli", "web", "ios", "android", ""]:
+                for active in [viewer(idle_seconds=0), viewer(kind="webapp", basis="page", idle_seconds=299.9),
+                               viewer(can_alert=None)]:
+                    with self.subTest(policy=name, platform=platform, viewer=active):
+                        self.policy, self.viewers = policy, [active]
+                        control = self.today("local-1", platform)
+                        payload = self.reply("local-1", platform)
+                        self.assertEqual(payload["hermes"]["source"], "desktop")
+                        self.assertIs(payload["hermes"]["desktop_active"], True)
+                        # Nothing else about the push changes.
+                        self.assertEqual({k: v for k, v in payload["hermes"].items() if k not in ("source", "desktop_active")},
+                                         {k: v for k, v in control["hermes"].items() if k != "source"})
+                        self.assertEqual({k: v for k, v in payload.items() if k != "hermes"},
+                                         {k: v for k, v in control.items() if k != "hermes"})
+
+    def test_any_active_computer_among_the_viewers_counts(self):
+        self.viewers = [viewer(kind="mobile", idle_seconds=1), viewer(idle_seconds=900), "junk",
+                        viewer(kind="webapp", idle_seconds=4, can_alert=None)]
+        self.assertEqual(self.reply()["hermes"]["source"], "desktop")
+        self.viewers = self.viewers[:3]
+        self.assertEqual(self.reply(), self.today())
+
+    def test_without_recent_evidence_of_a_person_the_push_is_todays(self):
+        nan, inf = float("nan"), float("inf")
+        cases = [[], [viewer(idle_seconds=300)], [viewer(idle_seconds=301)], [viewer(idle_seconds=None)],
+                 [viewer(can_alert=False)], [viewer(kind="mobile", idle_seconds=1)], [viewer(kind="tui", idle_seconds=1)],
+                 [viewer(kind=None, idle_seconds=1)], [viewer(idle_seconds=-1)], [viewer(idle_seconds=nan)],
+                 [viewer(idle_seconds=inf)], [viewer(idle_seconds=10**400)], [viewer(idle_seconds="5")],
+                 [viewer(idle_seconds=True)], [viewer(can_alert="true")], [viewer(can_alert=1)], [{"kind": {}}],
+                 ["desktop"], [None]]
+        for viewers in cases:
+            with self.subTest(viewers=viewers):
+                self.viewers = viewers
+                payload = self.reply()
+                self.assertEqual(payload, self.today())
+                self.assertEqual(payload["hermes"]["source"], "gui")
+                self.assertNotIn("desktop_active", payload["hermes"])
+
+    def test_an_unknown_or_malformed_answer_means_todays_push(self):
+        control = self.today()
+        self.assertEqual((control["hermes"]["source"], "desktop_active" in control["hermes"]), ("gui", False))
+        for failing in ["turn_client", "session_viewers"]:
+            with self.subTest(failing=failing):
+                self.failing = {failing}
+                self.assertEqual(self.reply(), control)
+        self.failing = set()
+        for missing in ["turn_client", "session_viewers"]:
+            with self.subTest(missing=missing), patch.object(self.ctx, missing, None):
+                self.assertEqual(self.reply(), control)
+        for viewers in [None, "desktop", viewer(), 5]:
+            with self.subTest(viewers=viewers):
+                self.viewers = viewers
+                self.assertEqual(self.reply(), control)
+
+    def test_a_turn_a_client_sent_keeps_todays_logic(self):
+        """A phone's turn is never the computer's; a computer's turn is decided as before; any other
+        client, however it names itself, is not \"no client\"."""
+        for client, source in [(IPHONE, "ios"), (ANDROID, "android"), ({"kind": "mobile"}, "mobile"),
+                               ({"name": "hermes-tui", "kind": "tui"}, "gui"), ({}, "gui"),
+                               ({"kind": None, "name": None}, "gui"), ({"kind": "Desktop"}, "gui")]:
+            with self.subTest(client=client):
+                self.client = client
+                payload = self.reply()
+                self.assertEqual(payload["hermes"]["source"], source)
+                self.assertNotIn("desktop_active", payload["hermes"])
+        self.client = DESKTOP
+        self.assertIs(self.reply()["hermes"]["desktop_active"], True)
+        self.viewers = [viewer(idle_seconds=900)]
+        self.assertIs(self.reply()["hermes"]["desktop_active"], False)
+
+    def test_other_platforms_and_automations_are_byte_identical(self):
+        """Only Hermes' own surfaces: a messaging chat, the API server, the curator, a webhook run,
+        a delegated child, cron and Kanban push exactly what they push today, a computer active or not."""
+        self.policy = None
+        cron = types.SimpleNamespace(job_id="job-1", job_name="Morning brief")
+        redactor = types.ModuleType("agent.redact")
+        redactor.redact_sensitive_text = lambda text, *, force: text
+        cases = [("s1", "telegram", False), ("s1", "discord", False), ("s1", "homeassistant", False),
+                 ("s1", "api_server", False), ("s1", "curator", False), ("s1", "webhook", False),
+                 ("subagent_1", "subagent", False), ("local-1", "desktop", True), ("local-cron", "cron", False)]
+        with patch.dict("os.environ", {"HERMES_MOBILE_PUSH_HOOK_PLATFORMS": "telegram,discord,homeassistant,"
+                                                                          "api_server,curator,webhook"}), \
+                patch.object(self.adapter, "_webhook_route_delivers_to_push", lambda: False), \
+                patch.dict(sys.modules, {"agent": types.ModuleType("agent"), "agent.redact": redactor}):
+            for session_id, platform, delegated in cases:
+                with self.subTest(platform=platform, delegated=delegated):
+                    self.delegated = delegated
+                    self.ctx.current_cron_execution = (lambda: cron) if platform == "cron" else (lambda: None)
+                    try:
+                        payload = self.reply(session_id, platform)
+                        self.assertEqual(payload, self.today(session_id, platform))
+                    finally:
+                        self.delegated = False
+                        self.ctx.current_cron_execution = lambda: None
+                    self.assertNotIn("desktop_active", payload["hermes"])
+        before = len(self.sent)
+        finish_turn(self.adapter, "kanban_1", "Done.", "desktop")
+        self.assertEqual(self.sent[before:], [], "Kanban workers stay silent, as today")
+
+    def test_waits_on_the_person_and_failed_turns_are_untouched(self):
+        self.adapter._on_human_input_request(kind="approval", request_id="r1", session_id="local-1",
+                                             session_key="route", platform="local", prompt="rm -rf build")
+        self.adapter._on_human_input_request(kind="clarify", request_id="r2", session_id="local-1",
+                                             session_key="route", platform="local", prompt="Which?")
+        payload = self.adapter._server_request_payload("sudo", "srq-1", {}, {"session_id": "local-1", "source": "gui"})
+        finish_turn(self.adapter, "local-1", "Partial.", "desktop", failed=True)
+        others = self.sent + [payload]
+        self.assertEqual([p["kind"] for p in others], ["approval", "clarify", "sudo"])
+        for other in others:
+            self.assertEqual(other["hermes"]["source"], "gui")
+            self.assertNotIn("desktop_active", other["hermes"])
+
+    def test_the_threshold_is_the_platforms_active_seconds(self):
+        self.adapter.PushAdapter(types.SimpleNamespace(extra={"active_seconds": 60}))
+        for idle, expected in [(59.9, True), (60, False), (100, False)]:
+            with self.subTest(idle=idle):
+                self.viewers = [viewer(idle_seconds=idle)]
+                self.assertEqual("desktop_active" in self.reply()["hermes"], expected)
+
+    def test_quiet_while_active_holds_it_back_too(self):
+        self.adapter.PushAdapter(types.SimpleNamespace(extra={"quiet_while_active": True}))
+        before = len(self.sent), len(self.reported)
+        finish_turn(self.adapter, "local-1", "Done.", "desktop")
+        self.assertEqual(self.sent[before[0]:], [])
+        self.assertEqual(self.reported[before[1]:], [("end", "local-1", "turn-1")], "the turn's end is still reported")
+        self.assertEqual(self.adapter._replies, {})
+        for viewers in [[], [viewer(idle_seconds=301)], [viewer(kind="mobile", idle_seconds=1)]]:
+            with self.subTest(viewers=viewers):
+                self.viewers = viewers
+                self.assertEqual(self.reply()["kind"], "reply", "nobody at a computer: the phone is told")
+        self.policy = None
+        self.viewers = [viewer(idle_seconds=5)]
+        with patch.dict("os.environ", {"HERMES_MOBILE_PUSH_HOOK_PLATFORMS": "telegram"}):
+            self.assertEqual(self.reply("s1", "telegram")["kind"], "reply")
+
+    def test_the_relay_sees_it_beside_the_source(self):
+        privacy = load_privacy()
+        privacy._home = lambda: self.home
+        privacy.load_key = lambda: bytes(range(32))
+        protected = privacy.protect(self.reply(), "ab" * 32)
+        self.assertEqual((protected["hermes"]["source"], protected["hermes"]["desktop_active"]), ("desktop", True))
+        self.viewers = []
+        protected = privacy.protect(self.reply(), "ab" * 32)
+        self.assertEqual(protected["hermes"]["source"], "gui")
+        self.assertNotIn("desktop_active", protected["hermes"])
 
 
 class PresenceSettingsTests(PresenceTestCase):

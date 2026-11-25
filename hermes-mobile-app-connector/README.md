@@ -78,7 +78,11 @@ A running gateway reads the effective settings on every send, so a re-pair to a 
 
 ### While you are at the computer
 
-When Hermes reports the submitting client and active viewers (`turn_client()` and `session_viewers()`), replies to messages sent from Desktop or the Webapp include `hermes.source: "desktop"` and `hermes.desktop_active`. You can also suppress reply pushes while active at a computer via `config.yaml`:
+When Hermes reports the submitting client and active viewers (`turn_client()` and `session_viewers()`), replies to messages sent from Desktop or the Webapp include `hermes.source: "desktop"` and `hermes.desktop_active`.
+
+A turn no client submitted (Hermes starts it itself: a subagent's result coming back, a background process finishing) has no client to name. In a session of the mobile app, Desktop, the TUI or the CLI, its reply carries `hermes.source: "desktop"` and `hermes.desktop_active: true` while a Desktop or Webapp attached to the session reported your input less than `active_seconds` ago and can get your attention itself; otherwise it is labelled as before, with no `hermes.desktop_active`. Replies on messaging platforms, the API server and the curator, and cron, Kanban and webhook runs, are never relabelled. The tradeoff: while a computer is active, these replies also fall under each device's **Desktop Messages** switch, so a device with it off does not get them then, in conversations started on the phone too. While no computer is active nothing changes.
+
+You can also suppress reply pushes while active at a computer via `config.yaml`:
 
 ```yaml
 platforms:

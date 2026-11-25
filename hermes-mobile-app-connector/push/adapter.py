@@ -437,6 +437,20 @@ def _desktop_active(facts, active_seconds):
     return any(_active_at_computer(viewer, active_seconds) for viewer in viewers)
 
 
+def _present_for_unattributed_turn(platform, facts):
+    """Whether the reply to a turn no client submitted (an async delegation's result, a finished
+    background process, any wake Hermes starts itself) is one the user is at a computer to see: by
+    known *facts* (``_turn_facts``), Hermes names no client for the turn (``turn_client()`` is
+    ``None``), the turn runs on one of Hermes' own surfaces (``_OWN_SURFACES``: an app, Desktop,
+    TUI or CLI session; never a messaging platform, the API server or the curator, and cron and Kanban
+    runs are decided before), and a Desktop or Webapp
+    attached to its session is active (``_active_at_computer``). Anything else says no."""
+    if facts is _UNKNOWN or facts[0] is not None or platform not in _OWN_SURFACES:
+        return False
+    active_seconds = _active_seconds()
+    return any(_active_at_computer(viewer, active_seconds) for viewer in facts[1])
+
+
 def _turn_facts(fields, platform):
     """What Hermes says about a finished turn whose reply is its own: ``(client, viewers)``, from
     ``turn_client()`` and ``session_viewers()``. Both or neither: ``_UNKNOWN`` when either accessor
@@ -972,8 +986,12 @@ def _on_session_end(*args, **kwargs):
     # session, and only for a turn that notifies; the stream hooks run off the turn's thread.
     # ``facts``: the turn's client and its session's viewers, or unknown (``_turn_facts``).
     facts = _turn_facts(fields, platform)
+    # A turn no client submitted reads as a Desktop reply while the user is active at a computer
+    # attached to its session, so each device's choice for Desktop replies applies to it too.
+    present = _present_for_unattributed_turn(platform, facts)
+    source = "desktop" if present else _turn_source(fields, platform, facts)
     hermes = {
-        **_origin_metadata({**fields, "platform": platform, "source": _turn_source(fields, platform, facts)}),
+        **_origin_metadata({**fields, "platform": platform, "source": source}),
         "kind": "agent_end",
         "session_id": session_id,
         "platform": platform,
@@ -982,7 +1000,9 @@ def _on_session_end(*args, **kwargs):
     # Unknown facts (among them a delegated child's completion and a webhook run's reply) say
     # nothing about a computer. The relay reads the fact only on a Desktop reply, so no other
     # reply carries it.
-    if facts is not _UNKNOWN and hermes.get("source") == "desktop":
+    if present:
+        hermes["desktop_active"] = True
+    elif facts is not _UNKNOWN and hermes.get("source") == "desktop":
         hermes["desktop_active"] = _desktop_active(facts, _active_seconds())
     if hermes.get("desktop_active") is True and _quiet_while_active():
         # The user is active at a computer. The turn's end is already reported

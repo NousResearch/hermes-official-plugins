@@ -327,10 +327,20 @@ def browser_console(expression: Optional[str] = None, task_id: Optional[str] = N
 
 
 def _vision_settings() -> tuple[float, float]:
-    """``auxiliary.vision`` ``(timeout, temperature)``; 120 s / 0.1 on any config error."""
+    """``(timeout, temperature)`` for the ``camofox_vision`` auxiliary task; 120 s / 0.1 on error.
+
+    Core registers that task with ``inherit_from: vision``, so a task-specific block must win over
+    the inherited one. Reading only ``auxiliary.vision`` made the registered task's own knobs dead
+    configuration even though they are documented as supported.
+    """
     try:
-        cfg = cfg_get(read_raw_config(), "auxiliary", "vision", default={}) or {}
-        return float(cfg.get("timeout", 120)), float(cfg.get("temperature", 0.1))
+        cfg = read_raw_config()
+        task = cfg_get(cfg, "auxiliary", VISION_TASK, default={}) or {}
+        parent_name = task.get("inherit_from")
+        parent = cfg_get(cfg, "auxiliary", parent_name, default={}) or {} \
+            if isinstance(parent_name, str) and parent_name else {}
+        merged = {**parent, **task}
+        return float(merged.get("timeout", 120)), float(merged.get("temperature", 0.1))
     except Exception:
         return 120.0, 0.1
 

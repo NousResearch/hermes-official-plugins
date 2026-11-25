@@ -79,11 +79,20 @@ def _open_turn(mod, session="s1", platform="cli"):
     )
 
 
+# The deployment labels (service / host / environment) ride on every trace, roots and children
+# alike; these tests are about attribution, so compare the propagated metadata without them.
+_DEPLOYMENT_LABELS = ("service", "host", "environment")
+
+
+def _identity(metadata):
+    return {k: v for k, v in metadata.items() if k not in _DEPLOYMENT_LABELS}
+
+
 def test_default_profile_is_named(traced):
     mod, roots, propagated, _ = traced
     _open_turn(mod)
     assert roots[0]["metadata"]["profile"] == "default"
-    assert propagated[0]["metadata"] == {"profile": "default"}
+    assert _identity(propagated[0]["metadata"]) == {"profile": "default"}
 
 
 def test_routed_turn_names_the_served_profile_not_the_launch_one(traced, monkeypatch):
@@ -98,7 +107,7 @@ def test_routed_turn_names_the_served_profile_not_the_launch_one(traced, monkeyp
     finally:
         reset_hermes_home_override(token)
     assert roots[0]["metadata"]["profile"] == "arkana"
-    assert propagated[0]["metadata"] == {"profile": "arkana"}
+    assert _identity(propagated[0]["metadata"]) == {"profile": "arkana"}
 
 
 def test_kanban_worker_trace_names_its_board_task_and_run(traced, monkeypatch):
@@ -109,7 +118,7 @@ def test_kanban_worker_trace_names_its_board_task_and_run(traced, monkeypatch):
     monkeypatch.setenv("HERMES_KANBAN_RUN_ID", "42")
     _open_turn(mod)
     assert roots[0]["metadata"]["kanban_task_id"] == "t_8f2c" and roots[0]["metadata"]["kanban_run_id"] == "42"
-    assert propagated[0]["metadata"] == {"profile": "default", "kanban_task_id": "t_8f2c", "kanban_run_id": "42"}
+    assert _identity(propagated[0]["metadata"]) == {"profile": "default", "kanban_task_id": "t_8f2c", "kanban_run_id": "42"}
 
 
 # Platform / trigger / cron-job tags (hermes-agent#102755, #74930, #88502).
@@ -250,7 +259,7 @@ def test_gateway_turn_is_attributed_to_its_sender(opted_in):
     assert roots == []  # the turn-scoped hook must still not open an orphan root
     _open_turn(mod, platform="matrix")
     assert propagated[0]["user_id"] == "@alice:example.org"
-    assert propagated[0]["metadata"] == {"profile": "default"}
+    assert _identity(propagated[0]["metadata"]) == {"profile": "default"}
 
 
 def test_senderless_turn_leaves_user_unset(opted_in):

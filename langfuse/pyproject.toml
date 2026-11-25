@@ -1,6 +1,6 @@
 [project]
 name = "hermes-langfuse"
-version = "2.0.0"
+version = "2.1.0"
 description = "Langfuse tracing for Hermes Agent turns, LLM calls and tools (official plugin)"
 readme = "README.md"
 license = { text = "MIT" }

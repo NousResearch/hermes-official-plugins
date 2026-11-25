@@ -312,21 +312,31 @@ class EventBridge:
         self._thread: Optional[threading.Thread] = None
         self._last_poll_timestamps: dict[str, float] = {}  # session_key -> unix timestamp
         self._pending_approvals: dict[str, dict] = {}  # populated from events
-        self._start_lock = threading.Lock()
         self._db_version = _StateDbVersion()
         self._state_db_version: Optional[int] = None  # skip polling work when state.db is unchanged
         self._cached_sessions_index: dict = {}
+        self._baselined = False  # prime() ran: history up to launch is marked seen
+        self._stopped = False  # stop() is final: nothing restarts the poller afterwards
+        self._auto_start = False  # armed by run_mcp_server: the first events call starts the poll thread
+        self._start_lock = threading.Lock()
 
-    def ensure_started(self):
-        """Start the poller on first use (events_poll, events_wait, approvals). Idempotent and thread-safe.
+    def prime(self) -> None:
+        """Baseline at launch WITHOUT starting the poll thread. Messages that arrive after launch stay deliverable:
+        the thread, when ensure_started() launches it on first use, delivers everything newer than this baseline."""
+        if not self._baselined:
+            self._establish_baseline()
+            self._baselined = True
 
-        The poller is not started at server launch: every MCP client (one per Claude Code session) would otherwise
-        run a 200 ms state.db poll whose tick re-reads every indexed transcript whenever any connection commits
-        (2026-11-25: ~25k pread/s per bridge, host load 200+, gateway handshakes past the 10 s open_timeout)."""
-        if self._running:
+    def ensure_started(self) -> None:
+        """Start the poll thread on first events_poll / events_wait. Idempotent and thread-safe; a no-op after stop().
+
+        The poller is not started at launch: one MCP server per agent session each ran a 200 ms state.db poll whose
+        open tick re-reads every indexed transcript, and with a busy gateway the data_version gate is open almost
+        every tick (measured ~25k pread/s per idle bridge)."""
+        if not self._auto_start or self._running or self._stopped:
             return
         with self._start_lock:
-            if not self._running:
+            if not self._running and not self._stopped:
                 self.start()
 
     def start(self):
@@ -337,8 +347,8 @@ class EventBridge:
         # messages as events; sessions appearing later default to last_seen=0.0
         # in _poll_once, so new-conversation delivery is preserved.
         # Unit tests that drive _poll_once directly bypass start() and still observe first-poll delivery.
-        # See #13414.
-        self._establish_baseline()
+        # See #13414. prime() at launch already baselined; never re-baseline (that would drop post-launch messages).
+        self.prime()
         self._running = True
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
@@ -346,6 +356,7 @@ class EventBridge:
 
     def stop(self):
         """Stop the background polling thread and wake any waiters."""
+        self._stopped = True
         self._running = False
         self._new_event.set()
         if self._thread:
@@ -360,13 +371,11 @@ class EventBridge:
 
     def poll_events(self, after_cursor: int = 0, session_key: Optional[str] = None, limit: int = 20) -> dict:
         """Return events since after_cursor, optionally filtered by session_key."""
-        self.ensure_started()
         events = self._matching(after_cursor, session_key, limit)
         return {"events": events, "next_cursor": events[-1]["cursor"] if events else after_cursor}
 
     def wait_for_event(self, after_cursor: int = 0, session_key: Optional[str] = None, timeout_ms: int = 30000) -> Optional[dict]:
         """Block until a matching event arrives or timeout expires."""
-        self.ensure_started()
         deadline = time.monotonic() + (timeout_ms / 1000.0)
         while time.monotonic() < deadline:
             # Clear BEFORE the queue check. An enqueue between the check and the clear would
@@ -384,13 +393,11 @@ class EventBridge:
 
     def list_pending_approvals(self) -> list[dict]:
         """List approval requests observed during this bridge session."""
-        self.ensure_started()
         with self._lock:
             return sorted(self._pending_approvals.values(), key=lambda a: a.get("created_at", ""))
 
     def respond_to_approval(self, approval_id: str, decision: str) -> dict:
         """Resolve a pending approval (best-effort without gateway IPC)."""
-        self.ensure_started()
         with self._lock:
             approval = self._pending_approvals.pop(approval_id, None)
         if not approval:
@@ -637,6 +644,7 @@ class _ToolHandlers:
         """
         after_cursor = _coerce_int(after_cursor, default=0, minimum=0, maximum=10**18)
         limit = _coerce_int(limit, default=20, minimum=1, maximum=200)
+        self.bridge.ensure_started()
         result = self.bridge.poll_events(after_cursor=after_cursor, session_key=session_key, limit=limit)
         return json.dumps(result, indent=2)
 
@@ -653,6 +661,7 @@ class _ToolHandlers:
         """
         after_cursor = _coerce_int(after_cursor, default=0, minimum=0, maximum=10**18)
         timeout_ms = _coerce_int(timeout_ms, default=30000, minimum=0, maximum=300000)  # cap 5 min
+        self.bridge.ensure_started()
         event = self.bridge.wait_for_event(after_cursor=after_cursor, session_key=session_key, timeout_ms=timeout_ms)
         return json.dumps({"event": event} if event else {"event": None, "reason": "timeout"}, indent=2)
 
@@ -791,7 +800,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None, include_tools:
 
 
 def _eager_events() -> bool:
-    """HERMES_MCP_EAGER_EVENTS=1 restores the poller starting at launch (events queued from server start)."""
+    """HERMES_MCP_EAGER_EVENTS=1: start the poll thread with the server, as before."""
     return os.environ.get("HERMES_MCP_EAGER_EVENTS", "").strip() == "1"
 
 
@@ -807,8 +816,12 @@ def run_mcp_server(verbose: bool = False, include_tools: bool = False, accept_ho
         prepare_tool_process(accept_hooks=accept_hooks)
     # --tools-only serves no bridge tools, so it starts no event bridge (no state.db poller).
     bridge = None if tools_only else EventBridge()
-    if bridge is not None and _eager_events():
-        bridge.start()  # opt-in old behaviour; by default the first event/approval call starts it
+    if bridge is not None:
+        if _eager_events():
+            bridge.start()  # opt-in old behaviour
+        else:
+            bridge.prime()  # baseline now; the first events_poll / events_wait starts the poll thread
+            bridge._auto_start = True
     server = create_mcp_server(event_bridge=bridge, include_tools=include_tools, tools_only=tools_only)
     import asyncio
 

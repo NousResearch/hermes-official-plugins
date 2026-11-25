@@ -362,6 +362,7 @@ class DesktopActiveTests(PresenceTestCase):
                 self.client = client
                 self.assertEqual(self.active(), "omitted")
         self.policy = None  # A session no client created: "desktop" is the platform's own label.
+        self.client = None
         self.assertIs(self.active(), False)
 
     def test_only_a_reply_labelled_desktop_carries_it(self):

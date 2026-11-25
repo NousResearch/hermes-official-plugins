@@ -228,7 +228,11 @@ def check_camofox_available() -> bool:
     try:
         with requests.get(f"{url}/health", timeout=5) as resp:
             if resp.status_code == 200 and url not in _vnc_url_by_camofox_url:
-                _vnc_url_by_camofox_url[url] = _vnc_url_from_health(url, resp)
+                vnc_url = _vnc_url_from_health(url, resp)
+                # A healthy server can answer before VNC is enabled. Only cache a real URL:
+                # caching None makes get_vnc_url() treat "no VNC yet" as authoritative forever.
+                if vnc_url:
+                    _vnc_url_by_camofox_url[url] = vnc_url
             return resp.status_code == 200
     except Exception:
         return False

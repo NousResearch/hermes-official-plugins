@@ -235,7 +235,7 @@ class HomeAssistantAdapter(BasePlatformAdapter):
         self._watch_entities: Set[str] = set()
         self._ignore_entities: Set[str] = set(extra.get("ignore_entities", []))
         self._watch_all: bool = bool(extra.get("watch_all", False))
-        self._cooldown_seconds: int = int(extra.get("cooldown_seconds", 30))
+        self._cooldown_seconds: int = self._read_cooldown(extra.get("cooldown_seconds"))
         self._ws_heartbeat: Optional[float] = self._read_heartbeat(extra.get("ws_heartbeat_seconds"))
         # A stable ID updates one HA notification instead of accumulating routine replies.
         # An explicit empty value preserves HA's default create-a-new behavior.
@@ -369,6 +369,21 @@ class HomeAssistantAdapter(BasePlatformAdapter):
         # Injection budget: chat budget_key -> injection timestamps inside the
         # rolling window (pruned on each decision; keys evicted when empty).
         self._injection_times: Dict[str, list] = {}
+
+    @staticmethod
+    def _read_cooldown(raw: Any) -> int:
+        """The per-entity cooldown window in seconds.
+
+        A non-numeric setting falls back to the 30s default for the same reason the
+        heartbeat does: a bad config value must not stop the platform from starting.
+        A negative window would defeat the filter, so it clamps to no delay.
+        """
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            return 30
+        try:
+            return max(0, int(float(raw)))
+        except (TypeError, ValueError):
+            return 30
 
     @classmethod
     def _read_heartbeat(cls, raw: Any) -> Optional[float]:

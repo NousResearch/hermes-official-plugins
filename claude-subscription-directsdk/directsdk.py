@@ -33,7 +33,7 @@ try:
     from .directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, max_concurrent, observe_rate_limit,
-        reap_orphaned_refresh_lock, relay, resolve_upstream, Upstream)
+        reap_orphaned_refresh_lock, relay, resolve_upstream, scrub_hermes_internal_env, Upstream)
 except ImportError:
     import concurrency
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
@@ -41,7 +41,7 @@ except ImportError:
     from directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
         apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, max_concurrent, observe_rate_limit,
-        reap_orphaned_refresh_lock, relay, resolve_upstream, Upstream)
+        reap_orphaned_refresh_lock, relay, resolve_upstream, scrub_hermes_internal_env, Upstream)
 
 
 logger = logging.getLogger(__name__)
@@ -1016,6 +1016,11 @@ class Client:
                     conflicts += [key for key in ('CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY') if env.get(key, '').lower() not in ('', '0', 'false', 'no', 'off')]
                     if conflicts:
                         raise RequestRejected('OAuth provider refuses conflicting native auth/backend overrides: ' + ', '.join(conflicts))
+                    # The refusal above saw the inherited overrides; the rest of Hermes' internal
+                    # credential names never ride along either (#514): the launch profile's custom
+                    # endpoint key_env, HERMES_CUSTOM_*/HERMES_PROVIDER_* keys, GATEWAY_RELAY_* auth,
+                    # Tier-1 infrastructure and other-provider credentials.
+                    scrub_hermes_internal_env(env)
                 # Fail with the install hint, not a Popen FileNotFoundError, when Claude Code is absent.
                 resolved = resolve_claude(self.command, env)
                 if resolved is None:

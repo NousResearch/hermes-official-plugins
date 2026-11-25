@@ -166,6 +166,39 @@ def drop_api_credentials(env):
     return env
 
 
+def scrub_hermes_internal_env(env, keep=()):
+    """Strip the credential names a Hermes subprocess never carries (#514).
+
+    Hermes loads the launch profile's ``.env`` into ``os.environ``, and a multiplexed gateway serves
+    every profile from that one process, so any other credential in it - a custom endpoint's
+    ``key_env``, ``HERMES_CUSTOM_*``/``HERMES_PROVIDER_*`` keys, ``GATEWAY_RELAY_*`` auth, Tier-1
+    infrastructure and other-provider credentials - would reach every child this plugin spawns.
+    The child needs none of it: its login, PATH/HOME, proxy and CA settings and the plugin's own
+    flags all pass. The rules are core's spawn policy (``tools/environments/local_env_policy.py``);
+    on a core without that module the environment passes unchanged. ``keep`` names (case-folded)
+    survive the scrub: the setup probe's ``_first_party`` gate reads the inherited backend
+    overrides off the child, so a probe keeps those and the relay replaces the base URL.
+    """
+    try:
+        from tools.environments.local_env_policy import (
+            _ALWAYS_STRIP_FOLDED, _HERMES_PROVIDER_ENV_FORCE_PREFIX, _home_declared_key_env,
+            _is_hermes_internal_secret, _is_provider_env_blocklisted, _registry_adapter_secret_env)
+    except ImportError:
+        return env
+    kept = frozenset(name.upper() for name in keep)
+    registered = _registry_adapter_secret_env() | _home_declared_key_env()
+    for key in list(env):
+        upper = key.upper()
+        if upper in kept:
+            continue
+        if (upper in _ALWAYS_STRIP_FOLDED
+                or key.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX)
+                or _is_hermes_internal_secret(key)
+                or _is_provider_env_blocklisted(key, registered)):
+            del env[key]
+    return env
+
+
 def _setting(key, default=None):
     """Read one plugin setting, with unreadable config or missing keys treated as not set.
 
@@ -428,6 +461,9 @@ def _child_env(env, *, flag_fetch=False):
     """The env for a setup probe. ``flag_fetch`` lifts the quiet flags that block the CLI's feature-flag
     and usage fetches (``FLAG_FETCH_BLOCKERS``), except one the user exported in ``env``."""
     child = drop_api_credentials(dict(env))
+    # A setup probe child drops the rest of Hermes' internal credential names too (#514), except the
+    # backend overrides: _first_party reads them off the child to keep the probe behind the relay.
+    scrub_hermes_internal_env(child, keep=BACKEND_OVERRIDES + BACKEND_SWITCHES)
     apply_config_dir(child)
     apply_profile_credential(child)
     reap_orphaned_refresh_lock(child)

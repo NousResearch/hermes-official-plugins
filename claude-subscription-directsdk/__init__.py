@@ -231,6 +231,10 @@ def classify_api_error(error, **_):
     # Matched by class name: the plugin can load as a package or as top-level modules, so the class may be either copy.
     if type(error).__name__ == 'RequestRejected':
         return {'reason': 'format_error', 'retryable': False, 'should_fallback': True}
+    # A native tool call outside the offered inventory is the model's own output, not a transport failure: it is not
+    # retried here (status-less, it would otherwise be retried as unknown), and a configured fallback may answer.
+    if type(error).__name__ == 'ClaudeToolOutsideInventory':
+        return {'reason': 'format_error', 'retryable': False, 'should_fallback': True}
     return None
 
 

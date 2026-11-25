@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import contextvars
 import copy
 from collections import OrderedDict, deque
 from contextlib import suppress
@@ -24,25 +25,32 @@ import threading
 import time
 import uuid
 import weakref
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 try:
+    from . import concurrency
+    from .admission import steer_tail
     from .model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from .process_tree import kill_process_tree, own_process_group, unreaped
     from .directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
-        apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, observe_rate_limit, reap_orphaned_refresh_lock, relay,
-        resolve_upstream, session_settings, Upstream)
+        apply_traffic_policy, check_extra_usage, claude_version, drop_api_credentials, egress_env, max_concurrent, note_version,
+        observe_rate_limit, version_key, reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_idle_seconds,
+        session_min_rounds, session_tested, Upstream)
 except ImportError:
+    import concurrency
+    from admission import steer_tail
     from model_catalog import accepts_thinking_disable, native_model, supports_adaptive_thinking
     from process_tree import kill_process_tree, own_process_group, unreaped
     from directsdk_setup import (
         ClaudeCodeLoggedOut, INSTALL_HINT, LOGGED_OUT_HINT, _resolve as resolve_claude, apply_config_dir, apply_profile_credential,
-        apply_traffic_policy, check_extra_usage, drop_api_credentials, egress_env, observe_rate_limit, reap_orphaned_refresh_lock, relay,
-        resolve_upstream, session_settings, Upstream)
+        apply_traffic_policy, check_extra_usage, claude_version, drop_api_credentials, egress_env, max_concurrent, note_version,
+        observe_rate_limit, version_key, reap_orphaned_refresh_lock, relay, resolve_upstream, session_settings, session_idle_seconds,
+        session_min_rounds, session_tested, Upstream)
 
 
 logger = logging.getLogger(__name__)
+
 
 
 # Hermes picks retry vs fallback from an error's status_code (main loop and auxiliary ladder alike).
@@ -59,13 +67,44 @@ def _request_id(value):
 class ClaudeAPIError(RuntimeError):
     """A failed upstream or native-answered request; status_code is None when there is no HTTP equivalent."""
 
-    def __init__(self, message, status_code=None, *, request_id=None):
+    def __init__(self, message, status_code=None, *, request_id=None, resets_at=None):
         request_id = _request_id(request_id)
         if request_id:
             message += f' (request_id={request_id})'
         super().__init__(message)
         self.status_code = status_code
         self.request_id = request_id
+        # Core reads a limit's reopening (epoch seconds) from body['resets_at']; native's own text names a
+        # clock time (`resets 3:45pm`) that core cannot parse.
+        self.body = {'resets_at': resets_at} if resets_at else None
+
+
+# The relay records a transport failure as an exception class name (``UpstreamIdle``,
+# ``ConnectionResetError``). Core's classifier reads the message, not this plugin's types, so a
+# status-less wrapper used to reach it as an unclassifiable error: no same-provider retry, no
+# fallback, and no compression network-failure guard (#396). Name the failure with wording core
+# already matches, keeping the original label for reports. Mid-stream failures use core's
+# premature-close wording, never its server-disconnect wording: on a large session with a
+# non-reasoning model core reads a disconnect as a probable context overflow and compresses.
+_TRANSPORT_PHRASES = {
+    "UpstreamIdle": "response ended prematurely",
+    "ConnectionResetError": "connection reset",
+    "ConnectionAbortedError": "connection reset",
+    "BrokenPipeError": "connection reset",
+    "RemoteProtocolError": "response ended prematurely",
+    "LocalProtocolError": "response ended prematurely",
+    "IncompleteRead": "response ended prematurely",
+    "ConnectionRefusedError": "connection refused",
+    "TimeoutError": "timed out",
+    "socket.timeout": "timed out",
+}
+
+
+def transport_phrase(failure):
+    """Canonical transport wording for a relay failure label, or "" when it names no transport."""
+    if not isinstance(failure, str) or not failure:
+        return ""
+    return _TRANSPORT_PHRASES.get(failure.rsplit(".", 1)[-1], "")
 
 
 class RequestRejected(ValueError):
@@ -301,7 +340,7 @@ def native_format_schema(node):
 def request_body(kwargs):
     allowed = {'model', 'messages', 'tools', 'stream', 'stream_options', 'max_tokens', 'max_completion_tokens',
                'temperature', 'top_p', 'stop', 'extra_body', 'extra_headers', 'timeout', 'tool_choice', 'parallel_tool_calls', 'n', 'response_format',
-               'hermes_auxiliary'}
+               'hermes_auxiliary', 'hermes_cache_ttl'}
     unknown = set(kwargs) - allowed
     if unknown:
         raise RequestRejected('Unsupported request parameters: ' + ', '.join(sorted(unknown)))
@@ -422,11 +461,13 @@ class Request:
 
     def cancel(self):
         self.cancelled.set()
-        if self.admission is not None:
-            self.admission.abort()
+        # Read once, under the lock the hand-over to a kept session takes: it may clear the relay meanwhile.
         with self.lock:
+            admission = self.admission
             if self.process is not None:
                 kill_process_tree(self.process)
+        if admission is not None:
+            admission.abort()
 
     def spawn(self, command, *, stdin=subprocess.DEVNULL, **kwargs):
         with self.lock:
@@ -582,14 +623,64 @@ def _hand_off(native):
                 native.release()
             finally:
                 _draining.discard(process)
+                if native.slot is not None:
+                    # The answer returned long ago; the slot frees only now that this native has exited.
+                    native.slot.release()
 
     threading.Thread(target=drain, daemon=True, name='directsdk-drain').start()
 
 
 # Kept-alive natives of every client in this process, against the max_sessions cap; one session idles out after
 # this long, the prompt cache's own lifetime.
-_live, _live_lock = set(), threading.Lock()
+# Hermes imports the plugin once per profile home, one module each (concurrency.py says the same of its pool): every
+# copy finds the one registry under this name, so max_sessions bounds the Hermes process, not each profile.
+# Filled in before it is published, so a copy importing at the same time finds it whole or not at all.
+_LIVE = ModuleType('_claude_subscription_directsdk_live_v1')
+_LIVE.natives, _LIVE.lock = set(), threading.Lock()
+_LIVE = sys.modules.setdefault(_LIVE.__name__, _LIVE)
+_live, _live_lock = _LIVE.natives, _LIVE.lock
 SESSION_IDLE_S = 3600.0
+
+
+class _Reservation:
+    """A kept process's place in ``_live`` from the cap check until the process exists (nothing to kill yet)."""
+
+    def kill(self):
+        pass
+
+
+def _place(cap):
+    """A place against ``max_sessions`` for a new kept process, else None. At the cap the kept process that has waited
+    longest for a new user turn gives its place up; one serving a step or holding a parked call never does. The place
+    is taken under the lock: concurrent launches checked against an empty set used to all pass."""
+    tried = set()
+    while True:
+        with _live_lock:
+            if len(_live) < cap:
+                reservation = _Reservation()
+                _live.add(reservation)
+                return reservation
+            idle = [(since, id(n), n) for n in _live if n not in tried and (since := getattr(n, 'idle_since', None)) is not None]
+        if not idle:
+            return None
+        oldest = min(idle)[2]
+        tried.add(oldest)
+        end = oldest.end and oldest.end()
+        # Its owner ends it only if it is still that client's session and still waits for its user.
+        if end is not None and end(oldest, True):
+            logger.debug('Claude session evicted (the longest idle at max_sessions %d): its place goes to a step asking now', cap)
+
+
+def _end_orphan_native(native):
+    native.kill()
+    native.release()
+
+
+def _end_orphan(kept):
+    """End the process a collected client still held (``kept`` is the client's holder, not the client)."""
+    native = kept.pop('native', None)
+    if native is not None:
+        _end_orphan_native(native)
 _LAUNCH_DIR = re.compile(r'claude-directsdk-launch-(\d+)-')
 _swept = []
 
@@ -616,6 +707,15 @@ def _launch_dir():
     return Path(tempfile.mkdtemp(prefix=f'claude-directsdk-launch-{os.getpid()}-'))
 
 
+class _Doubt(RuntimeError):
+    """A kept native did something the plugin does not know (a tool call it cannot match, a control request or an
+    output line of an unknown shape): it is never answered or waited on, and its step restarts it."""
+
+    def __init__(self, why):
+        super().__init__(f'Claude session in doubt ({why})')
+        self.why = why
+
+
 class Native:
     """One Claude Code process and the relay its requests go through.
 
@@ -623,14 +723,32 @@ class Native:
     protocol: native's ``tools/call`` waits until Hermes brings the result, so native never runs a tool. A one-shot
     gets end of input after its frames and answers one step."""
 
-    def __init__(self, request, command, env, workdir, admission, launch_dir, tools=None):
-        self.admission, self.launch_dir, self.tools = admission, launch_dir, tools
+    def __init__(self, request, command, env, workdir, admission, launch_dir, tools=None, binary=None, version=None):
+        # ``binary``: the version key of the command this process runs (its files when it was started), under which its
+        # init event's version is recorded for the gate.
+        self.admission, self.launch_dir, self.tools, self.binary = admission, launch_dir, tools, binary
         self.events, self.stderr = queue.Queue(), deque(maxlen=40)
         self.lock, self.writing = threading.Lock(), threading.Lock()
+        self.watch = None  # the step's stdin watchdog (one thread a step, #419)
+        self.rate_limit = None  # the plan window as this process last reported it (rate_limit_event)
+        # A kept native may write rate_limit_event after its step has ended (and settled() would drop it): its reader
+        # feeds the extra-usage policy as the event arrives, before the next step's check (#398). It reads the serving
+        # profile's settings, which a gateway binds per context: the reader thread runs in a copy of this step's.
+        context = contextvars.copy_context()
+        self.observe = (lambda summary: context.copy().run(observe_rate_limit, env, summary)) if tools is not None else None
         self.parked, self.results = {}, {}
         # A kept session: what it was launched with, the frames it holds, and what the next step must bring.
-        self.ident = self.frames = self.expect = self.idle = None
-        self.cost = 0
+        self.ident = self.frames = self.expect = self.idle = self.on_exit = None
+        self.version = version  # the Claude Code version the gate let this kept process run on
+        # Why this native is in doubt (a restart reason), every tool id it asked for, and whether a resumed request of
+        # its own has been shown equal to per-call's.
+        self.doubt, self.asked, self.proven = None, set(), False
+        # Kept and waiting for a new user turn since (monotonic), and its owner's way to end it: the cap's eviction order.
+        self.idle_since = self.end = None
+        self.idle_gen = 0  # which idle period its timer belongs to
+        self.serving = True  # serving a step, as opposed to kept between steps by its client
+        self.doubt_ended = False  # its doubt has been acted on (logged, the process ended): once only
+        self.cost, self.slot = 0, None
         self.process = request.spawn(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      text=True, encoding='utf-8', cwd=workdir, env=env)
         # Native's stderr is diagnosis, not noise: a gateway-only failure (issue #44) vanished into DEVNULL.
@@ -651,39 +769,129 @@ class Native:
         try:
             for line in process.stdout:
                 event = json.loads(line)
-                if event.get('type') == 'control_request':
+                if self.tools is not None and not (isinstance(event, dict) and isinstance(event.get('type'), str) and (
+                        event['type'] != 'stream_event' or isinstance(event.get('event'), dict))):
+                    self._doubt('event')
+                elif event.get('type') == 'control_request':
                     self._control(event)
                 elif event.get('type') != 'control_response':
+                    if event.get('type') == 'system' and event.get('subtype') == 'init' and self.binary is not None:
+                        reported = event.get('claude_code_version')
+                        note_version(None, reported, self.binary)
+                        if self.tools is not None and reported != self.version:
+                            # The binary changed under the gate: this process is not the version it allowed.
+                            self.admission.unversioned = True
+                            self._doubt('version')
+                        if self.tools is not None and self.admission.init_ok is not None:
+                            self.admission.init_ok.set()
+                    if self.observe is not None and event.get('type') == 'rate_limit_event':
+                        self._observe(event)
                     self.events.put(event)
         except Exception as error:
+            if self.tools is not None and not isinstance(error, TimeoutError):
+                self._doubt('event')  # A line that is not JSON; a control write that timed out stays a timeout.
             self.events.put(error)
         finally:
+            if self.tools is not None:
+                # Its output ended (or broke): a kept native that can no longer be read is no session. End it rather
+                # than wait on a process that may never exit.
+                kill_process_tree(process)
             # The consumer may close while paused at a yielded chunk. Reaping belongs to this owner thread, never
             # cancel(). Clear the group first: a launcher that exits leaves children the reap would orphan.
             if os.name != 'nt' and hasattr(os, 'waitid') and unreaped(process, block=True):
                 kill_process_tree(process)
             process.wait()
             self.events.put(None)
+            # A kept native that exits while idle gives its relay and its place back now, not at its next use.
+            if self.on_exit is not None:
+                self.on_exit()
+
+    def _observe(self, event):
+        summary = _rate_limit_summary(event)
+        if summary:
+            self.rate_limit = summary
+            try:
+                self.observe(summary)
+            except Exception:  # The policy's bookkeeping must not end the reader, and with it the process.
+                logger.exception('claude-subscription-directsdk: rate_limit_event not recorded')
 
     def _write(self, row):
-        with self.writing, suppress(OSError, ValueError):
-            self.process.stdin.write(json.dumps(row, allow_nan=False) + '\n')
-            self.process.stdin.flush()
+        """One control row to native, bounded by the step's timeout as send() is: a native that stops reading stdin
+        would hold a large tool result's write, on the step's thread or the reader's, until someone cancelled."""
+        stalled = threading.Event()
+        timer = threading.Timer(self.admission.timeout, lambda: (stalled.set(), self.kill()))
+        timer.daemon = True
+        timer.start()
+        try:
+            with self.writing, suppress(OSError, ValueError):
+                self.process.stdin.write(json.dumps(row, allow_nan=False) + '\n')
+                self.process.stdin.flush()
+        finally:
+            timer.cancel()
+        if stalled.is_set():
+            raise TimeoutError('Claude request timed out')
+
+    def _doubt(self, why):
+        """Never trust this native again: the step it serves (or the next one) restarts it with ``why`` as the reason."""
+        if self.doubt is None:
+            self.doubt = why
+            self.events.put(_Doubt(why))
+            if not self.serving and self.end_doubted():
+                # Kept between steps, nobody reads the queue until the next step: end it now. Its reader's exit hands
+                # the place and the relay back.
+                self.kill()
+
+    def end_doubted(self):
+        """Claim acting on this native's doubt (log its reason); False when the reader or the hand-over already did."""
+        with self.lock:
+            if self.doubt_ended:
+                return False
+            self.doubt_ended = True
+        logger.debug('Claude session restart (%s): replaying into a new process', self.doubt)
+        return True
+
+    def _expected(self):
+        """The tool ids native may ask for now: the calls of the response this step received, else the parked ones."""
+        message = self.admission.capture.message
+        if message is not None:
+            return {b.get('id') for b in message.get('content') or () if isinstance(b, dict) and b.get('type') == 'tool_use'}
+        return self.expect if isinstance(self.expect, frozenset) else frozenset()
 
     def _control(self, event):
         """Answer native's MCP traffic for the hermes server; park each tools/call until Hermes has its result."""
         request = event.get('request') or {}
         message = request.get('message') or {}
         if request.get('subtype') != 'mcp_message':
+            if self.tools is not None:
+                # A kept native asks only for the hermes server's MCP traffic: one that asks for more is not kept. The
+                # error below still answers it, so a reply already streaming finishes.
+                self._doubt('control')
             # dontAsk with mcp__hermes allowed leaves native nothing else to ask; never let it act on its own.
             self._write({'type': 'control_response', 'response': {'subtype': 'error', 'request_id': event.get('request_id'),
                                                                   'error': 'Hermes runs every tool'}})
             return
+        if self.tools is not None and (request.get('server_name') != 'hermes' or (
+                message.get('method') == 'tools/call' and ('id' not in message or (message.get('params') or {}).get('name')
+                                                           not in {t.get('name') for t in self.tools}))):
+            # Traffic for another server, a call that cannot be answered (no JSON-RPC id), or one for a tool Hermes
+            # did not offer: not the hermes server's, so never parked or answered.
+            self._doubt('control')
+            return
         if message.get('method') == 'tools/call':
             tool_id = ((message.get('params') or {}).get('_meta') or {}).get('claudecode/toolUseId')
+            if not isinstance(tool_id, str):
+                # Parked under no id it would never be answered: native would wait on it forever.
+                self._doubt('no_tool_id')
+                return
             with self.lock:
-                self.parked[tool_id] = (event['request_id'], message.get('id'))
-                self._answer(tool_id)
+                known = tool_id not in self.asked and tool_id in self._expected()
+                if known:
+                    self.asked.add(tool_id)
+                    self.parked[tool_id] = (event['request_id'], message.get('id'))
+                    self._answer(tool_id)
+            if not known:
+                # A call this step never received, or one native asked for before: its history is not Hermes'.
+                self._doubt('tool_id')
             return
         result = {}
         if message.get('method') == 'initialize':
@@ -711,15 +919,18 @@ class Native:
                 self._answer(tool_id)
 
     def send(self, request, data, timeout):
+        """Write one frame (None: end of input). A child that stops reading stdin blocks a plain write past the
+        timeout: kill it then. One watchdog thread guards every write of a step (#419): a Timer per write was a
+        thread per replayed frame."""
         if data is None and self.process.stdin.closed:
             return
-        """Write one frame (None: end of input). A child that stops reading stdin blocks a plain write past the
-        timeout: kill it then."""
-        stalled = threading.Event()
-        timer = threading.Timer(timeout, lambda: (stalled.set(), request.cancel()))
-        timer.start()
+        watch = self.watch
+        if watch is None or watch.request is not request:
+            self.stop_watch()
+            watch = self.watch = _StdinWatch(timeout, request.cancel)
+            watch.request = request
         try:
-            with self.writing:
+            with self.writing, watch:
                 if data is None:
                     self.process.stdin.close()
                 else:
@@ -728,9 +939,7 @@ class Native:
         except OSError:
             if not request.cancelled.is_set():
                 raise
-        finally:
-            timer.cancel()
-        if stalled.is_set():
+        if watch.stalled.is_set():
             raise TimeoutError('Claude request timed out')
         if request.cancelled.is_set():
             raise RuntimeError('Claude request cancelled')
@@ -747,6 +956,8 @@ class Native:
                 event = self.events.get(timeout=min(remaining, .2))
             except queue.Empty:
                 continue
+            if isinstance(event, (TimeoutError, _Doubt)):
+                raise event  # The reader's own control write gave up (a timeout, not bad output), or it doubts native.
             if isinstance(event, Exception):
                 # The offending stdout line is the whole diagnosis (a shim banner, a stray print); keep it.
                 raise RuntimeError('Invalid native stream-json output: ' + repr((getattr(event, 'doc', None) or str(event))[:300]) + _stderr_tail(self.stderr)) from event
@@ -773,17 +984,21 @@ class Native:
                     break
 
     def resumes(self, frames):
-        """How this kept session continues ``frames``: ('user', frame), ('tools', results), or None (restart)."""
+        """How this kept session continues ``frames``: ('user', frame), ('tools', results), ('steer', results, frame)
+        for the results with Hermes' /steer after them, or why it cannot (a string: the restart's reason)."""
         n = len(self.frames)
         if len(frames) != n + 1 or frames[:n] != self.frames:
-            return None
+            return 'edited'
         blocks = frames[n]['message']['content']
         if self.expect == 'user':
-            return ('user', frames[n]) if any(b.get('type') != 'tool_result' for b in blocks) else None
+            return ('user', frames[n]) if any(b.get('type') != 'tool_result' for b in blocks) else 'results'
+        steer = steer_tail(blocks)
+        if steer:
+            blocks = blocks[:-1]
         results = {b.get('tool_use_id'): (b.get('content'), bool(b.get('is_error'))) for b in blocks if b.get('type') == 'tool_result'}
         if len(results) != len(blocks) or set(results) != self.expect or not all(isinstance(c, str) for c, _ in results.values()):
-            return None
-        return 'tools', results
+            return 'steer' if any(b.get('type') != 'tool_result' for b in blocks) else 'results'
+        return ('steer', results, {'type': 'user', 'message': {'role': 'user', 'content': [dict(steer)]}}) if steer else ('tools', results)
 
     def settled(self):
         """Drop what the last step left queued (native's own echo of its turn); False once native has exited.
@@ -792,15 +1007,24 @@ class Native:
             try:
                 event = self.events.get_nowait()
             except queue.Empty:
-                return self.process.poll() is None
+                # Never poll() here: that reaps the child, and the reader thread owns reaping (its group kill after an
+                # exited launcher needs the leader unreaped). The reader ends only after native has exited.
+                return self.reader.is_alive()
             if event is None or isinstance(event, Exception):
                 return False
 
     def forget_launch(self):
         shutil.rmtree(self.launch_dir, ignore_errors=True)
 
+    def stop_watch(self):
+        """End the step's stdin watchdog (the next step's first write starts its own)."""
+        watch, self.watch = self.watch, None
+        if watch is not None:
+            watch.stop()
+
     def kill(self):
         """Signal native's group and stop its relay; safe from any thread."""
+        self.stop_watch()
         if self.idle is not None:
             self.idle.cancel()
         self.admission.abort()
@@ -808,12 +1032,15 @@ class Native:
 
     def release(self):
         """Owner-thread teardown after kill() or exit: relay, pipes, launch files, the cap slot."""
+        self.stop_watch()
         with _live_lock:
             _live.discard(self)
         self.admission.close()
         with suppress(subprocess.TimeoutExpired):
             self.process.wait(timeout=5)
-        self.reader.join(timeout=5)
+        if threading.current_thread() is not self.reader:
+            # The reader itself releases a native that exited while idle.
+            self.reader.join(timeout=5)
         for pipe in (self.process.stdin, self.process.stdout):
             # Closing stdin re-flushes bytes a dead child never read; that BrokenPipe must not replace the error raised.
             with suppress(OSError, ValueError):
@@ -882,6 +1109,12 @@ def _rate_limit_summary(event) -> "dict | None":
         value = info.get(source)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             summary[key] = value
+    # The fuller account-wide plan window (0..1 fractions in unifiedWindows), for an extra_usage reserve (#398).
+    windows = info.get('unifiedWindows') if isinstance(info.get('unifiedWindows'), dict) else {}
+    used = [w.get('utilization') for name, w in windows.items() if name in ('five_hour', 'seven_day') and isinstance(w, dict)]
+    used = [u for u in used if isinstance(u, (int, float)) and not isinstance(u, bool)]
+    if used:
+        summary['utilization'] = max(used)
     return summary
 
 
@@ -891,6 +1124,51 @@ def _stderr_tail(native_stderr):
     learn the stream was empty."""
     text = ' '.join(line.strip() for line in native_stderr if line.strip())
     return f' (native stderr: {text[:400]})' if text else ''
+
+
+class _StdinWatch:
+    """One watchdog thread for every stdin write of a request.
+
+    A child that stops reading stdin blocks a plain write past the timeout; ``on_stall`` kills it then. A
+    ``threading.Timer`` per write was one thread started per replayed frame (602 for a 300-round history).
+    Here a write only records when it began. The thread never sleeps past ``timeout``, so it always wakes before
+    the deadline of a write that began while it slept, and then sleeps until exactly that deadline.
+    """
+
+    def __init__(self, timeout, on_stall):
+        self.timeout, self.on_stall, self.request = timeout, on_stall, None
+        self.stalled = threading.Event()
+        self._began = None
+        self._done = threading.Event()
+        self._thread = None
+
+    def __enter__(self):
+        self._began = time.monotonic()
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._run, daemon=True, name='claude-directsdk-stdin-watch')
+            self._thread.start()
+        return self
+
+    def __exit__(self, *_):
+        self._began = None
+
+    def _run(self):
+        wait = self.timeout
+        while not self._done.wait(wait):
+            began = self._began
+            wait = self.timeout if began is None else began + self.timeout - time.monotonic()
+            if wait <= 0:
+                on_stall = self.on_stall
+                if on_stall is not None:
+                    self.stalled.set()
+                    on_stall()
+                return
+
+    def stop(self):
+        # The thread can run on for a moment after this. It must not hold the request meanwhile: through it the
+        # client, which a caller that drops it expects collected, and its kept process ended, at once.
+        self.on_stall = self.request = None
+        self._done.set()
 
 
 class Stream:
@@ -1074,60 +1352,123 @@ class Client:
         command = command or source_env.get('CLAUDE_SUBSCRIPTION_DIRECTSDK_COMMAND') or 'claude'
         self.command = ([command] if isinstance(command, str) else list(command)) + list(args or [])
         self.timeout = timeout if isinstance(timeout, (int, float)) else 180
-        self._lock, self._requests, self._closed = threading.Lock(), set(), False
+        # close() ends the kept process, never another call (#378); a step serving when it lands keeps no process.
+        self._lock, self._requests, self._close_epoch = threading.Lock(), set(), 0
         # The one native kept alive for this client (Hermes keeps a client per agent), and whether a step uses it.
         self._session, self._stepping = None, False
+        # A client Hermes drops without close() must not keep its process for the idle hour: the finalizer ends
+        # whatever this holder names once the client is collected (the holder, not the client, is what it references).
+        self._kept = {'native': None}
+        weakref.finalize(self, _end_orphan, self._kept)
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
 
     def cancel(self):
         """Fast cross-thread cancellation: signal owned groups; never close caller-thread FDs."""
         with self._lock:
             requests = tuple(self._requests)
-        for request in requests:
-            request.cancel()
-        self._end_session()
+        try:
+            for request in requests:
+                request.cancel()
+        finally:
+            self._end_session()  # the kept process ends however the requests' cancels went
 
     def close(self):
+        # Calls in flight are left alone by design (#378): Hermes' auxiliary cache closes a client bound to a
+        # different live event loop, and cancelling its requests here killed parallel tool calls still running on
+        # that loop; each request owns and reaps its own native, and Stream.close()/cancel() stay the per-request
+        # stop. Later calls are not refused. The kept process is the client's own, between steps: it ends now, and a
+        # step that is serving when close() lands hands its process to no one.
         with self._lock:
-            self._closed = True
-            requests = tuple(self._requests)
-        for request in requests:
-            stream = request.stream() if request.stream else None
-            if stream is not None:
-                stream.close()
-            else:
-                request.cancel()
+            self._close_epoch += 1
         self._end_session()
 
-    def _end_session(self, native=None):
-        """Kill the idle kept session (only ``native`` when given: the idle timer's own)."""
+    def _end_session(self, native=None, idle=False, gen=None):
+        """Kill the idle kept session (only ``native`` when given: the idle timer's own; with ``idle``, only while it
+        waits for its user, as eviction requires; with ``gen``, only in that idle period); whether it did."""
         with self._lock:
-            if self._session is None or (native is not None and self._session is not native):
-                return
-            native, self._session = self._session, None
+            if self._session is None or (native is not None and self._session is not native) or (
+                    idle and self._session.idle_since is None) or (gen is not None and self._session.idle_gen != gen):
+                return False
+            native, self._session, self._kept['native'] = self._session, None, None
         native.kill()
         native.release()
+        return True
 
-    def _keep(self, native, frames, expect):
+    def _keep(self, native, frames, expect, request):
+        """Make ``native`` this client's kept session; False when cancel() got there first, None when close() did.
+
+        Ownership moves from the request to the client in one step, under both locks: a stop lands wholly before
+        (it kills through the request, and the step ends cancelled) or wholly after (it finds the session)."""
         native.frames, native.expect = frames, expect
-        native.idle = threading.Timer(SESSION_IDLE_S, self._end_session, args=(native,))
-        native.idle.daemon = True
-        native.idle.start()
-        with self._lock:
-            self._session, self._stepping = native, False
+        # Its step's stdin watchdog holds that step's request, and through it this client: it ends with the step.
+        native.stop_watch()
+        # The timer holds no reference to this client: a bound method would keep a dropped client, and with it the
+        # process, alive for the whole idle hour. Once the client is gone the timer ends the process itself.
+        end = weakref.WeakMethod(self._end_session)
 
-    def _resume(self, ident, frames):
-        """The kept session and how this step continues it, else (None, None) after ending it."""
+        native.idle_gen = gen = native.idle_gen + 1
+
+        def ended(idle_gen=None):
+            """The idle hour passed (``idle_gen``: that idle period's), or native exited on its own (its reader calls
+            this). A timer that fired as a step took the process over must not end its next park or idle period."""
+            method = end()
+            if method is not None:
+                method(native, gen=idle_gen)
+            else:
+                _end_orphan_native(native)
+        native.idle = threading.Timer(session_idle_seconds(SESSION_IDLE_S), ended, kwargs={'idle_gen': gen})
+        native.on_exit = ended
+        native.idle.daemon = True
+        native.idle_since, native.end = (time.monotonic(), end) if expect == 'user' else (None, None)
+        with self._lock, request.lock:
+            if request.cancelled.is_set():
+                return False
+            if request.close_epoch != self._close_epoch:
+                return None  # close() landed: the step's answer stands (#378) and its process is kept by no one
+            self._session, self._stepping, self._kept['native'] = native, False, native
+            native.serving = False
+            request.process = request.admission = None
+            # Idle from here on, so its max_concurrent slot goes back now, not when the caller ends the stream.
+            slot, native.slot = native.slot, None
+            if expect == 'user':
+                # A parked call is not idle: native waits on Hermes' tool, however long it runs.
+                native.idle.start()
+        if slot is not None:
+            slot.release()
+        if native.process.returncode is not None or native.doubt is not None:
+            # It exited, or doubted, before it was the session: its reader found nothing to end. Ending is idempotent;
+            # only the log line is claimed once (the reader or the step may have logged the doubt already).
+            if native.doubt is not None:
+                native.end_doubted()
+            ended()
+        return True
+
+    def _resume(self, ident, frames, version):
+        """The kept session and how this step continues it, else (None, None) after ending it (``version``: the
+        Claude Code version this step may keep a process on, None for none)."""
         with self._lock:
-            native, self._session = self._session, None
+            native, self._session, self._kept['native'] = self._session, None, None
+            if native is not None:
+                native.serving = True
         if native is not None:
             native.idle.cancel()
-            how = native.resumes(frames) if native.ident == ident and native.settled() else None
-            if how:
+            native.idle_since = None  # serving a step now: never evicted
+            how = ('version' if native.version != version else 'launch' if native.ident != ident else native.doubt or
+                   (native.resumes(frames) if native.settled() else 'exited'))
+            if not isinstance(how, str):
                 return native, how
-            native.kill()
-            native.release()
+            self._restart(native, how)
         return None, None
+
+    @staticmethod
+    def _restart(native, why):
+        """End a kept session this step cannot continue; Hermes' logs say why (a rising rate is visible there)."""
+        if why is not None and why == native.doubt:
+            native.end_doubted()  # logs it, unless the reader or the hand-over already did
+        else:
+            logger.debug('Claude session restart (%s): replaying into a new process', why)
+        native.kill()
+        native.release()
 
     def _workdir(self):
         """The shared cwd, else the one private cwd of this process."""
@@ -1163,8 +1504,7 @@ class Client:
     def _register(self):
         request = Request(self)
         with self._lock:
-            if self._closed:
-                raise RuntimeError('Claude client is closed')
+            request.close_epoch = self._close_epoch
             self._requests.add(request)
         return request
 
@@ -1193,7 +1533,7 @@ class Client:
 
     def _run(self, request, kwargs, body, manifest, names, system, frames):
         hermes_names = {native: hermes for hermes, native in names.items()}
-        native, state, stepping = None, {}, False
+        native, state, stepping, slot = None, {}, False, None
         try:
             timeout = kwargs.get('timeout', self.timeout)
             timeout = getattr(timeout, 'read', timeout)
@@ -1220,6 +1560,10 @@ class Client:
             # Anthropic or the profile's opted-in gateway; an explicit Client(env=...) fixture may name its own.
             upstream = (Upstream(env['ANTHROPIC_BASE_URL'], None, None, False) if env.get('ANTHROPIC_BASE_URL')
                         else resolve_upstream())
+            # Wait for a free slot (#329), then check extra usage: calls that ran meanwhile may have crossed the limit.
+            # A kept process holds a slot only while it serves a step; idle or parked between steps it holds none.
+            slot = yield from concurrency.acquire(max_concurrent(), request.cancelled, timeout,
+                                                  lambda: self._chunk(kwargs['model'], {}))
             # The extra_usage setting refuses here, before anything is billed (#43).
             check_extra_usage(resolved, dict(env), upstream)
             # An inherited effort level would override the --effort Hermes passes below.
@@ -1228,6 +1572,10 @@ class Client:
             env.update(ENABLE_TOOL_SEARCH='false', CLAUDE_CODE_MAX_RETRIES='0', DISABLE_AUTO_COMPACT='1', DISABLE_COMPACT='1')
             # Telemetry and feature flags follow the user's claude_code_telemetry setting, read per spawn.
             apply_traffic_policy(env)
+            # Hermes asked for a 5m cache on this request (a delegated child). A `-p` turn is native's main
+            # conversation bucket, so its own variable is the one that applies; a tier the user exported wins.
+            if kwargs.get('hermes_cache_ttl') == '5m':
+                env.setdefault('CLAUDE_CODE_PROMPT_CACHE_TTL', '5m')
             egress_env(env, upstream)
             # Hermes owns budgets; native's replayed reminder invalidates cached history.
             env['CLAUDE_CODE_TOTAL_TOKENS_REMINDER'] = 'off'
@@ -1246,62 +1594,155 @@ class Client:
             ident = hashlib.sha256(json.dumps([resolved, sorted(env.items()), upstream and [upstream.url, upstream.proxy],
                                                kwargs['model'], body, system, session_id], default=str).encode()).hexdigest()
             enabled, cap = session_settings()
+            if not enabled or (not manifest and kwargs.get('hermes_auxiliary') is not True):
+                # Session mode was turned off, or the agent's own call carries no tools: a process kept before (even one
+                # parked) cannot serve it and ends now. An auxiliary call (title, summary) leaves it alone.
+                self._end_session()
             # An auxiliary call (summary, title) or a tool-less one is a single step: a one-shot, never kept.
             session = bool(enabled and manifest and kwargs.get('hermes_auxiliary') is not True)
+            # Kept mode runs only on a Claude Code version the session tests passed on; any other runs per-call. The
+            # version is what a process of this binary reported in its init event: until one has, the step runs per-call.
+            seen, version = claude_version(resolved) if session else (False, None)
+            tested = session and seen and session_tested(version)
             with self._lock:
                 # One step at a time uses the kept native; a concurrent call on this client runs one-shot.
                 session = stepping = session and not self._stepping
                 self._stepping = self._stepping or session
-            native, how = self._resume(ident, frames) if session else (None, None)
+            native, how = self._resume(ident, frames, version if tested else None) if session else (None, None)
+            # A new process is kept only once the conversation has had session_min_rounds tool rounds (Hermes' frames of
+            # tool results): before that the saving is small and the memory not worth holding (short chats, most
+            # subagents). A kept one still continues, or restarts, as its history says.
+            rounds = sum(f['type'] == 'user' and any(b.get('type') == 'tool_result' for b in f['message']['content'])
+                         for f in frames)
+            session = session and tested and (native is not None or rounds >= session_min_rounds())
             while True:
                 if native is None:
-                    with _live_lock:
-                        # At the process cap this step runs one-shot: the same bytes at the per-call cost.
-                        session = session and len(_live) < cap
-                    native = self._launch(request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id, session)
-                    native.ident = ident
-                    native.replay(request, frames, timeout)
+                    # At the process cap with no kept process to evict, this step runs one-shot: the same bytes at the
+                    # per-call cost.
+                    reservation = _place(cap) if session else None
+                    session = reservation is not None
+                    try:
+                        native = self._launch(request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id, session, reservation,
+                                              version)
+                    finally:
+                        # However the launch ended, the reservation is spent: native holds the place now, or nothing does.
+                        with _live_lock:
+                            _live.discard(reservation)
+                    native.ident, native.version, native.slot = ident, version, slot
+                    try:
+                        native.replay(request, frames, timeout)
+                    except _Doubt as doubt:
+                        # Nothing has gone upstream yet: this step replays on a fresh one-shot.
+                        self._restart(native, doubt.why)
+                        native, session = None, False
+                        continue
                     if not session:
                         native.send(request, None, timeout)
                 else:
+                    expected = None
+                    if not native.proven:
+                        # Its first resumed request is the first with rows native built itself past the launch's replay,
+                        # so no earlier request proves them: it goes upstream only as per-call's own bytes.
+                        expected = self._per_call_request(request, env, resolved, upstream, kwargs, body, manifest, system,
+                                                          frames, timeout, session_id)
+                        # The probe took a while: drop what native echoed of its last step meanwhile, as _resume did.
+                        why = 'unproven' if expected is None else None if native.settled() else 'exited'
+                        if why:
+                            self._restart(native, why)
+                            native = None
+                            continue
                     with request.lock:
                         if request.cancelled.is_set():
                             raise RuntimeError('Claude request cancelled')
                         request.process, request.admission = native.process, native.admission
-                    native.admission.rearm(timeout, frames[-1]['message']['content'], frames)
+                    native.slot = slot
+                    native.admission.rearm(timeout, frames[-1]['message']['content'], frames, expected)
+                    native.proven = True
                     native.admission.eager = session_id not in _BUFFER_TOOL_INPUT
-                    if how[0] == 'user':
-                        native.send(request, how[1], timeout)
-                    else:
-                        native.deliver(how[1])
-                if (yield from self._step(request, native, state, kwargs, hermes_names, session, session_id, resolved, env, frames, timeout)) != 'diverged':
-                    break
-                # The kept native's request would not extend its previous one; it was never forwarded. Replay instead.
-                logger.info('Claude session diverged from its previous request; replaying into a new one')
-                native.kill()
-                native.release()
+                    try:
+                        if how[0] == 'user':
+                            native.send(request, how[1], timeout)
+                        else:
+                            if how[0] == 'steer':
+                                # Native reads its stdin in order, so the steer is queued when the results arrive and
+                                # goes up with them in one request (as its own row; the relay puts it back where Hermes
+                                # has it).
+                                native.send(request, how[2], timeout)
+                            native.deliver(how[1])
+                    except TimeoutError:
+                        raise  # the step's own deadline passed while native would not read: no replay after it
+                    except OSError:
+                        # It exited after the resume check, before this write: nothing went upstream. Replay instead.
+                        self._restart(native, 'exited')
+                        native = None
+                        continue
+                try:
+                    if (yield from self._step(request, native, state, kwargs, hermes_names, session, session_id, resolved, env, frames, timeout)) != 'diverged':
+                        break
+                    # The relay refused the kept native's request before upstream (rows that do not line up, not the
+                    # previous request extended, not per-call's bytes). Replay instead.
+                    why = 'diverged'
+                    if native.admission.unversioned:
+                        # Its own init never named the allowed version: this step runs per-call.
+                        why, session = 'version', False
+                except _Doubt as doubt:
+                    # Before its request went upstream: this step replays per-call bytes on a fresh one-shot.
+                    why, session = doubt.why, False
+                self._restart(native, why)
                 native = None
         finally:
-            request.cancel()
             outcome = state.get('outcome')
-            if native is not None and outcome not in ('kept', 'handed_off'):
-                native.kill()
-                native.release()
-            with self._lock:
-                self._requests.discard(request)
-                if stepping and outcome != 'kept':
-                    self._stepping = False
+            try:
+                if native is not None:
+                    native.stop_watch()  # a kept process between steps holds no watchdog thread
+                request.cancel()
+                if native is not None and outcome not in ('kept', 'handed_off'):
+                    native.kill()
+                    native.release()
+            finally:
+                if slot is not None and outcome != 'handed_off':
+                    # A kept process gave its slot back in _keep (idempotent here); a handed-off one-shot frees it on exit.
+                    slot.release()
+                with self._lock:
+                    self._requests.discard(request)
+                    if stepping and outcome != 'kept':
+                        self._stepping = False
 
-    def _launch(self, request, env, resolved, upstream, kwargs, body, tools, system, frames, timeout, session_id, session):
-        """Start native for one step: a session (kept for the next step) or a one-shot (ends after this one)."""
+    def _per_call_request(self, request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id):
+        """The request a per-call step sends for ``frames``, from a one-shot whose relay keeps it and sends nothing
+        upstream; None when it could not be had."""
+        probe = self._launch(request, env, resolved, upstream, kwargs, body, manifest, system, frames, timeout, session_id, False,
+                             probe=True)
+        try:
+            probe.replay(request, frames, timeout)
+            probe.send(request, None, timeout)
+            while probe.admission.probed is None and probe.receive(request, timeout) is not None:
+                pass
+        except TimeoutError:
+            raise  # the step's deadline passed while the probe built nothing: no replay after it
+        except (RuntimeError, OSError):
+            if request.cancelled.is_set():
+                raise
+        finally:
+            probe.kill()
+            probe.release()
+        return probe.admission.probed
+
+    def _launch(self, request, env, resolved, upstream, kwargs, body, tools, system, frames, timeout, session_id, session, reservation=None,
+                version=None, probe=False):
+        """Start native for one step: a session (kept for the next step, taking the place ``reservation`` holds in
+        ``_live``) or a one-shot (ends after this one)."""
         queried = frames[-1]['message']['content']
         # The queried frame lets the relay keep the cache breakpoint off native's per-request context.
         admission = relay(upstream, timeout, queried=queried)
         # A Hermes auxiliary one-shot (summary, title: marked by the profile hook, one turn, no tools) is
         # never replayed, so the relay drops its message cache marks instead of moving them.
         admission.one_shot = kwargs.get('hermes_auxiliary') is True and not json.loads(body)['tools'] and len(frames) == 1
+        # A probe's relay keeps the request and forwards nothing, from before its Claude Code starts.
+        admission.probe = probe
         admission.eager = session_id not in _BUFFER_TOOL_INPUT
         if session:
+            admission.init_ok = threading.Event()
             # The relay keeps a kept native's requests byte-identical to what a fresh replay sends.
             admission.frames = frames
         with request.lock:
@@ -1310,8 +1751,10 @@ class Client:
         if session:
             # A parked call waits as long as Hermes runs the tool; Hermes bounds tool output itself.
             env.update(MCP_TOOL_TIMEOUT='86400000', MAX_MCP_OUTPUT_TOKENS='100000000')
-        root = _launch_dir()
+        root = None
         try:
+            # Inside the relay's cleanup: a launch directory that cannot be made must not leave the relay listening.
+            root = _launch_dir()
             # Native settings apply env inside the process, avoiding execve's
             # per-argument/environment-string limit for full Hermes schemas.
             (root / 'settings.json').write_text(json.dumps({'env': {'CLAUDE_CODE_EXTRA_BODY': body}}), encoding='utf-8')
@@ -1333,14 +1776,18 @@ class Client:
             if effort:
                 command += ['--effort', effort]
             command += ['--session-id', session_id]
-            native = Native(request, command, env, self._workdir(), admission, root, tools if session else None)
+            binary = version_key(resolved)  # before the spawn: an update after it is another binary
+            native = Native(request, command, env, self._workdir(), admission, root, tools if session else None, binary,
+                            version if session else None)
             if session:
                 with _live_lock:
+                    _live.discard(reservation)
                     _live.add(native)
             return native
         except BaseException:
             admission.close()
-            shutil.rmtree(root, ignore_errors=True)
+            if root is not None:
+                shutil.rmtree(root, ignore_errors=True)
             raise
 
     def _step(self, request, native, state, kwargs, hermes_names, session, session_id, resolved, env, frames, timeout):
@@ -1353,7 +1800,14 @@ class Client:
         native_error = native_error_code = None
         parked = False
         while True:
-            event = native.receive(request, timeout)
+            try:
+                event = native.receive(request, timeout)
+            except _Doubt:
+                if not admission.used:
+                    raise
+                # Native asks for a tool as soon as its call has streamed. The answer is upstream's and stands; the
+                # process is not kept after it (native.doubt).
+                continue
             if event is None:
                 break
             kind = event.get('type')
@@ -1373,7 +1827,8 @@ class Client:
                 summary = _rate_limit_summary(event)
                 if summary:
                     rate_limit = summary
-                    observe_rate_limit(env, summary)
+                    if native.observe is None:  # a kept native's reader has fed it already
+                        observe_rate_limit(env, summary)
             elif kind == 'stream_event':
                 event = event['event']
                 if event['type'] == 'message_stop':
@@ -1416,6 +1871,12 @@ class Client:
         # A kept native refused by the relay, or gone before this step reached it: replay into a new one.
         if admission.diverged or (native.frames is not None and not admission.used and not assistants and not results):
             return 'diverged'
+        if session and rate_limit is None and admission.used and native.rate_limit:
+            # Native reports the plan window only when it changes: a kept one says nothing on a step that found the
+            # window as its last report did, where a new process (per-call) reports that state again. The reserve
+            # (#398) must see every step, so this one feeds the state the process last reported.
+            rate_limit = native.rate_limit
+            observe_rate_limit(env, rate_limit)
         if admission.used:
             if admission.status != 200 or not admission.capture.complete:
                 # Native's last error is the admission denial; name the first attempt's outcome so reports are diagnosable.
@@ -1424,8 +1885,12 @@ class Client:
                     first += ', upstream said: ' + admission.error_text()[:500]
                 # The first attempt's real HTTP status; a 200 cut short or a relay failure has none.
                 status = admission.status if isinstance(admission.status, int) and admission.status >= 400 else None
-                raise ClaudeAPIError(f'Incomplete upstream response ({first})' + (': ' + native_error if native_error else ''),
-                                     status, request_id=admission.request_id)
+                message = f'Incomplete upstream response ({first})' + (': ' + native_error if native_error else '')
+                phrase = transport_phrase(admission.failure)
+                if phrase and phrase not in message.lower():
+                    # Keep the transport class visible to core's message-based classifier.
+                    message += f' [{phrase}]'
+                raise ClaudeAPIError(message, status, request_id=admission.request_id, resets_at=admission.reset_at)
             assistants = [admission.capture.message]
             stopped = True
         native_failure_handled = admission.denied or (admission.used and assistants[0].get('stop_reason') == 'refusal')
@@ -1525,7 +1990,9 @@ class Client:
         # Kept only when native holds exactly the history Hermes will send next: a clean step through the relay, every
         # call parked on Hermes, nothing native answered itself.
         clean = (session and admission.used and not admission.denied and not native_error and not refused and not unparsed
-                 and (routed if parked else final.get('subtype') == 'success' and not calls))
+                 and (routed if parked else final.get('subtype') == 'success' and not calls) and native.doubt is None)
+        if session and native.doubt is not None:
+            native.end_doubted()
         state['outcome'] = 'kept' if clean else 'handed_off' if fast else 'done'
         if fast:
             # The answer is complete at native's result: its exit is never waited for; the drain kills a native
@@ -1534,11 +2001,14 @@ class Client:
                 request.process = request.admission = None
             _hand_off(native)
         if clean:
-            with request.lock:
-                request.process = request.admission = None
             reply = {k: v for k, v in copy.deepcopy(assistants[0]).items() if k != 'usage'}
-            self._keep(native, frames + [{'type': 'assistant', 'message': reply}],
-                       frozenset(c['id'] for c in calls) if parked else 'user')
+            kept = self._keep(native, frames + [{'type': 'assistant', 'message': reply}],
+                              frozenset(c['id'] for c in calls) if parked else 'user', request)
+            if not kept:
+                # The stop still held this step's process: it ends with the step (the finally below), native with it.
+                state['outcome'] = 'done'
+                if kept is False:
+                    raise RuntimeError('Claude request cancelled')
         native.forget_launch()
         yield chunk
     @staticmethod

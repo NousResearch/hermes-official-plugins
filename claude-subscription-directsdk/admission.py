@@ -8,10 +8,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import secrets
+import selectors
 import socket
+import socketserver
 import ssl
 import sys
 import threading
@@ -29,6 +32,8 @@ MAX_BREAKPOINTS = 4
 # (180 s, native 2.1.263-2.1.286). Behind this relay native widens its watchdog to 300 s, the same as Hermes'
 # compression floor and stall detector, so a silent upstream surfaced as a stall instead of this error.
 UPSTREAM_IDLE_SECONDS = 180
+# How long a kept native's relay waits for that native's own init event before it refuses its request.
+INIT_WAIT_SECONDS = 10.0
 # Probe a quiet upstream socket so a dead path fails in ~30 s instead of waiting on TCP retransmits.
 KEEPALIVE = (('TCP_KEEPIDLE', 15), ('TCP_KEEPALIVE', 15), ('TCP_KEEPINTVL', 5), ('TCP_KEEPCNT', 3))
 GZIP_HOSTS = ('api.anthropic.com',)
@@ -80,6 +85,21 @@ def _rejection_kind(response, body):
     return None
 
 
+def rejected_window_reset(response):
+    """Epoch seconds a used-up plan window reopens, from the 429 that rejected it; None for any other answer.
+
+    Every answer carries the window's reset, so only a rejected window makes it this 429's reset: a throttle
+    while the window is open must not bench the route for hours.
+    """
+    if response.status != 429 or (response.getheader('anthropic-ratelimit-unified-status') or '').strip() != 'rejected':
+        return None
+    try:
+        reset = float(response.getheader('anthropic-ratelimit-unified-reset') or '')
+    except ValueError:
+        return None
+    return round(reset) if math.isfinite(reset) and reset > 0 else None
+
+
 class UpstreamIdle(OSError):
     """The upstream sent headers, then nothing for UPSTREAM_IDLE_SECONDS."""
 
@@ -99,6 +119,10 @@ def keepalive(sock):
 
 class QueriedTurnMismatch(ValueError):
     """The native request could not be reconciled with Hermes' tool results."""
+
+
+class HistoryMisaligned(ValueError):
+    """A kept-alive native's own history does not line up with Hermes' frames (``canonical_history``)."""
 
 
 # Winsock: shutdown() does not wake a recv blocked in another thread; closesocket() cancels pending calls.
@@ -565,41 +589,124 @@ def _fold_replayed_date(messages):
     return True
 
 
+# How Claude Code (2.1.292 to 2.1.323) puts a user message that reached a kept native mid-turn (a /steer) into its
+# requests: a system row of its own after the tool results. Per-call has the same text as a block after the results.
+STEER_ROW = ('The user sent a new message while you were working:\n', '\n\nThis is how Claude Code surfaces messages '
+             'the user sends mid-turn — within the running turn, often alongside the next tool result, rather than '
+             'as a separate conversation turn. Address the message above as you continue this turn.')
+
+
+def steer_tail(content):
+    """The one text block after a frame's tool results (Hermes' /steer), else None."""
+    tail = content[-1:] if len(content) > 1 and all(b.get('type') == 'tool_result' for b in content[:-1]) else []
+    return tail[0] if tail and set(tail[0]) == {'type', 'text'} and tail[0]['type'] == 'text' else None
+
+
+def _steer_row(message):
+    """The text of a system row of native's steer shape (one text block, or a string in its own history), else None."""
+    content = message.get('content') if message.get('role') == 'system' else None
+    block = content[0] if isinstance(content, list) and len(content) == 1 and isinstance(content[0], dict) else {}
+    text = content if isinstance(content, str) else block.get('text') if set(block) <= {'type', 'text', 'cache_control'} else None
+    return text if isinstance(text, str) and text.startswith(STEER_ROW[0]) else None
+
+
+def _fold_steer(messages, i, steer):
+    """Remove native's steer row after row ``i`` when it wraps exactly ``steer``; returns its cache mark (or True)."""
+    row = messages[i + 1] if i + 1 < len(messages) else {}
+    if _steer_row(row) != steer['text'].join(STEER_ROW):
+        return None
+    del messages[i + 1]
+    return (row['content'][0].get('cache_control') if isinstance(row['content'], list) else None) or True
+
+
 def canonical_history(payload, frames):
     """Send every replayed user frame of a kept-alive native exactly as a fresh native replays Hermes' frame.
 
     Native holds tool results as it built them from MCP replies (text-block lists), and a fresh native replays
     Hermes' frames verbatim, so the two would differ from the second request on. Mapping is positional over
-    non-system messages; native's cache mark stays; anything that does not line up forwards as is."""
+    non-system messages; native's cache mark stays. A steer native holds as its own row goes back into the frame.
+    Raises ``HistoryMisaligned`` when the rows do not line up (one more or fewer than Hermes holds, a role out of
+    place, a steer not where Hermes put it, a body this cannot read): the caller decides whether such a request
+    still forwards."""
     try:
         body = json.loads(payload)
         messages = body['messages']
         changed = _fold_replayed_date(messages)
         convo = [(i, m) for i, m in enumerate(messages) if m.get('role') != 'system']
         if len(convo) != len(frames):
-            return payload
-        for k, ((i, sent), frame) in enumerate(zip(convo, frames)):
+            raise HistoryMisaligned(f'{len(convo)} native rows against {len(frames)} Hermes frames')
+        for k, ((i, sent), frame) in reversed(list(enumerate(zip(convo, frames)))):  # a fold shifts later rows only
             if sent.get('role') != frame['type']:
-                return payload
+                raise HistoryMisaligned(f'row {k}: native {sent.get("role")!r} against Hermes {frame["type"]!r}')
+            steer = frame['type'] == 'user' and steer_tail(frame['message']['content'])
+            folded = steer and _fold_steer(messages, i, steer)
+            changed = changed or bool(folded)
+            if steer and k == len(frames) - 1:
+                if folded:
+                    sent['content'].append(dict(steer, **({} if folded is True else {'cache_control': folded})))
+                elif _plain(sent['content'][-1]) != steer:
+                    raise HistoryMisaligned(f'row {k}: the steer is not where Hermes put it')
+                # The results before the steer go up as Hermes' bytes too, native's mark on the last block.
+                want = copy.deepcopy(frame['message']['content'])
+                marks = [b['cache_control'] for b in sent['content'] if isinstance(b, dict) and 'cache_control' in b]
+                if marks and not any(isinstance(b, dict) and 'cache_control' in b for b in want):
+                    want[-1]['cache_control'] = marks[-1]
+                if _bytes(sent['content']) != _bytes(want):
+                    messages[i] = {'role': 'user', 'content': want}
+                    changed = True
+                continue
             opens_turn = any(b.get('type') != 'tool_result' for b in frame['message']['content'])
-            # Assistant turns are native's own; a new user turn keeps the per-call transforms that follow.
-            if frame['type'] != 'user' or (k == len(frames) - 1 and opens_turn):
+            if frame['type'] != 'user':
+                # Native's record of a reply goes upstream as it is: it must be, mark aside, the reply a fresh
+                # replay sends from Hermes' frame, byte for byte, or the request is not per-call's.
+                if _bytes(_unmarked(sent.get('content'))) != _bytes(_as_replayed(frame['message']['content'])):
+                    raise HistoryMisaligned(f"row {k}: native's record of the reply is not Hermes' frame")
+                continue
+            # A new user turn keeps the per-call transforms that follow.
+            if k == len(frames) - 1 and opens_turn:
                 continue
             if k == 0:
                 # A kept native replays its opening turn with the context per-call's _frame_first dropped from it.
                 changed = drop_prepended_context(sent.get('content'), frame['message']['content']) or changed
                 continue
+            if opens_turn and not steer:
+                # An earlier user turn of text: native holds it as it read it, as a replay builds it. Rewriting it to
+                # Hermes' frame put back what native drops (an empty block), so no later request extended the first.
+                continue
             want = copy.deepcopy(frame['message']['content'])
             got = sent.get('content')
             mark = next((b['cache_control'] for b in got if isinstance(b, dict) and 'cache_control' in b), None) if isinstance(got, list) else None
+            if mark is None and isinstance(folded, dict):
+                mark = folded  # native's mark sat on the steer row folded in above
             if mark is not None:
                 want[-1].setdefault('cache_control', mark)
-            if got != want:
+            if _bytes(got) != _bytes(want):  # key order too: the claim is bytes
                 messages[i] = {'role': 'user', 'content': want}
                 changed = True
+        if any(_steer_row(m) for m in messages):
+            raise HistoryMisaligned('a steer row where Hermes holds none')
         return json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8') if changed else payload
-    except (ValueError, TypeError, KeyError, AttributeError, IndexError):
-        return payload
+    except HistoryMisaligned:
+        raise
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError) as error:
+        raise HistoryMisaligned(f'{type(error).__name__}: {error}') from error
+
+
+_DIRECT = {'type': 'direct'}
+
+
+def _as_replayed(content):
+    """Hermes' frame of a reply as a fresh native replays it: no cache mark, and no ``"caller": {"type": "direct"}``
+    on a tool call (the Messages API adds it to every one; Claude Code drops it from its record and from a replay).
+    Only Hermes' side is changed, and only that exact value: a native record that kept it, or any other caller, no
+    longer matches, and its request is refused."""
+    return [{k: v for k, v in block.items() if not (k == 'caller' and v == _DIRECT)}
+            if isinstance(block, dict) and block.get('type') == 'tool_use' else block
+            for block in _unmarked(content)] if isinstance(content, list) else _unmarked(content)
+
+
+def _bytes(value):
+    return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
 
 
 def _unmarked(value):
@@ -758,6 +865,13 @@ class _Server(HTTPServer):
             return
         super().handle_error(request, client_address)
 
+    def server_bind(self):
+        # HTTPServer.server_bind also asks DNS for the bound address's name (socket.getfqdn) only to fill
+        # server_name, which nothing here reads. Every call starts a relay, and on a host whose resolver stalls on
+        # 127.0.0.1 the first call of each process waited out that lookup (35 s on one macOS host).
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[0], self.server_address[1]
+
 
 class Admission:
     def __init__(self, upstream, timeout, queried=None, *, proxy=None, context=None):
@@ -785,6 +899,7 @@ class Admission:
         self.auth_retry_used = False
         self.request_id = None
         self.status = None
+        self.reset_at = None
         self.failure = None
         self.unrestored = None
         self.capture = Capture()
@@ -792,17 +907,51 @@ class Admission:
         # A kept-alive native's step: Hermes' frames for canonical_history, and the request extends_previous checks.
         self.frames = self.last_forwarded = None
         self.diverged = False
+        # A probe relay keeps per-call's request for a step (``probed``) and sends nothing; a kept native's relay
+        # forwards its request only when it equals ``expected``, when that is set.
+        self.probe, self.probed, self.expected = False, None, None
+        # A kept native's relay: set once its native's init named the Claude Code version the gate allowed
+        # (``init_ok``), or named another or none (``unversioned``); None for a one-shot.
+        self.init_ok, self.unversioned = None, False
         self.prefix = '/admit/' + secrets.token_urlsafe(32)
         self.server = _Server(('127.0.0.1', 0), Handler)
         self.server.admission = self
+        # _serve() calls handle_request() once the listener is readable; it selects again before accepting, and must
+        # not wait there: a connection gone in between would hold the loop, and close() with it.
+        self.server.timeout = 0
         self.url = f'http://127.0.0.1:{self.server.server_port}' + self.prefix
-        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval':.05}, daemon=True)
-        self.thread.start()
+        # close() wakes the loop through this pair at once; serve_forever() noticed a shutdown only at its next poll,
+        # up to 50 ms after close() asked, on every step.
+        selector = None
+        try:
+            self._wake, self._waker = socket.socketpair()
+            # Made here, not in the thread: an epoll that cannot be had (out of descriptors) fails the relay's start.
+            selector = selectors.DefaultSelector()
+            selector.register(self.server, selectors.EVENT_READ)
+            selector.register(self._wake, selectors.EVENT_READ)
+            self.thread = threading.Thread(target=self._serve, args=(selector,), daemon=True)
+            self.thread.start()
+        except BaseException:
+            # Out of descriptors or threads: the listener must not outlive the relay that could not start.
+            self.server.server_close()
+            for each in (selector, getattr(self, '_wake', None), getattr(self, '_waker', None)):
+                if each is not None:
+                    each.close()
+            raise
 
-    def rearm(self, timeout, queried, frames):
-        """Admit one more request: the next step of the kept-alive native this relay serves."""
+    def _serve(self, selector):
+        with selector:
+            while True:
+                ready = [key.fileobj for key, _ in selector.select()]
+                if self._wake in ready:
+                    return
+                self.server.handle_request()
+
+    def rearm(self, timeout, queried, frames, expected=None):
+        """Admit one more request: the next step of the kept-alive native this relay serves (only as ``expected``,
+        when given)."""
         with self.lock:
-            self.timeout, self.queried, self.frames = timeout, queried, frames
+            self.timeout, self.queried, self.frames, self.expected = timeout, queried, frames, expected
             self.cancelled, self.used, self.denied, self.auth_retry_used = False, False, 0, False
             self.request_id = self.status = self.failure = self.unrestored = None
             self.capture, self.error_body, self.diverged = Capture(), b'', False
@@ -832,12 +981,21 @@ class Admission:
                             socket.close(fd)
                     except OSError:
                         pass
+        if self.init_ok is not None:
+            # Only now, with the cancel marked: a request waiting for its native's init wakes to find it, and is
+            # refused, at once. Woken before, it could find no cancel yet and go upstream with no init read.
+            self.init_ok.set()
 
     def close(self):
         self.abort()
-        self.server.shutdown()
+        try:
+            self._waker.send(b'\0')
+        except OSError:
+            pass  # Already closed: a second close().
         self.thread.join()
         self.server.server_close()
+        self._wake.close()
+        self._waker.close()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -941,11 +1099,29 @@ class Handler(BaseHTTPRequestHandler):
             payload = self.rfile.read(int(self.headers['Content-Length']))
             if getattr(gate, 'one_shot', False):
                 payload = drop_message_breakpoints(payload)
-            if gate.frames is not None:
-                payload = canonical_history(payload, gate.frames)
+            # A fresh native's first request is the replay itself, built as per-call builds it: it is not rewritten.
+            resumed = gate.frames is not None and gate.last_forwarded is not None
+            if resumed:
+                try:
+                    payload = canonical_history(payload, gate.frames)
+                except HistoryMisaligned as misaligned:
+                    # Native's own history no longer lines up with Hermes' frames, so its replayed rows cannot be
+                    # rewritten to the bytes a fresh replay sends. Refuse before upstream, as a request that does
+                    # not extend the previous one is refused; the client replays the step into a new process.
+                    gate.diverged = True
+                    logging.getLogger(__name__).info('kept session history misaligned, replaying: %s', misaligned)
+                    self._refuse(b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_SESSION_DIVERGED"}}')
+                    return
             try:
                 payload = restore_queried_turn(payload, gate.queried)
             except QueriedTurnMismatch as exc:
+                if resumed:
+                    # A kept native's newest frame that cannot be shown to be Hermes' is not per-call's: refuse
+                    # before upstream; the client replays the step into a new process.
+                    gate.diverged = True
+                    logging.getLogger(__name__).info('kept session request not restorable, replaying: %s', exc)
+                    self._refuse(b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_SESSION_DIVERGED"}}')
+                    return
                 # Restoration is hygiene, not a gate: a frame it cannot prove lossless forwards
                 # exactly as native built it (the pre-restoration behaviour), so a CLI that
                 # reshapes its tool results degrades to an uncached tail, never a failed turn.
@@ -954,7 +1130,17 @@ class Handler(BaseHTTPRequestHandler):
             payload = pin_message_breakpoint(payload, gate.queried)
             if gate.eager:
                 payload = stream_tool_input(payload)
-            if gate.frames is not None and not extends_previous(gate, payload):
+            if gate.init_ok is not None and (not gate.init_ok.wait(min(gate.timeout, INIT_WAIT_SECONDS)) or gate.unversioned
+                                             or gate.cancelled):
+                # Kept mode runs only on a version this very process reported: nothing goes upstream before it has.
+                gate.diverged = gate.unversioned = True
+                self._refuse(b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_SESSION_DIVERGED"}}')
+                return
+            if gate.probe:
+                gate.probed = payload
+                self._refuse(b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_PER_CALL_PROBE"}}')
+                return
+            if gate.frames is not None and (gate.expected not in (None, payload) or not extends_previous(gate, payload)):
                 # Never worse than per-call: refuse before upstream, as a denial does; the client serves the step anew.
                 gate.diverged = True
                 self._refuse(b'{"type":"error","error":{"type":"invalid_request_error","message":"HERMES_SESSION_DIVERGED"}}')
@@ -1002,6 +1188,7 @@ class Handler(BaseHTTPRequestHandler):
             del headers, payload, wire
             gate.request_id = response.getheader('request-id') or response.getheader('x-request-id')
             gate.status = response.status
+            gate.reset_at = rejected_window_reset(response)
             self.send_response(response.status)
             for key, value in response.getheaders():
                 if key.lower() not in ('connection','transfer-encoding','server','date'):

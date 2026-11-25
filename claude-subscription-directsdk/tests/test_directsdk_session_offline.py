@@ -1,0 +1,150 @@
+"""Session-mode paths that need no Claude Code process: failures before a launch and errors the reader thread hands over."""
+from collections import deque
+from pathlib import Path
+import queue
+import socket
+import sys
+import threading
+from types import SimpleNamespace
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import directsdk
+import directsdk_setup
+
+TOOLS = [{'type': 'function', 'function': {'name': 'read_file', 'description': 'Read a file',
+          'parameters': {'type': 'object', 'properties': {'path': {'type': 'string'}}, 'required': ['path']}}}]
+
+
+@pytest.fixture
+def first_step(tmp_path, monkeypatch):
+    """A session-mode first step up to its launch; the command resolves but no test here lets it spawn."""
+    monkeypatch.setattr(directsdk, 'apply_traffic_policy', lambda env: env)
+    monkeypatch.setattr(directsdk, 'session_settings', lambda: (True, 1))
+    # The fake CLI reports no version: say one of its processes reported one session mode runs on, or the step would
+    # run per-call and take no place, and these tests would pass without testing anything.
+    monkeypatch.setattr(directsdk, 'claude_version', lambda *_: (True, min(directsdk_setup.session_versions())))
+    monkeypatch.setattr(directsdk, 'session_min_rounds', lambda: 0)
+    client = directsdk.Client(command=[sys.executable, '-I', str(Path(__file__).parent / 'fixtures/lifecycle_cli.py')], timeout=2,
+                              env={'HOME': str(tmp_path), 'PATH': '', 'ANTHROPIC_BASE_URL': 'http://127.0.0.1:9'})
+    yield lambda: client.create(model='sonnet', messages=[{'role': 'user', 'content': 'go'}], tools=TOOLS)
+    client.close()
+
+
+def held():
+    with directsdk._live_lock:
+        return len(directsdk._live)
+
+
+def test_a_control_write_the_reader_thread_gave_up_on_reaches_the_step_as_a_timeout():
+    """The reader thread answers native's later tool calls itself. When that bounded write gives up, the step must
+    see the timeout error, not the bad-output error every other reader failure maps to."""
+    native = object.__new__(directsdk.Native)
+    native.events, native.stderr = queue.Queue(), deque()
+    native.events.put(TimeoutError('Claude request timed out'))
+    with pytest.raises(TimeoutError, match='Claude request timed out'):
+        native.receive(SimpleNamespace(cancelled=threading.Event()), 1)
+
+
+def test_a_launch_that_fails_before_the_spawn_leaves_no_relay(first_step, monkeypatch):
+    """The launch directory cannot be made (a full or read-only temp dir) after the relay is up: the relay's thread
+    and listener must go with the failed launch, and so must its place against ``max_sessions``."""
+    relays, make, taken = [], directsdk.relay, []
+
+    def recorded(*args, **kwargs):
+        relays.append(make(*args, **kwargs))
+        return relays[-1]
+
+    def no_dir():
+        taken.append(held())
+        raise OSError(28, 'No space left on device')
+    monkeypatch.setattr(directsdk, 'relay', recorded)
+    monkeypatch.setattr(directsdk, '_launch_dir', no_dir)
+    monkeypatch.setattr(directsdk.Request, 'spawn', lambda *_, **__: pytest.fail('nothing may spawn'))
+    with pytest.raises(OSError, match='No space left'):
+        first_step()
+    relay, = relays
+    try:
+        assert not relay.thread.is_alive(), 'the relay thread outlived the failed launch'
+        with pytest.raises(OSError):
+            socket.create_connection(('127.0.0.1', int(relay.url.split(':')[2].split('/')[0])), timeout=1).close()
+        assert taken == [1] and held() == 0, 'the launch took no place, or kept it'
+    finally:
+        if relay.thread.is_alive():
+            relay.close()
+        with directsdk._live_lock:
+            directsdk._live.clear()
+
+
+def test_a_launch_that_fails_before_its_relay_gives_its_place_back(first_step, monkeypatch):
+    """The place against ``max_sessions`` is taken before the launch; a relay that cannot start (no socket to bind)
+    must not keep it, or the cap shrinks by one for the life of the Hermes process."""
+    taken = []
+
+    def no_relay(*_, **__):
+        taken.append(held())
+        raise OSError(24, 'Too many open files')
+    monkeypatch.setattr(directsdk, 'relay', no_relay)
+    try:
+        with pytest.raises(OSError, match='Too many open files'):
+            first_step()
+        assert taken == [1] and held() == 0, 'the launch took no place, or kept it'
+    finally:
+        with directsdk._live_lock:
+            directsdk._live.clear()
+
+
+def test_cancel_reads_the_relay_once_while_the_hand_over_may_clear_it():
+    """The hand-over to a kept session clears the request's relay under the request's lock. Cancel read it twice, the
+    second time after the hand-over had cleared it, and raised before the client ended its session."""
+    reads, aborted = [], []
+
+    class Handing(directsdk.Request):
+        @property
+        def admission(self):
+            reads.append(True)
+            return SimpleNamespace(abort=lambda: aborted.append(True)) if len(reads) == 1 else None
+
+        @admission.setter
+        def admission(self, value):
+            pass
+    request = Handing(SimpleNamespace())
+    request.cancel()
+    assert request.cancelled.is_set() and aborted == [True]
+
+
+def test_client_cancel_ends_the_kept_session_even_when_a_request_cancel_fails(monkeypatch):
+    c = directsdk.Client(command=['claude'], env={})
+    ended = []
+    monkeypatch.setattr(c, '_end_session', lambda *a, **k: ended.append(True))
+    request = c._register()
+    monkeypatch.setattr(request, 'cancel', lambda: (_ for _ in ()).throw(RuntimeError('boom')))
+    with pytest.raises(RuntimeError, match='boom'):
+        c.cancel()
+    assert ended == [True]
+
+
+def test_the_kept_process_registry_is_whole_when_another_profile_can_find_it(monkeypatch):
+    """Two profiles can import the plugin at once, each its own module; the shared registry must hold its set and lock
+    when the other can first see it. Before, it was published empty and filled in after, so each copy could fill it with
+    a set of its own and keep a process past max_sessions."""
+    import importlib.util
+    key = '_claude_subscription_directsdk_live_v1'
+    published = []
+
+    class Modules(dict):
+        def setdefault(self, name, value=None):
+            if name == key and name not in self:
+                published.append(hasattr(value, 'natives') and hasattr(value, 'lock'))
+            return super().setdefault(name, value)
+
+    monkeypatch.delitem(sys.modules, key)
+    monkeypatch.setattr(sys, 'modules', Modules(sys.modules))
+    spec = importlib.util.spec_from_file_location('directsdk_profile_copy', directsdk.__file__)
+    copy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(copy)
+    import atexit
+    atexit.unregister(copy._kill_draining)
+    assert published == [True], 'the registry was published before its set and lock'
+    assert copy._live is sys.modules[key].natives and copy._live_lock is sys.modules[key].lock

@@ -21,6 +21,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import directsdk
+import directsdk_setup
 
 CLAUDE = os.environ.get('CLAUDE_CODE_BIN') or shutil.which('claude')
 pytestmark = pytest.mark.skipif(not CLAUDE, reason='needs the Claude Code CLI')
@@ -80,18 +81,43 @@ def upstream():
     server.server_close()
 
 
+FIXTURE_USER_ID = 'ab' * 32
+
+
+def seed_identity(path):
+    """Write the config directory's ``userID``: Claude Code puts it on the wire (``metadata.user_id.device_id``). In a
+    fresh directory each process makes up its own until one write of it lands, and on Windows two processes starting
+    at once (a kept native and the per-call build that proves it) each kept their own, so per-call and kept differed."""
+    Path(path, '.claude.json').write_text(json.dumps({'userID': FIXTURE_USER_ID}), encoding='utf-8')
+
+
 @pytest.fixture
 def home():
-    # One HOME for both runs: native derives its device id from it, and that id is on the wire.
+    # One HOME and config directory for both runs, with its identity written up front: that id is on the wire.
     with tempfile.TemporaryDirectory(prefix='directsdk-session-') as path:
+        seed_identity(path)
         yield path
 
 
 EMAIL = 'fixture@example.invalid'
 
 
-def client(home, upstream, monkeypatch, session, cap=4, login='api_key'):
+def learned(binary=None):
+    """The version gate as it stands once a process of the CLI has reported its version (its init event): the first
+    step on a binary it has not seen runs per-call. The tests start from there."""
+    binary = binary or CLAUDE
+    if binary and not directsdk_setup.claude_version([binary])[0]:
+        printed = subprocess.check_output([binary, '--version'], text=True, stdin=subprocess.DEVNULL).split()[0]
+        directsdk_setup.note_version([binary], printed)
+
+
+def client(home, upstream, monkeypatch, session, cap=4, login='api_key', learn=True, min_rounds=0):
+    """A client on the real CLI; kept from its first step unless ``min_rounds`` (None: the profile's setting)."""
     monkeypatch.setattr(directsdk, 'session_settings', lambda: (session, cap))
+    if learn:
+        learned()
+    if min_rounds is not None:
+        monkeypatch.setattr(directsdk, 'session_min_rounds', lambda: min_rounds)
     if login == 'claude_ai':
         # A claude.ai login with an account email: native prepends the userEmail reminder to the opening user turn.
         account = Path(home) / '.claude.json'
@@ -130,34 +156,50 @@ def session_pids(c):
     return {native.process.pid} if native is not None else set()
 
 
+def ended(pid):
+    """Gone, or a zombie waiting on its reap; a pid that vanishes between two checks counts as gone."""
+    try:
+        return psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    except psutil.Error:
+        return True
+
+
 # claude_ai is the live A/B's shape: the kept native replayed its opening turn with the reminder per-call never sent,
 # so every session restarted after its first step (two processes per conversation, slower than per-call).
 @pytest.mark.parametrize('login', ['api_key', 'claude_ai'])
 def test_kept_session_sends_the_same_bytes_as_one_shots(home, upstream, monkeypatch, caplog, login):
     """One kept process serves the conversation with the bytes per-call sends; a diverged history (a compaction-like
-    edit) restarts it and still matches per-call; past the cap another agent runs per-call with the same bytes."""
+    edit) restarts it and still matches per-call; past the cap, beside a kept process that holds a parked tool call
+    (never evicted), another agent runs per-call with the same bytes."""
     one_shot = client(home, upstream, monkeypatch, session=False, login=login)
     history = converse(one_shot)
     one_shot.close()
     expected, upstream.bodies = list(upstream.bodies), []
     kept, pids, other = client(home, upstream, monkeypatch, session=True, cap=1, login=login), [], None
     try:
-        with caplog.at_level('INFO', logger=directsdk.logger.name):
+        with caplog.at_level('DEBUG', logger=directsdk.logger.name):
             assert converse(kept, on_step=lambda: pids.append(session_pids(kept))) == history
         assert len(expected) == 12 and upstream.bodies == expected
-        # One process served the whole conversation, and it never diverged.
+        # One process served the whole conversation, and it never restarted.
         assert len(set().union(*pids)) == 1
-        assert not [r for r in caplog.records if 'diverged' in r.getMessage()]
+        assert not [r for r in caplog.records if 'session restart' in r.getMessage()]
+        first = session_pids(kept)
+        edited = list(history)
+        edited[1] = {'role': 'user', 'content': 'go (summarised)'}
+        edited.append({'role': 'user', 'content': 'next'})
+        with caplog.at_level('DEBUG', logger=directsdk.logger.name):
+            kept.create(model=MODEL, messages=edited, tools=TOOLS, max_tokens=1000)
+        assert session_pids(kept) and session_pids(kept) != first
+        # The restart says why at debug level, so a rising restart rate is visible in Hermes' logs. The opening turn
+        # names the session id, so its edit changes what the process was launched with.
+        assert [r.getMessage() for r in caplog.records if 'session restart' in r.getMessage()] == \
+            ['Claude session restart (launch): replaying into a new process']
+        after = upstream.bodies[-1]
         other, upstream.bodies = directsdk.Client(command=kept.command, timeout=60, env=kept.env), []
         assert converse(other) == history and not session_pids(other)
         assert upstream.bodies == expected
-        first = session_pids(kept)
-        history[1] = {'role': 'user', 'content': 'go (summarised)'}
-        history.append({'role': 'user', 'content': 'next'})
-        kept.create(model=MODEL, messages=history, tools=TOOLS, max_tokens=1000)
-        assert session_pids(kept) and session_pids(kept) != first
-        after, upstream.bodies = upstream.bodies[-1], []
-        other.create(model=MODEL, messages=history, tools=TOOLS, max_tokens=1000)
+        upstream.bodies = []
+        other.create(model=MODEL, messages=edited, tools=TOOLS, max_tokens=1000)
         assert upstream.bodies == [after]
     finally:
         kept.close()
@@ -188,7 +230,7 @@ def test_a_kept_session_never_outlives_its_turn_or_its_owner(home, upstream, mon
         time.sleep(.1)
         kept.cancel()
         worker.join(5)
-        assert errors == ['Claude request cancelled'] and not psutil.pid_exists(pid) or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+        assert errors == ['Claude request cancelled'] and ended(pid)
         upstream.slow = 0
         kept.create(model=MODEL, messages=list(history), tools=TOOLS, max_tokens=1000)
     finally:
@@ -201,6 +243,8 @@ import sys
 sys.path[:0] = {[str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parent)]!r}
 import test_directsdk_session as t, directsdk, time
 directsdk.session_settings = lambda: (True, 4)
+t.learned()
+directsdk.session_min_rounds = lambda: 0
 c = directsdk.Client(command={CLAUDE!r}, timeout=60, env={{"PATH": "{os.defpath}", "HOME": {home!r}, "CLAUDE_CONFIG_DIR": {home!r},
     "ANTHROPIC_API_KEY": "***", "ANTHROPIC_BASE_URL": "http://127.0.0.1:{upstream.server_port}", "NO_PROXY": "127.0.0.1",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}})
@@ -212,6 +256,6 @@ time.sleep(60)
     owner.send_signal(signal.SIGKILL)
     owner.wait()
     deadline = time.monotonic() + 15
-    while time.monotonic() < deadline and psutil.pid_exists(pid) and psutil.Process(pid).status() != psutil.STATUS_ZOMBIE:
+    while time.monotonic() < deadline and not ended(pid):
         time.sleep(.05)
-    assert not psutil.pid_exists(pid) or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    assert ended(pid)

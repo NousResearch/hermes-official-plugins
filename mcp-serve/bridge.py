@@ -337,6 +337,17 @@ class EventBridge:
             return
         with self._start_lock:
             if not self._running and not self._stopped:
+                self.prime()
+                # One poll on the caller's thread first, so this very call already sees messages that arrived after
+                # launch (otherwise the first events_poll answers "nothing" until the thread's first tick).
+                db = _get_session_db()
+                if db:
+                    try:
+                        self._poll_once(db)
+                    except Exception as e:
+                        logger.debug("EventBridge first-use poll error: %s", e)
+                    finally:
+                        _close_quietly(db, "first-use")
                 self.start()
 
     def start(self):

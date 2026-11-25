@@ -95,6 +95,22 @@ def test_message_after_launch_is_delivered_on_first_use(fake_state):
         b.stop()
 
 
+def test_first_events_call_alone_returns_post_launch_messages(fake_state, monkeypatch):
+    """No waiting: the very first events_poll must already see what arrived after launch (review round 2). The
+    background loop is stubbed to never poll, so only a synchronous first poll can deliver the message."""
+    monkeypatch.setattr(B.EventBridge, "_poll_loop", lambda self: None)
+    b = _bridge()
+    b.prime()
+    fake_state.append({"id": 2, "role": "user", "content": "after launch", "timestamp": 2.0})
+    try:
+        import json
+        out = json.loads(B._ToolHandlers(b).events_poll())
+        assert [e["content"] for e in out["events"]] == ["after launch"]
+        assert out["next_cursor"] > 0
+    finally:
+        b.stop()
+
+
 def test_events_tools_start_the_poller_and_approval_tools_do_not(fake_state):
     b = _bridge()
     b.prime()

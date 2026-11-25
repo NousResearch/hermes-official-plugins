@@ -1,7 +1,7 @@
 name: langfuse
 label: Langfuse
 kind: standalone
-version: 2.0.0
+version: 2.1.0
 manifest_version: 2
 author: NousResearch
 homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/langfuse
@@ -37,6 +37,24 @@ optional_env:
   - name: HERMES_LANGFUSE_BASE_URL
     description: "Langfuse server URL for a self-hosted instance (default: https://cloud.langfuse.com)"
     prompt: "Langfuse server URL"
+    password: false
+  - name: HERMES_LANGFUSE_ENV
+    description: >-
+      Deployment label written into every trace's metadata as `environment` (and into Langfuse's own
+      environment field), for example `homelab`. Left unset, the key stays absent.
+    prompt: "Environment label (e.g. homelab)"
+    password: false
+  - name: HERMES_LANGFUSE_HOST
+    description: >-
+      Deployment label written into every trace's metadata as `host`, for example `hermes.gdev`.
+      Default: this machine's hostname.
+    prompt: "Host label (e.g. hermes.gdev)"
+    password: false
+  - name: HERMES_LANGFUSE_SERVICE
+    description: >-
+      Deployment label written into every trace's metadata as `service`. Default: hermes-agent, then
+      OTEL_SERVICE_NAME when set.
+    prompt: "Service label (e.g. hermes-gateway)"
     password: false
 config_schema:
   end_user_attribution:

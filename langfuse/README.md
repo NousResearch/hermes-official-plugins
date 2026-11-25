@@ -62,6 +62,50 @@ Root traces carry `platform:<name>` and `trigger:cron|interactive` tags (cron ru
 runs and profiles sharing one project can be filtered apart. Kanban worker turns also carry
 `kanban_task_id` / `kanban_run_id`, so a trace joins back to its board card.
 
+### Deployment labels: `service`, `host`, `environment`
+
+Every trace — root and each child observation — carries three flat metadata keys, so several agents
+or machines can share one Langfuse project and still be told apart in the UI, in dashboards and
+through the Metrics API:
+
+| Key | Default | Override |
+|---|---|---|
+| `service` | `hermes-agent` | `HERMES_LANGFUSE_SERVICE`, else `OTEL_SERVICE_NAME` |
+| `host` | this machine's hostname | `HERMES_LANGFUSE_HOST` (use your inventory name, e.g. `hermes.gdev`) |
+| `environment` | omitted when unset | `HERMES_LANGFUSE_ENV` (also sets Langfuse's own environment field) |
+
+The OTel resource's `service.name` only lands in `resourceAttributes`, which no Langfuse filter
+matches on, so the labels are written as ordinary metadata as well. Values are content-free: a
+configured override or the local hostname, collapsed to one line and capped at 200 characters —
+never prompt text and never a credential. An unset `environment` stays absent instead of being
+guessed, and a label that cannot be read is simply left out: tracing degrades, the turn never fails.
+
+```bash
+HERMES_LANGFUSE_ENV=homelab
+HERMES_LANGFUSE_HOST=hermes.gdev
+HERMES_LANGFUSE_SERVICE=hermes-gateway   # optional, defaults to hermes-agent
+```
+
+## Turning tracing off
+
+Tracing is off by default and fails open (no SDK, no keys or an unreachable Langfuse all degrade to a
+no-op; a missing key logs one warning):
+
+```bash
+hermes plugins disable langfuse        # the switch: no traces for this profile, no restart of anything else
+hermes -p llm-ops plugins disable langfuse   # per profile — plugins are installed per profile
+```
+
+Alternatives that keep the plugin installed:
+
+```bash
+HERMES_LANGFUSE_SAMPLE_RATE=0          # sample nothing (0.0–1.0; per turn)
+```
+
+Unsetting `HERMES_LANGFUSE_PUBLIC_KEY` / `HERMES_LANGFUSE_SECRET_KEY` also stops export, but the
+plugin then logs a "missing credentials" warning at startup — disabling the plugin is the clean
+switch. Nothing in the agent loop depends on the plugin, so disabling it cannot change behaviour.
+
 ### End-user attribution (opt-in)
 
 Langfuse can group traces by the person who sent the message (its **Users** view). That needs a
@@ -105,7 +149,9 @@ conversations.
 ## Optional tuning
 
 ```bash
-HERMES_LANGFUSE_ENV=production       # environment tag
+HERMES_LANGFUSE_ENV=production       # environment tag (also the trace metadata key)
+HERMES_LANGFUSE_HOST=host.example    # host label (default: this machine's hostname)
+HERMES_LANGFUSE_SERVICE=hermes-agent # service label (default: hermes-agent, then OTEL_SERVICE_NAME)
 HERMES_LANGFUSE_RELEASE=v1.0.0       # release tag
 HERMES_LANGFUSE_SAMPLE_RATE=0.5      # sample 50% of traces
 HERMES_LANGFUSE_MAX_CHARS=12000      # max chars per field (default: 12000)

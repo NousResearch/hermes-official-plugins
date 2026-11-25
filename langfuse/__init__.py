@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import socket
 import threading
 import time
 import weakref
@@ -53,6 +54,9 @@ class TraceState:
     last_updated_at: float = field(default_factory=time.time)
     # propagate_attributes() kwargs the root was opened with, re-applied to every child.
     propagated: dict[str, Any] = field(default_factory=dict)
+    # Deployment labels (service / host / environment) stamped on every child observation too:
+    # propagate_attributes() covers session/tags/user, not observation metadata.
+    labels: dict[str, str] = field(default_factory=dict)
 
 
 _STATE_LOCK = threading.Lock()
@@ -149,6 +153,53 @@ def _failsafe(label: str):
         yield
     except Exception as exc:  # pragma: no cover - fail-open
         _debug(f"{label} failed: {exc}")
+
+
+_RESOURCE_VALUE_MAX_CHARS = 200
+
+
+def _deployment_label(name: str) -> str:
+    """Read a deployment label (``service`` / ``host`` / ``environment``), never a credential.
+
+    The profile secret scope comes first: a multiplexed gateway keeps each profile's ``.env`` out
+    of ``os.environ``, so a label set there must be read through the scope; the process env is the
+    fallback for single-profile runs and for tests. Both readers may raise (an unscoped multiplex
+    caller, a missing scope) — a label that cannot be read is simply absent.
+    """
+    try:
+        value = _secret(name)
+    except Exception:
+        value = ""
+    return value or _env(name)
+
+
+def _resource_metadata() -> dict[str, str]:
+    """Flat ``service`` / ``host`` / ``environment`` metadata for one trace.
+
+    Langfuse keeps ``metadata`` as a flat ``Map(String,String)``, so a deployment can only group or
+    filter traces by these when they are metadata keys: the OTel resource's ``service.name`` stays
+    inside ``resourceAttributes`` and is not selectable in the UI or the Metrics API. The values
+    carry no prompt content and no credentials — only an operator override or the machine's own
+    hostname. Fail-open per key: a lookup that raises drops that key instead of the turn, and an
+    unset ``environment`` is omitted rather than invented, so a project never mixes a guessed label
+    with the real one.
+    """
+    readers = {
+        "service": lambda: (_deployment_label("HERMES_LANGFUSE_SERVICE")
+                            or _deployment_label("OTEL_SERVICE_NAME") or "hermes-agent"),
+        "host": lambda: _deployment_label("HERMES_LANGFUSE_HOST") or socket.gethostname(),
+        "environment": lambda: _deployment_label("HERMES_LANGFUSE_ENV"),
+    }
+    labels: dict[str, str] = {}
+    for key, read in readers.items():
+        try:
+            text = " ".join(str(read() or "").split())[:_RESOURCE_VALUE_MAX_CHARS]
+        except Exception as exc:  # pragma: no cover - fail-open
+            _debug(f"{key} label skipped: {exc}")
+            continue
+        if text:
+            labels[key] = text
+    return labels
 
 
 _CAPTURE_MODES = ("metadata", "sanitized", "full")
@@ -740,10 +791,14 @@ def _start_root_trace(task_key: str, *, task_id: str, session_id: str, platform:
     # be joined back to the card without guessing from session names. Omitted outside kanban.
     kanban = {k: v for k, v in (("kanban_task_id", _env("HERMES_KANBAN_TASK")),
                                 ("kanban_run_id", _env("HERMES_KANBAN_RUN_ID"))) if v}
+    # Deployment labels (service / host / environment): flat metadata keys, because Langfuse's
+    # Map(String,String) is what a dashboard or the Metrics API can filter on. Nobody downstream
+    # has to guess which agent or machine a trace came from.
+    resource = _resource_metadata()
     metadata = {
         "source": "hermes", "task_id": task_id, "turn_id": turn_id, "api_request_id": api_request_id,
         "platform": platform, "provider": provider, "model": model, "api_mode": api_mode,
-        "capture_mode": _capture_mode(), "profile": profile, **kanban,
+        "capture_mode": _capture_mode(), "profile": profile, **kanban, **resource,
     }
     # session_id must be in trace_context for Langfuse session grouping.
     trace_ctx: dict[str, Any] = {"trace_id": trace_id, **({"session_id": session_id} if session_id else {})}
@@ -762,8 +817,12 @@ def _start_root_trace(task_key: str, *, task_id: str, session_id: str, platform:
     # the Users view matches what the chat shows. The profile stays in metadata (hermes-agent#26455).
     if user_id:
         propagated["user_id"] = user_id
-    if profile or kanban:
-        propagated["metadata"] = {**({"profile": profile} if profile else {}), **kanban}
+    # The same flat labels also ride in the propagated metadata (the root's own metadata carries
+    # them already); the per-child stamping in _start_child_observation is what actually puts them
+    # on generations and tool spans, since propagate_attributes() only covers session/tags/user.
+    propagated_metadata = {**({"profile": profile} if profile else {}), **kanban, **resource}
+    if propagated_metadata:
+        propagated["metadata"] = propagated_metadata
     if propagate_attributes is not None:
         try:
             with propagate_attributes(**propagated):
@@ -779,7 +838,7 @@ def _start_root_trace(task_key: str, *, task_id: str, session_id: str, platform:
         root_span.set_trace_io(input=trace_input)
 
     _debug(f"started trace {trace_id} for {task_key}")
-    return TraceState(trace_id=trace_id, root_span=root_span, propagated=propagated)
+    return TraceState(trace_id=trace_id, root_span=root_span, propagated=propagated, labels=resource)
 
 
 def _start_child_observation(state: TraceState, *, name: str, as_type: str, input_value: Any,
@@ -792,7 +851,7 @@ def _start_child_observation(state: TraceState, *, name: str, as_type: str, inpu
     with propagate_attributes(**state.propagated) if propagate_attributes and state.propagated \
             else contextlib.nullcontext():
         return state.root_span.start_observation(name=name, as_type=as_type, input=input_value,
-                                                 metadata=metadata or {}, model=model,
+                                                 metadata={**state.labels, **(metadata or {})}, model=model,
                                                  model_parameters=model_parameters)
 
 

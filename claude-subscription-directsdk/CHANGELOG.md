@@ -67,7 +67,7 @@
   until an idle hour passed, and later ones ran per-call). A parked tool call no longer counts as idle. A finished
   subagent's process ends when Hermes closes the child agent, which closes its client.
 - Session mode runs only on the Claude Code versions its tests passed on (`session_versions` in `plugin.yaml`:
-  2.1.292 and 2.1.322 to 2.1.331; maintainer review of #361, item 5). Any other version runs per-call, with one log line
+  2.1.292 and 2.1.322 to 2.1.332; maintainer review of #361, item 5). Any other version runs per-call, with one log line
   that says why; a kept process ends at its next step when its binary changes or its version leaves the list, and one
   that reports another version than the gate allowed is not kept (`version`). The version is the
   one Claude Code reports in its own init event (`claude_code_version`), kept for the binary's files as they were when

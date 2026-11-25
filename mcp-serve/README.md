@@ -31,7 +31,7 @@ hermes plugins install NousResearch/hermes-official-plugins#mcp-serve
 
 Use `["-p", "<profile>", "mcp-serve"]` to serve another profile's conversations; the plugin must be installed in that profile too (`hermes -p <profile> plugins install mcp-serve`).
 
-**Coming from `hermes mcp serve`?** Change the client's `args` from `["mcp", "serve"]` to `["mcp-serve"]`. The ten tool names, their parameters and descriptions are unchanged. On a Hermes without the old command, `hermes mcp serve` prints this new spelling and the install line.
+**Coming from `hermes mcp serve`?** Change the client's `args` from `["mcp", "serve"]` to `["mcp-serve"]`. The ten tool names and existing parameters still work. On a Hermes without the old command, `hermes mcp serve` prints this new spelling and the install line.
 
 ## Tools
 
@@ -47,6 +47,34 @@ Use `["-p", "<profile>", "mcp-serve"]` to serve another profile's conversations;
 | `permissions_list_open` / `permissions_respond` | Approval requests seen during this session |
 
 Messages come from the profile's `state.db`. Events start when the server starts; older history is read with `messages_read`. Reading needs no running gateway; `messages_send` does, since the platform connections live there.
+
+## Send attachments
+
+Use `messages_send` to send a file from an MCP client. Include the file contents as Base64, a text representation of binary data. The file does not need to exist on the Hermes host.
+
+For example, send a text file with a message:
+
+```json
+{
+  "target": "discord:#general",
+  "message": "Here is the report.",
+  "attachments": [
+    {
+      "filename": "report.txt",
+      "mime_type": "text/plain",
+      "data": "SGVsbG8hCg=="
+    }
+  ]
+}
+```
+
+Use an empty `message` to send only attachments. Existing calls with text or `MEDIA:<path>` still work.
+
+Each request can contain up to four attachments. The total decoded size must not exceed 8 MiB. The receiving platform can impose a smaller limit. Use a filename with letters, digits, dots, underscores, or hyphens. Do not use a directory path or a data URI. The optional `mime_type` field describes the file. Hermes uses its normal media delivery rules to select the file type and send it.
+
+Hermes writes the files to a private temporary directory in the profile cache. It removes that directory when the send call returns, even if delivery fails. A forced process stop can leave files in the cache.
+
+Do not send confidential files through a client or proxy that logs tool arguments. Base64 does not encrypt data.
 
 ## `--tools`: Hermes' tools for other agents
 

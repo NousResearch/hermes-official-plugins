@@ -13,18 +13,23 @@ Hermes' own tool surface; ``--tools-only`` serves that slice alone, with no mess
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import logging
 import os
 import re
 import sqlite3
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+from typing_extensions import NotRequired, TypedDict
 
 logger = logging.getLogger("hermes.mcp_serve")
 
@@ -497,6 +502,80 @@ def _platform_matches(wanted: Optional[str], actual: str) -> bool:
     return not wanted or actual.lower() == wanted.lower()
 
 
+_MAX_ATTACHMENTS = 4
+_MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
+_ATTACHMENT_FILENAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+_WINDOWS_DEVICE_NAME = re.compile(r"(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])\Z", re.IGNORECASE)
+
+
+class SendAttachment(TypedDict):
+    filename: str
+    data: str
+    mime_type: NotRequired[str]
+
+
+def _decode_send_attachments(attachments: Optional[list[SendAttachment]]) -> list[tuple[str, bytes]]:
+    """Validate all attachments before staging files or sending a message."""
+    if attachments is None:
+        return []
+    if not isinstance(attachments, list) or len(attachments) > _MAX_ATTACHMENTS:
+        raise ValueError("attachments must be a list of at most 4 files")
+    files = []
+    remaining = _MAX_ATTACHMENT_BYTES
+    for item in attachments:
+        if not isinstance(item, dict) or set(item) - {"filename", "data", "mime_type"}:
+            raise ValueError("Each attachment requires filename and data. mime_type is optional.")
+        filename, encoded = item.get("filename"), item.get("data")
+        if (not isinstance(filename, str) or not _ATTACHMENT_FILENAME.fullmatch(filename)
+                or filename.endswith(".") or _WINDOWS_DEVICE_NAME.fullmatch(filename.split(".", 1)[0])):
+            raise ValueError("Invalid attachment filename. Use letters, digits, dots, underscores, or hyphens.")
+        mime = item.get("mime_type")
+        if mime is not None and (not isinstance(mime, str) or len(mime) > 127 or
+                                 not re.fullmatch(r"[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+", mime)):
+            raise ValueError("Invalid attachment mime_type")
+        if not isinstance(encoded, str) or not encoded:
+            raise ValueError("Attachment data must be nonempty Base64")
+        # Bound the encoded length before allocating the decoded buffer.
+        if len(encoded) > 4 * ((remaining + 2) // 3):
+            raise ValueError("Attachments exceed 8 MiB decoded total")
+        try:
+            decoded = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error):
+            raise ValueError("Invalid attachment Base64") from None
+        if not decoded:
+            raise ValueError("Attachment must not be empty")
+        if len(decoded) > remaining:
+            raise ValueError("Attachments exceed 8 MiB decoded total")
+        remaining -= len(decoded)
+        files.append((filename, decoded))
+    return files
+
+
+def _send_with_attachments(sender, target: str, message: str, files: list[tuple[str, bytes]]) -> str:
+    if not files:
+        return sender({"action": "send", "target": target, "message": message})
+    # The native sender applies platform limits and media delivery policy.
+    cache = _hermes_home() / "cache"
+    cache.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="mcp-send-", dir=cache) as temp:
+        paths = []
+        for index, (filename, data) in enumerate(files):
+            folder = Path(temp) / str(index)
+            folder.mkdir(mode=0o700)
+            path = folder / filename
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+            with os.fdopen(os.open(path, flags, 0o600), "wb") as handle:
+                handle.write(data)
+            paths.append(path)
+        # Quote paths for profile directories that contain spaces. Refuse paths
+        # that cannot be represented as a single MEDIA directive.
+        if any(any(char in str(path) for char in '\"\n\r') for path in paths):
+            raise ValueError("Cannot represent the attachment path as a MEDIA directive")
+        tags = "\n".join(f'MEDIA:"{path}"' for path in paths)
+        return sender({"action": "send", "target": target,
+                       "message": f"{tags}\n\n{message}" if message else tags})
+
+
 class _ToolHandlers:
     """The MCP tool handlers; each method named in _TOOL_NAMES is registered as one tool.
 
@@ -639,7 +718,8 @@ class _ToolHandlers:
         event = self.bridge.wait_for_event(after_cursor=after_cursor, session_key=session_key, timeout_ms=timeout_ms)
         return json.dumps({"event": event} if event else {"event": None, "reason": "timeout"}, indent=2)
 
-    def messages_send(self, target: str, message: str) -> str:
+    def messages_send(self, target: str, message: str,
+                      attachments: Optional[list[SendAttachment]] = None) -> str:
         """Send a message to a platform conversation.
 
         The target format is "platform:chat_id" — same format used by the
@@ -653,13 +733,19 @@ class _ToolHandlers:
 
         Args:
             target: Platform target in "platform:identifier" format
-            message: The message text to send
+            message: The message text. Use an empty string to send only attachments.
+            attachments: Up to 4 files with filename, Base64 data, and optional mime_type.
+                The total decoded size must not exceed 8 MiB. Do not use data URIs.
         """
-        if not target or not message:
-            return json.dumps({"error": "Both target and message are required"})
+        if not target or (not message and not attachments):
+            return json.dumps({"error": "A target and message or attachments are required"})
+        try:
+            files = _decode_send_attachments(attachments)
+        except ValueError as exc:
+            return json.dumps({"error": str(exc)})
         try:
             from tools.send_message_tool import send_message_tool
-            return send_message_tool({"action": "send", "target": target, "message": message})
+            return _send_with_attachments(send_message_tool, target, message, files)
         except ImportError:
             return json.dumps({"error": "Send message tool not available"})
         except Exception as e:

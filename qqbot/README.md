@@ -1,12 +1,8 @@
-<p align="center"><img src="../assets/qqbot.jpg" alt="QQ Bot, a Hermes Labs plugin" width="100%"></p>
+<p align="center"><img src="../assets/qqbot.jpg" alt="QQ Bot: official Hermes Agent plugin" width="100%"></p>
 
-# QQ Bot
+# QQ Bot for Hermes Agent
 
-> **Labs plugin: works, but unsupported.** QQ Bot is now a Hermes Labs plugin: built by Nous Research, not supported, and likely not maintained going forward. Fixes from the community are welcome. See [what "labs" means](../README.md#what-labs-means).
-
-Part of [Hermes Labs Plugins](../README.md): built by Nous Research, **not supported**. Formerly built into
-[hermes-agent](https://github.com/NousResearch/hermes-agent) core (`plugins/platforms/qqbot`); this directory
-carries its full history.
+> Part of the [Hermes Official Plugins](../README.md), Nous Research's official plugins for Hermes Agent. Formerly built into [Hermes Agent](https://github.com/NousResearch/hermes-agent) core (`plugins/platforms/qqbot`); this directory carries its full history.
 
 Connect Hermes to QQ through the **official QQ Bot API (v2)**: private (C2C) chats, group @-mentions and guild
 channels over QQ's bot WebSocket gateway, replies (text, markdown and native media) over the REST API, voice
@@ -15,6 +11,9 @@ transcription, scan-to-configure setup and cron delivery to a home channel.
 Everything an existing setup relies on is unchanged: platform name `qqbot`, every `QQ_*` / `QQBOT_*` env var
 (including the legacy `QQ_HOME_CHANNEL`), the `platforms.qqbot` config keys and `QQBOT_HOME_CHANNEL`. Hermes
 installs this plugin automatically for profiles that used the built-in QQ Bot platform.
+
+This plugin is **installed and enabled by default on every Hermes home** (catalog `default: true`). It does
+nothing until you configure it: with no `QQ_APP_ID` / `QQ_CLIENT_SECRET` the gateway never starts the adapter.
 
 ## Install
 

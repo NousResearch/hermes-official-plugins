@@ -1,7 +1,7 @@
 [project]
 name = "hermes-qqbot"
 version = "2.0.0"
-description = "QQ Bot (official QQ Bot API v2) gateway platform for Hermes Agent (Hermes Labs plugin, unsupported)"
+description = "QQ Bot (official QQ Bot API v2) gateway platform for Hermes Agent (official plugin)"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Nous Research" }]
@@ -20,4 +20,4 @@ dependencies = [
 silk = ["pilk>=0.2.4,<0.3"]
 
 [project.urls]
-Homepage = "https://github.com/NousResearch/hermes-labs-plugins/tree/main/qqbot"
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/qqbot"

@@ -3,12 +3,12 @@ label: QQ Bot
 kind: platform
 version: 2.0.0
 description: >
-  QQ Bot gateway adapter for Hermes Agent on the official QQ Bot API v2 (Hermes Labs
-  plugin: built by Nous Research, not supported). WebSocket gateway for inbound DMs,
-  group and guild chats, REST for outbound text and native media, voice transcription,
+  QQ Bot gateway adapter for Hermes Agent on the official QQ Bot API v2. WebSocket
+  gateway for inbound DMs, group and guild chats, REST for outbound text and native media, voice transcription,
   scan-to-configure setup and home-channel cron delivery. Formerly built into Hermes core.
 author: NousResearch
-homepage: https://github.com/NousResearch/hermes-labs-plugins/tree/main/qqbot
+homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/qqbot
+requires_hermes: ">=0.23.5"
 provides_tools: []
 provides_hooks: []
 requires_env:

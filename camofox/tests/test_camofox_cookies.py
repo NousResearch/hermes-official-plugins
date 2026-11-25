@@ -104,3 +104,13 @@ class TestImport:
             "".join(f".example.com\tTRUE\t/\tFALSE\t0\tc{i}\tv\n" for i in range(501)))
         assert "Too many cookies" in json.loads(t.browser_import_cookies("many.txt", task_id="t1"))["error"]
         assert camofox.calls("POST", "/cookies") == []
+
+
+def test_cookie_import_refuses_plain_http_to_a_remote_camofox(camofox, cookies_dir, monkeypatch):
+    monkeypatch.setenv("CAMOFOX_API_KEY", "k-secret")
+    monkeypatch.setenv("CAMOFOX_URL", "http://camofox.lan:9377")
+    (cookies_dir / "x.txt").write_text(".example.com\tTRUE\t/\tFALSE\t0\tfoo\tbar\n")
+    assert t.check_cookie_import_available() is False
+    result = json.loads(t.browser_import_cookies("x.txt", task_id="t1"))
+    assert result["success"] is False
+    assert camofox.requests == []

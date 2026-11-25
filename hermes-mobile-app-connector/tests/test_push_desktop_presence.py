@@ -30,6 +30,7 @@ class PresenceTestCase(unittest.TestCase):
         self.home = Path(directory.name)
         self.adapter, self.constants = load_push_adapter(self.home)
         self.client = None
+        self.internal = False
         self.viewers = []
         self.failing = set()
         self.reads = []
@@ -38,6 +39,7 @@ class PresenceTestCase(unittest.TestCase):
         self.ctx = types.SimpleNamespace(
             turn_client=lambda: self.read("turn_client", self.client),
             session_viewers=lambda: self.read("session_viewers", self.viewers),
+            turn_internal=lambda: self.read("turn_internal", self.internal),
             session_source=lambda: getattr(self.policy, "source", "") if self.policy is not None else "",
             session_surface=lambda: getattr(self.policy, "platform", "") if self.policy is not None else "",
             in_delegated_child=lambda include_subprocesses=False: self.delegated,
@@ -241,6 +243,76 @@ class HermesPresenceAccessorTests(unittest.TestCase):
         [payload] = self.sent
         self.assertEqual(payload["hermes"]["source"], self.adapter._creation_source("cli"))
         self.assertNotIn("desktop_active", payload["hermes"], "the relay reads it only on a Desktop reply")
+
+
+def _real_turn(test, internal):
+    """A real Hermes turn context: a local session's turn event (``internal`` as Hermes marks a wake),
+    with one active Desktop attached (``session_viewers()``; no gateway runs in this process)."""
+    from gateway.config import Platform
+    from gateway.platforms.event import MessageEvent
+    from gateway.session import SessionSource
+    from gateway.session_context import clear_session_vars, set_session_vars
+    event = MessageEvent(text="[process done]", source=SessionSource(platform=Platform.LOCAL, chat_id="s"),
+                         internal=internal)
+    tokens = set_session_vars(platform="local", chat_id="s", session_key="s", session_id="local-1", turn_event=event)
+    test.addCleanup(clear_session_vars, tokens)
+    viewers = patch.object(test.adapter._ctx, "session_viewers", lambda: [viewer(idle_seconds=5)])
+    viewers.start()
+    test.addCleanup(viewers.stop)
+
+
+class _RealHermesTurn(unittest.TestCase):
+    def setUp(self):
+        self.adapter = load_module("adapter.py")
+        ps = _hermes_presence_accessors()
+        self.adapter._ctx = types.SimpleNamespace(
+            turn_client=ps.turn_client, session_viewers=ps.session_viewers, session_surface=ps.session_surface,
+            **{name: getattr(ps, name) for name in ("session_source", "in_delegated_child", "turn_internal")
+               if callable(getattr(ps, name, None))})
+        self.sent = []
+        self.adapter._deliver_in_background = lambda payload, relay=None: self.sent.append(payload)
+        self.adapter._report_activity = lambda *args: None
+
+    def reply(self):
+        finish_turn(self.adapter, "local-1", "Done.", "local")
+        return self.sent.pop()
+
+    def today(self):
+        """The push for the same turn from a Hermes without the turn accessors."""
+        with patch.object(self.adapter._ctx, "turn_client", None), patch.object(self.adapter._ctx, "session_viewers", None):
+            return self.reply()
+
+
+@unittest.skipUnless(_hermes_presence_accessors() and callable(getattr(_hermes_presence_accessors(), "turn_internal", None)),
+                     "needs a Hermes checkout with plugin_session.turn_internal on PYTHONPATH")
+class HermesTurnInternalTests(_RealHermesTurn):
+    """The plugin against a Hermes that says whether it started the turn (``turn_internal()``)."""
+
+    def test_a_wake_reads_as_a_desktop_reply_and_a_typed_turn_does_not(self):
+        for internal in [True, False]:
+            with self.subTest(internal=internal):
+                _real_turn(self, internal)
+                payload, control = self.reply(), self.today()
+                if internal:
+                    self.assertEqual((payload["hermes"]["source"], payload["hermes"]["desktop_active"]), ("desktop", True))
+                else:
+                    self.assertEqual(payload, control)
+                self.doCleanups()
+
+
+@unittest.skipUnless(_hermes_presence_accessors() and getattr(_hermes_presence_accessors(), "turn_internal", None) is None,
+                     "needs a Hermes checkout whose plugin_session has turn_client but no turn_internal")
+class HermesWithoutTurnInternalTests(_RealHermesTurn):
+    """A Hermes that cannot say who started the turn: even a wake's reply is today's push."""
+
+    def test_no_reply_is_relabelled(self):
+        for internal in [True, False]:
+            with self.subTest(internal=internal):
+                _real_turn(self, internal)
+                payload = self.reply()
+                self.assertEqual(payload, self.today())
+                self.assertNotIn("desktop_active", payload["hermes"])
+                self.doCleanups()
 
 
 class DesktopActiveTests(PresenceTestCase):
@@ -581,14 +653,16 @@ class DesktopActiveTests(PresenceTestCase):
 
 
 class UnattributedTurnTests(PresenceTestCase):
-    """A turn no client submitted (``turn_client()`` is ``None``: an async delegation's result, a
-    finished background process, any wake Hermes starts itself) in a session of Hermes' own surfaces:
-    its reply reads as a Desktop reply with ``desktop_active: true`` only while a Desktop or Webapp
-    attached to the session is active; on anything less it is exactly today's push."""
+    """A turn Hermes started itself (``turn_internal()`` is ``True`` and ``turn_client()`` is
+    ``None``: an async delegation's result, a finished background process, any other wake) in a
+    session of Hermes' own surfaces: its reply reads as a Desktop reply with ``desktop_active: true``
+    only while a Desktop or Webapp attached to the session is active; on anything less it is exactly
+    today's push."""
 
     def setUp(self):
         super().setUp()
         self.client = None
+        self.internal = True
         self.viewers = [viewer(idle_seconds=5)]
 
     def today(self, session_id="local-1", platform="desktop"):
@@ -600,7 +674,7 @@ class UnattributedTurnTests(PresenceTestCase):
         policies = [("gui", types.SimpleNamespace(source="gui", platform="desktop")),
                     ("tui", types.SimpleNamespace(source="tui", platform="tui")), ("no policy", None)]
         for name, policy in policies:
-            for platform in ["desktop", "local", "gui", "tui", "cli", "web", "ios", "android", ""]:
+            for platform in ["desktop", "local", "gui", "tui", "cli", "web", "ios", "android"]:
                 for active in [viewer(idle_seconds=0), viewer(kind="webapp", basis="page", idle_seconds=299.9),
                                viewer(can_alert=None)]:
                     with self.subTest(policy=name, platform=platform, viewer=active):
@@ -621,6 +695,39 @@ class UnattributedTurnTests(PresenceTestCase):
         self.assertEqual(self.reply()["hermes"]["source"], "desktop")
         self.viewers = self.viewers[:3]
         self.assertEqual(self.reply(), self.today())
+
+    def test_a_typed_turn_from_a_connection_that_announced_nothing_is_todays(self):
+        """A person's turn sent over a connection that announced no client also reads
+        ``turn_client() is None``; Hermes says it did not start it, so the push is today's even
+        while a Desktop is active."""
+        self.internal = False
+        payload = self.reply()
+        self.assertEqual(payload, self.today())
+        self.assertEqual(payload["hermes"]["source"], "gui")
+        self.assertNotIn("desktop_active", payload["hermes"])
+
+    def test_only_hermes_saying_it_started_the_turn_relabels_it(self):
+        control = self.today()
+        for answer in [False, None, "true", 1, [], {}]:
+            with self.subTest(answer=answer):
+                self.internal = answer
+                self.assertEqual(self.reply(), control)
+        self.internal = True
+        self.failing = {"turn_internal"}
+        self.assertEqual(self.reply(), control)
+        self.failing = set()
+        with patch.object(self.ctx, "turn_internal", None):  # A Hermes whose ctx predates the accessor.
+            self.assertEqual(self.reply(), control)
+        del self.ctx.turn_internal
+        self.assertEqual(self.reply(), control)
+
+    def test_a_turn_with_no_platform_keeps_todays_push(self):
+        self.policy = None
+        for platform in [None, ""]:
+            with self.subTest(platform=platform):
+                payload = self.reply("local-1", platform)
+                self.assertEqual(payload, self.today("local-1", platform))
+                self.assertNotIn("desktop_active", payload["hermes"])
 
     def test_without_recent_evidence_of_a_person_the_push_is_todays(self):
         nan, inf = float("nan"), float("inf")

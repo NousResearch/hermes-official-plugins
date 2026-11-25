@@ -291,8 +291,8 @@ def _creation_source(platform):
 
 # What a Hermes with the plugin session accessors says about the running turn:
 # ``ctx.turn_client()`` names the client that submitted it, ``ctx.session_viewers()``
-# the clients attached to its session. A Hermes without them, or an accessor that
-# fails, leaves the fact unknown.
+# the clients attached to its session, ``ctx.turn_internal()`` whether Hermes started
+# it itself. A Hermes without them, or an accessor that fails, leaves the fact unknown.
 _UNKNOWN = object()
 
 
@@ -438,14 +438,18 @@ def _desktop_active(facts, active_seconds):
 
 
 def _present_for_unattributed_turn(platform, facts):
-    """Whether the reply to a turn no client submitted (an async delegation's result, a finished
-    background process, any wake Hermes starts itself) is one the user is at a computer to see: by
-    known *facts* (``_turn_facts``), Hermes names no client for the turn (``turn_client()`` is
-    ``None``), the turn runs on one of Hermes' own surfaces (``_OWN_SURFACES``: an app, Desktop,
-    TUI or CLI session; never a messaging platform, the API server or the curator, and cron and Kanban
-    runs are decided before), and a Desktop or Webapp
-    attached to its session is active (``_active_at_computer``). Anything else says no."""
-    if facts is _UNKNOWN or facts[0] is not None or platform not in _OWN_SURFACES:
+    """Whether the reply to a turn Hermes started itself (an async delegation's result, a finished
+    background process, any other wake) is one the user is at a computer to see: Hermes says it
+    started the turn (``turn_internal()`` is ``True``; a Hermes without the accessor, or one that
+    fails or answers anything else, says no) and, by known *facts* (``_turn_facts``), names no
+    client for it (``turn_client()`` is ``None``), the turn runs on one of Hermes' own surfaces
+    (``_OWN_SURFACES``: an app, Desktop, TUI or CLI session; never a messaging platform, the API
+    server or the curator, and cron and Kanban runs are decided before) under a platform the hook
+    named, and a Desktop or Webapp attached to its session is active (``_active_at_computer``).
+    Anything else says no."""
+    if facts is _UNKNOWN or facts[0] is not None or not platform or platform not in _OWN_SURFACES:
+        return False
+    if _plugin_session_fact("turn_internal") is not True:
         return False
     active_seconds = _active_seconds()
     return any(_active_at_computer(viewer, active_seconds) for viewer in facts[1])
@@ -986,7 +990,7 @@ def _on_session_end(*args, **kwargs):
     # session, and only for a turn that notifies; the stream hooks run off the turn's thread.
     # ``facts``: the turn's client and its session's viewers, or unknown (``_turn_facts``).
     facts = _turn_facts(fields, platform)
-    # A turn no client submitted reads as a Desktop reply while the user is active at a computer
+    # A turn Hermes started itself reads as a Desktop reply while the user is active at a computer
     # attached to its session, so each device's choice for Desktop replies applies to it too.
     present = _present_for_unattributed_turn(platform, facts)
     source = "desktop" if present else _turn_source(fields, platform, facts)

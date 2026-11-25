@@ -296,4 +296,27 @@ The subscription-backed task, CLI delegation, streaming, resume, denial, steerin
 
 Extracted from hermes-agent PR #105863 (`feat: add Claude Subscription DirectSDK (Experimental) provider`) by @teknium1 and @unsupportedpastels. The provider-agnostic parts of that PR (external-process provider profiles, provider-native replay carriers, setup-flow gating, picker plumbing) land in Hermes core via hermes-agent PR #117451; the provider itself lives here as a standalone plugin because Hermes does not bundle vendor-specific subscription transports in-tree. The `claude` presence checks were added during extraction.
 
+## Native WebSearch (opt-in, default off)
+
+`native_web_search: true` makes Hermes `web_search` available through your Claude subscription, served by the
+companion plugin [`claude-subscription-directsdk-websearch`](../claude-subscription-directsdk-websearch) (a
+`kind: backend` plugin, because Hermes never calls `register(ctx)` on a `kind: model-provider` one). It is a
+**separate** `claude -p --tools WebSearch` call with `--strict-mcp-config`, no Hermes tools and its own scratch
+directory; the main turn still spawns with `--tools ''` and still forwards exactly one upstream `/v1/messages`.
+
+```yaml
+plugins:
+  enabled: [claude-subscription-websearch]
+  entries:
+    claude-subscription-directsdk-experimental:
+      settings:
+        native_web_search: true
+        native_web_search_model: haiku    # default
+web:
+  search_backend: claude-subscription-websearch
+```
+
+**Egress disclosure:** queries leave through your own Claude subscription, so they **bypass Hermes-side web
+configuration and egress settings**. Results are untrusted text, returned to Hermes unprocessed.
+
 MIT licensed; see `LICENSE`.

@@ -1,0 +1,41 @@
+{
+ "query": "hermes agent plugin web_search provider",
+ "hits": [
+  {
+   "title": "Introducing SerpApi’s Hermes Agent Plugin",
+   "url": "https://serpapi.com/blog/introducing-serpapis-hermes-agent-plugin/"
+  },
+  {
+   "title": "Web Search Provider Plugins",
+   "url": "https://hermes-agent.nousresearch.com/docs/developer-guide/web-search-provider-plugin"
+  },
+  {
+   "title": "How to Give Hermes Agent Real-Time Web Search Results",
+   "url": "https://serpapi.com/blog/how-to-give-hermes-agent-real-time-web-search-results/"
+  },
+  {
+   "title": "Web Search & Extract",
+   "url": "https://hermes-agent.nousresearch.com/docs/user-guide/features/web-search"
+  },
+  {
+   "title": "hermes-agent/website/docs/user-guide/features/web-search.md at main · NousResearch/hermes-agent · GitHub",
+   "url": "https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/web-search.md"
+  },
+  {
+   "title": "Web Search in Hermes Agent: What's Built In and How to Use It",
+   "url": "https://www.firecrawl.dev/blog/hermes-web-search"
+  },
+  {
+   "title": "Web Search Provider Plugins",
+   "url": "https://hermes-agent.lzw.me/docs/en/developer-guide/web-search-provider-plugin"
+  },
+  {
+   "title": "web-search-plus-hermes - Hermes Agent Web Search Plugin",
+   "url": "https://www.everydev.ai/tools/web-search-plus-hermes"
+  },
+  {
+   "title": "Web Search Backends for Hermes Agent: Firecrawl, SearXNG, Tavily & More",
+   "url": "https://hermes-tutorials.dev/blog/web-search-backends/"
+  }
+ ]
+}

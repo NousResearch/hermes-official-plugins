@@ -1,0 +1,15 @@
+[project]
+name = "hermes-plugin-claude-subscription-websearch"
+version = "0.1.0"
+description = "Hermes Agent web_search backend served by a Claude subscription through Claude Code's WebSearch tool (opt-in, experimental)"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+# No Python dependencies beyond Hermes core: the call drives the `claude` executable directly.
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# importlib mode: the plugin root carries an __init__.py, which must not be collected as a package.
+addopts = "-p no:cacheprovider --import-mode=importlib"
+pythonpath = [".", "tests"]

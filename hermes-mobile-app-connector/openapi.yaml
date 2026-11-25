@@ -1,0 +1,569 @@
+openapi: 3.1.0
+info:
+  title: hermes-mobile-app-connector dashboard API
+  version: "2"
+  description: >
+    The routes `dashboard/plugin_api.py` mounts under `/api/plugins/hermes-mobile-app-connector`, as the mobile app
+    calls them. `GET /sessions/silent` is read-only and reports which scheduled and webhook runs ended
+    silently. `/pair` pairs, inspects, and clears the profile's push relay configuration and returns
+    the notification preview key over the existing authenticated dashboard connection. The
+    device-access routes follow `Store._public` in `device/bridge.py`; the routes that hand requests
+    to a device and take its answers also check the device's pairing token
+    (`X-Hermes-Mobile-Device-Token`). An error answers `{"detail": <reason>}`: 400 for an invalid
+    profile name or invalid pairing input, 404 for a profile that does not exist, 401 without a
+    pairing token, 403 when the device id and pairing token match no paired device, 409 when the
+    bridge or pairing refuses (with its reason) and 503 while the profile's storage is busy or
+    unreadable, which the app retries. A request body FastAPI cannot validate answers 422 with a list
+    of problems in `detail`, except on `POST /pair`, which validates its own body and answers 400
+    naming the offending field only, never echoing a value. A running gateway follows a `/pair`
+    re-pair or unpair on its next send, without a restart.
+paths:
+  /api/plugins/hermes-mobile-app-connector/pair:
+    get:
+      summary: Current push notification pairing status for the profile (never returns secrets).
+      parameters:
+        - $ref: "#/components/parameters/Profile"
+      responses:
+        "200":
+          description: Whether the profile is paired, where its settings come from, and whether notifications are ready.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushPairStatus"}
+        "400":
+          description: The profile name is not a valid profile name.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+        "404":
+          description: No such profile.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+    post:
+      summary: >
+        Pair push notifications for the profile in one authenticated call: mint or adopt the install
+        key, store plugin-managed values in `pairing.json`, ensure the preview key exists, and return
+        both keys. Values the operator configured (`platforms.push` in config.yaml, then environment
+        variables or scoped secrets) win: they are returned as they are and never written. A running
+        gateway sends with the new settings without a restart.
+      parameters:
+        - $ref: "#/components/parameters/Profile"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PushPairRequest"}
+      responses:
+        "200":
+          description: The effective install key, install id, preview key, relay URL, source, and readiness.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushPairResult"}
+        "400":
+          description: >
+            Invalid profile name, a body that is not a JSON object, a missing or non-string
+            `relay_url`, a disallowed relay URL (must be https:// or localhost http://, with no
+            userinfo such as `user:pass@`), or an install key that is not a string of 32 to 256
+            URL-safe ASCII characters. `detail` names the offending field, never its value.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+        "404":
+          description: No such profile.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+        "409":
+          description: The profile is already paired with a different install key (never silently rotated).
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+        "503":
+          description: Pairing or preview-key storage could not be read or written.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+    delete:
+      summary: >
+        Remove only the plugin's stored `pairing.json` for the profile. Values configured in
+        `platforms.push` or the environment are left in place and reported in the response; the
+        preview key is never deleted or rotated. A running gateway stops sending with the removed
+        pairing on its next send.
+      parameters:
+        - $ref: "#/components/parameters/Profile"
+      responses:
+        "200":
+          description: Remaining pairing status after removing stored plugin pairing.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushPairStatus"}
+        "400":
+          description: The profile name is not a valid profile name.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+        "404":
+          description: No such profile.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+        "503":
+          description: Stored pairing could not be removed.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+  /api/plugins/hermes-mobile-app-connector/sessions/silent:
+    get:
+      summary: >
+        The profile's newest scheduled and webhook runs (at most 1,000) whose final reply was a
+        silence marker such as `[SILENT]`, by Hermes' own rule for autonomous runs.
+      parameters:
+        - $ref: "#/components/parameters/Profile"
+      responses:
+        "200":
+          description: The silent runs' session ids.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushSilentSessions"}
+        "400":
+          description: The profile name is not a valid profile name.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+        "404":
+          description: No such profile.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+        "503":
+          description: The profile's session store could not be read; try again.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PushError"}
+  /api/plugins/hermes-mobile-app-connector/setup:
+    get:
+      summary: Which protocol the installed plugin speaks and the profiles it serves.
+      responses:
+        "200":
+          description: The plugin's protocol, version and profiles.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DeviceAccessSetup"}
+  /api/plugins/hermes-mobile-app-connector/devices/{device_id}:
+    put:
+      summary: Saves the device's grants and scope for the profile.
+      parameters:
+        - $ref: "#/components/parameters/DeviceID"
+        - $ref: "#/components/parameters/Profile"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/DeviceRegistration"}
+      responses:
+        "200":
+          description: The device is registered with these grants and scope.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DeviceRegistered"}
+        "400": {$ref: "#/components/responses/InvalidProfile"}
+        "404": {$ref: "#/components/responses/UnknownProfile"}
+        "409": {$ref: "#/components/responses/Refused"}
+        "422": {$ref: "#/components/responses/InvalidBody"}
+        "503": {$ref: "#/components/responses/Busy"}
+  /api/plugins/hermes-mobile-app-connector/devices/{device_id}/pending:
+    post:
+      summary: Claims up to four requests waiting for the device, each under a new lease.
+      parameters:
+        - $ref: "#/components/parameters/DeviceID"
+        - $ref: "#/components/parameters/Profile"
+        - $ref: "#/components/parameters/DeviceToken"
+      responses:
+        "200":
+          description: The claimed requests; empty when none is waiting.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DevicePending"}
+        "400": {$ref: "#/components/responses/InvalidProfile"}
+        "401": {$ref: "#/components/responses/TokenRequired"}
+        "403": {$ref: "#/components/responses/DeviceNotPaired"}
+        "404": {$ref: "#/components/responses/UnknownProfile"}
+        "409": {$ref: "#/components/responses/Refused"}
+        "503": {$ref: "#/components/responses/Busy"}
+  /api/plugins/hermes-mobile-app-connector/devices/{device_id}/results/{request_id}:
+    post:
+      summary: Answers a claimed request under the lease it was claimed with. A repeated answer is a no-op.
+      parameters:
+        - $ref: "#/components/parameters/DeviceID"
+        - name: request_id
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/Profile"
+        - $ref: "#/components/parameters/DeviceToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/DeviceCompletion"}
+      responses:
+        "200":
+          description: The request as recorded with its answer.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DeviceRequestRecord"}
+        "400": {$ref: "#/components/responses/InvalidProfile"}
+        "401": {$ref: "#/components/responses/TokenRequired"}
+        "403": {$ref: "#/components/responses/DeviceNotPaired"}
+        "404": {$ref: "#/components/responses/UnknownProfile"}
+        "409": {$ref: "#/components/responses/Refused"}
+        "422": {$ref: "#/components/responses/InvalidBody"}
+        "503": {$ref: "#/components/responses/Busy"}
+  /api/plugins/hermes-mobile-app-connector/requests/{request_id}:
+    get:
+      summary: A request's recorded state and result.
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: "#/components/parameters/Profile"
+      responses:
+        "200":
+          description: The request's recorded state and result.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DeviceRequestRecord"}
+        "400": {$ref: "#/components/responses/InvalidProfile"}
+        "404": {$ref: "#/components/responses/UnknownProfile"}
+        "409": {$ref: "#/components/responses/RequestNotFound"}
+        "503": {$ref: "#/components/responses/Busy"}
+components:
+  responses:
+    InvalidProfile:
+      description: The profile name is not a valid profile name.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/DeviceAccessError"}
+    UnknownProfile:
+      description: No such profile.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/DeviceAccessError"}
+    TokenRequired:
+      description: The device pairing token is missing or too short.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/DeviceAccessError"}
+    DeviceNotPaired:
+      description: No device with this id is paired under this pairing token in this profile.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/DeviceAccessError"}
+    Refused:
+      description: >
+        The bridge refused, with its reason: the request is unavailable, expired, revoked or under
+        another lease, or the registration is invalid.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/DeviceAccessError"}
+    RequestNotFound:
+      description: No such request in this profile.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/DeviceAccessError"}
+    Busy:
+      description: Another process held the profile's storage past the busy timeout; try again.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/DeviceAccessError"}
+    InvalidBody:
+      description: >
+        FastAPI rejected the request body before the route ran: a field is missing, has the wrong
+        type or breaks a limit. `detail` lists each problem.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/DeviceAccessValidationError"}
+  parameters:
+    DeviceID:
+      name: device_id
+      in: path
+      required: true
+      schema: {type: string}
+    Profile:
+      name: profile
+      in: query
+      description: >
+        The profile to read or act on: `default` or a named profile. Omitted, the route serves the
+        profile Hermes binds the request to, else the profile Hermes was launched with; where Hermes
+        binds a profile on device-access routes, that profile wins over this one.
+      schema: {type: string}
+    DeviceToken:
+      name: X-Hermes-Mobile-Device-Token
+      in: header
+      required: true
+      description: The device's pairing token, as registered.
+      schema: {type: string, minLength: 32}
+  schemas:
+    PushError:
+      type: object
+      required: [detail]
+      properties:
+        detail: {type: string}
+    PushPairRequest:
+      type: object
+      additionalProperties: false
+      required: [relay_url]
+      properties:
+        relay_url:
+          type: string
+          description: >
+            Base URL of the push relay (`https://`, or `http://` to localhost only), with no
+            userinfo (`user:pass@`).
+        install_key:
+          anyOf:
+            - {type: string}
+            - {type: "null"}
+          description: >
+            Optional capability key to adopt when the profile has no current install key (32 to 256
+            URL-safe characters `[A-Za-z0-9_-]`), or the existing install key. Omit or pass `null`
+            to keep the current key or mint a new one.
+    PushPairResult:
+      type: object
+      additionalProperties: false
+      required: [install_key, install_id, preview_key, relay_url, source, notifications_ready]
+      properties:
+        install_key:
+          type: string
+          description: Effective install key pairing this Hermes profile with the push relay.
+        install_id:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: Lowercase SHA-256 hex digest of `install_key`.
+        preview_key:
+          type: string
+          description: Standard base64 encoding of the 32-byte AES-256-GCM preview key.
+        relay_url:
+          type: string
+          description: >
+            Effective push relay base URL, any userinfo removed (empty string if a configured URL
+            was refused).
+        source:
+          type: string
+          enum: [plugin, environment, config]
+          description: >
+            `config` when the relay URL or install key comes from `platforms.push` in the profile's
+            config.yaml; otherwise `environment` when either comes from environment variables or
+            scoped secrets; `plugin` when both come from the plugin's own `pairing.json`.
+        notifications_ready:
+          type: boolean
+          description: Whether a valid relay URL and install key are in effect for notifications.
+    PushPairStatus:
+      type: object
+      additionalProperties: false
+      required: [paired, install_id, relay_url, source, notifications_ready]
+      properties:
+        paired:
+          type: boolean
+        install_id:
+          anyOf:
+            - {type: string, pattern: "^[0-9a-f]{64}$"}
+            - {type: "null"}
+          description: Lowercase SHA-256 hex digest of the effective install key, or `null`.
+        relay_url:
+          anyOf:
+            - {type: string}
+            - {type: "null"}
+          description: Effective push relay base URL with any userinfo removed, or `null`.
+        source:
+          anyOf:
+            - {type: string, enum: [plugin, environment, config]}
+            - {type: "null"}
+          description: >
+            Where the active settings come from (`config`, `environment` or `plugin`, as in
+            `PushPairResult`), or `null` when unpaired.
+        notifications_ready:
+          type: boolean
+    PushSilentSessions:
+      type: object
+      additionalProperties: false
+      required: [silent]
+      properties:
+        silent:
+          type: array
+          description: Session ids, newest first.
+          items: {type: string}
+    DeviceAccessError:
+      type: object
+      required: [detail]
+      properties:
+        detail: {type: string}
+    DeviceAccessValidationError:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            required: [loc, msg, type]
+            properties:
+              loc:
+                type: array
+                description: Where the problem is, such as `body`, `scope`, `calendars`, `0`.
+                items: {}
+              msg: {type: string}
+              type: {type: string}
+    DeviceAccessSetup:
+      type: object
+      additionalProperties: false
+      properties:
+        protocol_version: {type: integer}
+        plugin_version: {type: string}
+        state: {type: string}
+        profiles:
+          type: array
+          items: {type: string}
+          description: Absent from older plugins.
+    DeviceCalendarScope:
+      type: object
+      additionalProperties: false
+      required: [id, title, writable]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        writable: {type: boolean}
+    DeviceScope:
+      type: object
+      additionalProperties: false
+      required: [calendar_ids, calendars, health_metrics, contact_fields]
+      properties:
+        calendar_ids:
+          type: array
+          maxItems: 128
+          items: {type: string}
+        calendars:
+          type: array
+          maxItems: 128
+          items: {$ref: "#/components/schemas/DeviceCalendarScope"}
+        health_metrics:
+          type: array
+          description: The Health categories the agent may read.
+          items: {type: string, enum: [active_energy, blood_glucose, blood_oxygen, blood_pressure, body_fat, body_mass_index, caffeine, carbohydrates, cycling_distance, dietary_energy, exercise_minutes, fat, fiber, flights_climbed, heart_rate, heart_rate_variability, height, lean_body_mass, mindful_minutes, protein, respiratory_rate, resting_energy, resting_heart_rate, sleep, sodium, stand_minutes, steps, sugar, vo2_max, walking_heart_rate, walking_running_distance, water, weight, workouts, wrist_temperature]}
+        health_write_metrics:
+          type: array
+          description: The Health categories the agent may log. Absent from older apps, which log nothing.
+          items: {type: string, enum: [body_fat, caffeine, carbohydrates, dietary_energy, fat, fiber, mindful_minutes, protein, sodium, sugar, water, weight]}
+        contact_fields:
+          type: array
+          items: {type: string}
+    DeviceRegistration:
+      type: object
+      additionalProperties: false
+      required: [name, grants, token, scope]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 128}
+        grants:
+          type: array
+          maxItems: 16
+          items: {type: string}
+          description: Permission names such as `calendar.read`.
+        token: {type: string, minLength: 32, maxLength: 128}
+        scope: {$ref: "#/components/schemas/DeviceScope"}
+        features:
+          type: array
+          maxItems: 64
+          items: {type: string}
+          description: >
+            What this app version can do beyond its grants, such as `reminders.update` and
+            `reminders.query`. Absent from older apps, which have none of them; unknown names are ignored.
+    DeviceRegistered:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          description: "`registered`."
+    DeviceRequestRecord:
+      type: object
+      additionalProperties: false
+      required: [id, profile, device_id, operation, arguments, status, created_at, expires_at, result]
+      properties:
+        id: {type: string}
+        profile: {type: string}
+        device_id:
+          anyOf:
+            - {type: string}
+            - {type: "null"}
+        operation:
+          type: string
+          description: Such as `calendar.events` or `reminders.create`.
+        arguments:
+          type: object
+          additionalProperties: true
+        status:
+          type: string
+          description: >
+            `pending`, `running`, `succeeded`, `unavailable`, `failed`, `expired` or `cancelled`
+            (the device withdrew the permission or data the request needs).
+        created_at:
+          type: number
+          description: Seconds since 1970.
+        expires_at:
+          type: number
+          description: >
+            Seconds since 1970. A pending request expires then; a claimed one stays open until its
+            lease lapses, if that is later.
+        result:
+          anyOf:
+            - {type: object, additionalProperties: true}
+            - {type: "null"}
+    DeviceClaimedRequest:
+      type: object
+      additionalProperties: false
+      required: [id, profile, device_id, operation, arguments, status, created_at, expires_at, result, lease]
+      properties:
+        id: {type: string}
+        profile: {type: string}
+        device_id: {type: string}
+        operation: {type: string}
+        arguments:
+          type: object
+          additionalProperties: true
+        status: {type: string}
+        created_at: {type: number}
+        expires_at: {type: number}
+        result:
+          anyOf:
+            - {type: object, additionalProperties: true}
+            - {type: "null"}
+        lease:
+          type: string
+          description: Answers must carry it; it lapses after 35 seconds.
+    DevicePending:
+      type: object
+      additionalProperties: false
+      required: [requests]
+      properties:
+        requests:
+          type: array
+          items: {$ref: "#/components/schemas/DeviceClaimedRequest"}
+    DeviceResult:
+      type: object
+      additionalProperties: false
+      required: [status, observed_at]
+      properties:
+        status: {type: string, enum: [succeeded, unavailable, failed]}
+        data:
+          description: The operation's answer.
+        error: {type: string}
+        observed_at: {type: string, format: date-time}
+    DeviceCompletion:
+      type: object
+      additionalProperties: false
+      required: [lease, result]
+      properties:
+        lease: {type: string, minLength: 32, maxLength: 32}
+        result: {$ref: "#/components/schemas/DeviceResult"}

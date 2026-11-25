@@ -1,0 +1,9 @@
+{
+  "name": "hermes-mobile-app-connector",
+  "label": "Hermes Mobile",
+  "description": "Silent automated runs and paired device access requests",
+  "version": "2.0.0",
+  "icon": "Smartphone",
+  "tab": {"hidden": true},
+  "api": "plugin_api.py"
+}

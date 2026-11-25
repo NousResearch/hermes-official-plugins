@@ -17,6 +17,9 @@ def test_default_threshold_is_100():
     assert eu.reserve_percent(setting({"extra_usage_reserve_percent": "abc"})) == 100.0
     assert eu.reserve_percent(setting({"extra_usage_reserve_percent": "0"})) == 100.0
     assert eu.reserve_percent(setting({"extra_usage_reserve_percent": "150"})) == 100.0
+    # YAML parses an unquoted `true` as bool; float(True) == 1.0 must not become a 1% reserve.
+    assert eu.reserve_percent(setting({"extra_usage_reserve_percent": True})) == 100.0
+    assert eu.reserve_percent(setting({"extra_usage_reserve_percent": False})) == 100.0
 
 
 def test_reserve_percent_parsed():

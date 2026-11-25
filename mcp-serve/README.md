@@ -46,7 +46,7 @@ Use `["-p", "<profile>", "mcp-serve"]` to serve another profile's conversations;
 | `channels_list` | Targets you can send to |
 | `permissions_list_open` / `permissions_respond` | Approval requests seen during this session |
 
-Messages come from the profile's `state.db`. Events start when the server starts; older history is read with `messages_read`. Reading needs no running gateway; `messages_send` does, since the platform connections live there.
+Messages come from the profile's `state.db`. Events count from server start (history up to launch is baselined), but the `state.db` poll thread only runs once a client calls `events_poll` or `events_wait`, so a client that only reads, sends, answers approvals or uses `--tools` costs nothing while idle. Set `HERMES_MCP_EAGER_EVENTS=1` to start the poll thread with the server. Older history is read with `messages_read`. Reading needs no running gateway; `messages_send` does, since the platform connections live there.
 
 ## `--tools`: Hermes' tools for other agents
 

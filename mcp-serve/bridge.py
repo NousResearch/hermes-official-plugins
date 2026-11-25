@@ -315,6 +315,40 @@ class EventBridge:
         self._db_version = _StateDbVersion()
         self._state_db_version: Optional[int] = None  # skip polling work when state.db is unchanged
         self._cached_sessions_index: dict = {}
+        self._baselined = False  # prime() ran: history up to launch is marked seen
+        self._stopped = False  # stop() is final: nothing restarts the poller afterwards
+        self._auto_start = False  # armed by run_mcp_server: the first events call starts the poll thread
+        self._start_lock = threading.Lock()
+
+    def prime(self) -> None:
+        """Baseline at launch WITHOUT starting the poll thread. Messages that arrive after launch stay deliverable:
+        the thread, when ensure_started() launches it on first use, delivers everything newer than this baseline."""
+        if not self._baselined:
+            self._establish_baseline()
+            self._baselined = True
+
+    def ensure_started(self) -> None:
+        """Start the poll thread on first events_poll / events_wait. Idempotent and thread-safe; a no-op after stop().
+
+        The poller is not started at launch: one MCP server per agent session each ran a 200 ms state.db poll whose
+        open tick re-reads every indexed transcript, and with a busy gateway the data_version gate is open almost
+        every tick (measured ~25k pread/s per idle bridge)."""
+        if not self._auto_start or self._running or self._stopped:
+            return
+        with self._start_lock:
+            if not self._running and not self._stopped:
+                self.prime()
+                # One poll on the caller's thread first, so this very call already sees messages that arrived after
+                # launch (otherwise the first events_poll answers "nothing" until the thread's first tick).
+                db = _get_session_db()
+                if db:
+                    try:
+                        self._poll_once(db)
+                    except Exception as e:
+                        logger.debug("EventBridge first-use poll error: %s", e)
+                    finally:
+                        _close_quietly(db, "first-use")
+                self.start()
 
     def start(self):
         """Start the background polling thread."""
@@ -324,8 +358,8 @@ class EventBridge:
         # messages as events; sessions appearing later default to last_seen=0.0
         # in _poll_once, so new-conversation delivery is preserved.
         # Unit tests that drive _poll_once directly bypass start() and still observe first-poll delivery.
-        # See #13414.
-        self._establish_baseline()
+        # See #13414. prime() at launch already baselined; never re-baseline (that would drop post-launch messages).
+        self.prime()
         self._running = True
         self._thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._thread.start()
@@ -333,6 +367,7 @@ class EventBridge:
 
     def stop(self):
         """Stop the background polling thread and wake any waiters."""
+        self._stopped = True
         self._running = False
         self._new_event.set()
         if self._thread:
@@ -620,6 +655,7 @@ class _ToolHandlers:
         """
         after_cursor = _coerce_int(after_cursor, default=0, minimum=0, maximum=10**18)
         limit = _coerce_int(limit, default=20, minimum=1, maximum=200)
+        self.bridge.ensure_started()
         result = self.bridge.poll_events(after_cursor=after_cursor, session_key=session_key, limit=limit)
         return json.dumps(result, indent=2)
 
@@ -636,6 +672,7 @@ class _ToolHandlers:
         """
         after_cursor = _coerce_int(after_cursor, default=0, minimum=0, maximum=10**18)
         timeout_ms = _coerce_int(timeout_ms, default=30000, minimum=0, maximum=300000)  # cap 5 min
+        self.bridge.ensure_started()
         event = self.bridge.wait_for_event(after_cursor=after_cursor, session_key=session_key, timeout_ms=timeout_ms)
         return json.dumps({"event": event} if event else {"event": None, "reason": "timeout"}, indent=2)
 
@@ -773,6 +810,11 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None, include_tools:
     return mcp
 
 
+def _eager_events() -> bool:
+    """HERMES_MCP_EAGER_EVENTS=1: start the poll thread with the server, as before."""
+    return os.environ.get("HERMES_MCP_EAGER_EVENTS", "").strip() == "1"
+
+
 def run_mcp_server(verbose: bool = False, include_tools: bool = False, accept_hooks: bool = False,
                    tools_only: bool = False) -> None:
     """Start the Hermes MCP server on stdio."""
@@ -786,7 +828,11 @@ def run_mcp_server(verbose: bool = False, include_tools: bool = False, accept_ho
     # --tools-only serves no bridge tools, so it starts no event bridge (no state.db poller).
     bridge = None if tools_only else EventBridge()
     if bridge is not None:
-        bridge.start()
+        if _eager_events():
+            bridge.start()  # opt-in old behaviour
+        else:
+            bridge.prime()  # baseline now; the first events_poll / events_wait starts the poll thread
+            bridge._auto_start = True
     server = create_mcp_server(event_bridge=bridge, include_tools=include_tools, tools_only=tools_only)
     import asyncio
 

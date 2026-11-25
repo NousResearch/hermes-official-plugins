@@ -163,7 +163,9 @@ def parse_export(text: str) -> list[dict[str, Any]]:
     and trailing commas, which copying through a chat app or phone adds, are repaired."""
     blocks = _FENCE_RE.findall(text)
     candidates = blocks or [text.strip()]
-    if not blocks and "{" in text:
+    if not blocks and "{" in text and "}" in text:
+        # Both braces, or the slice below raises "substring not found" and the reply never reaches
+        # the cut-off message that is written for it.
         candidates.append(text[text.index("{"):text.rindex("}") + 1])
     # Inside a reply, only export-shaped blocks count: an example list of routines is not a bot.
     documents = [d for d in (_load_document(c, bare_ok=not blocks) for c in candidates) if d is not None]

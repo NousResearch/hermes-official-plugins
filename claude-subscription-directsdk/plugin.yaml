@@ -42,6 +42,22 @@ config_schema:
       Let Claude Code send its usage telemetry and error reports. Off by default. The model picker and
       /usage stay complete either way: their zero-inference probes still fetch Claude Code's feature
       flags and plan limits.
+  native_web_search:
+    type: bool
+    default: false
+    label: Native WebSearch through your Claude subscription
+    description: >-
+      Serve Hermes web_search from a separate Claude Code call with WebSearch as its only native tool.
+      Off by default. Queries go out through your own Claude subscription and bypass Hermes-side web
+      config and egress settings; results are untrusted text returned to Hermes unprocessed. The main
+      turn is unchanged and still makes exactly one upstream request.
+  native_web_search_timeout:
+    type: int
+    default: 90
+    label: Native WebSearch timeout (seconds)
+    description: >-
+      Deadline for one native WebSearch call (5-600 seconds). The call runs in its own scratch working
+      directory with no Hermes MCP servers.
   max_concurrent:
     type: int
     default: 4

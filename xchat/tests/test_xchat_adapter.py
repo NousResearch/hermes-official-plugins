@@ -526,6 +526,47 @@ def test_remember_sent_survives_concurrent_writers(monkeypatch, tmp_path):
     assert not missing, f"lost ids: {missing}"
 
 
+def test_a_lock_timeout_retries_instead_of_writing_unlocked(monkeypatch, tmp_path):
+    """``msvcrt.locking(LK_LOCK)`` blocks ~9 s and then raises EDEADLK under contention.
+
+    ``_remember_sent`` treated that as "carry on without the lock", so two writers that both
+    timed out did an unlocked read-modify-write and clobbered each other's id. A timeout must be
+    retried, never traded for an unlocked write.
+    """
+    from xchat_plugin import adapter as xchat_adapter
+
+    attempts = {"n": 0}
+
+    def flaky_lock(fd):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise OSError(36, "Resource deadlock avoided")
+
+    monkeypatch.setattr(xchat_adapter, "_lock_fd", flaky_lock)
+    monkeypatch.setattr(xchat_adapter, "_state_dir", lambda: tmp_path)
+
+    xchat_adapter._remember_sent("uuid-lock-retry")
+
+    assert attempts["n"] >= 3, "the lock was not retried"
+    assert "uuid-lock-retry" in xchat_adapter._load_sent_ids()
+
+
+def test_a_permanently_unavailable_lock_still_records_the_id(monkeypatch, tmp_path):
+    """After the retries are exhausted the id is still written - an unanswered self-chat echo is
+    worse than a racy append - but it must not spin forever."""
+    from xchat_plugin import adapter as xchat_adapter
+
+    def broken_lock(fd):
+        raise OSError(36, "Resource deadlock avoided")
+
+    monkeypatch.setattr(xchat_adapter, "_lock_fd", broken_lock)
+    monkeypatch.setattr(xchat_adapter, "_state_dir", lambda: tmp_path)
+
+    xchat_adapter._remember_sent("uuid-lock-giveup")
+
+    assert "uuid-lock-giveup" in xchat_adapter._load_sent_ids()
+
+
 @pytest.mark.asyncio
 async def test_keychange_routes_through_batch(monkeypatch):
     adapter = _make_adapter(monkeypatch)

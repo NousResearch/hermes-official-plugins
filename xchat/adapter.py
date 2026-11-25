@@ -75,6 +75,9 @@ REPLY_CACHE_MAX = 200
 MAX_INBOUND_ATTACHMENTS = 5
 # Message ids Hermes sent, kept so self-chat echoes are never answered.
 SENT_IDS_MAX = 500
+# Lock retries for the shared sent-id file: each LK_LOCK wait is up to ~9 s, so 4 keeps a
+# contended writer inside the lock protocol for ~40 s before giving up on it.
+SENT_ID_LOCK_ATTEMPTS = 4
 
 # Cross-process lock for the shared sent-id file (gateway + cron / `hermes send`).
 try:
@@ -229,13 +232,23 @@ def _remember_sent(message_id: str) -> None:
         logger.debug("[xchat] sent-id lock open failed", exc_info=True)
         return
     try:
-        locked = True
-        try:
-            _lock_fd(fd)
-        except OSError:
-            # Still record the id: dropping it would make the poll loop answer our own message.
-            locked = False
-            logger.debug("[xchat] sent-id lock acquire failed; writing unlocked", exc_info=True)
+        # msvcrt's LK_LOCK blocks for ~9 s and then raises EDEADLK, so a contended lock looks like a
+        # failure rather than a wait. Writing unlocked after that let two writers that both timed out
+        # do an unlocked read-modify-write and lose one another's id, so retry the lock instead: the
+        # holders only hold it for one short line, and the retries outlast a whole LK_LOCK wait.
+        locked = False
+        for attempt in range(SENT_ID_LOCK_ATTEMPTS):
+            try:
+                _lock_fd(fd)
+                locked = True
+                break
+            except OSError:
+                if attempt == SENT_ID_LOCK_ATTEMPTS - 1:
+                    # Last resort: record the id anyway. Dropping it would make the poll loop answer
+                    # our own message, which is worse than a rare lost update between two writers.
+                    logger.debug("[xchat] sent-id lock acquire failed; writing unlocked", exc_info=True)
+                else:
+                    time.sleep(0.05 * (attempt + 1))
         try:
             ids = [m for m in _load_sent_ids() if m != message_id] + [message_id]
             path = _sent_path()

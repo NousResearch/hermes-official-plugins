@@ -291,9 +291,14 @@ def _creation_source(platform):
 
 # What a Hermes with the plugin session accessors says about the running turn:
 # ``ctx.turn_client()`` names the client that submitted it, ``ctx.session_viewers()``
-# the clients attached to its session, ``ctx.turn_internal()`` whether Hermes started
-# it itself. A Hermes without them, or an accessor that fails, leaves the fact unknown.
+# the clients attached to its session, ``ctx.turn_origin()`` the Hermes producer that
+# started it, where Hermes knows one. A Hermes without them, or an accessor that fails,
+# leaves the fact unknown.
 _UNKNOWN = object()
+
+# The ``turn_origin()`` answers whose reply may read as a Desktop reply: turns only Hermes
+# starts. Any other answer, including a value a newer Hermes adds, keeps today's push.
+_RELABELLED_TURN_ORIGINS = frozenset({"delegation_result", "process_notification"})
 
 
 def _plugin_session_fact(name):
@@ -438,10 +443,10 @@ def _desktop_active(facts, active_seconds):
 
 
 def _present_for_unattributed_turn(platform, facts):
-    """Whether the reply to a turn Hermes started itself (an async delegation's result, a finished
-    background process, any other wake) is one the user is at a computer to see: Hermes says it
-    started the turn (``turn_internal()`` is ``True``; a Hermes without the accessor, or one that
-    fails or answers anything else, says no) and, by known *facts* (``_turn_facts``), names no
+    """Whether the reply to a turn Hermes started itself (an async delegation's result, a background
+    process's notice) is one the user is at a computer to see: Hermes names the turn's producer as
+    one of ``_RELABELLED_TURN_ORIGINS`` (``turn_origin()``; a Hermes without the accessor, or one
+    that fails or answers anything else, says no) and, by known *facts* (``_turn_facts``), names no
     client for it (``turn_client()`` is ``None``), the turn runs on one of Hermes' own surfaces
     (``_OWN_SURFACES``: an app, Desktop, TUI or CLI session; never a messaging platform, the API
     server or the curator, and cron and Kanban runs are decided before) under a platform the hook
@@ -449,7 +454,8 @@ def _present_for_unattributed_turn(platform, facts):
     Anything else says no."""
     if facts is _UNKNOWN or facts[0] is not None or not platform or platform not in _OWN_SURFACES:
         return False
-    if _plugin_session_fact("turn_internal") is not True:
+    origin = _plugin_session_fact("turn_origin")
+    if not isinstance(origin, str) or origin not in _RELABELLED_TURN_ORIGINS:
         return False
     active_seconds = _active_seconds()
     return any(_active_at_computer(viewer, active_seconds) for viewer in facts[1])

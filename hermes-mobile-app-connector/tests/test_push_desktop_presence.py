@@ -30,7 +30,7 @@ class PresenceTestCase(unittest.TestCase):
         self.home = Path(directory.name)
         self.adapter, self.constants = load_push_adapter(self.home)
         self.client = None
-        self.internal = False
+        self.origin = None
         self.viewers = []
         self.failing = set()
         self.reads = []
@@ -39,7 +39,7 @@ class PresenceTestCase(unittest.TestCase):
         self.ctx = types.SimpleNamespace(
             turn_client=lambda: self.read("turn_client", self.client),
             session_viewers=lambda: self.read("session_viewers", self.viewers),
-            turn_internal=lambda: self.read("turn_internal", self.internal),
+            turn_origin=lambda: self.read("turn_origin", self.origin),
             session_source=lambda: getattr(self.policy, "source", "") if self.policy is not None else "",
             session_surface=lambda: getattr(self.policy, "platform", "") if self.policy is not None else "",
             in_delegated_child=lambda include_subprocesses=False: self.delegated,
@@ -245,15 +245,18 @@ class HermesPresenceAccessorTests(unittest.TestCase):
         self.assertNotIn("desktop_active", payload["hermes"], "the relay reads it only on a Desktop reply")
 
 
-def _real_turn(test, internal):
-    """A real Hermes turn context: a local session's turn event (``internal`` as Hermes marks a wake),
-    with one active Desktop attached (``session_viewers()``; no gateway runs in this process)."""
+def _real_turn(test, origin):
+    """A real Hermes turn context: a local session's ``internal`` turn event, its producer named
+    *origin* where this Hermes can name one, with one active Desktop attached (``session_viewers()``;
+    no gateway runs in this process)."""
     from gateway.config import Platform
     from gateway.platforms.event import MessageEvent
     from gateway.session import SessionSource
     from gateway.session_context import clear_session_vars, set_session_vars
     event = MessageEvent(text="[process done]", source=SessionSource(platform=Platform.LOCAL, chat_id="s"),
-                         internal=internal)
+                         internal=True)
+    if origin is not None and callable(getattr(event, "set_turn_origin", None)):
+        event.set_turn_origin(origin)
     tokens = set_session_vars(platform="local", chat_id="s", session_key="s", session_id="local-1", turn_event=event)
     test.addCleanup(clear_session_vars, tokens)
     viewers = patch.object(test.adapter._ctx, "session_viewers", lambda: [viewer(idle_seconds=5)])
@@ -267,7 +270,7 @@ class _RealHermesTurn(unittest.TestCase):
         ps = _hermes_presence_accessors()
         self.adapter._ctx = types.SimpleNamespace(
             turn_client=ps.turn_client, session_viewers=ps.session_viewers, session_surface=ps.session_surface,
-            **{name: getattr(ps, name) for name in ("session_source", "in_delegated_child", "turn_internal")
+            **{name: getattr(ps, name) for name in ("session_source", "in_delegated_child", "turn_origin")
                if callable(getattr(ps, name, None))})
         self.sent = []
         self.adapter._deliver_in_background = lambda payload, relay=None: self.sent.append(payload)
@@ -283,32 +286,32 @@ class _RealHermesTurn(unittest.TestCase):
             return self.reply()
 
 
-@unittest.skipUnless(_hermes_presence_accessors() and callable(getattr(_hermes_presence_accessors(), "turn_internal", None)),
-                     "needs a Hermes checkout with plugin_session.turn_internal on PYTHONPATH")
-class HermesTurnInternalTests(_RealHermesTurn):
-    """The plugin against a Hermes that says whether it started the turn (``turn_internal()``)."""
+@unittest.skipUnless(_hermes_presence_accessors() and callable(getattr(_hermes_presence_accessors(), "turn_origin", None)),
+                     "needs a Hermes checkout with plugin_session.turn_origin on PYTHONPATH")
+class HermesTurnOriginTests(_RealHermesTurn):
+    """The plugin against a Hermes that names the producer of a turn it started (``turn_origin()``)."""
 
-    def test_a_wake_reads_as_a_desktop_reply_and_a_typed_turn_does_not(self):
-        for internal in [True, False]:
-            with self.subTest(internal=internal):
-                _real_turn(self, internal)
+    def test_a_process_or_delegation_wake_reads_as_a_desktop_reply_and_any_other_internal_turn_does_not(self):
+        for origin in ["process_notification", "delegation_result", None]:
+            with self.subTest(origin=origin):
+                _real_turn(self, origin)
                 payload, control = self.reply(), self.today()
-                if internal:
+                if origin is not None:
                     self.assertEqual((payload["hermes"]["source"], payload["hermes"]["desktop_active"]), ("desktop", True))
                 else:
                     self.assertEqual(payload, control)
                 self.doCleanups()
 
 
-@unittest.skipUnless(_hermes_presence_accessors() and getattr(_hermes_presence_accessors(), "turn_internal", None) is None,
-                     "needs a Hermes checkout whose plugin_session has turn_client but no turn_internal")
-class HermesWithoutTurnInternalTests(_RealHermesTurn):
-    """A Hermes that cannot say who started the turn: even a wake's reply is today's push."""
+@unittest.skipUnless(_hermes_presence_accessors() and getattr(_hermes_presence_accessors(), "turn_origin", None) is None,
+                     "needs a Hermes checkout whose plugin_session has turn_client but no turn_origin")
+class HermesWithoutTurnOriginTests(_RealHermesTurn):
+    """A Hermes that cannot name who started the turn: even a wake's reply is today's push."""
 
     def test_no_reply_is_relabelled(self):
-        for internal in [True, False]:
-            with self.subTest(internal=internal):
-                _real_turn(self, internal)
+        for origin in ["process_notification", None]:
+            with self.subTest(origin=origin):
+                _real_turn(self, origin)
                 payload = self.reply()
                 self.assertEqual(payload, self.today())
                 self.assertNotIn("desktop_active", payload["hermes"])
@@ -354,14 +357,10 @@ class DesktopActiveTests(PresenceTestCase):
 
     def test_a_turn_a_phone_sent_is_not_the_computers_even_while_the_computer_is_active(self):
         self.viewers = [viewer(idle_seconds=2)]
-        for client in [IPHONE, ANDROID, {"name": "hermes-tui", "kind": "tui"}]:
+        for client in [IPHONE, ANDROID, None, {"name": "hermes-tui", "kind": "tui"}]:
             with self.subTest(client=client):
                 self.client = client
                 self.assertEqual(self.active(), "omitted")
-        # A turn no client sent while nobody is active (UnattributedTurnTests covers the rest).
-        self.viewers = [viewer(idle_seconds=900)]
-        self.client = None
-        self.assertEqual(self.active(), "omitted")
         self.policy = None  # A session no client created: "desktop" is the platform's own label.
         self.assertIs(self.active(), False)
 
@@ -371,13 +370,12 @@ class DesktopActiveTests(PresenceTestCase):
         privacy = load_privacy()
         privacy._home = lambda: self.home
         privacy.load_key = lambda: bytes(range(32))
-        active, idle = [viewer(idle_seconds=2)], [viewer(idle_seconds=900)]
-        turns = [("iphone", IPHONE, "desktop", active), ("android", ANDROID, "desktop", active),
-                 ("no client, nobody active", None, "desktop", idle), ("cli, nobody active", None, "cli", idle),
-                 ("messaging", None, "homeassistant", active)]
-        for name, client, platform, viewers in turns:
+        self.viewers = [viewer(idle_seconds=2)]
+        turns = [("iphone", IPHONE, "desktop"), ("android", ANDROID, "desktop"), ("no client", None, "desktop"),
+                 ("cli", None, "cli"), ("messaging", None, "homeassistant")]
+        for name, client, platform in turns:
             with self.subTest(name):
-                self.client, self.viewers = client, viewers
+                self.client = client
                 if platform != "desktop":
                     self.policy = None
                 payload = self.reply(session_id="s1", platform=platform)
@@ -460,8 +458,7 @@ class DesktopActiveTests(PresenceTestCase):
     def test_no_client_and_an_unknown_kind_are_answers(self):
         # Well formed, naming no computer: today's label, and no Desktop reply to say it of.
         self.viewers = [viewer()]
-        # (A turn with no client at all is UnattributedTurnTests'.)
-        for client in [{}, {"kind": None, "name": None}, {"name": "hermes-cli", "kind": "cli"},
+        for client in [None, {}, {"kind": None, "name": None}, {"name": "hermes-cli", "kind": "cli"},
                        {"kind": "Desktop"}]:
             with self.subTest(client=client):
                 self.client = client
@@ -653,8 +650,8 @@ class DesktopActiveTests(PresenceTestCase):
 
 
 class UnattributedTurnTests(PresenceTestCase):
-    """A turn Hermes started itself (``turn_internal()`` is ``True`` and ``turn_client()`` is
-    ``None``: an async delegation's result, a finished background process, any other wake) in a
+    """A turn Hermes started itself (``turn_origin()`` names an allow-listed producer and
+    ``turn_client()`` is ``None``: an async delegation's result, a background process's notice) in a
     session of Hermes' own surfaces: its reply reads as a Desktop reply with ``desktop_active: true``
     only while a Desktop or Webapp attached to the session is active; on anything less it is exactly
     today's push."""
@@ -662,7 +659,7 @@ class UnattributedTurnTests(PresenceTestCase):
     def setUp(self):
         super().setUp()
         self.client = None
-        self.internal = True
+        self.origin = "process_notification"
         self.viewers = [viewer(idle_seconds=5)]
 
     def today(self, session_id="local-1", platform="desktop"):
@@ -673,7 +670,9 @@ class UnattributedTurnTests(PresenceTestCase):
     def test_the_reply_reads_as_a_desktop_reply_while_a_computer_is_active(self):
         policies = [("gui", types.SimpleNamespace(source="gui", platform="desktop")),
                     ("tui", types.SimpleNamespace(source="tui", platform="tui")), ("no policy", None)]
-        for name, policy in policies:
+        for name, policy in [(f"{name} {origin}", policy) for name, policy in policies
+                             for origin in ("process_notification", "delegation_result")]:
+            self.origin = name.rsplit(" ", 1)[1]
             for platform in ["desktop", "local", "gui", "tui", "cli", "web", "ios", "android"]:
                 for active in [viewer(idle_seconds=0), viewer(kind="webapp", basis="page", idle_seconds=299.9),
                                viewer(can_alert=None)]:
@@ -698,27 +697,31 @@ class UnattributedTurnTests(PresenceTestCase):
 
     def test_a_typed_turn_from_a_connection_that_announced_nothing_is_todays(self):
         """A person's turn sent over a connection that announced no client also reads
-        ``turn_client() is None``; Hermes says it did not start it, so the push is today's even
+        ``turn_client() is None``; Hermes names no producer for it, so the push is today's even
         while a Desktop is active."""
-        self.internal = False
+        self.origin = None
         payload = self.reply()
         self.assertEqual(payload, self.today())
         self.assertEqual(payload["hermes"]["source"], "gui")
         self.assertNotIn("desktop_active", payload["hermes"])
 
-    def test_only_hermes_saying_it_started_the_turn_relabels_it(self):
+    def test_only_an_allow_listed_origin_relabels_the_turn(self):
         control = self.today()
-        for answer in [False, None, "true", 1, [], {}]:
+        # Every other producer a Hermes may name (a restart resume, a Bot Chat delivery, cron, an
+        # automation, a plugin injection, a value a newer Hermes adds) and every other shape.
+        for answer in [None, "cron", "kanban", "bot_chat", "restart_resume", "plugin_injection", "",
+                       "Process_Notification", "delegation_result ", True, False, 1, [], {},
+                       ["process_notification"], {"process_notification"}]:
             with self.subTest(answer=answer):
-                self.internal = answer
+                self.origin = answer
                 self.assertEqual(self.reply(), control)
-        self.internal = True
-        self.failing = {"turn_internal"}
+        self.origin = "process_notification"
+        self.failing = {"turn_origin"}
         self.assertEqual(self.reply(), control)
         self.failing = set()
-        with patch.object(self.ctx, "turn_internal", None):  # A Hermes whose ctx predates the accessor.
+        with patch.object(self.ctx, "turn_origin", None):  # A Hermes whose ctx predates the accessor.
             self.assertEqual(self.reply(), control)
-        del self.ctx.turn_internal
+        del self.ctx.turn_origin
         self.assertEqual(self.reply(), control)
 
     def test_a_turn_with_no_platform_keeps_todays_push(self):

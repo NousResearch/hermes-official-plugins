@@ -12,6 +12,7 @@ Settings live in ``delegation.backends.profile_routes`` of config.yaml::
             - name: researcher
               description: Web research and long-form summaries.
           default: coder              # optional: profile for tasks that set none
+          require_profile: false      # optional: refuse a task that names no profile (default ignored)
 
 ``delegate_task`` gains a per-task ``profile`` enum of those names. A task that sets one runs as that
 Hermes profile (core binds the profile's own config, model, credentials, skills and SOUL.md); a task
@@ -24,7 +25,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping
 
-from agent.delegation_provider import DelegationProvider
+from agent.delegation_provider import DelegationProvider, DelegationRouteError
 
 logger = logging.getLogger(__name__)
 
@@ -102,12 +103,21 @@ class ProfilesDelegationProvider(DelegationProvider):
         return "Each task may set `profile` to run that subagent as one of the listed Hermes profiles."
 
     def route_task(self, task: Mapping[str, Any], config: Mapping[str, Any]) -> dict[str, Any]:
+        settings = self.settings(config)
+        default = settings.get("default")
+        require_profile = settings.get("require_profile", False)
+        if require_profile and default is not None:
+            # Two possible sources of a silent route is what this flag exists to remove.
+            _warn_once("%s.default is ignored when require_profile is on.", SETTINGS_PATH)
         chosen = task.get(PARAMETER)
         if chosen:
             # Core already refused anything outside the enum before calling us.
             return {"profile": chosen, "label": chosen}
-        settings = self.settings(config)
-        default = settings.get("default")
+        if require_profile:
+            names = [name for name, _ in configured_profiles(settings)]
+            detail = ("choose one of " + ", ".join(names)) if names else "the profiles list is empty"
+            raise DelegationRouteError(
+                f"this task needs 'profile' ({SETTINGS_PATH}.require_profile is on): {detail}")
         if isinstance(default, str) and default.strip():
             default = default.strip()
             if default in {name for name, _ in configured_profiles(settings)}:

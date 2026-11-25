@@ -183,7 +183,13 @@ def _risky_eval_reason(expression: str) -> Optional[str]:
     hit = next((reason for pattern, reason in _RISKY_EVAL_PATTERNS if pattern.search(expression)), None)
     if hit:
         return hit
-    literals = "".join(_decode_js_string_literal(m.group(0)) for m in _JS_STRING_LITERAL_RE.finditer(expression)).lower()
+    # A template literal with empty substitutions (``coo${""}kie``) is the same string as
+    # concatenated literals; strip ``${...}`` so its parts can form the token. A non-empty
+    # substitution stays as-is — decoding arbitrary expressions is not this denylist's job.
+    literals = "".join(
+        re.sub(r"\$\{[^}]*\}", "", _decode_js_string_literal(m.group(0)))
+        for m in _JS_STRING_LITERAL_RE.finditer(expression)
+    ).lower()
     return next((reason for token, reason in _SENSITIVE_EVAL_TOKENS
                  if re.search(rf"\b{re.escape(token)}\b", expression, re.IGNORECASE) or token.lower() in literals), None)
 

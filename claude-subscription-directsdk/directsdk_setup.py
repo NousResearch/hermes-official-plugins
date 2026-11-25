@@ -158,10 +158,28 @@ BACKEND_SWITCHES = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE
 # is inherited here too. Claude Code would sign in with it and bill API usage instead of the
 # subscription, so no child of this plugin receives one.
 API_CREDENTIAL_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_FOUNDRY_API_KEY")
+# A secret source's bootstrap token (`secrets.onepassword` reads `OP_SERVICE_ACCOUNT_TOKEN`, `secrets.bitwarden`
+# `BWS_ACCESS_TOKEN`) unlocks every other secret in the vault. Core keeps it out of every child it spawns
+# (Tier 1 in `tools/environments/local_env_policy.py`); this plugin builds its child env from `os.environ`
+# itself, so it drops the same names. Claude Code never reads them. The names stay listed for a core
+# without the secret-source registry.
+SECRET_SOURCE_BOOTSTRAP_ENV = ("OP_SERVICE_ACCOUNT_TOKEN", "BWS_ACCESS_TOKEN")
+
+
+def secret_source_bootstrap_env():
+    """Every registered secret source's bootstrap env name, read from core per call like core's own scrub."""
+    names = set(SECRET_SOURCE_BOOTSTRAP_ENV)
+    try:
+        from agent.secret_sources.registry import list_sources
+        names.update(name for source in list_sources() if (name := source.token_env({})))
+    except Exception:  # an older core without the registry keeps the static names
+        pass
+    return names
 
 
 def drop_api_credentials(env):
-    for key in API_CREDENTIAL_ENV:
+    """Drop, in place, what Claude Code must not inherit from Hermes: API keys and secret-source bootstrap tokens."""
+    for key in (*API_CREDENTIAL_ENV, *secret_source_bootstrap_env()):
         env.pop(key, None)
     return env
 

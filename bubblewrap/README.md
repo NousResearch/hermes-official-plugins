@@ -349,8 +349,8 @@ no core changes:
 
 - Settings moved from `terminal.bubblewrap_*` to `plugins.entries.bubblewrap.settings.*`.
 - The sandbox notice reaches the model as a plugin system prompt section instead of a core prompt edit.
-- Background jobs are not refused up front (core has no plugin flag for that yet); they die with their
-  sandbox, as described above.
+- Background jobs are refused up front (`BACKGROUND_LAUNCH_REFUSAL`); the model is told background
+  processes are unavailable on this backend, as described above.
 - `execute_code` reaches the per-call path by falling back from the session kernel, instead of a core
   branch that skips it.
 - The gateway starts in the process directory, or your home directory when that is hidden, instead of

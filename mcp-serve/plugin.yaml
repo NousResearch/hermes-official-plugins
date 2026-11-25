@@ -1,7 +1,7 @@
 name: mcp-serve
 label: MCP Serve
 kind: standalone
-version: 1.0.1
+version: 1.1.0
 author: NousResearch
 homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/mcp-serve
 description: >
@@ -10,8 +10,10 @@ description: >
   conversations, poll live events, send messages and answer approvals over
   stdio. `--tools` (off by default) also exposes Hermes' web, vision,
   image generation, skills and TTS tools under your profile's credentials;
-  terminal, file and kanban tools are never exposed. Formerly built into
-  Hermes core as `hermes mcp serve`.
+  terminal, file and kanban tools are never exposed. `--tools-only` serves that
+  tool face without the messaging bridge, plus three read-only state tools:
+  status, an allowlisted config read, and the installed plugins. Formerly built
+  into Hermes core as `hermes mcp serve`.
 requires_hermes: ">=0.22.0"
 provides_tools: []
 provides_hooks: []

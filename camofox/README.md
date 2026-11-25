@@ -159,6 +159,24 @@ checkpoints state, it does not erase it. So Hermes closes the session through th
 directory alone rather than guessing at the server's private layout: to drop the cookies as well,
 remove that `userId`'s directory by hand after the session is closed.
 
+## Is a site still signed in?
+
+Persisted cookies expire and sites log you out; an unattended job usually only finds out when the
+task fails mid-run. `browser_signed_in_status` answers that beforehand, read-only, without
+navigating to the site. Like cookie import it is offered only when `CAMOFOX_API_KEY` is set, and the
+storage-state route on the server checks the same key:
+
+```bash
+hermes camofox signed-in github.com
+# Signed in: yes — 4 cookie(s) for this origin, earliest expiry 2026-12-01T10:00:00Z (cookie _gh_sess)
+```
+
+It reports the live cookies for the origin — names only, never values — how many, and when the
+earliest expires; expired cookies never count as signed in. With no active Camofox session for the
+profile the answer is `unknown`; add `--open-session` to load the persisted profile first (it opens
+one about:blank tab in that profile). `--user-id` checks a scheduled agent's profile instead of
+this one.
+
 ## Externally managed sessions
 
 When another app drives the visible Camofox browser, Hermes can work inside that same identity:

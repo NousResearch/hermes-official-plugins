@@ -67,6 +67,9 @@ def register(ctx) -> None:
     # Offered only with CAMOFOX_API_KEY set: the server's cookie route checks that bearer token.
     ctx.register_tool(name=s.BROWSER_IMPORT_COOKIES["name"], toolset=TOOLSET, schema=s.BROWSER_IMPORT_COOKIES,
                       handler=t.handle_import_cookies, check_fn=t.check_cookie_import_available, emoji="🍪")
+    # Read-only signed-in status reads the storage-state export: same bearer-token gate.
+    ctx.register_tool(name=s.BROWSER_SIGNED_IN_STATUS["name"], toolset=TOOLSET, schema=s.BROWSER_SIGNED_IN_STATUS,
+                      handler=t.handle_signed_in_status, check_fn=t.check_signed_in_status_available, emoji="🔑")
 
     # Core cleaned the task's Camofox session after every turn (cleanup_task_resources), except with
     # browser.headed on, where someone watches the window; a teardown without a final turn (CLI quit,

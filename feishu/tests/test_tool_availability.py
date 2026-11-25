@@ -7,6 +7,10 @@ Runs through the real registry and ``model_tools.get_tool_definitions``.
 
 import importlib
 import json
+import shutil
+from pathlib import Path
+
+import hermes_yaml as yaml
 
 import pytest
 
@@ -27,7 +31,7 @@ class _RegistryCtx:
     def register_platform(self, **kwargs):
         pass
 
-    def register_tool(self, **kwargs):
+    def register_tool(self, default_platforms=(), **kwargs):
         self.registry.register(**kwargs)
 
 
@@ -115,3 +119,34 @@ def test_each_multiplexed_profile_sees_only_its_own_setup(model_tool_names, monk
             reset_hermes_home_override(home)
     finally:
         set_multiplex_active(False)
+
+
+def test_configured_home_offers_the_tools_on_feishu_only(monkeypatch, tmp_path):
+    """A new home that sets Feishu up (no saved ``hermes tools`` choice): the five tools ride in
+    ``tools[]`` for the Feishu platform and nowhere else, through the real plugin loader."""
+    import model_tools
+    from hermes_cli.plugins import discover_plugins
+    from hermes_cli.tools_config import _get_platform_tools
+    from tools.registry import invalidate_check_fn_cache
+
+    home = tmp_path / "home"
+    shutil.copytree(Path(__file__).resolve().parents[1], home / "plugins" / "feishu",
+                    ignore=shutil.ignore_patterns("__pycache__", "tests", ".pytest_cache"))
+    (home / "config.yaml").write_text("plugins:\n  enabled: [feishu]\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    # The suite runs against a core without Feishu (see conftest), whichever version string it carries.
+    floor = yaml.safe_load((home / "plugins" / "feishu" / "plugin.yaml").read_text(encoding="utf-8"))["requires_hermes"]
+    monkeypatch.setattr("hermes_cli.plugins_manifest.running_hermes_version", lambda: floor.lstrip(">="))
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_a")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "s3cret")
+    discover_plugins()
+    invalidate_check_fn_cache()
+
+    def names(platform: str) -> set:
+        enabled = _get_platform_tools({}, platform)
+        blob = json.dumps(model_tools.get_tool_definitions(enabled_toolsets=sorted(enabled), quiet_mode=True))
+        return {name for name in FEISHU_TOOLS if name in blob}
+
+    assert names("feishu") == FEISHU_TOOLS
+    assert names("cli") == set()
+    assert names("telegram") == set()

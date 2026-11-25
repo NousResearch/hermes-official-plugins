@@ -6,6 +6,7 @@ Uses the same lazy-import + BaseRequest pattern as feishu_comment.py. Registered
 """
 
 from .lark_client import (
+    DEFAULT_PLATFORMS,
     _check_feishu,
     build_request,
     get_client,
@@ -71,4 +72,4 @@ def register_tools(ctx) -> None:
     ctx.register_tool(
         name="feishu_doc_read", toolset=TOOLSET, schema=FEISHU_DOC_READ_SCHEMA, handler=_handle_feishu_doc_read,
         check_fn=_check_feishu, requires_env=[], is_async=False, description="Read Feishu document content",
-        emoji="\U0001f4c4")
+        emoji="\U0001f4c4", default_platforms=DEFAULT_PLATFORMS)

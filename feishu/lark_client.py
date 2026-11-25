@@ -15,6 +15,10 @@ from .adapter import PLATFORM_NAME, _lark_sdk_installed, app_credentials
 # events each run in their own context, so they never see each other's client.
 current_client: contextvars.ContextVar = contextvars.ContextVar("feishu_lark_client", default=None)
 
+# The tools only work inside a comment run, so their toolsets default on for the Feishu platform alone
+# (elsewhere they would be dead weight in every request); ``hermes tools`` can still turn them on anywhere.
+DEFAULT_PLATFORMS = (PLATFORM_NAME,)
+
 
 def get_client():
     """Return the lark client of the comment being answered, or None outside a comment run."""

@@ -9,6 +9,7 @@ API (``register_tools(ctx)`` -> ``ctx.register_tool``), not ``tools.registry``.
 import logging
 
 from .lark_client import (
+    DEFAULT_PLATFORMS,
     _check_feishu,
     build_request,
     get_client,
@@ -198,4 +199,5 @@ def register_tools(ctx) -> None:
     for schema, handler, desc, emoji in _TOOLS:
         ctx.register_tool(
             name=schema["name"], toolset=TOOLSET, schema=schema, handler=handler,
-            check_fn=_check_feishu, requires_env=[], is_async=False, description=desc, emoji=emoji)
+            check_fn=_check_feishu, requires_env=[], is_async=False, description=desc, emoji=emoji,
+            default_platforms=DEFAULT_PLATFORMS)

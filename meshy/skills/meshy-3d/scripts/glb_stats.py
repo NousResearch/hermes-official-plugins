@@ -24,6 +24,8 @@ def stats(path: str) -> dict:
             raise ValueError("not a binary glTF (.glb) file")
         (json_len,) = struct.unpack("<I", head[12:16])
         doc = json.loads(fh.read(json_len))
+        if not isinstance(doc, dict):
+            raise ValueError("glTF JSON chunk is not an object")
     accessors = doc.get("accessors", [])
     tris = verts = prims = 0
     for mesh in doc.get("meshes", []):
@@ -69,7 +71,7 @@ def main(argv: list[str]) -> int:
     for p in argv:
         try:
             print(json.dumps(stats(p)))
-        except (OSError, ValueError, KeyError, IndexError) as exc:
+        except (OSError, ValueError, KeyError, IndexError, AttributeError, TypeError) as exc:
             print(json.dumps({"path": p, "error": str(exc)}))
             rc = 1
     return rc

@@ -635,12 +635,40 @@ def _serialize_assistant_message(message: Any) -> dict[str, Any]:
     }
 
 
+def _pricing_key(base_url: str) -> str:
+    """The key core's own pricing lookup sends to *base_url* ("" when it sends none).
+
+    Hermes prices a custom endpoint from its ``/models`` list. A keyed endpoint (LiteLLM, vLLM with
+    ``--api-key``) answers that list with 401 without the key, so a keyless lookup logs a rejected
+    request there each time the cached list is cold, and the generation gets no cost. Core's aux
+    pricing resolves this key: only for the configured main endpoint, none beside a live credential
+    source, and none when the config backend is down.
+    """
+    if not base_url:
+        return ""
+    try:
+        from agent.aux_accounting import _pricing_api_key
+    except ImportError:  # core before v0.23.3: price without a key, as before
+        return ""
+    try:
+        return _pricing_api_key(base_url, None) or ""
+    except Exception as exc:  # pragma: no cover - fail-open: price without a key
+        _debug(f"pricing key lookup failed: {exc}")
+        return ""
+
+
 def _canonical_usage_and_cost(canonical: Any, *, provider: str, model: str,
                               base_url: str) -> tuple[dict[str, int], dict[str, float]]:
     """Translate canonical Hermes usage into Langfuse usage and cost maps."""
     buckets = _usage_buckets(lambda attr: getattr(canonical, attr))
     usage_details: dict[str, int] = {key: tokens for key, tokens in buckets.items() if tokens or key in ("input", "output")}
     cost_details: dict[str, float] = {}
+    # Pricing reads config; a down config backend raises ConfigBackendUnavailable, a SystemExit on
+    # purpose. Pricing is optional, so it must not abort the export of the generation.
+    try:
+        from hermes_cli.config_backend import ConfigBackendUnavailable as backend_down
+    except ImportError:  # core without a config backend
+        backend_down = Exception
     try:
         from agent.usage_pricing import estimate_usage_cost, resolve_billing_route
 
@@ -649,8 +677,9 @@ def _canonical_usage_and_cost(canonical: Any, *, provider: str, model: str,
         route = resolve_billing_route(model, provider=provider, base_url=base_url)
         if getattr(route, "billing_mode", "") == "subscription_included":
             return usage_details, cost_details
-        cost = estimate_usage_cost(model, canonical, provider=provider, base_url=base_url, api_key="")
-    except Exception as exc:  # pragma: no cover - fail-open
+        api_key = _pricing_key(base_url)
+        cost = estimate_usage_cost(model, canonical, provider=provider, base_url=base_url, api_key=api_key)
+    except (Exception, backend_down) as exc:  # fail-open
         _debug(f"usage pricing failed: {exc}")
         return usage_details, cost_details
 
@@ -671,7 +700,8 @@ def _canonical_usage_and_cost(canonical: Any, *, provider: str, model: str,
 
         from agent.usage_pricing import get_pricing_entry
 
-        entry = get_pricing_entry(model, provider=provider, base_url=base_url)
+        entry = (get_pricing_entry(model, provider=provider, base_url=base_url, api_key=api_key) if api_key
+                 else get_pricing_entry(model, provider=provider, base_url=base_url))
         # Above the context tier, estimate_usage_cost bills the WHOLE request at the
         # *_above rates; use them here too or the breakdown disagrees with "total".
         above = bool(entry) and entry.tier_threshold_tokens is not None and canonical.prompt_tokens > entry.tier_threshold_tokens
@@ -681,7 +711,7 @@ def _canonical_usage_and_cost(canonical: Any, *, provider: str, model: str,
             tokens = buckets[key]
             if rate is not None and tokens:
                 cost_details[key] = float(Decimal(tokens) * rate / Decimal(1000000))
-    except Exception:  # pragma: no cover - canonical total remains usable
+    except (Exception, backend_down):  # pragma: no cover - canonical total remains usable
         pass
 
     return usage_details, cost_details

@@ -2,7 +2,7 @@
 
 # Feishu / Lark
 
-> Part of the [Hermes Official Plugins](../README.md), Nous Research's official plugins for Hermes Agent. Opt-in: install it with `hermes plugins install feishu`; homes that already used the built-in Feishu / Lark adapter get it installed automatically.
+> Part of the [Hermes Official Plugins](../README.md), Nous Research's official plugins for Hermes Agent. Installed by default on every Hermes home and idle until configured: with no Feishu App ID and App Secret it connects nothing and adds no tools to the model.
 
 Formerly built into
 [hermes-agent](https://github.com/NousResearch/hermes-agent) core (`plugins/platforms/feishu`,
@@ -13,15 +13,23 @@ Everything an existing setup relies on is unchanged: platform name `feishu`, too
 `feishu_drive`, the tool names (`feishu_doc_read`, `feishu_drive_list_comments`,
 `feishu_drive_list_comment_replies`, `feishu_drive_reply_comment`, `feishu_drive_add_comment`), every
 `FEISHU_*` env var, the `platforms.feishu` config keys, `FEISHU_HOME_CHANNEL`, and the
-`feishu_comment_rules.json` / `feishu_comment_pairing.json` files. Hermes installs this plugin automatically
-for profiles that used the built-in Feishu platform. Core's composite `hermes-feishu` toolset goes away with
+`feishu_comment_rules.json` / `feishu_comment_pairing.json` files. Hermes installs this plugin once on every
+home (a profile that used the built-in Feishu platform gets it on its first start after the update); remove it
+with `hermes plugins remove feishu` and it stays removed. Core's composite `hermes-feishu` toolset goes away with
 core.
 
 ## Install
 
+Nothing to do on a current Hermes: the plugin is installed by default. To get it back after removing it:
+
 ```bash
 hermes plugins install feishu
 ```
+
+Until Feishu is set up for a profile (`FEISHU_APP_ID` + `FEISHU_APP_SECRET` in that profile's `.env`, or
+`app_id` / `app_secret` under `platforms.feishu`), the gateway starts no Feishu adapter and the
+`feishu_doc` / `feishu_drive` tools are not offered to the model. They appear on the next session once the
+credentials are there; no reinstall.
 
 The plugin's Python dependencies (`lark-oapi`, `qrcode`) come from its `pyproject.toml` at install time.
 

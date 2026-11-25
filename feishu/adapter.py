@@ -1398,8 +1398,7 @@ class FeishuAdapter(FeishuChoiceCardsMixin, FeishuSyntheticEventsMixin, BasePlat
             _secret(var).lower() in {"true", "1", "yes"} for var in ("FEISHU_ALLOW_ALL_USERS", "GATEWAY_ALLOW_ALL_USERS")
         )
         return FeishuAdapterSettings(
-            app_id=_extra_or_secret("app_id", "FEISHU_APP_ID"),
-            app_secret=_extra_or_secret("app_secret", "FEISHU_APP_SECRET"),
+            **dict(zip(("app_id", "app_secret"), app_credentials(extra))),
             domain_name=_extra_or_env("domain", "FEISHU_DOMAIN", "feishu").lower(),
             connection_mode=_extra_or_env("connection_mode", "FEISHU_CONNECTION_MODE", "websocket").lower(),
             encrypt_key=_extra_or_secret("encrypt_key", "FEISHU_ENCRYPT_KEY"),
@@ -4341,6 +4340,13 @@ def _apply_yaml_config(yaml_cfg: dict, feishu_cfg: dict) -> dict | None:
     seed ``extra.allow_bots`` so a multiplexed secondary profile's adapter reads its own value."""
     seeded = _apply_yaml_bridge(feishu_cfg, (("allow_bots", "FEISHU_ALLOW_BOTS", "lower"),))
     return {"allow_bots": str(seeded["allow_bots"]).lower()} if seeded else None
+
+
+def app_credentials(extra: dict[str, Any]) -> tuple[str, str]:
+    """``(app_id, app_secret)`` as the adapter connects with them: the profile's ``FEISHU_APP_ID`` /
+    ``FEISHU_APP_SECRET`` (scope-aware), else ``app_id`` / ``app_secret`` in ``platforms.feishu.extra``."""
+    return tuple(str(_shared_extra_or_secret(extra, key, env, "")).strip()
+                 for key, env in (("app_id", "FEISHU_APP_ID"), ("app_secret", "FEISHU_APP_SECRET")))
 
 
 def _is_connected(config) -> bool:

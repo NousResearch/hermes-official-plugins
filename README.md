@@ -232,7 +232,7 @@ Catalog entries come in two tiers:
 <a href="feishu/"><img src="assets/feishu.jpg" alt="Feishu / Lark plugin"></a>
 <h3><a href="feishu/">Feishu / Lark</a></h3>
 <code>hermes plugins install feishu</code>
-<p>Feishu (飞书) and Lark as a Hermes messaging platform: DMs and group chats over the official lark-oapi SDK (WebSocket or webhook), media, threads, interactive approval cards, document-comment replies and meeting invites, and cron delivery to a home chat. Your <code>FEISHU_*</code> env vars and <code>platforms.feishu</code> settings carry over. Formerly built into Hermes core.</p>
+<p>Feishu (飞书) and Lark as a Hermes messaging platform: DMs and group chats over the official lark-oapi SDK (WebSocket or webhook), media, threads, interactive approval cards, document-comment replies and meeting invites, and cron delivery to a home chat. Your <code>FEISHU_*</code> env vars and <code>platforms.feishu</code> settings carry over. Installed by default on every Hermes home; it stays idle (no adapter, no tools) until you add a Feishu App ID and secret. Formerly built into Hermes core.</p>
 <p><code>feishu_doc_read</code> and 4 more · toolsets <code>feishu_doc</code> · <code>feishu_drive</code></p>
 </td>
 </tr>

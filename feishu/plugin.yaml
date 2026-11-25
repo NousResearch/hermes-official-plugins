@@ -12,8 +12,10 @@ description: >
   drive comment events, and meeting invites. The feishu_doc / feishu_drive
   toolsets (feishu_doc_read, feishu_drive_list_comments,
   feishu_drive_list_comment_replies, feishu_drive_reply_comment,
-  feishu_drive_add_comment) read documents and answer document comments.
-  Formerly built into Hermes core.
+  feishu_drive_add_comment) read documents and answer document comments; they are
+  offered only once FEISHU_APP_ID and FEISHU_APP_SECRET (or platforms.feishu
+  app_id / app_secret) are set for the profile. Installed by default on every
+  Hermes home, idle until configured. Formerly built into Hermes core.
 author: NousResearch
 homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/feishu
 provides_tools:

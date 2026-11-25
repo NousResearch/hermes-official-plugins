@@ -37,6 +37,16 @@ requires_env:
     url: "https://open.feishu.cn/"
     password: true
 optional_env:
+  - name: FEISHU_ENCRYPT_KEY
+    description: "Event encrypt key (Events & Callbacks > Encryption); webhook mode needs it or the verification token"
+    prompt: "Encrypt Key"
+    url: "https://open.feishu.cn/"
+    password: true
+  - name: FEISHU_VERIFICATION_TOKEN
+    description: "Event verification token (Events & Callbacks > Encryption); webhook mode needs it or the encrypt key"
+    prompt: "Verification Token"
+    url: "https://open.feishu.cn/"
+    password: true
   - name: FEISHU_DOMAIN
     description: "Domain: 'feishu' (China) or 'lark' (International)"
     prompt: "Domain (feishu/lark)"

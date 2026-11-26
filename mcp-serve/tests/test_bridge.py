@@ -16,6 +16,7 @@ import sqlite3
 import time
 import sys
 import threading
+import types
 from unittest.mock import MagicMock
 
 import pytest
@@ -766,6 +767,35 @@ class TestE2EMessagesSend:
         server, _ = mcp_server_e2e
         result = _run_tool(server, "messages_send", {"target": "", "message": "hi"})
         assert "error" in result
+
+class TestSendMessageToolResolution:
+    """The outbound sender moved in core 0.23.2 (tools/ -> gateway/outbound/).
+
+    Resolve the current location first and keep the old one as a fallback, so a
+    single plugin release works against both cores.
+    """
+
+    def test_prefers_gateway_outbound_send(self, monkeypatch):
+        from mcp_serve_plugin import bridge
+
+        sentinel = object()
+        module = types.ModuleType("gateway.outbound.send")
+        module.send_message_tool = sentinel
+        monkeypatch.setitem(sys.modules, "gateway.outbound.send", module)
+
+        assert bridge._load_send_message_tool() is sentinel
+
+    def test_falls_back_to_tools_module(self, monkeypatch):
+        from mcp_serve_plugin import bridge
+
+        sentinel = object()
+        module = types.ModuleType("tools.send_message_tool")
+        module.send_message_tool = sentinel
+        monkeypatch.setitem(sys.modules, "gateway.outbound.send", None)
+        monkeypatch.setitem(sys.modules, "tools.send_message_tool", module)
+
+        assert bridge._load_send_message_tool() is sentinel
+
 
 class TestE2EChannelsList:
     def test_channels_from_sessions(self, mcp_server_e2e, _event_loop):

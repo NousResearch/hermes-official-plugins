@@ -610,6 +610,20 @@ class AgentImporter:
                                 "Imported skill was modified locally — not refreshed")
                     continue
 
+            if not destination.exists():
+                # A re-import must not recreate a name the tree already holds under another
+                # category; only a byte-identical twin is the same skill, so only that one skips.
+                twins = [t for t in sorted(destination_root.parent.glob(f"*/{skill_dir.name}"))
+                         if (t / "SKILL.md").is_file()]
+                same = next((t for t in twins if skill_tree_digest(t) == skill_tree_digest(skill_dir)), None)
+                if same:
+                    self.record("skill", skill_dir, destination, "skipped",
+                                f"Already imported under {same.parent.name}")
+                    continue
+                if twins:
+                    self.record("skill", skill_dir, destination, "conflict",
+                                f"Name already exists under {twins[0].parent.name} with different content")
+
             def copy(skill_dir=skill_dir, destination=destination) -> str | None:
                 # Stage beside the destination and swap only after a complete copy: the old code
                 # deleted the installed skill first, so a failed copytree (disk full, unreadable

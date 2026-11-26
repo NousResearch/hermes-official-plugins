@@ -116,11 +116,21 @@ class XChatApi:
             return
         await self._refresh_access_token()
 
-    async def _refresh_access_token(self) -> None:
-        """POST /2/oauth2/token (refresh_token grant). Rotates both tokens."""
+    async def _refresh_access_token(self, stale_access_token: str = "") -> None:
+        """POST /2/oauth2/token (refresh_token grant). Rotates both tokens.
+
+        ``stale_access_token`` is the bearer the caller just saw rejected. When
+        given, the guard below dedupes on the token itself, so a reactive 401
+        refresh still happens while the cached expiry is in the future (the
+        normal state for hours after any successful refresh).
+        """
         async with self._refresh_lock:
-            # Another task may have refreshed while we waited on the lock.
-            if self._token_expires_at and time.time() < self._token_expires_at - _TOKEN_REFRESH_SLACK:
+            if stale_access_token:
+                # Another task may have rotated while we waited on the lock.
+                if self._access_token != stale_access_token:
+                    return
+            # Proactive path: skip while the cached expiry is comfortably ahead.
+            elif self._token_expires_at and time.time() < self._token_expires_at - _TOKEN_REFRESH_SLACK:
                 return
             data = {
                 "grant_type": "refresh_token",
@@ -163,7 +173,8 @@ class XChatApi:
         _retried_auth: bool = False,
     ) -> dict[str, Any]:
         await self.ensure_token()
-        headers = {"Authorization": f"Bearer {self._access_token}"}
+        token_used = self._access_token
+        headers = {"Authorization": f"Bearer {token_used}"}
         resp = await self._http().request(
             method,
             f"{self._base_url}{path}",
@@ -172,8 +183,8 @@ class XChatApi:
             headers=headers,
         )
         if resp.status_code == 401 and self.can_refresh and not _retried_auth:
-            # Reactive refresh — covers the no-known-expiry case.
-            await self._refresh_access_token()
+            # Reactive refresh — covers a token the server rejected early.
+            await self._refresh_access_token(token_used)
             return await self._request(
                 method, path, params=params, json_body=json_body, _retried_auth=True
             )

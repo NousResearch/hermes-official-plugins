@@ -251,3 +251,72 @@ async def test_mark_read_posts_sequence_id():
     assert seen["path"] == "/2/chat/conversations/111-999/read"
     assert seen["body"] == {"seen_until_sequence_id": "sq42"}
     await api.aclose()
+
+RT = {"refresh_token": "rt"}
+
+
+@pytest.mark.asyncio
+async def test_401_refresh_is_not_skipped_by_a_live_cached_expiry():
+    """A 401 must refresh even while the cached expiry is still in the future.
+
+    The refresh helper skips when the cached expiry is ahead of now, which is
+    the normal state for hours after any successful refresh. The reactive 401
+    path calls the same helper, so it no-ops and retries with the same bearer.
+    """
+    calls: List[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/2/oauth2/token":
+            return httpx.Response(
+                200,
+                json={"access_token": "fresh", "expires_in": 7200, **RT},
+            )
+        auth = request.headers.get("Authorization", "")
+        if auth == "Bearer stale":
+            return httpx.Response(401, json={"title": "Unauthorized"})
+        return httpx.Response(200, json={"data": {"id": "42"}})
+
+    api = XChatApi(
+        "stale",
+        client_id="cid",
+        # ~1h of cached validity left: far outside the refresh slack window.
+        token_expires_at=time.time() + 3600,
+        client=_client(handler),
+        **RT,
+    )
+    out = await api.get_my_user()
+    assert out == {"id": "42"}
+    assert calls == ["/2/users/me", "/2/oauth2/token", "/2/users/me"]
+    await api.aclose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_401s_share_one_refresh_grant():
+    """Two in-flight requests that both 401 must rotate the token once."""
+    import asyncio as _asyncio
+
+    calls: List[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/2/oauth2/token":
+            return httpx.Response(
+                200,
+                json={"access_token": "fresh", "expires_in": 7200, **RT},
+            )
+        auth = request.headers.get("Authorization", "")
+        if auth == "Bearer stale":
+            return httpx.Response(401, json={"title": "Unauthorized"})
+        return httpx.Response(200, json={"data": {"id": "42"}})
+
+    api = XChatApi(
+        "stale",
+        client_id="cid",
+        token_expires_at=time.time() + 3600,
+        client=_client(handler),
+        **RT,
+    )
+    await _asyncio.gather(api.get_my_user(), api.get_my_user())
+    assert calls.count("/2/oauth2/token") == 1
+    await api.aclose()

@@ -175,6 +175,20 @@ def _register_exit_sweep() -> None:
 _sif_build_lock = threading.Lock()
 
 
+def _discard_partial_sif(sif_path: Path) -> None:
+    """Remove a SIF that a failed build left behind.
+
+    ``_get_or_build_sif`` treats ``sif_path.exists()`` as "already built", so a truncated file from a
+    failed or timed-out build is handed to every later ``apptainer instance start`` as a valid image
+    and login fails until someone deletes it by hand. A build that does not report success leaves no
+    usable artifact, so drop whatever is there.
+    """
+    try:
+        sif_path.unlink(missing_ok=True)
+    except OSError:
+        logger.warning("Could not remove the partial SIF at %s; delete it by hand", sif_path)
+
+
 def _get_or_build_sif(image: str, executable: str = "apptainer") -> str:
     """Build (once, cached) a SIF from a ``docker://`` URL; falls back to the URL on failure."""
     if (image.endswith('.sif') and Path(image).exists()) or not image.startswith('docker://'):
@@ -207,16 +221,17 @@ def _get_or_build_sif(image: str, executable: str = "apptainer") -> str:
             if result.returncode != 0:
                 logger.warning("SIF build failed, falling back to docker:// URL")
                 logger.warning("  Error: %s", result.stderr[:500])
+                _discard_partial_sif(sif_path)
                 return image
             logger.info("SIF image built successfully")
             return str(sif_path)
         except subprocess.TimeoutExpired:
             logger.warning("SIF build timed out, falling back to docker:// URL")
-            if sif_path.exists():
-                sif_path.unlink()
+            _discard_partial_sif(sif_path)
             return image
         except Exception as e:
             logger.warning("SIF build error: %s, falling back to docker:// URL", e)
+            _discard_partial_sif(sif_path)
             return image
 
 

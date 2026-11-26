@@ -120,6 +120,42 @@ def test_failed_sif_build_falls_back_to_the_docker_url(monkeypatch):
     assert singularity_env._get_or_build_sif("docker://python:3.12") == "docker://python:3.12"
 
 
+def test_failed_sif_build_leaves_no_partial_file_behind(monkeypatch, tmp_path):
+    """A truncated SIF used to be cached forever: exists() read as "already built"."""
+    sif_path = tmp_path / "scratch" / ".apptainer" / "python-3.12.sif"
+
+    def failing_build(cmd, **kw):
+        open(cmd[2], "w").close()  # apptainer wrote a partial file, then failed
+        return SimpleNamespace(returncode=1, stderr="denied")
+
+    monkeypatch.setattr(singularity_env, "run_capture", failing_build)
+    assert singularity_env._get_or_build_sif("docker://python:3.12") == "docker://python:3.12"
+    assert not sif_path.exists(), "a failed build must not leave a cache hit behind"
+
+    rebuilt = []
+
+    def succeeding_build(cmd, **kw):
+        rebuilt.append(cmd)
+        open(cmd[2], "w").close()
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(singularity_env, "run_capture", succeeding_build)
+    assert singularity_env._get_or_build_sif("docker://python:3.12") == str(sif_path)
+    assert len(rebuilt) == 1, "the retry must actually rebuild instead of reusing the partial file"
+
+
+def test_timed_out_sif_build_leaves_no_partial_file_behind(monkeypatch, tmp_path):
+    sif_path = tmp_path / "scratch" / ".apptainer" / "python-3.12.sif"
+
+    def timing_out_build(cmd, **kw):
+        open(cmd[2], "w").close()
+        raise subprocess.TimeoutExpired(cmd, 600)
+
+    monkeypatch.setattr(singularity_env, "run_capture", timing_out_build)
+    assert singularity_env._get_or_build_sif("docker://python:3.12") == "docker://python:3.12"
+    assert not sif_path.exists()
+
+
 def test_exit_sweep_removes_scratch_dirs_only(tmp_path):
     scratch = tmp_path / "scratch"
     (scratch / "hermes-overlays" / "overlay-default").mkdir(parents=True)

@@ -12,8 +12,11 @@ description: >
   your Hermes profiles. Set up with `hermes delegation config`; switch modes
   in a chat with /delegation. Only route names and descriptions reach the
   model. Bundles the model-routing skill (pick the cheapest route that
-  passes, with a local outcome ledger). Needs a Hermes core with pluggable
-  delegation providers.
+  passes, with a local outcome ledger). Enforces a subagent model cost cap
+  ($0.75/M input by default): a non-specialist OpenRouter route over the cap
+  or without tool support is refused at dispatch; mark a route
+  specialist: true to exempt (search/transcript/scraper/System-1 models).
+  Needs a Hermes core with pluggable delegation providers.
 requires_hermes: ">=0.22.5"
 provides_tools: []
 provides_hooks: []

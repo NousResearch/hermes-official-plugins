@@ -24,8 +24,8 @@ MODE_BLURBS: dict[str, str] = {
 }
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 #: Route keys the editor writes, in the order they are saved.
-ROUTE_KEYS = ("name", "description", "provider", "base_url", "model", "reasoning_effort", "service_tier", "daybreak")
-_STRING_ROUTE_KEYS = tuple(key for key in ROUTE_KEYS if key != "daybreak")  # daybreak is a bool
+ROUTE_KEYS = ("name", "description", "provider", "base_url", "model", "reasoning_effort", "service_tier", "daybreak", "specialist")
+_STRING_ROUTE_KEYS = tuple(key for key in ROUTE_KEYS if key not in ("daybreak", "specialist"))  # both are bools
 
 
 def delegation_section(config: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
@@ -248,6 +248,9 @@ def _validate_route(route: Mapping[str, Any], others: Sequence[Mapping[str, Any]
     daybreak = "" if problems else _daybreak_problem(route) if runtime else _daybreak_shape_problem(route)
     if daybreak:
         problems.append(daybreak)
+    specialist = route.get("specialist")
+    if specialist not in (None, True, False):
+        problems.append("specialist must be true or false.")
     return problems
 
 
@@ -444,11 +447,39 @@ def route_summary(route: Mapping[str, Any]) -> str:
         parts.append(_text(route.get("service_tier")))
     if route.get("daybreak") is True:
         parts.append("daybreak")
+    if route.get("specialist") is True:
+        parts.append("specialist")
     return " · ".join(p for p in parts if p)
 
 
 def mode_label(mode: str) -> str:
     return MODES.get(mode, mode)
+
+
+def _route_verdict(route: Mapping[str, Any]) -> str:
+    """Short cost-cap verdict for ``--show``: ``specialist (exempt)``, ``OK`` / ``OVER cap``, tools.
+
+    Returns '' for routes the guard does not price (base_url/local and non-OpenRouter providers)."""
+    if route.get("specialist") is True:
+        return "specialist (exempt)"
+    provider = _text(route.get("provider"))
+    model = _text(route.get("model"))
+    if not provider or not model:
+        return ""
+    try:
+        from hermes_cli.models import normalize_provider
+    except ImportError:
+        return ""
+    if normalize_provider(provider) != "openrouter":
+        return ""
+    from . import pricing
+    price, has_tools = pricing.verdict(model)
+    if price is None:
+        return "cost unknown"
+    bits = [f"${price:.2f}/M in", "OVER cap" if price > pricing.CAP_INPUT_USD_PER_M else "OK"]
+    if not has_tools:
+        bits.append("no tools")
+    return " · ".join(bits)
 
 
 def describe(section: Mapping[str, Any]) -> str:
@@ -466,7 +497,9 @@ def describe(section: Mapping[str, Any]) -> str:
             name = _text(option.get("name"))
             mark = "  (default)" if name == default else ""
             lines.append(f"    {name.ljust(width)}  {_text(option.get('description'))}")
-            lines.append(f"    {''.ljust(width)}  {route_summary(option)}{mark}")
+            verdict = _route_verdict(option)
+            suffix = f"  [{verdict}]" if verdict else ""
+            lines.append(f"    {''.ljust(width)}  {route_summary(option)}{mark}{suffix}")
         if not options:
             lines.append("    (none yet: run `hermes delegation config`)")
     elif mode == "profile_routes":

@@ -57,6 +57,7 @@ PARAMETER = "option"
 #: Entry keys copied into the route (same meaning as the matching core route fields).
 ROUTE_FIELDS = ("provider", "model", "base_url", "api_key", "api_mode", "reasoning_effort", "service_tier")
 DAYBREAK_KEY = "daybreak"
+SPECIALIST_KEY = "specialist"
 _warned: set[str] = set()
 
 
@@ -87,6 +88,9 @@ def _entry_problem(entry: Any) -> str:
         return f"has {DAYBREAK_KEY}: {daybreak!r}; use true or false"
     if daybreak is True and not _is_codex(_text(entry, "provider")):
         return f"sets {DAYBREAK_KEY}: true, which needs provider: openai-codex"
+    specialist = entry.get(SPECIALIST_KEY)
+    if specialist not in (None, True, False):
+        return f"has {SPECIALIST_KEY}: {specialist!r}; use true or false"
     return ""
 
 
@@ -123,7 +127,8 @@ def configured_options(settings: Mapping[str, Any]) -> dict[str, dict[str, Any]]
         if isinstance(entry.get("fallback_providers"), list):
             route["fallback_providers"] = list(entry["fallback_providers"])
         options[name] = {"description": _text(entry, "description"), "route": route,
-                         "daybreak": entry.get(DAYBREAK_KEY) is True}
+                         "daybreak": entry.get(DAYBREAK_KEY) is True,
+                         "specialist": entry.get(SPECIALIST_KEY) is True}
     return options
 
 
@@ -172,6 +177,43 @@ def _daybreak_route(name: str, route: Mapping[str, Any]) -> dict[str, Any]:
     return {**route, "request_overrides": {**overrides, "extra_body": extra_body}}
 
 
+def _cost_guard(name: str, route: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Refuse a non-specialist OpenRouter route that is over the input cost cap or tool-less.
+
+    Only OpenRouter routes are priced (the cost source is its ``/models`` endpoint); local
+    ``base_url`` routes and other providers skip the cap by design. The caller already
+    exempted ``specialist: true`` routes.
+    """
+    provider = _text(route, "provider")
+    if not provider:
+        return route  # base_url-only route (e.g. a local model) has no per-token OpenRouter price
+    try:
+        from hermes_cli.models import normalize_provider
+    except ImportError:
+        return route
+    if normalize_provider(provider) != "openrouter":
+        return route
+    model = _text(route, "model")
+    if not model:
+        return route
+    from agent.delegation_provider import DelegationRouteError
+    from . import pricing
+    price, has_tools = pricing.verdict(model)
+    if price is None:
+        raise DelegationRouteError(
+            f"Option {name!r} ({model}): cannot verify cost/tool support (pricing lookup failed). "
+            f"Mark specialist: true to exempt, or retry when the pricing source is reachable.")
+    if price > pricing.CAP_INPUT_USD_PER_M:
+        raise DelegationRouteError(
+            f"Option {name!r} ({model}) costs ${price:.2f}/M input, over the "
+            f"${pricing.CAP_INPUT_USD_PER_M:.2f} cap. Repoint to a cheaper model or mark specialist: true.")
+    if not has_tools:
+        raise DelegationRouteError(
+            f"Option {name!r} ({model}) has no tool support: a subagent there cannot write files or "
+            f"run commands. Repoint to a tool-capable model or mark specialist: true.")
+    return route
+
+
 class ModelMapDelegationProvider(DelegationProvider):
     """``delegation.backend: model_map``: the model picks a named model option per subagent, from the
     options in ``delegation.backends.model_map``."""
@@ -198,7 +240,7 @@ class ModelMapDelegationProvider(DelegationProvider):
     def route_keys(self) -> tuple[str, ...]:
         # Route keys beyond core's that settings editors may write and must keep; the Desktop route editor offers
         # its Daybreak control only when this backend declares it. Older cores never read this.
-        return (DAYBREAK_KEY,)
+        return (DAYBREAK_KEY, SPECIALIST_KEY)
 
     def task_parameters(self, config: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
         options = configured_options(self.settings(config))
@@ -236,4 +278,6 @@ class ModelMapDelegationProvider(DelegationProvider):
         route = options[chosen]["route"]
         if options[chosen]["daybreak"]:
             route = _daybreak_route(chosen, route)
+        if not options[chosen]["specialist"]:
+            route = _cost_guard(chosen, route)
         return {**route, "label": chosen}

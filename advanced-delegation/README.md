@@ -294,6 +294,42 @@ warning and the delegation modes still load.
   leaves the machine.
 - **No tools, hooks or dependencies.** The skill adds none; it drives `delegate_task`.
 
+## Subagent cost cap
+
+The `model_map` backend refuses to spawn a subagent on a route whose model costs more than
+**$0.75 per million input tokens**, or that lacks tool support — unless the route is marked
+`specialist: true` (search, transcript, scraper and System-1 action models, where the model *is*
+the capability). Prices are read from the OpenRouter `/models` endpoint and cached for 24h, so
+dispatch adds no network call after the first warm.
+
+```yaml
+delegation:
+  backend: model_map
+  backends:
+    model_map:
+      options:
+        - name: fast
+          description: Cheap; lookups and summaries.
+          provider: openrouter
+          model: google/gemini-2.5-flash-lite
+        - name: deep
+          description: Careful; hard debugging and design.
+          provider: openrouter
+          model: z-ai/glm-5.3-flash
+        - name: research
+          description: Web search specialist.
+          provider: openrouter
+          model: perplexity/sonar-pro
+          specialist: true   # over the cap / tool-less, but exempt by design
+```
+
+- Non-specialist OpenRouter routes over `$0.75/M in` or without `tools` are refused with a
+  `DelegationRouteError` naming the route and the fix (repoint or `specialist: true`).
+- `specialist: true`, local `base_url` routes, and non-OpenRouter providers skip the cap.
+- `hermes delegation config --show` prints the per-route verdict
+  (`OK` / `OVER cap` / `specialist (exempt)` / `no tools` / `cost unknown`).
+- The cap is `pricing.CAP_INPUT_USD_PER_M` in `pricing.py`.
+
 ## Development
 
 ```bash

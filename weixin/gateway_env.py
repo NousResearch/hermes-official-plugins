@@ -6,7 +6,7 @@ platform, so the row is built when the gateway runs it, never at import.
 
 import logging
 
-from gateway.platform_env import EnvCred, strip_slash
+from gateway.platform_env import EnvCred, env_home_channel, strip_slash
 
 logger = logging.getLogger("gateway.config")  # core logged this refusal under gateway.config
 
@@ -24,9 +24,15 @@ def _weixin_row(config) -> None:
             ("allow_from", "WEIXIN_ALLOWED_USERS"), ("group_allow_from", "WEIXIN_GROUP_ALLOWED_USERS"),
             ("split_multiline_messages", "WEIXIN_SPLIT_MULTILINE_MESSAGES"),
         ),
-        home="WEIXIN_HOME_CHANNEL", home_strip=True,
     )(config)
     _refuse_placeholder_token(config, Platform("weixin"))
+
+
+def _weixin_home(config) -> None:
+    """``WEIXIN_HOME_CHANNEL`` wherever the credentials live: core's send path read it beside a token kept in
+    ``platforms.weixin`` too, so it is not gated on env credentials (same as every ``home_step`` platform)."""
+    from gateway.config import Platform
+    env_home_channel(config, Platform("weixin"), "WEIXIN_HOME_CHANNEL", strip=True)
 
 
 def _refuse_placeholder_token(config, platform) -> None:
@@ -45,7 +51,7 @@ def _refuse_placeholder_token(config, platform) -> None:
     pconfig.extra["_enabled_explicit"] = True
 
 
-ENV_OVERRIDES = (_weixin_row,)
+ENV_OVERRIDES = (_weixin_row, _weixin_home)
 
 # Authorization env names (``PlatformEntry`` fields).
 AUTHZ = {

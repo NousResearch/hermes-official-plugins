@@ -64,6 +64,21 @@ def test_env_credentials_enable_weixin_with_its_extras_and_home_channel(monkeypa
 
 
 @pytest.mark.plugin_registry
+@pytest.mark.parametrize("enabled", ["true", "false"])  # false: a send-only home
+def test_home_channel_env_applies_to_credentials_kept_in_config_yaml(_isolated_hermes_home, monkeypatch, enabled):
+    """Token and account in ``platforms.weixin``, only ``WEIXIN_HOME_CHANNEL`` in the env: core's send path
+    resolved that home, so the plugin's bridge must not gate it on env credentials."""
+    from gateway.config import Platform, load_gateway_config
+    from gateway.outbound.send import _home_chat_id
+    (_isolated_hermes_home / "config.yaml").write_text(
+        f"platforms:\n  weixin:\n    enabled: {enabled}\n    token: tok-1234\n    extra:\n      account_id: acc@im.bot\n",
+        encoding="utf-8")
+    monkeypatch.setenv("WEIXIN_HOME_CHANNEL", " wxid_test ")
+    config = load_gateway_config()
+    assert _home_chat_id(config, Platform("weixin"), "weixin") == ("wxid_test", None, None)
+
+
+@pytest.mark.plugin_registry
 def test_a_yaml_disable_survives_env_credentials(_isolated_hermes_home, monkeypatch):
     from gateway.config import Platform, load_gateway_config
     monkeypatch.setenv("WEIXIN_ACCOUNT_ID", "acc")

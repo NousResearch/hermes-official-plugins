@@ -899,6 +899,45 @@ export function chatRoute(currentModel, options) {
   const provider = holders.includes(options?.provider) ? options.provider : holders.length === 1 ? holders[0] : ''
   return { model, ...(provider ? { provider } : {}) }
 }
+// The projects set up in Hermes (the sidebar's list), so a repository can be picked before it
+// has ever been scanned. Gateway inventory, like the model list: cached for a minute, not polled.
+function useProjects() {
+  const profile = useValue(host.state.profile)
+  const connectionId = useValue(host.state.connectionId)
+  return useQuery({
+    queryKey: [ID, profile, 'projects', connectionId],
+    queryFn: () => host.request('projects.list', {}),
+    staleTime: 60000,
+    retry: false
+  })
+}
+// One folder, however it is written: Windows paths ignore case and take either slash.
+export const pathKey = (path) => {
+  const s = String(path || '').replace(/[\\/]+$/, '')
+  return /^[a-z]:[\\/]|^\\\\/i.test(s) ? s.replace(/\//g, '\\').toLowerCase() : s
+}
+export function projectFolders(data) {
+  return list(data?.projects)
+    .filter((p) => p && !p.archived && typeof p.primary_path === 'string' && p.primary_path.trim())
+    .map((p) => ({ path: p.primary_path.trim(), name: String(p.name || '').trim() }))
+}
+// Repositories to offer: the given paths in their order, then the projects' folders, each folder
+// once. A project is shown by its name, with the folder's name when that differs.
+export function repositoryChoices(paths, projects) {
+  const seen = new Set()
+  const known = [...paths, ...projects.map((p) => p.path)].filter((p) => {
+    const key = p && p !== 'Target not recorded' ? pathKey(p) : ''
+    return key && !seen.has(key) && !!seen.add(key)
+  })
+  const names = new Map()
+  for (const p of projects) if (p.name && !names.has(pathKey(p.path))) names.set(pathKey(p.path), p.name)
+  const title = (p) => {
+    const name = names.get(pathKey(p))
+    const folder = repoName(p)
+    return !name ? folder : name.toLowerCase() === folder.toLowerCase() ? name : `${name} (${folder})`
+  }
+  return { known, choices: known.map((p) => [p, title(p)]) }
+}
 export function NewScan({ onClose, onStarted }) {
   const repos = useData('/repositories', { limit: 100, offset: 0 })
   const clones = useData('/clones')
@@ -906,8 +945,11 @@ export function NewScan({ onClose, onStarted }) {
   const models = useModelChoices()
   const cwd = host.state.cwd?.get?.() || ''
   const currentModel = host.state.model?.get?.() || models.data?.model || ''
-  const known = [...new Set([...items(repos.data).map(pathOf), ...items(clones.data).map((c) => c.path), cwd]
-    .filter((p) => p && p !== 'Target not recorded'))]
+  // Scanned before, cloned, the open chat's folder, then the Hermes projects.
+  const offered = repositoryChoices(
+    [...items(repos.data).map(pathOf), ...items(clones.data).map((c) => c.path), cwd],
+    projectFolders(useProjects().data))
+  const known = offered.known
   const [options, setOptions] = useState({ path: '', otherPath: '', changes: false, deep: false, tests: false, folder: '', context: '', model: '', delegate: '' })
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -916,7 +958,7 @@ export function NewScan({ onClose, onStarted }) {
   const path = (options.path === '__other' ? options.otherPath : options.path || known[0] || '').trim()
   const folders = useData('/folders', { path }, !!path)
   const [adding, setAdding] = useState(null) // null | 'browse' | 'clone'
-  const choices = known.map((p) => [p, repoName(p)])
+  const choices = offered.choices.slice()
   if (options.otherPath.trim() && !known.includes(options.otherPath.trim())) choices.push(['__other', repoName(options.otherPath)])
   const pick = (picked) => {
     setOptions((previous) => ({ ...previous, path: '__other', otherPath: picked, folder: '' }))

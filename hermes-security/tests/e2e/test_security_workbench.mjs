@@ -245,6 +245,66 @@ test('the repository is picked by browsing folders on the gateway machine, not a
   }
 })
 
+test('Hermes projects are offered as repositories, after the scanned ones and once per folder', async () => {
+  env.fixtures['/repositories'] = { items: [{ repoKey: 'r1', root: '/remote/repo' }], total: 1 }
+  env.fixtures['/folders'] = { root: '/remote/repo', items: [] }
+  const projects = { active_id: 'p1', projects: [
+    { id: 'p1', name: 'Billing', primary_path: '/work/billing-api', archived: false },
+    { id: 'p2', name: 'Repo', primary_path: '/remote/repo/', archived: false }, // scanned before: offered once
+    { id: 'p3', name: 'Old', primary_path: '/work/old', archived: true },
+    { id: 'p4', name: 'No folder', primary_path: null, archived: false },
+    { id: 'p5', name: 'Shop', primary_path: 'C:\\Work\\Shop', archived: false },
+    { id: 'p6', name: 'Shop again', primary_path: 'c:/work/shop/', archived: false },
+    { id: 'p7', name: '', primary_path: ' /work/unnamed ', archived: false }
+  ] }
+  const picker = () => {
+    const select = nodes(plugin.NewScan({})).find((n) => n.type === 'select' && n.props['aria-label'] === 'Repository')
+    const options = select ? nodes(select.props.children).filter((n) => n.type === 'option') : []
+    return { select, labels: options.map((n) => n.props.children), paths: options.map((n) => n.props.value) }
+  }
+  env.fixtures.projects = projects
+  try {
+    env.queryOptions.length = 0
+    let view = picker()
+    assert.deepEqual(view.labels, ['Repo', 'Billing (billing-api)', 'Shop', 'unnamed'])
+    assert.deepEqual(view.paths, ['/remote/repo', '/work/billing-api', 'C:\\Work\\Shop', '/work/unnamed'])
+    // What is selected at first is still the most recently scanned repository.
+    assert.equal(view.select.props.value, '/remote/repo')
+    // The list is the gateway's own project list, asked for like the model list: not polled.
+    const query = env.queryOptions.find((o) => o.queryKey[2] === 'projects')
+    assert.deepEqual([query.staleTime, query.refetchInterval, query.retry], [60000, undefined, false])
+    env.rpc = []
+    await query.queryFn()
+    assert.deepEqual(env.rpc, [['projects.list', {}]])
+    // A picked project is scanned at its folder.
+    env.states = [{ path: '/work/billing-api', otherPath: '', changes: false, deep: false, tests: false, folder: '', context: '', model: '', delegate: '' }, null, false]
+    await nodes(plugin.NewScan({})).find((n) => n.type === 'button' && n.props.children === 'Start scan').props.onClick()
+    assert.equal(env.calls.filter((c) => c.path === '/scans').at(-1).options.body.path, '/work/billing-api')
+    delete env.states
+    // Nothing scanned yet: the projects fill the list, where there used to be only the folder browser.
+    env.fixtures['/repositories'] = { items: [], total: 0 }
+    view = picker()
+    assert.deepEqual(view.labels, ['Billing (billing-api)', 'Repo', 'Shop', 'unnamed'])
+    assert.equal(view.select.props.value, '/work/billing-api')
+    // A gateway that has no project list (the request fails, so there is no data) changes nothing.
+    delete env.fixtures.projects
+    assert.equal(picker().select, undefined)
+    env.fixtures['/repositories'] = { items: [{ repoKey: 'r1', root: '/remote/repo' }], total: 1 }
+    assert.deepEqual(picker().labels, ['repo'])
+  } finally {
+    env.fixtures['/repositories'] = { items: [{ repoKey: 'r1', root: '/remote/repo' }], total: 1 }
+    delete env.fixtures.projects
+    delete env.states
+  }
+  // Windows paths compare without case and with either slash; other paths are taken as written.
+  assert.equal(plugin.pathKey('C:/Work/Shop/'), plugin.pathKey('c:\\work\\shop'))
+  assert.equal(plugin.pathKey('\\\\NAS\\Share\\Repo\\'), '\\\\nas\\share\\repo')
+  assert.notEqual(plugin.pathKey('/srv/App'), plugin.pathKey('/srv/app'))
+  assert.deepEqual(plugin.projectFolders(null), [])
+  assert.deepEqual(plugin.projectFolders({ projects: 'nope' }), [])
+  assert.deepEqual(plugin.repositoryChoices(['Target not recorded', '', '/a/x', '/a/x/'], []), { known: ['/a/x'], choices: [['/a/x', 'x']] })
+})
+
 test('app permission allow and stop buttons ask before sending requests', async () => {
   env.fixtures['/scans/scan_test/grants'] = { items: [{ grantId: 'grt_test', scanId: 'scan_test', origins: ['http://localhost:8000'], used: 0, maxRequests: 2, expiresAt: '2099-01-01T00:00:00Z' }] }
   globalThis.window = { confirm: () => false }
@@ -511,8 +571,8 @@ test('full page evaluates through SDK React shim and uses six-second queries', (
   for (const tab of ['Scans', 'Findings', 'New scan']) assert.match(output, new RegExp(tab))
   assert.doesNotMatch(output, /Repositories/)
   assert.match(output, /project/)
-  // Scan state polls every six seconds; the model list is gateway inventory, cached for a minute.
-  for (const q of env.queryOptions) assert.equal(q.refetchInterval, q.queryKey[2] === 'model-options' ? undefined : 6000)
+  // Scan state polls every six seconds; the model and project lists are gateway inventory, cached for a minute.
+  for (const q of env.queryOptions) assert.equal(q.refetchInterval, ['model-options', 'projects'].includes(q.queryKey[2]) ? undefined : 6000)
   assert.ok(env.queryOptions.some((q) => q.queryKey[2] === '/scans'))
 })
 test('legacy store projections normalize metadata without rewriting evidence', async () => {

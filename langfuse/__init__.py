@@ -15,6 +15,7 @@ import contextlib
 import functools
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -369,9 +370,12 @@ def _build_client() -> Optional[Langfuse]:
     sample_rate = _secret("HERMES_LANGFUSE_SAMPLE_RATE")
     if sample_rate:
         try:
-            kwargs["sample_rate"] = float(sample_rate)
+            parsed_rate = float(sample_rate)
+            if not math.isfinite(parsed_rate) or not 0.0 <= parsed_rate <= 1.0:
+                raise ValueError("out of range")
+            kwargs["sample_rate"] = parsed_rate
         except ValueError:
-            logger.warning("Invalid HERMES_LANGFUSE_SAMPLE_RATE=%r", sample_rate)
+            logger.warning("Invalid HERMES_LANGFUSE_SAMPLE_RATE=%r; expected a finite number between 0 and 1", sample_rate)
 
     # The SDK's OTel resource falls back to service.name=unknown_service, so every agent's traces
     # landed unattributed (hermes-agent#58322). Default only: an operator's OTEL_SERVICE_NAME or

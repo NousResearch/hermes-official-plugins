@@ -57,9 +57,10 @@ def _marker_path() -> Path:
 
 def _read_marker() -> dict:
     try:
-        return json.loads(_marker_path().read_text(encoding="utf-8"))
+        data = json.loads(_marker_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _write_marker(marker: dict) -> None:

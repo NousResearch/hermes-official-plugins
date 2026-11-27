@@ -4,10 +4,17 @@ import signal
 import subprocess
 
 
+def no_window_kwargs():
+    """Popen/run kwargs that suppress a flashing console window for console-subsystem children on Windows."""
+    if os.name == 'nt':
+        return {'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)}
+    return {}
+
+
 def own_process_group():
     """Popen kwargs that put native (and the node/cmd children it spawns) in a group we can kill as one."""
     if os.name == 'nt':
-        return {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
+        return {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, 'CREATE_NO_WINDOW', 0)}
     return {'start_new_session': True}
 
 
@@ -35,7 +42,8 @@ def kill_process_tree(process):
     if os.name == 'nt':
         if process.poll() is not None:
             return
-        subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False, **no_window_kwargs())
         return
     if not unreaped(process):
         return

@@ -29,6 +29,11 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 try:
+    from .process_tree import no_window_kwargs
+except ImportError:
+    from process_tree import no_window_kwargs
+
+try:
     from . import extra_usage
     from .admission import Admission
     from .model_catalog import MODEL_METADATA, PICKER_ROUTES, native_model
@@ -91,7 +96,7 @@ def _cli_version(exe, env):
     if key not in _cli_versions:
         try:
             out = subprocess.run([exe, "--version"], capture_output=True, text=True, encoding="utf-8",
-                                 errors="replace", timeout=5, env=env).stdout
+                                 errors="replace", timeout=5, env=env, **no_window_kwargs()).stdout
         except (OSError, subprocess.SubprocessError):
             return None  # not cached: a transient failure is asked again next time
         match = re.search(r"(\d+)\.(\d+)\.(\d+)", out or "")
@@ -554,7 +559,8 @@ def setup_status(command=None, env=None, timeout=20):
         return {"available": True, "logged_in": False, "plan": "", "detail": str(error), "login_command": login_command}
     try:
         run = subprocess.run(resolved + ["auth", "status"], env=child, stdin=subprocess.DEVNULL,
-                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                             **no_window_kwargs())
         auth = json.loads(run.stdout) if run.stdout.strip().startswith("{") else {}
     except (OSError, ValueError, subprocess.SubprocessError):
         auth = {}

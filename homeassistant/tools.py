@@ -922,12 +922,12 @@ def _handle_call_service(args: dict, **kw) -> str:
             data = json.loads(data) if data.strip() else None
         except json.JSONDecodeError as e:
             return tool_error(f"Invalid JSON string in 'data' parameter: {e}")
+    if data is not None and not isinstance(data, dict):
+        return tool_error(
+            f"Invalid 'data' parameter: expected a JSON object, got {type(data).__name__}")
     # Operator allow/deny lists also govern control: refuse before any network call.
     # Checked on the payload actually sent (entity_id overrides data["entity_id"]).
     if any(_get_entity_filter_config()):
-        if data is not None and not isinstance(data, dict):
-            return tool_error(
-                f"Invalid 'data' parameter: expected a JSON object, got {type(data).__name__}")
         violation = _service_call_violation(domain, service, _build_service_payload(entity_id, data))
     else:
         violation = None

@@ -21,9 +21,10 @@ nothing until you configure it: with no `QQ_APP_ID` / `QQ_CLIENT_SECRET` the gat
 hermes plugins install qqbot
 ```
 
-Needs a Hermes release in which QQ Bot has left core. On an older Hermes the plugin stays inactive and logs one
-line (`the plugin stays inactive until core drops it`): that Hermes still ships its own QQ Bot support, which
-keeps working.
+Installs on Hermes 0.23.4 and later (stable and canary). While a Hermes core still ships its own QQ Bot
+support, that support keeps serving and the plugin stays inactive: it registers nothing and logs one debug line
+(`the plugin stays inactive until core drops it`). The first Hermes without the built-in QQ Bot loads the
+plugin's adapter instead, with the same settings.
 
 Dependencies (`aiohttp`, `httpx`, `qrcode`) are declared in `pyproject.toml`. SILK voice notes need `pilk`
 (the optional `silk` extra); without it a SILK note is transcribed only when QQ's own ASR has text for it.

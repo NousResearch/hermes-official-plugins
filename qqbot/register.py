@@ -208,8 +208,8 @@ def core_ships_qqbot() -> bool:
 def register(ctx) -> None:
     """Plugin entry point — called by the Hermes plugin loader."""
     if core_ships_qqbot():
-        # Registering on top of the built-in would replace core's adapter with a second copy.
-        logger.info("qqbot: this Hermes core still ships QQ Bot built in; "
+        # Staged move: registering on top of the built-in would replace core's adapter with a second copy.
+        logger.debug("qqbot: this Hermes core still ships QQ Bot built in; "
                     "the plugin stays inactive until core drops it")
         return
     ctx.register_platform(**platform_kwargs())

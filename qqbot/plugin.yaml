@@ -8,7 +8,9 @@ description: >
   scan-to-configure setup and home-channel cron delivery. Formerly built into Hermes core.
 author: NousResearch
 homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/qqbot
-requires_hermes: ">=0.23.5"
+# Oldest Hermes tested: 0.23.4 (stable and canary). While core still bundles QQ Bot the plugin registers nothing
+# (register.core_ships_qqbot); core's adapter keeps serving, and the plugin takes over once core drops it.
+requires_hermes: ">=0.23.4"
 provides_tools: []
 provides_hooks: []
 requires_env:

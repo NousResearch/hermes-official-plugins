@@ -15,18 +15,14 @@ from feishu_plugin._i18n import t
 # Minimal Feishu mock so FeishuAdapter can be imported without lark-oapi
 # ---------------------------------------------------------------------------
 def _ensure_feishu_mocks():
-    """Provide stubs for lark-oapi / aiohttp.web so the import succeeds."""
-    if importlib.util.find_spec("lark_oapi") is None and "lark_oapi" not in sys.modules:
+    """Provide lark-oapi stubs so the import succeeds (the adapter runs without aiohttp: webhook mode off)."""
+    if "lark_oapi" not in sys.modules and importlib.util.find_spec("lark_oapi") is None:
         mod = MagicMock()
         for name in (
             "lark_oapi", "lark_oapi.api.im.v1",
             "lark_oapi.event", "lark_oapi.event.callback_type",
         ):
             sys.modules.setdefault(name, mod)
-    if importlib.util.find_spec("aiohttp") is None and "aiohttp" not in sys.modules:
-        aio = MagicMock()
-        sys.modules.setdefault("aiohttp", aio)
-        sys.modules.setdefault("aiohttp.web", aio.web)
 
 
 _ensure_feishu_mocks()

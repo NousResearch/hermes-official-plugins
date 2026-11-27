@@ -1,6 +1,7 @@
 """Tests for the Feishu gateway integration."""
 
 import asyncio
+import importlib.util
 import json
 import os
 import socket
@@ -14,6 +15,9 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+
+# Webhook mode serves over aiohttp, which core's messaging extra brings, not this plugin's dependencies.
+_needs_aiohttp = pytest.mark.skipif(importlib.util.find_spec("aiohttp") is None, reason="webhook mode needs aiohttp")
 
 from gateway.platforms.event import ProcessingOutcome
 
@@ -843,6 +847,7 @@ class TestAdapterBehavior(unittest.TestCase):
 
         self.assertTrue(submit.called)
 
+    @_needs_aiohttp
     @patch.dict(os.environ, {}, clear=True)
     def test_webhook_request_uses_same_message_dispatch_path(self):
         from gateway.config import PlatformConfig
@@ -867,6 +872,7 @@ class TestAdapterBehavior(unittest.TestCase):
         self.assertEqual(response.status, 200)
         adapter._on_message_event.assert_called_once()
 
+    @_needs_aiohttp
     @patch.dict(os.environ, {"FEISHU_VERIFICATION_TOKEN": "expected-token"}, clear=True)
     def test_url_verification_requires_configured_verification_token(self):
         """url_verification must be rejected when token is set but mismatched.
@@ -1528,6 +1534,7 @@ class TestWebhookSecurity(unittest.TestCase):
         adapter._webhook_rate_counts[ip] = (count, window_start - _FEISHU_WEBHOOK_RATE_WINDOW_SECONDS - 1)
         self.assertTrue(adapter._check_webhook_rate_limit(ip))
 
+    @_needs_aiohttp
     def test_webhook_request_rejects_oversized_chunked_body_while_reading(self):
         from gateway.config import PlatformConfig
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override

@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-if importlib.util.find_spec("lark_oapi") is None and "lark_oapi" not in sys.modules:
+if "lark_oapi" not in sys.modules and importlib.util.find_spec("lark_oapi") is None:
     _mod = MagicMock()
     for _name in ("lark_oapi", "lark_oapi.api.im.v1", "lark_oapi.event", "lark_oapi.event.callback_type"):
         sys.modules.setdefault(_name, _mod)
@@ -148,6 +148,7 @@ async def _webhook_tap(a, value, open_id="ou_ok"):
     return json.loads(response.body)
 
 
+@pytest.mark.skipif(importlib.util.find_spec("aiohttp") is None, reason="webhook mode needs aiohttp")
 @pytest.mark.asyncio
 async def test_webhook_tap_answers_the_clarify_and_returns_the_settled_card(adapter):
     adapter._loop = asyncio.get_running_loop()

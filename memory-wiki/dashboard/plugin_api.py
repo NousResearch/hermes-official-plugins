@@ -86,8 +86,14 @@ def _open_db():
     return SessionDB(db_path=db_path, read_only=True)
 
 
-def _clamp(value: int, low: int, high: int) -> int:
-    return max(low, min(int(value), high))
+def _clamp(value: object, low: int, high: int) -> int:
+    if isinstance(value, bool):
+        return low
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return low
+    return max(low, min(parsed, high))
 
 
 async def _with_db(label: str, fn, *, empty):

@@ -13,6 +13,7 @@ from __future__ import annotations
 import atexit
 import glob
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -116,10 +117,14 @@ _disk_usage_cache: dict = {"timestamp": float("-inf"), "result": False}
 def _disk_warning_threshold_gb() -> float:
     raw = os.getenv("TERMINAL_DISK_WARNING_GB", "500")
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError:
         logger.warning("TERMINAL_DISK_WARNING_GB=%r is not a number; using 500", raw)
         return 500.0
+    if not math.isfinite(value) or value <= 0:
+        logger.warning("TERMINAL_DISK_WARNING_GB=%r must be a positive finite number; using 500", raw)
+        return 500.0
+    return value
 
 
 def check_disk_usage_warning() -> bool:

@@ -52,8 +52,9 @@ changes.
 In chat, ask something like "scan this repo for security issues". Or open the
 **Security** page in Desktop, choose **New scan**, and fill in:
 
-1. **Repository:** a folder on the machine running Hermes. Pick a recent one,
-   use **Browse…**, or clone one with **From URL…**.
+1. **Repository:** a folder on the machine running Hermes. Pick a recent one
+   or one of your Hermes projects, use **Browse…**, or clone one with
+   **From URL…**.
 2. **What to scan:** **Whole codebase** or **Only my changes**. Only my changes
    means your uncommitted work, or your branch compared with the default branch.
    The plugin picks whichever applies.

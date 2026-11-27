@@ -73,6 +73,7 @@ def _bot_profile_name(bot_name: str) -> str:
 
 _CREATED_AT_RE = re.compile(r"^Profile '(?P<name>[^']+)' created at (?P<path>.+)$", re.MULTILINE)
 _PROFILE_PATH_RE = re.compile(r"^Path:\s+(?P<path>.+)$", re.MULTILINE)
+_PROFILE_CLI_TIMEOUT = 30.0
 
 
 def _profile_cli(*args: str) -> subprocess.CompletedProcess:
@@ -89,7 +90,15 @@ def _profile_cli(*args: str) -> subprocess.CompletedProcess:
     home = get_hermes_home()
     env = dict(os.environ, HERMES_HOME=str(home), HOME=str(Path.home()), USERPROFILE=str(Path.home()))
     argv = [sys.executable, "-P", "-m", "hermes_cli.main", "profile", *args]
-    return subprocess.run(argv, capture_output=True, text=True, check=False, env=env)
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, check=False, env=env, timeout=_PROFILE_CLI_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            argv,
+            returncode=124,
+            stdout="",
+            stderr=f"hermes profile {' '.join(args)} timed out after {_PROFILE_CLI_TIMEOUT:g}s",
+        )
 
 
 def _profile_home(profile: str) -> Optional[Path]:

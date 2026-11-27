@@ -301,7 +301,10 @@ def _token_post(
         detail = response.text.strip()
         raise _err(f"Spotify {what} failed.{failed_suffix}" + (f" Response: {detail}" if detail else ""),
                    failed_code, relogin=relogin_required)
-    payload = response.json()
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise _err(invalid_message, invalid_code, relogin=relogin_required) from exc
     if not isinstance(payload, dict) or not _clean(payload.get("access_token")):
         raise _err(invalid_message, invalid_code, relogin=relogin_required)
     return payload

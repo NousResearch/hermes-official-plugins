@@ -8,8 +8,9 @@ homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/team
 description: >
   Microsoft Teams meeting pipeline: Graph change notifications from the msgraph_webhook gateway
   platform become durable jobs that fetch the meeting transcript (or recording), summarize it and
-  deliver the summary to Teams and other sinks, plus an operator CLI (`hermes teams-pipeline`) for
-  jobs, replays, Graph setup checks and subscriptions. Formerly built into Hermes core as
+  deliver the summary to Teams (Notion and Linear writers exist but are not wired yet), plus an
+  operator CLI (`hermes teams-pipeline`) for jobs, re-runs, Graph setup checks and subscriptions.
+  Tested with stand-ins only, not against a real tenant. Formerly built into Hermes core as
   teams_pipeline.
 requires_hermes: ">=0.21.7"
 platforms:

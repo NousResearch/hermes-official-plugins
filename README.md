@@ -232,7 +232,7 @@ Catalog entries come in two tiers:
 <a href="google-meet/"><img src="assets/google-meet.jpg" alt="Google Meet plugin"></a>
 <h3><a href="google-meet/">Google Meet</a></h3>
 <code>hermes plugins install google-meet</code>
-<p>Hermes joins a Google Meet call you give it, scrapes the live captions into a transcript and does the follow-up work afterwards. Realtime mode lets it speak in the call through OpenAI Realtime, and a remote node host runs the browser on another machine (your Mac with a signed-in Chrome) while the gateway stays on Linux. Only joins meet.google.com URLs you pass in: no calendar scanning, no auto-dial.</p>
+<p>Hermes joins a Google Meet call you give it, scrapes the live captions into a transcript and does the follow-up work afterwards. Realtime mode lets it speak in the call (its text goes to OpenAI Realtime and the returned speech is played into the call; meeting audio is never sent), and a remote node host runs a listen-only bot on another machine. Only joins meet.google.com URLs you pass in: no calendar scanning, no auto-dial. Known limitation: the agent's bot is stopped when the turn that joined ends (<a href="https://github.com/NousResearch/hermes-official-plugins/issues/518">#518</a>).</p>
 <p><code>meet_join</code> and 4 more · <code>hermes meet</code> · Linux and macOS</p>
 </td>
 </tr>
@@ -241,7 +241,7 @@ Catalog entries come in two tiers:
 <a href="teams-pipeline/"><img src="assets/teams-pipeline.jpg" alt="Teams Meeting Pipeline plugin"></a>
 <h3><a href="teams-pipeline/">Teams Meeting Pipeline</a></h3>
 <code>hermes plugins install teams-pipeline</code>
-<p>Turns Microsoft Teams meetings into summaries. Graph change notifications on the <code>msgraph_webhook</code> gateway platform become durable jobs that fetch the transcript (or transcribe the recording), summarize it and deliver it to Teams, Notion or Linear. An operator CLI lists and replays jobs, checks Graph setup and maintains subscriptions.</p>
+<p>Turns Microsoft Teams meetings into summaries. Graph change notifications on the <code>msgraph_webhook</code> gateway platform become durable jobs that fetch the transcript (or transcribe the recording), summarize it and deliver it to Teams (Notion and Linear writers exist but are not wired yet). An operator CLI lists and re-runs jobs, checks Graph setup and maintains subscriptions. Tested with stand-ins only, not against a real tenant.</p>
 <p><code>hermes teams-pipeline</code> · Microsoft Graph app credentials</p>
 </td>
 <td width="50%" valign="top">

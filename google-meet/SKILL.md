@@ -27,7 +27,7 @@ The user says any of:
 | Mode | What the bot does |
 |---|---|
 | `transcribe` (default) | Joins, enables captions, scrapes a transcript. Listen-only. |
-| `realtime` | Same as transcribe PLUS speaks into the meeting via OpenAI Realtime. The agent calls `meet_say(text)` and the bot's voice comes out of the call. |
+| `realtime` | Same as transcribe PLUS speaks into the meeting via OpenAI Realtime. The agent calls `meet_say(text)`; the text goes to OpenAI and the returned voice comes out of the call. Meeting audio is never sent to OpenAI: listening stays caption-based. Local bot only. |
 
 Pick `realtime` only when the user actually wants the agent to speak. It costs real money (OpenAI Realtime is pay-per-audio-minute) and requires a virtual audio device set up on the machine running the bot.
 
@@ -36,7 +36,7 @@ Pick `realtime` only when the user actually wants the agent to speak. It costs r
 | Location | When |
 |---|---|
 | Local (default) | Gateway machine runs the Playwright bot directly. |
-| Remote node (`node="<name>"`) | Bot runs on a different machine that has a signed-in Chrome and (for realtime) a configured audio bridge. Useful when the gateway runs on a headless Linux box but the user's real signed-in Chrome lives on their Mac. |
+| Remote node (`node="<name>"`) | Bot runs on a different machine, transcribe mode only (the node does not pass `mode` on, so `meet_say` is not spoken there). Useful when the gateway runs on a headless box. |
 
 ## Prerequisites the user must handle once
 
@@ -46,7 +46,7 @@ Easiest path — run the built-in installer:
 hermes plugins install google-meet
 hermes meet install                 # PM dependencies + Chromium (transcribe only)
 hermes meet install --realtime      # + pulseaudio-utils / brew blackhole+ffmpeg
-hermes meet auth                    # optional; skips guest-lobby wait
+hermes meet auth                    # optional; used by `hermes meet join` only (meet_join joins as a guest)
 hermes meet setup                   # preflight checks
 ```
 
@@ -101,8 +101,9 @@ Run `hermes meet setup` to preflight local prereqs.
 
 ## Important limits
 
+- **The bot is stopped when your turn ends** (open issue NousResearch/hermes-official-plugins#518): the plugin's `on_session_end` hook runs after every agent turn and stops a running bot. Tell the user: a `meet_join` from a chat turn leaves when that turn finishes, and the transcript so far stays in `workspace/meetings/<meeting-id>/transcript.txt`. A bot started with `hermes meet join` from a terminal is stopped by the next agent turn in that profile.
 - Captions are only as good as Google Meet's live captions. English-biased, lossy on overlapping speakers.
-- Guest mode sits in the lobby until a host admits. Warn the user; `hermes meet auth` avoids this.
+- Guest mode sits in the lobby until a host admits. Warn the user. `meet_join` always joins as a guest; the `hermes meet auth` session is only used by `hermes meet join`.
 - **Lobby timeout**: if the host doesn't admit the bot within 5 minutes (configurable via `HERMES_MEET_LOBBY_TIMEOUT` env), the bot leaves and `meet_status` reports `leaveReason: "lobby_timeout"`.
 - **One active meeting per install per location.** A second `meet_join` leaves the first.
 - **Windows not supported.**

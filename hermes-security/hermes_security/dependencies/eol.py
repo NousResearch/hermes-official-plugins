@@ -66,6 +66,8 @@ def declarations(files, read):
                 data = json.loads(text)
             except ValueError:
                 continue
+            if not isinstance(data, dict):
+                continue
             if name == 'package.json' and isinstance(data.get('engines'), dict) and isinstance(data['engines'].get('node'), str):
                 found.append(('nodejs', data['engines']['node'][:40], path))
             if name == 'composer.json' and isinstance(data.get('require'), dict) and isinstance(data['require'].get('php'), str):
@@ -81,7 +83,11 @@ def declarations(files, read):
 def _fetch(product, opener, timeout):
     with opener(API.format(product=product), timeout=timeout) as response:
         data = json.loads(response.read(4 * 1024 * 1024))
-    return {str(r.get('name')): r for r in data.get('result', {}).get('releases', []) if isinstance(r, dict)}
+    result = data.get('result') if isinstance(data, dict) else None
+    releases = result.get('releases') if isinstance(result, dict) else None
+    if not isinstance(releases, list):
+        return {}
+    return {str(r.get('name')): r for r in releases if isinstance(r, dict)}
 
 
 def check_runtimes(files, read, *, opener=None, timeout=20):
@@ -111,6 +117,11 @@ def check_runtimes(files, read, *, opener=None, timeout=20):
             # ">=20" with no upper bound only permits an end-of-life minimum; supported versions qualify too.
             if status == 'end_of_life' and _open_minimum(declared):
                 status = 'allows_end_of_life'
-            row.update(status=status, eolDate=release.get('eolFrom'), latest=(release.get('latest') or {}).get('name'))
+            latest = release.get('latest')
+            row.update(
+                status=status,
+                eolDate=release.get('eolFrom'),
+                latest=latest.get('name') if isinstance(latest, dict) else None,
+            )
         results.append(row)
     return results

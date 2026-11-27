@@ -2,8 +2,10 @@ name: feishu
 label: Feishu / Lark
 kind: platform
 version: 2.0.0
-# The first Hermes release without core's bundled Feishu (its built-in feishu_* tools reject this plugin's).
-requires_hermes: ">=0.23.5"
+# Oldest Hermes tested: 0.23.4 (stable and canary). While core still bundles Feishu the plugin registers nothing
+# (register.core_ships_feishu); core's adapter and feishu_* tools keep serving, and the plugin takes over once
+# core drops them.
+requires_hermes: ">=0.23.4"
 description: >
   Feishu / Lark gateway adapter for Hermes Agent. Connects to Feishu (China) or Lark
   (International) via the official lark-oapi SDK over WebSocket or webhook and
@@ -18,12 +20,10 @@ description: >
   Hermes home, idle until configured. Formerly built into Hermes core.
 author: NousResearch
 homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/feishu
-provides_tools:
-  - feishu_doc_read
-  - feishu_drive_list_comments
-  - feishu_drive_list_comment_replies
-  - feishu_drive_reply_comment
-  - feishu_drive_add_comment
+# provides_tools stays undeclared while core still bundles its own feishu_* tools: `hermes plugins validate`
+# fails a declared name that collides with a built-in, and on such a core register() registers none of them
+# (register.core_ships_feishu). Declare the five names again once core's copies are gone.
+provides_tools: []
 provides_hooks: []
 requires_env:
   - name: FEISHU_APP_ID

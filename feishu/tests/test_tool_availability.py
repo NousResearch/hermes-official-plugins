@@ -121,6 +121,7 @@ def test_each_multiplexed_profile_sees_only_its_own_setup(model_tool_names, monk
         set_multiplex_active(False)
 
 
+@pytest.mark.plugin_registry  # the real loader: on a core that still bundles Feishu the plugin registers nothing
 def test_configured_home_offers_the_tools_on_feishu_only(monkeypatch, tmp_path):
     """A new home that sets Feishu up (no saved ``hermes tools`` choice): the five tools ride in
     ``tools[]`` for the Feishu platform and nowhere else, through the real plugin loader."""

@@ -152,9 +152,10 @@ def test_inert_when_core_still_ships_feishu(monkeypatch, caplog):
 
     monkeypatch.setattr(register_mod, "core_ships_feishu", lambda: True)
     ctx = _Ctx()
-    with caplog.at_level(logging.INFO, logger=register_mod.logger.name):
+    with caplog.at_level(logging.DEBUG, logger=register_mod.logger.name):
         register_mod.register(ctx)
     assert ctx.kwargs is None and ctx.tools == []
+    assert {r.levelno for r in caplog.records if "stays inactive" in r.getMessage()} == {logging.DEBUG}
     assert [r.getMessage() for r in caplog.records if "stays inactive" in r.getMessage()] == [
         "feishu: this Hermes core still ships Feishu built in; the plugin stays inactive until core drops it"]
 

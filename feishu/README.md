@@ -33,9 +33,10 @@ credentials are there; no reinstall.
 
 The plugin's Python dependencies (`lark-oapi`, `qrcode`) come from its `pyproject.toml` at install time.
 
-Needs a Hermes release in which Feishu has left core. On an older Hermes the plugin stays inactive and logs
-one line (`the plugin stays inactive until core drops it`): that Hermes still ships its own Feishu support,
-which keeps working. The check is whether core's Feishu files are present (`plugins/platforms/feishu/` or
+Installs on Hermes 0.23.4 and later (stable and canary). While a Hermes core still ships its own Feishu
+support (adapter and `feishu_*` tools), that support keeps serving and the plugin stays inactive: it registers
+nothing and logs one debug line (`the plugin stays inactive until core drops it`). The first Hermes without the
+built-in Feishu loads the plugin's adapter and tools instead, with the same settings and tool names. The check is whether core's Feishu files are present (`plugins/platforms/feishu/` or
 `tools/feishu_doc_tool.py`), not whether core's built-in Feishu is enabled.
 
 ## Setup

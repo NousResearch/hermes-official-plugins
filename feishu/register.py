@@ -100,8 +100,8 @@ def core_ships_feishu() -> bool:
 def register(ctx) -> None:
     """Plugin entry point — called by the Hermes plugin loader."""
     if core_ships_feishu():
-        # Registering on top of the built-in would shadow core's feishu_* tools and replace its adapter.
-        logger.info("feishu: this Hermes core still ships Feishu built in; "
+        # Staged move: registering on top of the built-in would shadow core's feishu_* tools and replace its adapter.
+        logger.debug("feishu: this Hermes core still ships Feishu built in; "
                     "the plugin stays inactive until core drops it")
         return
     ctx.register_platform(**platform_kwargs())

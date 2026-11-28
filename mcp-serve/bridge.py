@@ -42,6 +42,20 @@ except ImportError:
 
 # --- Helpers -----------------------------------------------------------------
 
+def _load_send_message_tool():
+    """Resolve Hermes' outbound sender across core versions.
+
+    Hermes <= 0.23.1 ships ``tools.send_message_tool``; 0.23.2 moved it to
+    ``gateway.outbound.send``. Try the current location first so one plugin
+    release works against both, and let the caller report the ImportError.
+    """
+    try:
+        from gateway.outbound.send import send_message_tool
+    except ImportError:
+        from tools.send_message_tool import send_message_tool
+    return send_message_tool
+
+
 def _hermes_home() -> Path:
     try:
         from hermes_constants import get_hermes_home
@@ -658,7 +672,7 @@ class _ToolHandlers:
         if not target or not message:
             return json.dumps({"error": "Both target and message are required"})
         try:
-            from tools.send_message_tool import send_message_tool
+            send_message_tool = _load_send_message_tool()
             return send_message_tool({"action": "send", "target": target, "message": message})
         except ImportError:
             return json.dumps({"error": "Send message tool not available"})

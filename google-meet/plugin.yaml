@@ -1,0 +1,27 @@
+name: google-meet
+label: Google Meet
+version: 0.3.0
+manifest_version: 2
+author: NousResearch
+kind: standalone
+homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/google-meet
+description: >
+  Join a Google Meet call, transcribe live captions, optionally speak in it, and follow up afterwards.
+  Transcribe-only is the default; mode='realtime' adds speech out (text to OpenAI Realtime, the returned
+  audio played into the call through BlackHole/PulseAudio; meeting audio is never sent anywhere); a
+  remote node host runs a transcribe-only bot on a different machine than the gateway. Explicit by
+  design: only joins meet.google.com URLs passed in, with no calendar scanning and no auto-dial. Known
+  limitation: the agent's bot is stopped when the turn that joined ends (issue #518). Formerly built
+  into Hermes core as google_meet.
+requires_hermes: ">=0.21.7"
+platforms:
+  - linux
+  - macos
+provides_tools:
+  - meet_join
+  - meet_leave
+  - meet_status
+  - meet_transcript
+  - meet_say
+provides_hooks:
+  - on_session_end

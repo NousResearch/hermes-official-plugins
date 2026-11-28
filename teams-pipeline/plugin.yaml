@@ -1,0 +1,32 @@
+name: teams-pipeline
+label: Teams Meeting Pipeline
+version: 0.2.0
+manifest_version: 2
+author: NousResearch
+kind: standalone
+homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/teams-pipeline
+description: >
+  Microsoft Teams meeting pipeline: Graph change notifications from the msgraph_webhook gateway
+  platform become durable jobs that fetch the meeting transcript (or recording), summarize it and
+  deliver the summary to Teams (Notion and Linear writers exist but are not wired yet), plus an
+  operator CLI (`hermes teams-pipeline`) for jobs, re-runs, Graph setup checks and subscriptions.
+  Tested with stand-ins only, not against a real tenant. Formerly built into Hermes core as
+  teams_pipeline.
+requires_hermes: ">=0.21.7"
+platforms:
+  - linux
+  - macos
+  - windows
+requires_env:
+  - name: MSGRAPH_TENANT_ID
+    description: "Microsoft Entra tenant ID of the app registration that reads meeting artifacts"
+    prompt: "Microsoft Graph tenant ID"
+    password: false
+  - name: MSGRAPH_CLIENT_ID
+    description: "Application (client) ID of the Microsoft Graph app registration"
+    prompt: "Microsoft Graph client ID"
+    password: false
+  - name: MSGRAPH_CLIENT_SECRET
+    description: "Client secret of the Microsoft Graph app registration"
+    prompt: "Microsoft Graph client secret"
+    password: true

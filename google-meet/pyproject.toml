@@ -1,0 +1,15 @@
+[project]
+name = "hermes-google-meet"
+version = "0.3.0"
+description = "Google Meet bot for Hermes Agent: join, transcribe, speak, follow up (official plugin)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nous Research" }]
+requires-python = ">=3.11"
+dependencies = [
+  "playwright==1.64.0; sys_platform != 'android'",
+  "websockets==15.0.1; sys_platform != 'android'",
+]
+
+[project.urls]
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/google-meet"

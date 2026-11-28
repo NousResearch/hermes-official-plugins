@@ -238,6 +238,22 @@ Catalog entries come in two tiers:
 <p><code>security_scan_start</code> and 8 more · <code>/security</code> · <code>hermes security-review</code></p>
 </td>
 <td width="50%" valign="top">
+<a href="google-meet/"><img src="assets/google-meet.jpg" alt="Google Meet plugin"></a>
+<h3><a href="google-meet/">Google Meet</a></h3>
+<code>hermes plugins install google-meet</code>
+<p>Hermes joins a Google Meet call you give it, scrapes the live captions into a transcript and does the follow-up work afterwards. Realtime mode lets it speak in the call (its text goes to OpenAI Realtime and the returned speech is played into the call; meeting audio is never sent), and a remote node host runs a listen-only bot on another machine. Only joins meet.google.com URLs you pass in: no calendar scanning, no auto-dial. Known limitation: the agent's bot is stopped when the turn that joined ends (<a href="https://github.com/NousResearch/hermes-official-plugins/issues/518">#518</a>).</p>
+<p><code>meet_join</code> and 4 more · <code>hermes meet</code> · Linux and macOS</p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<a href="teams-pipeline/"><img src="assets/teams-pipeline.jpg" alt="Teams Meeting Pipeline plugin"></a>
+<h3><a href="teams-pipeline/">Teams Meeting Pipeline</a></h3>
+<code>hermes plugins install teams-pipeline</code>
+<p>Turns Microsoft Teams meetings into summaries. Graph change notifications on the <code>msgraph_webhook</code> gateway platform become durable jobs that fetch the transcript (or transcribe the recording), summarize it and deliver it to Teams (Notion and Linear writers exist but are not wired yet). An operator CLI lists and re-runs jobs, checks Graph setup and maintains subscriptions. Tested with stand-ins only, not against a real tenant.</p>
+<p><code>hermes teams-pipeline</code> · Microsoft Graph app credentials</p>
+</td>
+<td width="50%" valign="top">
 <h3>More on the way</h3>
 <p>Official plugins move in here as they leave Hermes core or join from their own repos. Browse everything else, from Nous, vendors and the community, in the <a href="https://hermes-agent.nousresearch.com/docs/plugins">plugin catalog</a>. Experimental plugins we built but don't support live in <a href="https://github.com/NousResearch/hermes-labs-plugins">hermes-labs-plugins</a>.</p>
 </td>
@@ -247,9 +263,9 @@ Catalog entries come in two tiers:
 
 ### Already used one of these?
 
-Most plugins here used to live somewhere else: Home Assistant and Spotify were built into Hermes core and then briefly had their own repos, Langfuse shipped bundled with core as `observability/langfuse`, the Singularity/Apptainer terminal backend and the Camofox browser backend were built into core, MCP Serve was core's `hermes mcp serve`, and the rest each had a standalone `NousResearch/hermes-*` repo. **Except for MCP Serve, you don't need to do anything.**
+Most plugins here used to live somewhere else: Home Assistant and Spotify were built into Hermes core and then briefly had their own repos, Langfuse shipped bundled with core as `observability/langfuse`, the Singularity/Apptainer terminal backend, the Camofox browser backend, Google Meet (`google_meet`) and the Teams meeting pipeline (`teams_pipeline`) were built into core, MCP Serve was core's `hermes mcp serve`, and the rest each had a standalone `NousResearch/hermes-*` repo. **Except for MCP Serve, you don't need to do anything.**
 
-- **You used the built-in Home Assistant, Spotify, Langfuse, Singularity or Camofox backend:** `hermes update`, or the first start after updating, installs the plugin from the catalog with your existing config, env vars and login.
+- **You used the built-in Home Assistant, Spotify, Langfuse, Singularity, Camofox backend, Google Meet or Teams meeting pipeline:** `hermes update`, or the first start after updating, installs the plugin from the catalog with your existing config, env vars and login.
 - **You installed it from the catalog:** the catalog now points here, so `hermes plugins update <name>` moves your install to this repo and keeps your files.
 - **You used the built-in `hermes import-agent`:** profiles that registered an import for `--sync` get the `agent-importers` plugin on update; anywhere else, running `hermes import-agent` prints the one-line install (`hermes plugins install agent-importers`).
 - **You used `hermes claw migrate` (OpenClaw):** it now comes with the same plugin. After `hermes plugins install agent-importers`, both `hermes import-agent openclaw` and the old `hermes claw migrate` / `hermes claw cleanup` work with the same flags.

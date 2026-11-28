@@ -325,6 +325,40 @@ class TestClaudeCodeImport:
         assert items["slash-commands"]["status"] == "skipped"
 
 
+def test_claude_hooks_become_shell_hooks_that_keep_their_event_name(claude_tree, hermes_home, capsys):
+    """settings.json hooks land as config.yaml shell hooks the core parser accepts, each carrying the
+    Claude event as ``event_name`` (what the script reads on stdin); prompt hooks and events with no
+    Hermes counterpart are skipped, a re-import adds nothing, and the printed report shows each caveat."""
+    settings = json.loads((claude_tree / "settings.json").read_text(encoding="utf-8"))
+    settings["hooks"] = {
+        "PreToolUse": [{"matcher": "Bash|Edit|NotebookEdit", "hooks": [
+            {"type": "command", "command": "$CLAUDE_PROJECT_DIR/gate.sh", "timeout": 5},
+            {"type": "prompt", "prompt": "is this safe?"}]}],
+        "Stop": [{"hooks": [{"type": "command", "command": "run-tests.sh"}]}],
+        "PreCompact": [{"hooks": [{"type": "command", "command": "x.sh"}]}],
+    }
+    (claude_tree / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+    report = run_import("claude-code", claude_tree, hermes_home, execute=True)
+
+    from agent.shell_hooks import _parse_hooks_block
+    config = yaml.safe_load((hermes_home / "config.yaml").read_text(encoding="utf-8"))
+    specs = {(s.event, s.command): s for s in _parse_hooks_block(config["hooks"])}
+    gate = specs[("pre_tool_call", "$CLAUDE_PROJECT_DIR/gate.sh")]
+    assert (gate.matcher, gate.timeout, getattr(gate, "event_name", "PreToolUse")) == (
+        "terminal|patch|NotebookEdit", 5, "PreToolUse")
+    assert config["hooks"]["pre_verify"] == [{"command": "run-tests.sh", "event_name": "Stop"}]
+    hooks = [i for i in report["items"] if i["kind"] == "hooks"]
+    assert sorted(i["status"] for i in hooks) == ["imported", "imported", "skipped", "skipped"]
+
+    from agent_importers_plugin.cli import print_import_report
+    print_import_report(report, dry_run=False)
+    out = capsys.readouterr().out
+    assert "NotebookEdit" in out and "$CLAUDE_PROJECT_DIR is not set" in out and "edited files" in out
+
+    again = run_import("claude-code", claude_tree, hermes_home, execute=True)
+    assert all(i["status"] != "imported" for i in again["items"] if i["kind"] == "hooks")
+
+
 # ---------------------------------------------------------------------------
 # Codex real run
 # ---------------------------------------------------------------------------

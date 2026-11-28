@@ -1,0 +1,23 @@
+[project]
+name = "hermes-qqbot"
+version = "2.0.0"
+description = "QQ Bot (official QQ Bot API v2) gateway platform for Hermes Agent (official plugin)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nous Research" }]
+requires-python = ">=3.11"
+dependencies = [
+  # The bot WebSocket gateway (aiohttp) and the REST/token/onboarding client (httpx). Same pins Hermes
+  # core carried for them (messaging extra / core dependency), bounded.
+  "aiohttp>=3.14.5,<4",
+  "httpx>=0.28.1,<1",
+  # Terminal QR code for scan-to-configure setup (core's messaging extra pin).
+  "qrcode>=7.4.2,<8",
+]
+
+[project.optional-dependencies]
+# SILK voice decoding (QQ voice notes); the adapter imports it lazily and degrades without it.
+silk = ["pilk>=0.2.4,<0.3"]
+
+[project.urls]
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/qqbot"

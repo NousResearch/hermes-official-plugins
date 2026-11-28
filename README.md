@@ -135,6 +135,15 @@ Catalog entries come in two tiers:
 </tr>
 <tr>
 <td width="50%" valign="top">
+<a href="qqbot/"><img src="assets/qqbot.jpg" alt="QQ Bot plugin"></a>
+<h3><a href="qqbot/">QQ Bot</a></h3>
+<code>hermes plugins install qqbot</code>
+<p>A gateway platform for QQ over the official QQ Bot API v2: private chats, group @-mentions and guild channels over the bot WebSocket, text, markdown and native media replies, voice transcription, scan-to-configure setup and cron delivery with <code>deliver=qqbot</code>. Installed by default on every Hermes home; it stays idle until you add a QQ App ID and secret.</p>
+</td>
+<td width="50%" valign="top"></td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 <a href="langfuse/"><img src="assets/langfuse.jpg" alt="Langfuse plugin"></a>
 <h3><a href="langfuse/">Langfuse</a></h3>
 <code>hermes plugins install langfuse</code>
@@ -263,9 +272,9 @@ Catalog entries come in two tiers:
 
 ### Already used one of these?
 
-Most plugins here used to live somewhere else: Home Assistant and Spotify were built into Hermes core and then briefly had their own repos, Langfuse shipped bundled with core as `observability/langfuse`, the Singularity/Apptainer terminal backend, the Camofox browser backend, Google Meet (`google_meet`) and the Teams meeting pipeline (`teams_pipeline`) were built into core, MCP Serve was core's `hermes mcp serve`, and the rest each had a standalone `NousResearch/hermes-*` repo. **Except for MCP Serve, you don't need to do anything.**
+Most plugins here used to live somewhere else: Home Assistant and Spotify were built into Hermes core and then briefly had their own repos, Langfuse shipped bundled with core as `observability/langfuse`, the Singularity/Apptainer terminal backend, the Camofox browser backend, Google Meet (`google_meet`), the Teams meeting pipeline (`teams_pipeline`) and the QQ Bot platform were built into core, MCP Serve was core's `hermes mcp serve`, and the rest each had a standalone `NousResearch/hermes-*` repo. **Except for MCP Serve, you don't need to do anything.**
 
-- **You used the built-in Home Assistant, Spotify, Langfuse, Singularity, Camofox backend, Google Meet or Teams meeting pipeline:** `hermes update`, or the first start after updating, installs the plugin from the catalog with your existing config, env vars and login.
+- **You used the built-in Home Assistant, Spotify, Langfuse, Singularity, Camofox backend, Google Meet, Teams meeting pipeline or QQ Bot:** `hermes update`, or the first start after updating, installs the plugin from the catalog with your existing config, env vars and login.
 - **You installed it from the catalog:** the catalog now points here, so `hermes plugins update <name>` moves your install to this repo and keeps your files.
 - **You used the built-in `hermes import-agent`:** profiles that registered an import for `--sync` get the `agent-importers` plugin on update; anywhere else, running `hermes import-agent` prints the one-line install (`hermes plugins install agent-importers`).
 - **You used `hermes claw migrate` (OpenClaw):** it now comes with the same plugin. After `hermes plugins install agent-importers`, both `hermes import-agent openclaw` and the old `hermes claw migrate` / `hermes claw cleanup` work with the same flags.

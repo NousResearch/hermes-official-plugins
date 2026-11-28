@@ -362,13 +362,39 @@ def get_memory_subject(db, slug: str, *, cache=None) -> dict | None:
 
 
 def build_daily_logs(db, *, limit_days: int = 60, cache=None) -> list[dict]:
-    """Aggregate recent sessions into API-ready day log dictionaries."""
+    """Aggregate recent sessions into API-ready day log dictionaries.
+
+    Sessions are read most recently active first, in a window sized from ``limit_days``. When the
+    window fills up, a session it left out was last active on or before the oldest one it holds, so
+    that day and older ones may be missing sessions: the window grows (up to
+    ``_DAILY_SESSION_CAP`` sessions) until it covers ``limit_days`` whole days, and a day it only
+    partly reached is left out rather than reported with the sessions that happened to fit.
+    """
 
     if limit_days <= 0:
         return []
-    # The daily log is an activity record: it keeps cron and subagent runs (#379).
-    sessions = _recent_sessions(db, limit=max(limit_days * 25, 100), conversations_only=False)
-    units = _session_units(db, sessions, cache)
+    limit = max(limit_days * 25, 100)
+    while True:
+        # The daily log is an activity record: it keeps cron and subagent runs (#379), so a profile
+        # with frequent scheduled jobs can need far more than 25 sessions a day.
+        sessions = _recent_sessions(db, limit=limit, conversations_only=False)
+        logs = _daily_logs_from_units(_session_units(db, sessions, cache))
+        if len(sessions) < limit:
+            return logs[:limit_days]
+        oldest = _date_key(min(_session_info(session)["last_active"] for session in sessions))
+        complete = [day for day in logs if day["date"] > oldest]
+        if len(complete) >= limit_days or limit >= _DAILY_SESSION_CAP:
+            return complete[:limit_days]
+        limit = min(limit * 4, _DAILY_SESSION_CAP)
+
+
+# The largest session window one daily-log request reads (the cache keeps rescans cheap).
+_DAILY_SESSION_CAP = 20_000
+
+
+def _daily_logs_from_units(units: list[dict]) -> list[dict]:
+    """Day log dictionaries, newest day first, from per-session units in ``_session_units`` order."""
+
     days: dict[str, dict] = {}
 
     # A session that spans midnight counts on every day it has messages (#262): each unit
@@ -426,7 +452,7 @@ def build_daily_logs(db, *, limit_days: int = 60, cache=None) -> list[dict]:
         logs.append(day)
 
     logs.sort(key=lambda d: d["date"], reverse=True)
-    return logs[:limit_days]
+    return logs
 
 
 def get_daily_log(db, date: str, *, cache=None) -> dict | None:

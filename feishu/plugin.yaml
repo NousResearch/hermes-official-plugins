@@ -20,10 +20,12 @@ description: >
   Hermes home, idle until configured. Formerly built into Hermes core.
 author: NousResearch
 homepage: https://github.com/NousResearch/hermes-official-plugins/tree/main/feishu
-# provides_tools stays undeclared while core still bundles its own feishu_* tools: `hermes plugins validate`
-# fails a declared name that collides with a built-in, and on such a core register() registers none of them
-# (register.core_ships_feishu). Declare the five names again once core's copies are gone.
-provides_tools: []
+provides_tools:
+  - feishu_doc_read
+  - feishu_drive_list_comments
+  - feishu_drive_list_comment_replies
+  - feishu_drive_reply_comment
+  - feishu_drive_add_comment
 provides_hooks: []
 requires_env:
   - name: FEISHU_APP_ID

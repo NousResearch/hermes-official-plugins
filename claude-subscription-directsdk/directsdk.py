@@ -142,13 +142,27 @@ def obj(value):
     return value
 
 
+_UNPARSED_ARGUMENTS_CAP = 2000
+
+
+def _parse_tool_arguments(args):
+    """Parse tool_calls[].function.arguments; degrade malformed JSON into a bounded dict so history stays sendable."""
+    if not isinstance(args, str):
+        return args
+    try:
+        parsed = json.loads(args)
+    except ValueError as err:
+        logger.warning('Malformed JSON in assistant tool_calls arguments (%s); preserving bounded raw text', err)
+        return {'_unparsed_arguments': args[:_UNPARSED_ARGUMENTS_CAP]}
+    return parsed
+
+
 def projection(message):
     calls = []
     for tc in message.get('tool_calls') or []:
         f = tc['function']
-        args = f['arguments']
         calls.append({'id': tc['id'], 'name': f['name'],
-                      'input': json.loads(args) if isinstance(args, str) else args})
+                      'input': _parse_tool_arguments(f['arguments'])})
     return {'content': (message.get('content') or '').strip(), 'tool_calls': calls}
 
 

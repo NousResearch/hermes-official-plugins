@@ -67,7 +67,7 @@ class SpotifyClient:
             # One forced token refresh, then retry exactly once.
             self._runtime = self._resolve_runtime(force_refresh=True, refresh_if_expiring=True)
             return self.request(method, path, params=params, json_body=json_body, allow_retry_on_401=False,
-                                content=content, content_type=content_type)
+                                empty_response=empty_response, content=content, content_type=content_type)
         if response.status_code >= 400:
             detail = response.text.strip()
             message = _friendly_spotify_error_message(

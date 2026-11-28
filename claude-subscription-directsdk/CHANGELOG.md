@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.1] - 2026-11-24
+
+### Added
+
+- `isolate_profile_logins` setting (default off), the install owner's switch for a Hermes install shared by several people (#481). 0.4.0 refused every served profile without a Claude login of its own (#313), which broke the usual setup of one person running several profiles on one subscription: every turn failed with "This profile has no Claude login of its own" after the update, the launch profile's own turns included (#409, #472). Such a profile now shares the login Hermes was started with, as before 0.4.0, without the launch profile's gateway headers. With the setting on in the install's default profile (or the profile the process was started for), served profiles are refused as in 0.4.0, while the profile the process was started for always keeps its own login, its stamped messaging-gateway turns and cron fires included. Builds on P#420 (thanks @100yenadmin), whose launch-profile exemption and core-binder tests it keeps, and replaces its per-profile `inherit_launch_login` opt-in.
+
+### Fixed
+
+- A `claude_config_dir` (or `CLAUDE_SUBSCRIPTION_DIRECTSDK_CONFIG_DIR`, or inherited `CLAUDE_CONFIG_DIR`) that names Claude Code's own default `~/.claude` is no longer exported: with `CLAUDE_CONFIG_DIR` set, Claude Code looks for a different macOS Keychain item, so the workaround the refusal suggested read as logged out on a Mac (thanks @thebergerking91 on #409).
+- A caller passing `response_format=None` no longer drops the structured-output schema it set in `extra_body`; the schema reaches the request again (thanks @salch-cred).
+- A malformed `image_url` (a dict, list or number instead of a string) is refused with the plugin's request-rejected error instead of crashing the turn (thanks @salch-cred).
+
 ## [0.4.0] - Unreleased
 
 ### Added

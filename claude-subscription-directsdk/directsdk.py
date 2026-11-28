@@ -164,6 +164,10 @@ def content_blocks(content):
             result.append(copy.deepcopy(block))
         elif kind == 'image_url':
             url = block['image_url']['url']
+            if not isinstance(url, str):
+                # A malformed value must take the plugin's rejection path, not raise a raw
+                # TypeError/AttributeError/KeyError out of the URL prefix check below.
+                raise RequestRejected('Only base64 data image_url inputs are supported')
             if url[:8].lower().startswith(('http://', 'https://')):
                 # Native routing passes remote URLs through; the transport never fetches. A hint
                 # keeps the turn alive where an error would fail every retry of the same history.
@@ -393,7 +397,11 @@ def request_body(kwargs):
                 body['thinking'] = {'type': 'adaptive', 'display': 'summarized'}
             if effort:
                 body['output_config'] = {'effort': effort}
-    response_format = kwargs.get('response_format', body.pop('response_format', None))
+    # Pop the extra_body contract first, then prefer an explicit non-None response_format.
+    # kwargs.get('response_format', body.pop(...)) evaluated the default eagerly and dropped
+    # the schema when a caller passed response_format=None (a common SDK default).
+    extra_response_format = body.pop('response_format', None)
+    response_format = kwargs.get('response_format') or extra_response_format
     if response_format and response_format.get('type') != 'text':
         if response_format.get('type') != 'json_schema':
             raise RequestRejected('Only json_schema structured output is supported')

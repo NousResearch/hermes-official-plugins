@@ -1,6 +1,6 @@
 name: claude-subscription-directsdk-experimental
 kind: model-provider
-version: 0.4.0
+version: 0.4.1
 manifest_version: 2
 description: Claude Subscription DirectSDK (Experimental) — drive your Claude Pro/Max subscription through the official Claude Code CLI; Hermes owns tools, approvals and compaction
 author: Nous Research
@@ -25,6 +25,15 @@ config_schema:
     default: ""
     label: Claude login config directory
     description: Select this profile's logged-in Claude config directory, overriding process environment directories.
+  isolate_profile_logins:
+    type: bool
+    default: false
+    label: Isolate profile Claude logins
+    description: >-
+      For a Hermes install shared by several people. Off, every profile without a Claude login of its own uses the
+      login Hermes was started with (one person, one subscription). On, such a profile is refused until it has its
+      own CLAUDE_CODE_OAUTH_TOKEN or claude_config_dir, so it can't spend another person's allowance. Read from the
+      install's default profile and the profile Hermes was started for; a served profile's own value is ignored.
   claude_code_telemetry:
     type: bool
     default: false

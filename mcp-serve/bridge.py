@@ -354,13 +354,16 @@ class EventBridge:
         """Block until a matching event arrives or timeout expires."""
         deadline = time.monotonic() + (timeout_ms / 1000.0)
         while time.monotonic() < deadline:
+            # Clear BEFORE the queue check. An enqueue between the check and the clear would
+            # otherwise set the Event that clear() immediately erases, and this waiter would
+            # sleep through the wakeup with the event already queued (lost wakeup).
+            self._new_event.clear()
             found = self._matching(after_cursor, session_key, 1)
             if found:
                 return found[0]
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            self._new_event.clear()
             self._new_event.wait(timeout=min(remaining, POLL_INTERVAL))
         return None
 

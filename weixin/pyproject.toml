@@ -1,0 +1,17 @@
+[project]
+name = "hermes-weixin"
+version = "2.0.0"
+description = "Weixin (personal WeChat) gateway platform for Hermes Agent (official plugin)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nous Research" }]
+requires-python = ">=3.11"
+dependencies = [
+  # The iLink long-poll/HTTP client and the AES-128-ECB CDN media cipher. Hermes core pins both (patched
+  # floors); these bounds only keep a plugin-only install from resolving below them.
+  "aiohttp>=3.9,<4",
+  "cryptography>=44,<51",
+]
+
+[project.urls]
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/weixin"

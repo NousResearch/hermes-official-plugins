@@ -43,6 +43,15 @@ def test_empty_workbench_reads_succeed(api):
         assert response.json()['items'] == []
 
 
+def test_owner_names_the_profile_that_holds_the_scans(api, tmp_path, monkeypatch):
+    module, client = api
+    assert client.get(PREFIX + '/owner').json() == {'profile': 'default'}
+    # A named profile's home: the chats this page starts must run as that agent.
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path / 'profiles' / 'other-agent'))
+    monkeypatch.setattr(module, 'resolve_data_dir', lambda: tmp_path / 'profiles' / 'other-agent' / 'plugin-data' / 'hs')
+    assert client.get(PREFIX + '/owner').json() == {'profile': 'other-agent'}
+
+
 def test_browse_lists_folders_on_the_gateway_machine(api, tmp_path):
     module, client = api
     base = tmp_path / 'browse'

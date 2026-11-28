@@ -78,6 +78,15 @@ Catalog entries come in two tiers:
 </tr>
 <tr>
 <td width="50%" valign="top">
+<a href="weixin/"><img src="assets/weixin.jpg" alt="Weixin plugin"></a>
+<h3><a href="weixin/">Weixin (personal WeChat)</a></h3>
+<code>hermes plugins install weixin</code>
+<p>A gateway platform for personal WeChat over Tencent's iLink Bot API: QR login in <code>hermes gateway setup</code>, DMs with pairing or allowlists, native images, video, voice and documents through the encrypted CDN, and cron delivery with <code>deliver=weixin</code>. Installed by default on every Hermes home; it stays idle until you log in.</p>
+</td>
+<td width="50%" valign="top"></td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 <a href="claude-subscription-directsdk/"><img src="assets/claude-subscription-directsdk.jpg" alt="Claude Subscription DirectSDK plugin"></a>
 <h3><a href="claude-subscription-directsdk/">Claude Subscription DirectSDK</a> <sup>experimental</sup></h3>
 <code>hermes plugins install claude-subscription-directsdk</code>

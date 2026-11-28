@@ -468,9 +468,9 @@ class HomeAssistantAdapter(BasePlatformAdapter):
                     "your HA platform config to receive events.",
                     self.name)
             self._listen_task = asyncio.create_task(self._listen_loop())
-            self._running = True
-            logger.info("[%s] Connected to %s", self.name, self._hass_url)
             self._wire_plugin_handlers(None)
+            self._mark_connected()
+            logger.info("[%s] Connected to %s", self.name, self._hass_url)
             return True
         except Exception as e:
             logger.error("[%s] Failed to connect: %s", self.name, _connect_error_detail(e))
@@ -601,7 +601,7 @@ class HomeAssistantAdapter(BasePlatformAdapter):
         await self._close_connection(ws, session)
 
     async def disconnect(self) -> None:
-        self._running = False
+        self._mark_disconnected()
 
         async def _teardown() -> None:
             listen_task, self._listen_task = self._listen_task, None
@@ -627,13 +627,27 @@ class HomeAssistantAdapter(BasePlatformAdapter):
                 logger.warning("[%s] WebSocket error: %s", self.name, _connect_error_detail(e))
             if not self._running:
                 return
+            self._write_runtime_status_safe(
+                "reconnecting",
+                platform_state="retrying",
+                error_code=None,
+                error_message="Home Assistant WebSocket disconnected; reconnecting.",
+            )
             delay = self._BACKOFF_STEPS[min(backoff_idx, len(self._BACKOFF_STEPS) - 1)]
             logger.info("[%s] Reconnecting in %ds...", self.name, delay)
             await asyncio.sleep(delay)
+            if not self._running:
+                return
             backoff_idx += 1
             try:
                 await self._cleanup_ws()
+                if not self._running:
+                    return
                 if await self._ws_connect():
+                    if not self._running:
+                        await self._cleanup_ws()
+                        return
+                    self._mark_connected()
                     backoff_idx = 0
                     logger.info("[%s] Reconnected", self.name)
             except Exception as e:

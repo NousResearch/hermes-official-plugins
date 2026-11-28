@@ -78,6 +78,15 @@ Catalog entries come in two tiers:
 </tr>
 <tr>
 <td width="50%" valign="top">
+<a href="weixin/"><img src="assets/weixin.jpg" alt="Weixin plugin"></a>
+<h3><a href="weixin/">Weixin (personal WeChat)</a></h3>
+<code>hermes plugins install weixin</code>
+<p>A gateway platform for personal WeChat over Tencent's iLink Bot API: QR login in <code>hermes gateway setup</code>, DMs with pairing or allowlists, native images, video, voice and documents through the encrypted CDN, and cron delivery with <code>deliver=weixin</code>. Installed by default on every Hermes home; it stays idle until you log in.</p>
+</td>
+<td width="50%" valign="top"></td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 <a href="claude-subscription-directsdk/"><img src="assets/claude-subscription-directsdk.jpg" alt="Claude Subscription DirectSDK plugin"></a>
 <h3><a href="claude-subscription-directsdk/">Claude Subscription DirectSDK</a> <sup>experimental</sup></h3>
 <code>hermes plugins install claude-subscription-directsdk</code>
@@ -123,6 +132,15 @@ Catalog entries come in two tiers:
 <p>An OKLCH colour wheel in the Hermes Desktop status bar. Drag it and the whole theme retints live, and the pick is restored on the next launch.</p>
 <p>Desktop plugin · status bar + palette commands</p>
 </td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<a href="qqbot/"><img src="assets/qqbot.jpg" alt="QQ Bot plugin"></a>
+<h3><a href="qqbot/">QQ Bot</a></h3>
+<code>hermes plugins install qqbot</code>
+<p>A gateway platform for QQ over the official QQ Bot API v2: private chats, group @-mentions and guild channels over the bot WebSocket, text, markdown and native media replies, voice transcription, scan-to-configure setup and cron delivery with <code>deliver=qqbot</code>. Installed by default on every Hermes home; it stays idle until you add a QQ App ID and secret.</p>
+</td>
+<td width="50%" valign="top"></td>
 </tr>
 <tr>
 <td width="50%" valign="top">
@@ -229,6 +247,22 @@ Catalog entries come in two tiers:
 <p><code>security_scan_start</code> and 8 more · <code>/security</code> · <code>hermes security-review</code></p>
 </td>
 <td width="50%" valign="top">
+<a href="google-meet/"><img src="assets/google-meet.jpg" alt="Google Meet plugin"></a>
+<h3><a href="google-meet/">Google Meet</a></h3>
+<code>hermes plugins install google-meet</code>
+<p>Hermes joins a Google Meet call you give it, scrapes the live captions into a transcript and does the follow-up work afterwards. Realtime mode lets it speak in the call (its text goes to OpenAI Realtime and the returned speech is played into the call; meeting audio is never sent), and a remote node host runs a listen-only bot on another machine. Only joins meet.google.com URLs you pass in: no calendar scanning, no auto-dial. Known limitation: the agent's bot is stopped when the turn that joined ends (<a href="https://github.com/NousResearch/hermes-official-plugins/issues/518">#518</a>).</p>
+<p><code>meet_join</code> and 4 more · <code>hermes meet</code> · Linux and macOS</p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<a href="teams-pipeline/"><img src="assets/teams-pipeline.jpg" alt="Teams Meeting Pipeline plugin"></a>
+<h3><a href="teams-pipeline/">Teams Meeting Pipeline</a></h3>
+<code>hermes plugins install teams-pipeline</code>
+<p>Turns Microsoft Teams meetings into summaries. Graph change notifications on the <code>msgraph_webhook</code> gateway platform become durable jobs that fetch the transcript (or transcribe the recording), summarize it and deliver it to Teams (Notion and Linear writers exist but are not wired yet). An operator CLI lists and re-runs jobs, checks Graph setup and maintains subscriptions. Tested with stand-ins only, not against a real tenant.</p>
+<p><code>hermes teams-pipeline</code> · Microsoft Graph app credentials</p>
+</td>
+<td width="50%" valign="top">
 <a href="feishu/"><img src="assets/feishu.jpg" alt="Feishu / Lark plugin"></a>
 <h3><a href="feishu/">Feishu / Lark</a></h3>
 <code>hermes plugins install feishu</code>
@@ -247,9 +281,9 @@ Catalog entries come in two tiers:
 
 ### Already used one of these?
 
-Most plugins here used to live somewhere else: Home Assistant and Spotify were built into Hermes core and then briefly had their own repos, Langfuse shipped bundled with core as `observability/langfuse`, the Singularity/Apptainer terminal backend, the Camofox browser backend and the Feishu / Lark platform were built into core, MCP Serve was core's `hermes mcp serve`, and the rest each had a standalone `NousResearch/hermes-*` repo. **Except for MCP Serve, you don't need to do anything.**
+Most plugins here used to live somewhere else: Home Assistant and Spotify were built into Hermes core and then briefly had their own repos, Langfuse shipped bundled with core as `observability/langfuse`, the Singularity/Apptainer terminal backend, the Camofox browser backend, Google Meet (`google_meet`), the Teams meeting pipeline (`teams_pipeline`), the QQ Bot platform and the Feishu / Lark platform were built into core, MCP Serve was core's `hermes mcp serve`, and the rest each had a standalone `NousResearch/hermes-*` repo. **Except for MCP Serve, you don't need to do anything.**
 
-- **You used the built-in Home Assistant, Spotify, Langfuse, Singularity, Camofox backend or Feishu / Lark:** `hermes update`, or the first start after updating, installs the plugin from the catalog with your existing config, env vars and login.
+- **You used the built-in Home Assistant, Spotify, Langfuse, Singularity, Camofox backend, Google Meet, Teams meeting pipeline, QQ Bot or Feishu / Lark:** `hermes update`, or the first start after updating, installs the plugin from the catalog with your existing config, env vars and login.
 - **You installed it from the catalog:** the catalog now points here, so `hermes plugins update <name>` moves your install to this repo and keeps your files.
 - **You used the built-in `hermes import-agent`:** profiles that registered an import for `--sync` get the `agent-importers` plugin on update; anywhere else, running `hermes import-agent` prints the one-line install (`hermes plugins install agent-importers`).
 - **You used `hermes claw migrate` (OpenClaw):** it now comes with the same plugin. After `hermes plugins install agent-importers`, both `hermes import-agent openclaw` and the old `hermes claw migrate` / `hermes claw cleanup` work with the same flags.

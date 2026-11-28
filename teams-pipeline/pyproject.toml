@@ -1,0 +1,14 @@
+[project]
+name = "hermes-teams-pipeline"
+version = "0.2.0"
+description = "Microsoft Teams meeting transcript and summary pipeline for Hermes Agent (official plugin)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Nous Research" }]
+requires-python = ">=3.11"
+dependencies = [
+  "httpx[socks]==0.28.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/NousResearch/hermes-official-plugins/tree/main/teams-pipeline"

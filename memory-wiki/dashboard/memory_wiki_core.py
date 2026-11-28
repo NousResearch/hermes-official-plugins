@@ -721,12 +721,17 @@ def _snippets_for_candidates(
                 snippets[candidate.slug].append(_snippet(session, message, text))
 
     # Keep only the snippets the aggregation can actually surface: per slug the
-    # finalize step sorts by (timestamp, session_id, message_id) and keeps the
-    # first 5, so storing each session's 5 smallest makes units small without
-    # changing any output — this is what keeps the cached units bounded.
+    # finalize step sorts by (role != "user", timestamp, session_id, message_id)
+    # and keeps the first 5, so storing each session's 5 first in that same order
+    # makes units small without changing any output — this is what keeps the
+    # cached units bounded. The role key must stay in sync with _finalize_subject,
+    # otherwise a user's request is trimmed away in favour of earlier assistant
+    # chatter before the finalizer ever sees it.
     for slug, items in snippets.items():
         if len(items) > _SNIPPETS_PER_SLUG:
-            items.sort(key=lambda s: (s["timestamp"], s.get("message_id") or 0))
+            items.sort(key=lambda s: (
+                s["role"] != "user", s["timestamp"], s["session_id"], s.get("message_id") or 0,
+            ))
             snippets[slug] = items[:_SNIPPETS_PER_SLUG]
     return snippets
 

@@ -284,3 +284,55 @@ def test_default_cache_is_profile_scoped(tmp_path, memory_wiki_cache, monkeypatc
 
     second = mwc.default_cache(tmp_path / "home-b" / "cache" / "memory-wiki")
     assert second is not first, "a different HERMES_HOME must not share units"
+
+def test_bounded_snippets_keep_the_user_evidence_the_finalizer_ranks_first(
+    tmp_path, hermes_home, memory_wiki_core, memory_wiki_cache
+):
+    """The per-slug snippet cap must not drop what ``_finalize_subject`` ranks first.
+
+    ``_finalize_subject`` sorts snippets by ``(role != "user", timestamp, ...)``, so a
+    user message outranks every assistant message. ``_snippets_for_candidates`` caps
+    each slug at five snippets sorted only by ``(timestamp, message_id)``; on a session
+    whose early messages are all assistant replies the user's own request is trimmed
+    away before the finalizer ever sees it, so the subject card loses its evidence.
+    """
+
+    import time
+
+    db_path = tmp_path / "state.db"
+    now = time.time()
+    writer = hermes_state.SessionDB(db_path=db_path)
+    try:
+        writer.create_session("s-alpha", "cli")
+        for index in range(6):
+            writer.append_message(
+                "s-alpha", "assistant", f"Update alpha/widget.py step {index}", timestamp=now - 60 + index
+            )
+        for index in range(2):
+            writer.append_message(
+                "s-alpha", "user", f"alpha/widget.py is broken {index}", timestamp=now - 50 + index
+            )
+    finally:
+        writer.close()
+
+    db = hermes_state.SessionDB(db_path=db_path, read_only=True)
+    try:
+        sidecar = tmp_path / "cache" / "memory-wiki" / "session_units-v2.json"
+        cache = memory_wiki_cache.SessionUnitCache(sidecar)
+        cached = memory_wiki_core.build_memory_overview(db, subject_limit=50, day_limit=30, cache=cache)
+        cache.flush()
+        from_disk = memory_wiki_core.build_memory_overview(
+            db, subject_limit=50, day_limit=30, cache=memory_wiki_cache.SessionUnitCache(sidecar)
+        )
+        uncached = memory_wiki_core.build_memory_overview(db, subject_limit=50, day_limit=30)
+    finally:
+        db.close()
+
+    def subject(overview):
+        return next(item for item in overview["subjects"] if item["slug"] == "alpha-widget-py")
+
+    assert cached == uncached, "the bounded cache must not change the overview payload"
+    assert from_disk == uncached, "a restarted gateway must reproduce the same payload"
+    for label, overview in (("uncached", uncached), ("cached", cached)):
+        roles = [snippet["role"] for snippet in subject(overview)["snippets"]]
+        assert "user" in roles, f"{label} path dropped the user's request: {roles}"
